@@ -3,7 +3,7 @@
 </p>
 <p align="center">
 <a href="[https://platform.composio.dev?utm_source=github&utm_medium=banner&utm_campaign=2101&utm_content=open-claude-cowork](https://platform.composio.dev/?utm_source=github&utm_medium=banner&utm_campaign=2101&utm_content=open-claude-cowork)">
-<img src="assets/open%20claud%20cowork%20wide%20new.png" alt="Open Claude Cowork Banner" width="800">
+<img src="assets/open%20claude%20cowork%20wide%20new.png" alt="Open Claude Cowork Banner" width="800">
 </a>
 </p>
 <p align="center">
