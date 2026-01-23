@@ -1,9 +1,13 @@
 <p align="center">
   <h1 align="center">Open Claude Cowork</h1>
 </p>
-
 <p align="center">
-  <a href="https://platform.composio.dev?utm_source=github&utm_medium=readme&utm_campaign=open-claude-cowork">
+  <a href="https://platform.composio.dev?utm_source=github&utm_medium=banner&utm_campaign=2101&utm_content=open-claude-cowork">
+    <img src="assets/open%20claude%20cowork.png" alt="Open Claude Cowork Banner">
+  </a>
+</p>
+<p align="center">
+  <a href="https://platform.composio.dev?utm_source=github&utm_medium=gif&utm_campaign=2101&utm_content=open-claude-cowork">
     <img src="open-claude-cowork.gif" alt="Open Claude Cowork Demo" width="800">
   </a>
 </p>
