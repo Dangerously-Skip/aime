@@ -448,12 +448,16 @@ open-claude-cowork/
 
 ---
 
+
 <p align="center">
-  <a href="https://platform.composio.dev/?utm_source=Github&utm_content=AwesomeSkills">
-    <img src="https://img.shields.io/badge/Join_200,000+_developers_building_agents_in_production-4F46E5?style=for-the-badge" alt="Join 200,000+ developers building agents in production"/>
-  </a>
+  <b>Join 200,000+ developers building agents in production</b>
 </p>
 
+<p align="center">
+  <a href="https://platform.composio.dev/?utm_source=github&utm_medium=community&utm_campaign=2101&utm_content=open claude cowork">
+    <img src="https://img.shields.io/badge/Get_Started_For_Free-4F46E5?style=for-the-badge" alt="Get Started For Free"/>
+  </a>
+</p>
 
 
 
