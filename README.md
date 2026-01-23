@@ -439,6 +439,24 @@ open-claude-cowork/
 
 ---
 
+
+## Join the Community
+
+- [Join our Discord](https://discord.com/invite/composio) - Chat with other developers building Claude Skills
+- [Follow on Twitter/X](https://x.com/composio) - Stay updated on new skills and features
+- Questions? [support@composio.dev](mailto:support@composio.dev)
+
+---
+
+<p align="center">
+  <a href="https://platform.composio.dev/?utm_source=Github&utm_content=AwesomeSkills">
+    <img src="https://img.shields.io/badge/Get_Started_Free-4F46E5?style=for-the-badge" alt="Join 200,000+ developers building agents in production"/>
+  </a>
+</p>
+
+
+
+
 <p align="center">
   Built with Claude Code and Composio
 </p>
