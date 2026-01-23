@@ -30,16 +30,12 @@
 </p>
 
 <p align="center">
-  An open-source desktop chat application powered by Claude Agent SDK and Composio Tool Router. Build AI agents with access to 500+ tools and persistent chat sessions.
-</p>
-
-<p align="center">
-  <a href="https://platform.composio.dev?utm_source=github&utm_medium=readme&utm_campaign=open-claude-cowork">
-    <img src="https://img.shields.io/badge/Get%20Started-Composio%20Platform-orange?style=for-the-badge" alt="Get Started with Composio">
+  An open-source desktop chat application powered by Claude Agent SDK and Composio Tool Router. Automate your work end-to-end across desktop and all your work apps in one place.
+  <br><br>
+  <a href="https://platform.composio.dev?utm_source=github&utm_medium=description&utm_campaign=2101&utm_content=open-claude-cowork">
+    <b>Get your free API key to get started →</b>
   </a>
 </p>
-
----
 
 ## Features
 
