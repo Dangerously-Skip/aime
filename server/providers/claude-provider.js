@@ -11,14 +11,30 @@ export class ClaudeProvider extends BaseProvider {
     // Default allowed tools - matches server.js
     this.defaultAllowedTools = config.allowedTools || [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebSearch', 'WebFetch', 'TodoWrite'
+      'WebSearch', 'WebFetch', 'TodoWrite', 'Skill'
     ];
     this.defaultMaxTurns = config.maxTurns || 20;
     this.permissionMode = config.permissionMode || 'bypassPermissions';
+    // Track active abort controllers per chatId
+    this.abortControllers = new Map();
   }
 
   get name() {
     return 'claude';
+  }
+
+  /**
+   * Abort an active query for a given chatId
+   */
+  abort(chatId) {
+    const controller = this.abortControllers.get(chatId);
+    if (controller) {
+      console.log('[Claude] Aborting query for chatId:', chatId);
+      controller.abort();
+      this.abortControllers.delete(chatId);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -47,7 +63,8 @@ export class ClaudeProvider extends BaseProvider {
       allowedTools,
       maxTurns,
       mcpServers,
-      permissionMode: this.permissionMode
+      permissionMode: this.permissionMode,
+      settingSources: ['user', 'project']  // Enable Skills from filesystem
     };
 
     // Check for existing session - matches server.js session resumption logic
@@ -62,10 +79,18 @@ export class ClaudeProvider extends BaseProvider {
 
     console.log('[Claude] Calling Claude Agent SDK...');
 
+    // Create abort controller for this request
+    const abortController = new AbortController();
+    if (chatId) {
+      this.abortControllers.set(chatId, abortController);
+    }
+
+    try {
     // Stream responses from Claude Agent SDK - matches server.js exactly
     for await (const chunk of query({
       prompt,
-      options: queryOptions
+      options: queryOptions,
+      abortSignal: abortController.signal
     })) {
       // Debug: log all system messages to find session_id
       if (chunk.type === 'system') {
@@ -147,5 +172,21 @@ export class ClaudeProvider extends BaseProvider {
     };
 
     console.log('[Claude] Stream completed');
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.log('[Claude] Query aborted for chatId:', chatId);
+        yield {
+          type: 'aborted',
+          provider: this.name
+        };
+      } else {
+        throw error;
+      }
+    } finally {
+      // Clean up abort controller
+      if (chatId) {
+        this.abortControllers.delete(chatId);
+      }
+    }
   }
 }

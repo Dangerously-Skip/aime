@@ -85,13 +85,25 @@ function generateId() {
 function saveState() {
   if (!currentChatId) return;
 
+  if (isWaitingForResponse) {
+    console.log('[Save] Skipping save during streaming');
+    return;
+  }
+
   const chatData = {
     id: currentChatId,
     title: chatTitle.textContent,
-    messages: Array.from(chatMessages.children).map(msg => ({
-      class: msg.className,
-      content: msg.querySelector('.message-content')?.dataset.rawContent || msg.querySelector('.message-content')?.textContent || ''
-    })),
+    messages: Array.from(chatMessages.children).map(msg => {
+      const contentDiv = msg.querySelector('.message-content');
+      const rawContent = contentDiv?.dataset.rawContent || contentDiv?.textContent || '';
+
+      // Save complete message structure including tool calls
+      return {
+        class: msg.className,
+        content: rawContent,
+        html: contentDiv?.innerHTML || '' // Save rendered HTML to restore tool calls
+      };
+    }),
     todos,
     toolCalls,
     provider: selectedProvider,
@@ -148,6 +160,9 @@ function loadAllChats() {
       const chat = allChats.find(c => c.id === currentChatId);
       if (chat) {
         loadChat(chat);
+      } else {
+        currentChatId = null;
+        localStorage.removeItem('currentChatId');
       }
     }
   } catch (err) {
@@ -223,7 +238,13 @@ function loadChat(chat) {
     if (msgData.class.includes('user')) {
       contentDiv.textContent = msgData.content;
     } else if (msgData.class.includes('assistant')) {
-      renderMarkdown(contentDiv);
+      // Restore complete HTML structure including tool calls
+      if (msgData.html) {
+        contentDiv.innerHTML = msgData.html;
+      } else {
+        // Fallback for old messages without HTML
+        renderMarkdown(contentDiv);
+      }
     }
 
     messageDiv.appendChild(contentDiv);
@@ -244,6 +265,8 @@ function loadChat(chat) {
 
     chatMessages.appendChild(messageDiv);
   });
+
+  renderTodos();
 
   scrollToBottom();
   renderChatHistory();
@@ -288,6 +311,12 @@ function renderChatHistory() {
 
 // Switch to a different chat
 function switchToChat(chatId) {
+  // Abort any ongoing request when switching chats
+  if (isWaitingForResponse) {
+    window.electronAPI.abortCurrentRequest();
+    isWaitingForResponse = false;
+  }
+
   if (currentChatId) {
     saveState();
   }
@@ -296,6 +325,10 @@ function switchToChat(chatId) {
   if (chat) {
     loadChat(chat);
   }
+
+  // Update send button states
+  updateSendButton(homeInput, homeSendBtn);
+  updateSendButton(messageInput, chatSendBtn);
 }
 
 // Delete a chat
@@ -655,7 +688,60 @@ function toggleLeftSidebar() {
 
 // Update send button state
 function updateSendButton(input, button) {
-  button.disabled = !input.value.trim() || isWaitingForResponse;
+  if (isWaitingForResponse) {
+    // In streaming mode - show stop icon and enable button
+    button.disabled = false;
+    button.classList.add('streaming');
+    const sendIcon = button.querySelector('.send-icon');
+    const stopIcon = button.querySelector('.stop-icon');
+    if (sendIcon) sendIcon.classList.add('hidden');
+    if (stopIcon) stopIcon.classList.remove('hidden');
+  } else {
+    // Normal mode - show send icon
+    button.disabled = !input.value.trim();
+    button.classList.remove('streaming');
+    const sendIcon = button.querySelector('.send-icon');
+    const stopIcon = button.querySelector('.stop-icon');
+    if (sendIcon) sendIcon.classList.remove('hidden');
+    if (stopIcon) stopIcon.classList.add('hidden');
+  }
+}
+
+// Stop the current streaming query
+async function stopCurrentQuery() {
+  if (!isWaitingForResponse || !currentChatId) return;
+
+  console.log('[Chat] Stopping query for chatId:', currentChatId);
+
+  // Abort the client-side fetch
+  window.electronAPI.abortCurrentRequest();
+
+  // Tell the backend to stop processing
+  await window.electronAPI.stopQuery(currentChatId, selectedProvider);
+
+  // Reset state
+  isWaitingForResponse = false;
+  updateSendButton(messageInput, chatSendBtn);
+  updateSendButton(homeInput, homeSendBtn);
+
+  // Remove loading indicator from last assistant message
+  const lastMessage = chatMessages.lastElementChild;
+  if (lastMessage && lastMessage.classList.contains('assistant')) {
+    const loadingIndicator = lastMessage.querySelector('.loading-indicator');
+    if (loadingIndicator) loadingIndicator.remove();
+
+    // Add a note that the response was stopped
+    const contentDiv = lastMessage.querySelector('.message-content');
+    if (contentDiv) {
+      const stoppedNote = document.createElement('p');
+      stoppedNote.style.color = '#888';
+      stoppedNote.style.fontStyle = 'italic';
+      stoppedNote.textContent = '[Response stopped]';
+      contentDiv.appendChild(stoppedNote);
+    }
+  }
+
+  saveState();
 }
 
 // Handle key press
@@ -688,17 +774,27 @@ function switchToChatView() {
 async function handleSendMessage(e) {
   e.preventDefault();
 
+  // If currently streaming, stop the query instead
+  if (isWaitingForResponse) {
+    await stopCurrentQuery();
+    return;
+  }
+
   const input = isFirstMessage ? homeInput : messageInput;
   const message = input.value.trim();
 
-  if (!message || isWaitingForResponse) {
+  if (!message) {
     return;
   }
 
   if (isFirstMessage) {
+    // Always generate a new ID for a new conversation
     currentChatId = generateId();
     switchToChatView();
     isFirstMessage = false;
+    chatTitle.textContent = message.length > 30 ? message.substring(0, 30) + '...' : message;
+  } else if (!currentChatId) {
+    currentChatId = generateId();
     chatTitle.textContent = message.length > 30 ? message.substring(0, 30) + '...' : message;
   }
 
@@ -707,15 +803,20 @@ async function handleSendMessage(e) {
 
   input.value = '';
   resetTextareaHeight(input);
-  updateSendButton(input, homeSendBtn);
-  updateSendButton(messageInput, chatSendBtn);
 
   // Set loading state
   isWaitingForResponse = true;
 
+  // Update buttons to show stop icon
+  updateSendButton(homeInput, homeSendBtn);
+  updateSendButton(messageInput, chatSendBtn);
+
   // Create assistant message with loading state
   const assistantMessage = createAssistantMessage();
   const contentDiv = assistantMessage.querySelector('.message-content');
+
+  // Declare heartbeatChecker outside try block so it's accessible in finally
+  let heartbeatChecker = null;
 
   try {
     console.log('[Chat] Sending message to API...');
@@ -729,36 +830,59 @@ async function handleSendMessage(e) {
     let receivedStreamingText = false;
     const pendingToolCalls = new Map();
 
-    while (true) {
-      const { done, value } = await reader.read();
+    let lastHeartbeat = Date.now();
+    const heartbeatTimeout = 300000;
+    let connectionLost = false;
 
-      if (done) {
-        console.log('[Chat] Stream complete');
-        const loadingIndicator = contentDiv.querySelector('.loading-indicator');
-        if (loadingIndicator && hasContent) {
-          loadingIndicator.remove();
-        }
-        const actionsDiv = assistantMessage.querySelector('.message-actions');
-        if (actionsDiv) {
-          actionsDiv.classList.remove('hidden');
-        }
-        for (const [apiId, localId] of pendingToolCalls) {
-          updateToolCallStatus(localId, 'success');
-        }
-        break;
+    heartbeatChecker = setInterval(() => {
+      const timeSinceLastHeartbeat = Date.now() - lastHeartbeat;
+      if (timeSinceLastHeartbeat > heartbeatTimeout) {
+        console.warn('[Chat] No data received for 5 minutes - connection may be lost');
       }
+    }, 30000); 
 
-      buffer += value;
-      const lines = buffer.split('\n');
-      buffer = lines[lines.length - 1];
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
 
-      for (let i = 0; i < lines.length - 1; i++) {
-        const line = lines[i];
+        if (done) {
+          console.log('[Chat] Stream complete');
+          clearInterval(heartbeatChecker);
+          const loadingIndicator = contentDiv.querySelector('.loading-indicator');
+          if (loadingIndicator && hasContent) {
+            loadingIndicator.remove();
+          }
+          const actionsDiv = assistantMessage.querySelector('.message-actions');
+          if (actionsDiv) {
+            actionsDiv.classList.remove('hidden');
+          }
+          for (const [apiId, localId] of pendingToolCalls) {
+            updateToolCallStatus(localId, 'success');
+          }
+          break;
+        }
 
-        if (line.startsWith('data: ')) {
+        lastHeartbeat = Date.now();
+
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines[lines.length - 1];
+
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i];
+
+          // Detect heartbeat comments from server
+          if (line.startsWith(':')) {
+            continue; // Skip SSE comments (heartbeats)
+          }
+
+          if (line.startsWith('data: ')) {
           try {
             const jsonStr = line.slice(6);
             const data = JSON.parse(jsonStr);
+
+            // Debug: log all received events
+            console.log('[Frontend] Received event:', data.type, data.name || '');
 
             if (data.type === 'done') {
               break;
@@ -783,6 +907,11 @@ async function handleSendMessage(e) {
               if (apiId) {
                 pendingToolCalls.set(apiId, toolCall.id);
               }
+
+              if (toolName === 'TodoWrite' && toolInput.todos) {
+                updateTodos(toolInput.todos);
+              }
+
               hasContent = true;
             } else if (data.type === 'tool_result' || data.type === 'result') {
               const result = data.result || data.content || data;
@@ -843,9 +972,28 @@ async function handleSendMessage(e) {
           }
         }
       }
+      }
+    } catch (readerError) {
+      console.error('[Chat] Reader error:', readerError);
+      clearInterval(heartbeatChecker);
+      throw readerError; // Re-throw to outer catch
     }
   } catch (error) {
-    console.error('Error sending message:', error);
+    clearInterval(heartbeatChecker);
+
+    // Don't show error for aborted requests (user clicked stop or switched chats)
+    if (error?.name === 'AbortError' || error?.message?.includes('aborted') || error?.message?.includes('abort')) {
+      console.log('[Chat] Request was aborted');
+      return;
+    }
+
+    // Skip showing error if message is undefined or empty (likely an abort)
+    if (!error?.message) {
+      console.log('[Chat] Request ended without error message (likely aborted)');
+      return;
+    }
+
+    console.error('[Chat] Error sending message:', error);
     const loadingIndicator = contentDiv.querySelector('.loading-indicator');
     if (loadingIndicator) loadingIndicator.remove();
 
@@ -854,9 +1002,13 @@ async function handleSendMessage(e) {
     paragraph.style.color = '#c0392b';
     contentDiv.appendChild(paragraph);
   } finally {
+    if (heartbeatChecker) {
+      clearInterval(heartbeatChecker);
+    }
     isWaitingForResponse = false;
     saveState();
     updateSendButton(messageInput, chatSendBtn);
+    updateSendButton(homeInput, homeSendBtn);
     messageInput.focus();
   }
 }
@@ -974,6 +1126,12 @@ function appendToThinking(contentDiv, content) {
 
 // Start a new chat
 window.startNewChat = function() {
+  // Abort any ongoing request from the previous chat
+  if (isWaitingForResponse) {
+    window.electronAPI.abortCurrentRequest();
+    isWaitingForResponse = false;
+  }
+
   if (currentChatId && chatMessages.children.length > 0) {
     saveState();
   }
@@ -1007,6 +1165,10 @@ window.startNewChat = function() {
 
   // Update chat history display
   renderChatHistory();
+
+  // Update send button states to ensure they're enabled
+  updateSendButton(homeInput, homeSendBtn);
+  updateSendButton(messageInput, chatSendBtn);
 }
 
 // Get or create the current markdown container for streaming

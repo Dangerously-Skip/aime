@@ -15,10 +15,26 @@ export class OpencodeProvider extends BaseProvider {
     this.port = config.port || 4096;
     this.useExistingServer = config.useExistingServer || false;
     this.existingServerUrl = config.existingServerUrl || null;
+    // Track active abort controllers per chatId
+    this.abortControllers = new Map();
   }
 
   get name() {
     return 'opencode';
+  }
+
+  /**
+   * Abort an active query for a given chatId
+   */
+  abort(chatId) {
+    const controller = this.abortControllers.get(chatId);
+    if (controller) {
+      console.log('[Opencode] Aborting query for chatId:', chatId);
+      controller.abort();
+      this.abortControllers.delete(chatId);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -109,6 +125,12 @@ export class OpencodeProvider extends BaseProvider {
     let sessionId = chatId ? this.getSession(chatId) : null;
     console.log('[Opencode] Session for', chatId, ':', sessionId || 'new');
 
+    // Create abort controller for this request
+    const abortController = new AbortController();
+    if (chatId) {
+      this.abortControllers.set(chatId, abortController);
+    }
+
     try {
       // Note: MCP servers are configured in opencode.json, not passed via API
       // The backend server.js writes the Composio MCP URL to opencode.json
@@ -165,6 +187,12 @@ export class OpencodeProvider extends BaseProvider {
 
       // Listen to event stream
       for await (const event of events.stream) {
+        // Check if aborted
+        if (abortController.signal.aborted) {
+          console.log('[Opencode] Query aborted, breaking event loop');
+          break;
+        }
+
         const props = event.properties || {};
         const part = props.part || props;
         const eventSessionId = props.sessionID || part?.sessionID || props.session?.id;
@@ -277,12 +305,20 @@ export class OpencodeProvider extends BaseProvider {
         }
       }
 
-      yield {
-        type: 'done',
-        provider: this.name
-      };
-
-      console.log('[Opencode] Stream completed');
+      // Check if we were aborted
+      if (abortController.signal.aborted) {
+        yield {
+          type: 'aborted',
+          provider: this.name
+        };
+        console.log('[Opencode] Stream aborted');
+      } else {
+        yield {
+          type: 'done',
+          provider: this.name
+        };
+        console.log('[Opencode] Stream completed');
+      }
 
     } catch (error) {
       console.error('[Opencode] Query error:', error);
@@ -291,6 +327,11 @@ export class OpencodeProvider extends BaseProvider {
         message: error.message,
         provider: this.name
       };
+    } finally {
+      // Clean up abort controller
+      if (chatId) {
+        this.abortControllers.delete(chatId);
+      }
     }
   }
 

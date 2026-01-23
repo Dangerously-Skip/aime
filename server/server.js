@@ -140,9 +140,15 @@ app.post('/api/chat', async (req, res) => {
         userId,
         mcpServers,
         model,
-        allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'TodoWrite'],
-        maxTurns: 20
+        allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'TodoWrite', 'Skill'],
+        maxTurns: 100
       })) {
+        if (chunk.type === 'tool_use') {
+          console.log('[SSE] Sending tool_use:', chunk.name);
+        }
+        if (chunk.type === 'text') {
+          console.log('[SSE] Sending text chunk, length:', chunk.content?.length || 0);
+        }
         // Send chunk as SSE
         const data = `data: ${JSON.stringify(chunk)}\n\n`;
         res.write(data);
@@ -164,6 +170,33 @@ app.post('/api/chat', async (req, res) => {
     console.error('[CHAT] Error:', error);
     res.write(`data: ${JSON.stringify({ type: 'error', message: error.message })}\n\n`);
     res.end();
+  }
+});
+
+// Abort endpoint to stop active queries
+app.post('/api/abort', (req, res) => {
+  const { chatId, provider: providerName = 'claude' } = req.body;
+
+  if (!chatId) {
+    return res.status(400).json({ error: 'chatId is required' });
+  }
+
+  console.log('[ABORT] Request to abort chatId:', chatId, 'provider:', providerName);
+
+  try {
+    const provider = getProvider(providerName);
+    const aborted = provider.abort(chatId);
+
+    if (aborted) {
+      console.log('[ABORT] Successfully aborted chatId:', chatId);
+      res.json({ success: true, message: 'Query aborted' });
+    } else {
+      console.log('[ABORT] No active query found for chatId:', chatId);
+      res.json({ success: false, message: 'No active query to abort' });
+    }
+  } catch (error) {
+    console.error('[ABORT] Error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

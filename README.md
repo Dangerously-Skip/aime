@@ -46,6 +46,7 @@
 - **Real-time Streaming** - Server-Sent Events (SSE) for smooth, token-by-token response streaming
 - **Tool Call Visualization** - See tool inputs and outputs in real-time in the sidebar
 - **Progress Tracking** - Todo list integration for tracking agent task progress
+- **Skills Support** - Extend Claude with specialized capabilities using custom skills
 - **Modern UI** - Clean, dark-themed interface inspired by Claude.ai
 - **Desktop App** - Native Electron application for macOS, Windows, and Linux
 
@@ -236,6 +237,69 @@ Both providers use Server-Sent Events (SSE) for streaming responses:
 - Frontend: Real-time processing with markdown rendering
 - Tool calls: Inline display with input/output visualization
 
+### Skills System
+
+The application supports **Agent Skills** - specialized capabilities that Claude automatically invokes when relevant.
+
+#### What are Skills?
+
+Skills extend Claude with domain-specific knowledge and capabilities. They are defined as markdown files with instructions that Claude follows when the skill is triggered.
+
+#### How Skills Work
+
+1. **Filesystem-based**: Skills are stored as `SKILL.md` files in `.claude/skills/`
+2. **Auto-discovered**: Skills are loaded from user and project directories at startup
+3. **Model-invoked**: Claude autonomously chooses when to use them based on the skill description
+4. **Context-aware**: Skills receive full conversation context when triggered
+
+#### Included Skills
+
+**Remotion Best Practices** (`.claude/skills/remotion-best-practices/`)
+- Triggered when: User asks about creating videos with React, Remotion framework, or programmatic video generation
+- Provides: Best practices for Remotion, animation patterns, Player optimization, troubleshooting guides
+
+#### Creating Custom Skills
+
+1. **Create a skill directory:**
+```bash
+mkdir -p .claude/skills/my-skill
+```
+
+2. **Create SKILL.md with YAML frontmatter:**
+```markdown
+---
+description: Use this skill when the user asks about [your topic]
+---
+
+# My Skill Name
+
+Instructions for Claude when this skill is invoked...
+
+## When to Use
+- User asks about X
+- User needs help with Y
+```
+
+3. **Test the skill:**
+Ask Claude a question that matches your skill's description. Claude will automatically invoke it.
+
+#### Skill Locations
+
+- **Project Skills** (`.claude/skills/`) - Shared with your team via git
+- **User Skills** (`~/.claude/skills/`) - Personal skills across all projects
+
+#### Configuration
+
+Skills are enabled in the Claude provider with:
+```javascript
+settingSources: ['user', 'project']  // Loads skills from both locations
+allowedTools: [..., 'Skill']          // Enables the Skill tool
+```
+
+For more details on creating effective skills, see the [Agent Skills documentation](https://platform.claude.com/docs/en/agent-sdk/skills).
+
+---
+
 ### MCP Configuration (Tools Integration)
 
 **Important: Opencode requires MCP servers to be configured in `server/opencode.json`**
@@ -268,6 +332,10 @@ The application automatically updates this file when starting:
 
 ```
 open-claude-cowork/
+├── .claude/
+│   └── skills/             # Agent Skills directory
+│       └── remotion-best-practices/
+│           └── SKILL.md    # Remotion skill definition
 ├── main.js                 # Electron main process
 ├── preload.js              # IPC security bridge
 ├── renderer/
@@ -353,12 +421,19 @@ open-claude-cowork/
 
 ## Resources
 
+### AI & Agent SDKs
 - [Claude Agent SDK Documentation](https://docs.anthropic.com/en/docs/claude-agent-sdk)
+- [Agent Skills Documentation](https://platform.claude.com/docs/en/agent-sdk/skills)
 - [Opencode SDK Documentation](https://docs.opencode.dev)
+
+### Tools & Integration
 - [Composio Tool Router](https://docs.composio.dev/tool-router)
 - [Composio Dashboard](https://app.composio.dev)
+
+### Frameworks
 - [Electron Documentation](https://www.electronjs.org/docs)
 - [Opencode Platform](https://opencode.dev)
+- [Remotion Documentation](https://www.remotion.dev/docs/)
 
 ---
 

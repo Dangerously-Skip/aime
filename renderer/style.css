@@ -432,6 +432,18 @@ body {
   height: 20px;
 }
 
+.send-btn svg.hidden {
+  display: none;
+}
+
+.send-btn.streaming {
+  background: #e74c3c;
+}
+
+.send-btn.streaming:hover:not(:disabled) {
+  background: #c0392b;
+}
+
 /* Hidden file input */
 .file-input-hidden {
   display: none;

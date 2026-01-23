@@ -58,6 +58,16 @@ export class BaseProvider {
   }
 
   /**
+   * Abort an active query for a given chatId
+   * @param {string} chatId
+   * @returns {boolean} True if aborted, false if no active query
+   */
+  abort(chatId) {
+    // Override in subclass to implement abort functionality
+    return false;
+  }
+
+  /**
    * Cleanup resources
    * @returns {Promise<void>}
    */

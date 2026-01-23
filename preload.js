@@ -2,10 +2,51 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const SERVER_URL = 'http://localhost:3001';
 
+// Store the current abort controller for cancelling requests
+let currentAbortController = null;
+
 // Expose safe API to renderer process via contextBridge
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Abort the current ongoing request (client-side)
+  abortCurrentRequest: () => {
+    if (currentAbortController) {
+      console.log('[PRELOAD] Aborting current request');
+      currentAbortController.abort();
+      currentAbortController = null;
+    }
+  },
+
+  // Stop the backend query execution
+  stopQuery: async (chatId, provider = 'claude') => {
+    console.log('[PRELOAD] Stopping query for chatId:', chatId, 'provider:', provider);
+    try {
+      const response = await fetch(`${SERVER_URL}/api/abort`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ chatId, provider })
+      });
+      const result = await response.json();
+      console.log('[PRELOAD] Stop query result:', result);
+      return result;
+    } catch (error) {
+      console.error('[PRELOAD] Error stopping query:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
   // Send a chat message to the backend with chat ID, provider, and model
   sendMessage: async (message, chatId, provider = 'claude', model = null) => {
+    // Abort any previous request
+    if (currentAbortController) {
+      currentAbortController.abort();
+    }
+
+    // Create new abort controller for this request
+    currentAbortController = new AbortController();
+    const signal = currentAbortController.signal;
+
     return new Promise((resolve, reject) => {
       console.log('[PRELOAD] Sending message to backend:', message);
       console.log('[PRELOAD] Chat ID:', chatId);
@@ -17,7 +58,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ message, chatId, provider, model })
+        body: JSON.stringify({ message, chatId, provider, model }),
+        signal
       })
         .then(response => {
 
