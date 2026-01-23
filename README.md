@@ -450,7 +450,7 @@ open-claude-cowork/
 
 <p align="center">
   <a href="https://platform.composio.dev/?utm_source=Github&utm_content=AwesomeSkills">
-    <img src="https://img.shields.io/badge/Get_Started_Free-4F46E5?style=for-the-badge" alt="Join 200,000+ developers building agents in production"/>
+    <img src="https://img.shields.io/badge/Join_200,000+_developers_building_agents_in_production-4F46E5?style=for-the-badge" alt="Join 200,000+ developers building agents in production"/>
   </a>
 </p>
 
