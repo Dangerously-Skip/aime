@@ -358,18 +358,98 @@ async function setupWizard() {
 
 async function setupWhatsApp() {
   print('\n📱 WhatsApp Setup\n', colors.green)
-  print('WhatsApp uses QR code authentication via Baileys library.')
-  print('When you start the gateway, a QR code will appear in the terminal.')
-  print('Scan it with WhatsApp > Linked Devices > Link a Device\n')
 
-  const enable = await prompt('Enable WhatsApp adapter? (y/n): ')
+  // Check if already authenticated
+  const waAuthPath = path.join(__dirname, 'auth_whatsapp')
+  if (existsSync(waAuthPath)) {
+    print('✅ WhatsApp is already authenticated!\n', colors.green)
+    const reauth = await prompt('Re-authenticate (scan new QR)? (y/n): ')
+    if (reauth.toLowerCase() === 'y') {
+      print('\nRemoving old session...', colors.dim)
+      const fs = await import('fs')
+      fs.rmSync(waAuthPath, { recursive: true, force: true })
+    } else {
+      await updateConfig('whatsapp', { enabled: true })
+      print('\n✅ WhatsApp enabled!\n', colors.green)
+      return
+    }
+  }
 
-  if (enable.toLowerCase() === 'y') {
-    await updateConfig('whatsapp', { enabled: true })
-    print('\n✅ WhatsApp enabled! Start the gateway to scan QR code.\n', colors.green)
-  } else {
+  const enable = await prompt('Enable and authenticate WhatsApp now? (y/n): ')
+
+  if (enable.toLowerCase() !== 'y') {
     await updateConfig('whatsapp', { enabled: false })
     print('\n❌ WhatsApp disabled.\n', colors.dim)
+    return
+  }
+
+  print('\n🔄 Starting WhatsApp authentication...\n', colors.cyan)
+  print('A QR code will appear below. Scan it with:', colors.dim)
+  print('  WhatsApp > Settings > Linked Devices > Link a Device\n', colors.dim)
+
+  try {
+    // Import and start WhatsApp adapter just for auth
+    const { default: WhatsAppAdapter } = await import('./adapters/whatsapp.js')
+    const adapter = new WhatsAppAdapter({ enabled: true, allowedDMs: ['*'], allowedGroups: [], respondToMentionsOnly: true })
+
+    // Wait for connection
+    await new Promise((resolve, reject) => {
+      let connected = false
+      let timeout = null
+
+      // Monitor the socket for connection
+      const checkConnection = setInterval(() => {
+        if (adapter.sock?.user?.id) {
+          connected = true
+          clearInterval(checkConnection)
+          clearTimeout(timeout)
+          resolve()
+        }
+      }, 1000)
+
+      // Start the adapter
+      adapter.start().catch(reject)
+
+      // Timeout after 2 minutes
+      timeout = setTimeout(() => {
+        clearInterval(checkConnection)
+        if (!connected) {
+          adapter.stop().catch(() => {})
+          reject(new Error('Authentication timed out. Please try again.'))
+        }
+      }, 120000)
+    })
+
+    print('\n✅ WhatsApp authenticated successfully!\n', colors.green + colors.bold)
+
+    // Stop the adapter (gateway will start fresh)
+    await adapter.stop()
+
+    print('Group Message Settings:\n', colors.cyan)
+    print('  1) Respond in all groups (when @mentioned)', colors.green)
+    print('  2) DMs only (ignore all groups)', colors.dim)
+    print('  3) Specific groups only\n')
+
+    const groupChoice = await prompt('Select group setting (1-3): ')
+
+    let allowedGroups = []
+    if (groupChoice.trim() === '1') {
+      allowedGroups = ['*']
+      print('\n✅ Will respond in all groups when @mentioned\n', colors.green)
+    } else if (groupChoice.trim() === '3') {
+      print('\nEnter group JIDs (comma-separated). Find these by sending a message in the group.\n', colors.dim)
+      const groups = await prompt('Group JIDs: ')
+      allowedGroups = groups.split(',').map(g => g.trim()).filter(Boolean)
+      print(`\n✅ Will respond in ${allowedGroups.length} specific group(s)\n`, colors.green)
+    } else {
+      print('\n✅ DMs only - groups disabled\n', colors.dim)
+    }
+
+    await updateConfigFull('whatsapp', { enabled: true, allowedGroups })
+
+  } catch (err) {
+    print('\n❌ WhatsApp authentication failed: ' + err.message, colors.red)
+    print('You can try again or authenticate when starting the gateway.\n', colors.dim)
   }
 }
 
@@ -626,6 +706,34 @@ async function updateConfig(platform, updates) {
 
       // Find the platform block and update the key
       const platformRegex = new RegExp(`(${platform}:\\s*\\{[^}]*${key}:\\s*)([^,\\n}]+)`, 's')
+      if (platformRegex.test(content)) {
+        content = content.replace(platformRegex, `$1${valueStr}`)
+      }
+    }
+
+    writeFileSync(CONFIG_PATH, content)
+  } catch (err) {
+    print('Failed to update config: ' + err.message, colors.red)
+  }
+}
+
+async function updateConfigFull(platform, updates) {
+  try {
+    let content = readFileSync(CONFIG_PATH, 'utf-8')
+
+    for (const [key, value] of Object.entries(updates)) {
+      let valueStr
+      if (Array.isArray(value)) {
+        // Format array properly
+        valueStr = JSON.stringify(value).replace(/"/g, "'")
+      } else if (typeof value === 'string') {
+        valueStr = `'${value}'`
+      } else {
+        valueStr = value
+      }
+
+      // Find the platform block and update the key
+      const platformRegex = new RegExp(`(${platform}:\\s*\\{[^}]*${key}:\\s*)(\\[[^\\]]*\\]|[^,\\n}]+)`, 's')
       if (platformRegex.test(content)) {
         content = content.replace(platformRegex, `$1${valueStr}`)
       }

@@ -30,6 +30,14 @@
   </a>
 </p>
 
+<p align="center">
+  <i>Pst. hey, you, join our stargazers :)</i>
+  <br>
+  <a href="https://github.com/ComposioHQ/open-claude-cowork">
+    <img src="https://img.shields.io/github/stars/ComposioHQ/open-claude-cowork.svg?style=social&label=Star&maxAge=2592000" alt="GitHub stars">
+  </a>
+</p>
+
 ---
 
 ## What's Inside
