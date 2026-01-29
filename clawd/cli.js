@@ -126,15 +126,14 @@ async function terminalChat() {
       print('  ⚠️  Composio: ' + err.message, colors.yellow)
     }
 
-    // Initialize Browser MCP (internal Playwright server)
     let browserServer = null
     if (config.browser?.enabled) {
       try {
         const { BrowserServer, createBrowserMcpServer } = await import('./browser/index.js')
         browserServer = new BrowserServer(config.browser)
-        await browserServer.start()
+        // Don't start browser here - it will start lazily when agent calls a browser tool
         mcpServers.browser = createBrowserMcpServer(browserServer)
-        print(`  ✅ Browser ready (${config.browser.mode || 'clawd'} mode)`, colors.green)
+        print(`  ✅ Browser ready`, colors.green)
       } catch (err) {
         print('  ⚠️  Browser: ' + err.message, colors.yellow)
         if (config.browser.mode === 'chrome') {
@@ -149,6 +148,49 @@ async function terminalChat() {
       maxTurns: config.agent?.maxTurns || 50
     })
 
+    // Handle cron job executions in terminal
+    agent.cronScheduler.on('execute', async ({ jobId, message, invokeAgent }) => {
+      process.stdout.write('\n\n')
+      console.log(colors.yellow + '⏰ [Scheduled] ' + colors.reset + colors.cyan + message + colors.reset)
+      console.log(colors.dim + `   (job: ${jobId})${invokeAgent ? ' [invoking agent]' : ''}` + colors.reset)
+
+      // Play system sound and show desktop notification (macOS)
+      try {
+        execSync('afplay /System/Library/Sounds/Glass.aiff &', { stdio: 'ignore' })
+        const escapedMsg = message.replace(/"/g, '\\"').replace(/'/g, "'\"'\"'")
+        execSync(`osascript -e 'display notification "${escapedMsg}" with title "Clawd" sound name "Glass"'`, { stdio: 'ignore' })
+      } catch (e) {
+        process.stdout.write('\x07')
+      }
+
+      // If invokeAgent is true, run the agent with the message
+      if (invokeAgent) {
+        try {
+          process.stdout.write(colors.cyan + '\n🤖 Clawd: ' + colors.reset)
+          for await (const chunk of agent.run({
+            message,
+            sessionKey,
+            platform: 'terminal',
+            mcpServers
+          })) {
+            if (chunk.type === 'text' && chunk.content) {
+              process.stdout.write(chunk.content)
+            } else if (chunk.type === 'tool_use') {
+              process.stdout.write(colors.yellow + `\n🔧 ${chunk.name}` + colors.reset)
+            } else if (chunk.type === 'tool_result') {
+              process.stdout.write(colors.dim + ' ✓' + colors.reset)
+            }
+          }
+          console.log('')
+        } catch (err) {
+          console.log(colors.red + '\nError: ' + err.message + colors.reset)
+        }
+      }
+
+      // Re-show prompt after cron output
+      process.stdout.write('\nYou: ')
+    })
+
     print('\nChat started! Type "exit" or "quit" to end.\n', colors.red + colors.bold)
     print('─'.repeat(50), colors.dim)
 
@@ -161,6 +203,7 @@ async function terminalChat() {
       if (!input.trim()) continue
       if (['exit', 'quit', '/exit', '/quit'].includes(input.trim().toLowerCase())) {
         print('\nGoodbye!\n', colors.red)
+        agent.stopCron()
         break
       }
 
@@ -168,8 +211,8 @@ async function terminalChat() {
         // Pause readline during agent execution to prevent interference
         rl.pause()
 
-        let responseText = ''
-        const toolCalls = []
+        let isFirstText = true
+        let lastWasToolUse = false
 
         for await (const chunk of agent.run({
           message: input,
@@ -178,18 +221,29 @@ async function terminalChat() {
           mcpServers
         })) {
           if (chunk.type === 'tool_use') {
-            toolCalls.push(chunk.name)
-            console.log(colors.yellow + `\n🔧 ${chunk.name}` + colors.reset)
-          } else if (chunk.type === 'text') {
-            responseText += chunk.content
+            // Show tool being called
+            process.stdout.write(colors.yellow + `\n🔧 ${chunk.name}` + colors.reset)
+            lastWasToolUse = true
+            isFirstText = true  // Reset so next text gets header
+          } else if (chunk.type === 'tool_result') {
+            // Tool completed - show brief indicator
+            process.stdout.write(colors.dim + ' ✓' + colors.reset)
+          } else if (chunk.type === 'text' && chunk.content) {
+            // Stream text as it arrives
+            if (isFirstText) {
+              if (lastWasToolUse) {
+                process.stdout.write('\n')
+              }
+              process.stdout.write(colors.cyan + '\n🤖 Clawd: ' + colors.reset)
+              isFirstText = false
+              lastWasToolUse = false
+            }
+            process.stdout.write(chunk.content)
           }
         }
 
-        // Print final response
-        if (responseText) {
-          console.log(colors.cyan + '\n🤖 Clawd: ' + colors.reset)
-          console.log(wordWrap(responseText, 80))
-        }
+        // Ensure newline at end
+        console.log('')
 
         rl.resume()
       } catch (err) {

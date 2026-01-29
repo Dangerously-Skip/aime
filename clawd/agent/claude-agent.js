@@ -2,6 +2,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 import { EventEmitter } from 'events'
 import MemoryManager from '../memory/manager.js'
 import { createCronMcpServer, setContext as setCronContext, getScheduler } from '../tools/cron.js'
+import { createGatewayMcpServer, setGatewayContext } from '../tools/gateway.js'
 
 /**
  * Build the system prompt with memory system info
@@ -78,15 +79,28 @@ When the user sends an image, you will receive it in your context. You can:
 ## Communication Style
 - Be helpful and conversational
 - Keep responses concise for messaging (avoid walls of text)
+- DO NOT use markdown formatting (no **, \`, #, -, etc.) - messaging platforms don't render it
+- Use plain text only - write naturally without formatting syntax
 - Use emoji sparingly and appropriately
 - Remember context from the conversation
 - Proactively use tools when needed
+- DO NOT mention details about connected accounts (emails, usernames, account IDs) unless explicitly asked - just perform the action silently
 
 ## Available Tools
-Built-in: Read, Write, Edit, Bash, Glob, Grep
+Built-in: Read, Write, Edit, Bash, Glob, Grep, TodoWrite, Skill
 Scheduling: mcp__cron__schedule_delayed, mcp__cron__schedule_recurring, mcp__cron__schedule_cron, mcp__cron__list_scheduled, mcp__cron__cancel_scheduled
+Gateway: mcp__gateway__send_message, mcp__gateway__list_platforms, mcp__gateway__get_queue_status, mcp__gateway__get_current_context, mcp__gateway__list_sessions, mcp__gateway__broadcast_message
 Composio: Access to 500+ app integrations (Gmail, Slack, GitHub, Google Sheets, etc.) via Composio MCP tools
 Browser: Browser automation via mcp__browser tools (see below)
+
+
+## Gateway Tools
+- \`mcp__gateway__send_message\`: Send a message to any chat on any platform
+- \`mcp__gateway__list_platforms\`: List connected platforms
+- \`mcp__gateway__get_queue_status\`: Check message queue status
+- \`mcp__gateway__get_current_context\`: Get current platform/chat/session info
+- \`mcp__gateway__list_sessions\`: List all active sessions
+- \`mcp__gateway__broadcast_message\`: Send to multiple chats (use carefully)
 
 ## Tool Selection - IMPORTANT
 
@@ -136,6 +150,15 @@ Examples:
 - Always check memory before asking the user for information they may have already told you
 - Update memory when you learn new persistent information about the user
 - When user asks to be reminded, use the cron scheduling tools
+
+## Platform Switching / Starting Gateway
+When the user says things like "can I text you on WhatsApp?" or "I'm going outside, let me message you on WhatsApp":
+- This means they want to continue the conversation on WhatsApp
+- You need to START the Clawd gateway so you can receive WhatsApp messages
+- Run this command to start the gateway in the background:
+  \`cd ~/Desktop/santa-wrapped/open-claude-cowork/clawd && npm start > /tmp/clawd.log 2>&1 &\`
+- After starting, confirm: "Gateway started! You can message me on WhatsApp now."
+- The gateway will show a QR code in the logs if WhatsApp needs to be connected - tell the user to check /tmp/clawd.log if needed
 `
 }
 
@@ -149,12 +172,14 @@ export default class ClaudeAgent extends EventEmitter {
     this.memoryManager = new MemoryManager()
     this.cronMcpServer = createCronMcpServer()
     this.cronScheduler = getScheduler()
+    this.gatewayMcpServer = createGatewayMcpServer()
+    this.gateway = null // Set by gateway after construction
     this.sessions = new Map()
     this.abortControllers = new Map()
 
-    // Built-in tools
     this.allowedTools = config.allowedTools || [
-      'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'
+      'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
+      'TodoWrite', 'Skill'
     ]
 
     // Add cron MCP tools to allowed list
@@ -164,6 +189,16 @@ export default class ClaudeAgent extends EventEmitter {
       'mcp__cron__schedule_cron',
       'mcp__cron__list_scheduled',
       'mcp__cron__cancel_scheduled'
+    ]
+
+    // Add gateway MCP tools to allowed list
+    this.gatewayTools = [
+      'mcp__gateway__send_message',
+      'mcp__gateway__list_platforms',
+      'mcp__gateway__get_queue_status',
+      'mcp__gateway__get_current_context',
+      'mcp__gateway__list_sessions',
+      'mcp__gateway__broadcast_message'
     ]
 
     this.maxTurns = config.maxTurns || 50
@@ -257,13 +292,21 @@ export default class ClaudeAgent extends EventEmitter {
     // Set cron context for scheduled messages
     setCronContext({ platform, chatId, sessionKey })
 
+    // Set gateway context
+    setGatewayContext({
+      gateway: this.gateway,
+      currentPlatform: platform,
+      currentChatId: chatId,
+      currentSessionKey: sessionKey
+    })
+
     // Build system prompt
     const memoryContext = this.memoryManager.getMemoryContext()
     const cronInfo = this.getCronSummary()
     const systemPrompt = buildSystemPrompt(memoryContext, { sessionKey, platform }, cronInfo)
 
     // Combine all allowed tools
-    const allAllowedTools = [...this.allowedTools, ...this.cronTools]
+    const allAllowedTools = [...this.allowedTools, ...this.cronTools, ...this.gatewayTools]
 
     // Build query options
     const queryOptions = {
@@ -271,8 +314,10 @@ export default class ClaudeAgent extends EventEmitter {
       maxTurns: this.maxTurns,
       permissionMode: this.permissionMode,
       systemPrompt,
+      includePartialMessages: true,
       mcpServers: {
         cron: this.cronMcpServer,
+        gateway: this.gatewayMcpServer,
         ...mcpServers
       }
     }
@@ -285,17 +330,13 @@ export default class ClaudeAgent extends EventEmitter {
     const abortController = new AbortController()
     this.abortControllers.set(sessionKey, abortController)
 
-    // Only log details on first message of session
-    if (session.messageCount === 1) {
-      console.log('[ClaudeAgent] New session:', sessionKey)
-      console.log('[ClaudeAgent] MCP Servers:', Object.keys(queryOptions.mcpServers).join(', '))
-    }
     if (image) console.log('[ClaudeAgent] With image attachment')
 
     this.emit('run:start', { sessionKey, message, hasImage: !!image })
 
     try {
       let fullText = ''
+      let hasStreamedContent = false
 
       // Use streaming input for MCP compatibility
       for await (const chunk of query({
@@ -308,23 +349,54 @@ export default class ClaudeAgent extends EventEmitter {
           const newSessionId = chunk.session_id || chunk.data?.session_id
           if (newSessionId && !session.sdkSessionId) {
             session.sdkSessionId = newSessionId
-            console.log('[ClaudeAgent] Session ID:', newSessionId)
           } else if (newSessionId) {
             session.sdkSessionId = newSessionId
           }
           continue
         }
 
-        // Handle assistant messages
+        // Handle streaming partial messages (token-level streaming)
+        if (chunk.type === 'stream_event' && chunk.event) {
+          const event = chunk.event
+          hasStreamedContent = true
+
+          // Text delta - stream individual tokens
+          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+            const text = event.delta.text
+            if (text) {
+              fullText += text
+              yield { type: 'text', content: text }
+              this.emit('run:text', { sessionKey, content: text })
+            }
+          }
+          // Tool use start
+          else if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+            yield {
+              type: 'tool_use',
+              name: event.content_block.name,
+              input: {},
+              id: event.content_block.id
+            }
+            this.emit('run:tool', { sessionKey, name: event.content_block.name })
+          }
+          continue
+        }
+
+        // Handle complete assistant messages (only if we haven't streamed content)
+        // Skip text blocks since they were already streamed via stream_event
         if (chunk.type === 'assistant' && chunk.message?.content) {
           for (const block of chunk.message.content) {
-            if (block.type === 'text' && block.text) {
+            // Only yield text if we haven't been streaming
+            if (block.type === 'text' && block.text && !hasStreamedContent) {
               fullText += block.text
               yield { type: 'text', content: block.text }
               this.emit('run:text', { sessionKey, content: block.text })
             } else if (block.type === 'tool_use') {
-              yield { type: 'tool_use', name: block.name, input: block.input, id: block.id }
-              this.emit('run:tool', { sessionKey, name: block.name })
+              // Tool use with full input (stream_event only has partial)
+              if (!hasStreamedContent) {
+                yield { type: 'tool_use', name: block.name, input: block.input, id: block.id }
+                this.emit('run:tool', { sessionKey, name: block.name })
+              }
             }
           }
           continue

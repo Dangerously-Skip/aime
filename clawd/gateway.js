@@ -46,16 +46,12 @@ class Gateway {
     }
 
     if (config.browser?.enabled) {
-      console.log('[Browser] Initializing browser server...')
       console.log('[Browser] Mode:', config.browser.mode || 'clawd')
 
       try {
         this.browserServer = new BrowserServer(config.browser)
-        await this.browserServer.start()
-
-        // Create MCP server wrapper for the browser
         this.mcpServers.browser = createBrowserMcpServer(this.browserServer)
-        console.log('[Browser] Server ready')
+        console.log('[Browser] Ready')
       } catch (err) {
         console.error('[Browser] Failed to initialize:', err.message)
         if (config.browser.mode === 'chrome') {
@@ -94,9 +90,9 @@ class Gateway {
   }
 
   setupCronExecution() {
-    // Handle cron job execution - send scheduled messages
-    this.agentRunner.agent.cronScheduler.on('execute', async ({ jobId, platform, chatId, message }) => {
-      console.log(`[Cron] ⏰ Executing job ${jobId}`)
+    // Handle cron job execution - send scheduled messages or invoke agent
+    this.agentRunner.agent.cronScheduler.on('execute', async ({ jobId, platform, chatId, sessionKey, message, invokeAgent }) => {
+      console.log(`[Cron] ⏰ Executing job ${jobId}${invokeAgent ? ' (invoking agent)' : ''}`)
 
       const adapter = this.adapters.get(platform)
       if (!adapter) {
@@ -105,10 +101,28 @@ class Gateway {
       }
 
       try {
-        await adapter.sendMessage(chatId, message)
-        console.log(`[Cron] Message sent for job ${jobId}`)
+        if (invokeAgent) {
+          // Run the agent with the message and send the response
+          console.log(`[Cron] Invoking agent with: ${message}`)
+          const response = await this.agentRunner.agent.runAndCollect({
+            message,
+            sessionKey: sessionKey || `cron:${jobId}`,
+            platform,
+            chatId,
+            mcpServers: this.mcpServers
+          })
+
+          if (response) {
+            await adapter.sendMessage(chatId, response)
+            console.log(`[Cron] Agent response sent for job ${jobId}`)
+          }
+        } else {
+          // Just send the message directly
+          await adapter.sendMessage(chatId, message)
+          console.log(`[Cron] Message sent for job ${jobId}`)
+        }
       } catch (err) {
-        console.error(`[Cron] Failed to send message:`, err.message)
+        console.error(`[Cron] Failed to execute job:`, err.message)
       }
     })
   }
@@ -123,6 +137,8 @@ class Gateway {
 
     await this.initMcpServers()
     this.agentRunner.setMcpServers(this.mcpServers)
+
+    this.agentRunner.agent.gateway = this
 
     // Initialize WhatsApp adapter
     if (config.whatsapp.enabled) {
@@ -244,11 +260,7 @@ class Gateway {
           await adapter.stopTyping(message.chatId)
         }
 
-        console.log(`[${platform.toUpperCase()}] Sending response:`)
-        console.log(`  Text: ${response.substring(0, 100)}${response.length > 100 ? '...' : ''}`)
-
-        await adapter.sendMessage(message.chatId, response)
-        console.log(`[${platform.toUpperCase()}] Response sent`)
+        console.log(`[${platform.toUpperCase()}] Done`)
       } catch (error) {
         console.error(`[${platform.toUpperCase()}] Error:`, error.message)
 

@@ -178,10 +178,10 @@ export default class AgentRunner extends EventEmitter {
   }
 
   /**
-   * Execute a single agent run
+   * Execute a single agent run with streaming messages
    */
   async executeRun(run) {
-    const { sessionKey, message, image, mcpServers } = run
+    const { sessionKey, message, adapter, chatId, image, mcpServers } = run
     const platform = this.extractPlatform(sessionKey)
 
     // Record user message in transcript
@@ -192,23 +192,42 @@ export default class AgentRunner extends EventEmitter {
     })
 
     try {
-      // Run the agent directly with Composio tools
-      const response = await this.agent.runAndCollect({
+      let currentText = ''
+      let fullText = ''
+
+      for await (const chunk of this.agent.run({
         message,
         sessionKey,
         platform,
-        chatId: run.chatId,
+        chatId,
         image,
         mcpServers
-      })
+      })) {
+        // Accumulate text
+        if (chunk.type === 'text') {
+          currentText += chunk.content
+          fullText += chunk.content
+        }
 
-      // Record assistant response in transcript
+        // Tool called - send accumulated text first
+        if (chunk.type === 'tool_use' && currentText.trim()) {
+          await adapter.sendMessage(chatId, currentText.trim())
+          currentText = ''
+        }
+
+        // Done - send any remaining text
+        if (chunk.type === 'done' && currentText.trim()) {
+          await adapter.sendMessage(chatId, currentText.trim())
+        }
+      }
+
+      // Record full response in transcript
       this.sessionManager.appendTranscript(sessionKey, {
         role: 'assistant',
-        content: response
+        content: fullText
       })
 
-      return response
+      return fullText
     } catch (error) {
       console.error(`Agent run failed for ${sessionKey}:`, error)
       throw error

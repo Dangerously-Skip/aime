@@ -55,13 +55,14 @@ class CronScheduler extends EventEmitter {
   }
 
   scheduleDelayed(params) {
-    const { platform, chatId, message, delaySeconds, description, sessionKey } = params
+    const { platform, chatId, message, delaySeconds, description, sessionKey, invokeAgent } = params
     const id = this.generateId()
     const executeAt = Date.now() + (delaySeconds * 1000)
 
     const job = {
       id, type: 'delayed', platform, chatId, sessionKey, message, executeAt,
       description: description || `Send in ${delaySeconds}s`,
+      invokeAgent: invokeAgent || false,
       createdAt: Date.now()
     }
 
@@ -73,13 +74,14 @@ class CronScheduler extends EventEmitter {
   }
 
   scheduleRecurring(params) {
-    const { platform, chatId, message, intervalSeconds, description, sessionKey } = params
+    const { platform, chatId, message, intervalSeconds, description, sessionKey, invokeAgent } = params
     const id = this.generateId()
 
     const job = {
       id, type: 'recurring', platform, chatId, sessionKey, message,
       intervalMs: intervalSeconds * 1000,
       description: description || `Every ${intervalSeconds}s`,
+      invokeAgent: invokeAgent || false,
       createdAt: Date.now(), lastRun: null, runCount: 0
     }
 
@@ -91,12 +93,13 @@ class CronScheduler extends EventEmitter {
   }
 
   scheduleCron(params) {
-    const { platform, chatId, message, cron, description, sessionKey } = params
+    const { platform, chatId, message, cron, description, sessionKey, invokeAgent } = params
     const id = this.generateId()
 
     const job = {
       id, type: 'cron', platform, chatId, sessionKey, message, cron,
       description: description || `Cron: ${cron}`,
+      invokeAgent: invokeAgent || false,
       createdAt: Date.now(), lastRun: null, runCount: 0
     }
 
@@ -196,8 +199,12 @@ class CronScheduler extends EventEmitter {
     this.saveJobs()
 
     this.emit('execute', {
-      jobId: job.id, platform: job.platform,
-      chatId: job.chatId, sessionKey: job.sessionKey, message: job.message
+      jobId: job.id,
+      platform: job.platform,
+      chatId: job.chatId,
+      sessionKey: job.sessionKey,
+      message: job.message,
+      invokeAgent: job.invokeAgent || false
     })
 
     if (job.type === 'delayed') this.cancel(job.id)
@@ -242,11 +249,12 @@ export function createCronMcpServer() {
     tools: [
       tool(
         'schedule_delayed',
-        'Schedule a one-time message to be sent after a delay. Use for reminders like "remind me in 30 minutes".',
+        'Schedule a one-time task after a delay. Use for reminders like "remind me in 30 minutes". Set invoke_agent=true to have the agent process the message and respond.',
         {
-          message: z.string().describe('Message to send'),
+          message: z.string().describe('Message to send, or task for the agent if invoke_agent is true'),
           delay_seconds: z.number().positive().describe('Delay in seconds before sending'),
-          description: z.string().optional().describe('Human-readable description of the reminder')
+          description: z.string().optional().describe('Human-readable description of the reminder'),
+          invoke_agent: z.boolean().optional().describe('If true, the agent will process this message and respond. If false (default), just sends the message.')
         },
         async (args) => {
           const result = scheduler.scheduleDelayed({
@@ -255,7 +263,8 @@ export function createCronMcpServer() {
             sessionKey: currentContext.sessionKey,
             message: args.message,
             delaySeconds: args.delay_seconds,
-            description: args.description
+            description: args.description,
+            invokeAgent: args.invoke_agent
           })
 
           return {
@@ -269,11 +278,12 @@ export function createCronMcpServer() {
 
       tool(
         'schedule_recurring',
-        'Schedule a recurring message at regular intervals. Use for periodic check-ins.',
+        'Schedule a recurring task at regular intervals. Set invoke_agent=true to have the agent process and respond each time.',
         {
-          message: z.string().describe('Message to send'),
-          interval_seconds: z.number().positive().describe('Interval in seconds between messages'),
-          description: z.string().optional().describe('Human-readable description')
+          message: z.string().describe('Message to send, or task for the agent if invoke_agent is true'),
+          interval_seconds: z.number().positive().describe('Interval in seconds between executions'),
+          description: z.string().optional().describe('Human-readable description'),
+          invoke_agent: z.boolean().optional().describe('If true, the agent will process this message and respond each time.')
         },
         async (args) => {
           const result = scheduler.scheduleRecurring({
@@ -282,7 +292,8 @@ export function createCronMcpServer() {
             sessionKey: currentContext.sessionKey,
             message: args.message,
             intervalSeconds: args.interval_seconds,
-            description: args.description
+            description: args.description,
+            invokeAgent: args.invoke_agent
           })
 
           return {
@@ -296,11 +307,12 @@ export function createCronMcpServer() {
 
       tool(
         'schedule_cron',
-        'Schedule a message using cron expression. Format: "minute hour day month weekday". Examples: "0 9 * * *" for 9am daily, "0 9 * * 1-5" for 9am weekdays.',
+        'Schedule a task using cron expression. Format: "minute hour day month weekday". Examples: "0 9 * * *" for 9am daily. Set invoke_agent=true to have the agent process and respond.',
         {
-          message: z.string().describe('Message to send'),
+          message: z.string().describe('Message to send, or task for the agent if invoke_agent is true'),
           cron: z.string().describe('Cron expression: "minute hour day month weekday"'),
-          description: z.string().optional().describe('Human-readable description')
+          description: z.string().optional().describe('Human-readable description'),
+          invoke_agent: z.boolean().optional().describe('If true, the agent will process this message and respond each time.')
         },
         async (args) => {
           const result = scheduler.scheduleCron({
@@ -309,7 +321,8 @@ export function createCronMcpServer() {
             sessionKey: currentContext.sessionKey,
             message: args.message,
             cron: args.cron,
-            description: args.description
+            description: args.description,
+            invokeAgent: args.invoke_agent
           })
 
           return {
