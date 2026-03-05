@@ -1,6 +1,13 @@
 <p align="center">
   <h1 align="center">Open Claude Cowork</h1>
 </p>
+
+<p align="center">
+  <a href="https://platform.composio.dev?utm_source=Github&utm_medium=Banner&utm_content=open-claude-cowork">
+    <img src="assets/open_claude_cowork_banner.png" width="800">
+  </a>
+</p>
+
 <p align="center">
   <a href="https://platform.composio.dev?utm_source=github&utm_medium=gif&utm_campaign=2101&utm_content=open-claude-cowork">
     <img src="assets/clawd-bot-video.gif" alt="Secure Clawdbot Demo" width="800">
