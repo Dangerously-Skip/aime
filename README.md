@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://platform.composio.dev?utm_source=github&utm_medium=gif&utm_campaign=2101&utm_content=open-claude-cowork">
-    <img src="assets/clawd-bot-video.gif" alt="Secure Clawdbot Demo" width="800">
+    <img src="open-claude-cowork.gif" alt="Secure Clawdbot Demo" width="800">
   </a>
 </p>
 
