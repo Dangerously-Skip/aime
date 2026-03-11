@@ -7,9 +7,73 @@
   <link rel="stylesheet" href="../shared/theme.css">
   <link rel="stylesheet" href="../shared/base.css">
   <link rel="stylesheet" href="../shared/components.css">
+  <link rel="stylesheet" href="./code.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-  <div id="app"></div>
+  <div class="code-surface">
+
+    <!-- Terminal output area -->
+    <div class="code-terminal" id="terminalOutput">
+      <!-- Empty state -->
+      <div class="code-empty" id="emptyState">
+        <pre class="code-mascot">
+    (\(\
+    ( -.-)
+    o_(")(")
+        </pre>
+        <p class="code-empty-text">Ready to code. Select a folder to get started.</p>
+      </div>
+      <!-- Messages rendered here when active -->
+    </div>
+
+    <!-- Input area -->
+    <div class="code-input-area" id="inputArea">
+      <form class="input-form" id="codeForm">
+        <div class="input-wrapper">
+          <textarea class="message-input" id="messageInput" placeholder="What do you want to build?" rows="1"></textarea>
+          <div class="input-controls">
+            <div class="left-controls">
+              <select class="permission-select" id="permissionSelect">
+                <option value="acceptEdits">Auto accept edits</option>
+                <option value="default">Ask before editing</option>
+                <option value="plan">Plan only</option>
+              </select>
+            </div>
+            <div class="right-controls">
+              <select class="model-select" id="modelSelect">
+                <option value="sonnet">Sonnet 4.6</option>
+                <option value="opus">Opus 4.6</option>
+                <option value="haiku">Haiku 4.5</option>
+              </select>
+              <button type="submit" class="send-btn" id="sendBtn" disabled>
+                <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+                  <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                </svg>
+                <svg class="stop-icon hidden" viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+                  <rect x="6" y="6" width="12" height="12" rx="2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
+      <!-- Bottom bar -->
+      <div class="code-bottom-bar">
+        <button class="folder-select-btn" id="folderSelectBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+          </svg>
+          <span id="folderLabel">Select folder</span>
+        </button>
+        <div class="code-session-info">
+          <span class="session-indicator" id="sessionIndicator"></span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
   <script type="module" src="./code.js"></script>
 </body>
 </html>
