@@ -1,0 +1,773 @@
+/* ==========================================================================
+   code.css - Code Surface Styles
+   nib Cowork - Terminal-style dark theme for Claude Code interface
+   Depends on: theme.css, base.css, components.css
+   ========================================================================== */
+
+
+/* -----------------------------------------------------------------------
+   Layout: Full-height flex column, monospace-heavy terminal aesthetic
+   ----------------------------------------------------------------------- */
+
+.code-surface {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+  background-color: var(--bg-primary);
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+
+
+/* -----------------------------------------------------------------------
+   Terminal Output: Scrollable area for messages
+   ----------------------------------------------------------------------- */
+
+.code-terminal {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-4) var(--space-6);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  background-color: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+
+/* -----------------------------------------------------------------------
+   Empty State: Centered mascot and prompt text
+   ----------------------------------------------------------------------- */
+
+.code-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: var(--space-12);
+  text-align: center;
+  gap: var(--space-4);
+  user-select: none;
+}
+
+.code-mascot {
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  line-height: var(--leading-normal);
+  color: var(--text-tertiary);
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  white-space: pre;
+}
+
+.code-empty-text {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  max-width: 360px;
+  line-height: var(--leading-relaxed);
+}
+
+
+/* -----------------------------------------------------------------------
+   Terminal Messages: Shared base for all message blocks
+   ----------------------------------------------------------------------- */
+
+.code-message {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  animation: termFadeIn 0.15s ease-out;
+}
+
+@keyframes termFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+/* -----------------------------------------------------------------------
+   User Prompt: Shell-like prompt prefix
+   ----------------------------------------------------------------------- */
+
+.code-user-prompt {
+  color: var(--accent-primary);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.code-user-prompt::before {
+  content: '';
+}
+
+
+/* -----------------------------------------------------------------------
+   Assistant Output: Normal terminal text
+   ----------------------------------------------------------------------- */
+
+.code-assistant-output {
+  color: var(--text-primary);
+  width: 100%;
+  padding: var(--space-1) 0;
+}
+
+.code-assistant-output .markdown-content {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.code-assistant-output .markdown-content p {
+  margin: 0 0 var(--space-2) 0;
+}
+
+.code-assistant-output .markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.code-assistant-output .markdown-content ul,
+.code-assistant-output .markdown-content ol {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-6);
+}
+
+.code-assistant-output .markdown-content ul {
+  list-style: disc;
+}
+
+.code-assistant-output .markdown-content ol {
+  list-style: decimal;
+}
+
+.code-assistant-output .markdown-content li {
+  margin-bottom: var(--space-1);
+  color: var(--text-primary);
+}
+
+.code-assistant-output .markdown-content h1,
+.code-assistant-output .markdown-content h2,
+.code-assistant-output .markdown-content h3,
+.code-assistant-output .markdown-content h4 {
+  font-family: var(--font-mono);
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.code-assistant-output .markdown-content h1:first-child,
+.code-assistant-output .markdown-content h2:first-child,
+.code-assistant-output .markdown-content h3:first-child {
+  margin-top: 0;
+}
+
+.code-assistant-output .markdown-content pre {
+  margin: var(--space-2) 0;
+  border: 1px solid var(--border-secondary);
+  background-color: var(--code-bg);
+  border-radius: var(--radius-sm);
+}
+
+.code-assistant-output .markdown-content code {
+  font-family: var(--font-mono);
+  font-size: inherit;
+}
+
+.code-assistant-output .markdown-content table {
+  width: 100%;
+  margin: var(--space-2) 0;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.code-assistant-output .markdown-content th,
+.code-assistant-output .markdown-content td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-secondary);
+  text-align: left;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+}
+
+.code-assistant-output .markdown-content th {
+  background-color: var(--surface-elevated);
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+}
+
+
+/* -----------------------------------------------------------------------
+   Tool Block: Left-bordered monospace tool invocation display
+   ----------------------------------------------------------------------- */
+
+.code-tool-block {
+  border-left: 3px solid var(--accent-primary);
+  padding: 0;
+  margin: var(--space-2) 0;
+  background-color: var(--bg-secondary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  overflow: hidden;
+}
+
+.code-tool-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--surface-elevated);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--transition-fast);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.code-tool-header:hover {
+  background-color: var(--surface-hover);
+}
+
+.code-tool-header .tool-icon {
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+
+.code-tool-header .tool-name {
+  font-weight: var(--weight-semibold);
+  color: var(--accent-primary);
+  font-size: var(--text-sm);
+}
+
+.code-tool-header .tool-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+}
+
+.code-tool-header .tool-status.running {
+  color: var(--accent-primary);
+}
+
+.code-tool-header .tool-status.success {
+  color: var(--success);
+}
+
+.code-tool-header .tool-status.error {
+  color: var(--error);
+}
+
+.code-tool-content {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--code-text);
+  background-color: var(--code-bg);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-secondary);
+}
+
+.code-tool-content pre {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  font-size: inherit;
+  color: inherit;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.code-tool-content.hidden {
+  display: none;
+}
+
+/* Tool result output section */
+.code-tool-output {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background-color: var(--bg-secondary);
+  border-top: 1px solid var(--border-secondary);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.code-tool-output.hidden {
+  display: none;
+}
+
+.code-tool-output.error {
+  color: var(--error);
+  background-color: var(--error-muted);
+}
+
+/* Tool-specific border colors */
+.code-tool-block[data-tool="Read"] {
+  border-left-color: var(--info);
+}
+
+.code-tool-block[data-tool="Write"],
+.code-tool-block[data-tool="Edit"] {
+  border-left-color: var(--success);
+}
+
+.code-tool-block[data-tool="Bash"] {
+  border-left-color: var(--warning);
+}
+
+.code-tool-block[data-tool="Grep"],
+.code-tool-block[data-tool="Glob"] {
+  border-left-color: #b57edc;
+}
+
+
+/* -----------------------------------------------------------------------
+   Diff Block: Green/red diff coloring for file changes
+   ----------------------------------------------------------------------- */
+
+.code-diff-block {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  margin: var(--space-1) 0;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.code-diff-block .diff-added {
+  background-color: rgba(129, 178, 154, 0.1);
+  color: var(--success);
+}
+
+.code-diff-block .diff-removed {
+  background-color: rgba(224, 122, 95, 0.1);
+  color: var(--error);
+}
+
+.code-diff-block .diff-context {
+  color: var(--text-tertiary);
+}
+
+
+/* -----------------------------------------------------------------------
+   Thinking Section: Dim italic text, collapsible
+   ----------------------------------------------------------------------- */
+
+.code-thinking {
+  margin: var(--space-1) 0;
+}
+
+.code-thinking .thinking-section {
+  border-color: var(--border-secondary);
+  font-family: var(--font-mono);
+}
+
+.code-thinking .thinking-header {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.code-thinking .thinking-content {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+
+/* -----------------------------------------------------------------------
+   Error Block: Red-tinted terminal error display
+   ----------------------------------------------------------------------- */
+
+.code-error {
+  color: var(--error);
+  background-color: var(--error-muted);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--error);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0;
+}
+
+
+/* -----------------------------------------------------------------------
+   Loading Indicator: Terminal-style spinner
+   ----------------------------------------------------------------------- */
+
+.code-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.code-loading .spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 1.5px;
+}
+
+
+/* -----------------------------------------------------------------------
+   Input Area: Bottom section with border-top
+   ----------------------------------------------------------------------- */
+
+.code-input-area {
+  flex-shrink: 0;
+  padding: var(--space-3) var(--space-6) var(--space-3);
+  background-color: var(--bg-primary);
+  border-top: 1px solid var(--border-secondary);
+}
+
+.code-input-area .input-form {
+  max-width: 100%;
+  margin: 0;
+}
+
+.code-input-area .input-wrapper {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--transition-fast),
+              box-shadow var(--transition-fast);
+}
+
+.code-input-area .input-wrapper:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
+.code-input-area .message-input {
+  width: 100%;
+  min-height: 24px;
+  max-height: 160px;
+  padding: var(--space-3) var(--space-4) 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  resize: none;
+  line-height: var(--leading-normal);
+  overflow-y: auto;
+}
+
+.code-input-area .message-input::placeholder {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.code-input-area .message-input:focus {
+  outline: none;
+}
+
+.code-input-area .input-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+}
+
+.code-input-area .left-controls,
+.code-input-area .right-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+
+/* -----------------------------------------------------------------------
+   Permission Select: Small dropdown for edit permission mode
+   ----------------------------------------------------------------------- */
+
+.permission-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: var(--space-1) var(--space-6) var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background-color: var(--surface-elevated);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23a89e8f' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast),
+              color var(--transition-fast);
+}
+
+.permission-select:hover {
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+.permission-select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+  outline: none;
+}
+
+.permission-select option {
+  background-color: var(--surface-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+
+/* -----------------------------------------------------------------------
+   Model Select: Reuse styling from chat but monospace
+   ----------------------------------------------------------------------- */
+
+.code-input-area .model-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: var(--space-1) var(--space-6) var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background-color: var(--surface-elevated);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23a89e8f' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast),
+              color var(--transition-fast);
+}
+
+.code-input-area .model-select:hover {
+  border-color: var(--border-primary);
+  color: var(--text-primary);
+}
+
+.code-input-area .model-select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+  outline: none;
+}
+
+.code-input-area .model-select option {
+  background-color: var(--surface-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+
+/* -----------------------------------------------------------------------
+   Send Button: Circular accent-colored send/stop
+   ----------------------------------------------------------------------- */
+
+.code-input-area .send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--text-on-accent);
+  background-color: var(--accent-primary);
+  border: none;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background-color var(--transition-fast),
+              opacity var(--transition-fast);
+}
+
+.code-input-area .send-btn:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+.code-input-area .send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.code-input-area .send-btn.streaming {
+  background-color: var(--error);
+}
+
+.code-input-area .send-btn.streaming:hover {
+  background-color: var(--accent-active);
+}
+
+.code-input-area .send-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+
+/* -----------------------------------------------------------------------
+   Bottom Bar: Folder selector + session info
+   ----------------------------------------------------------------------- */
+
+.code-bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-1) 0;
+}
+
+.folder-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--transition-fast),
+              background-color var(--transition-fast);
+}
+
+.folder-select-btn:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-hover);
+}
+
+.folder-select-btn svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.folder-select-btn:hover svg {
+  color: var(--accent-primary);
+}
+
+.folder-select-btn .folder-path {
+  color: var(--accent-primary);
+  font-weight: var(--weight-semibold);
+}
+
+
+/* -----------------------------------------------------------------------
+   Session Indicator: Small dot + text showing session status
+   ----------------------------------------------------------------------- */
+
+.code-session-info {
+  display: flex;
+  align-items: center;
+}
+
+.session-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.session-indicator::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background-color: var(--text-tertiary);
+}
+
+.session-indicator.active::before {
+  background-color: var(--success);
+}
+
+.session-indicator.streaming::before {
+  background-color: var(--accent-primary);
+  animation: sessionPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes sessionPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+
+/* -----------------------------------------------------------------------
+   Message Actions: Copy button for assistant messages
+   ----------------------------------------------------------------------- */
+
+.code-message-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.code-assistant-output:hover .code-message-actions {
+  opacity: 1;
+}
+
+.code-message-actions .action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--transition-fast),
+              background-color var(--transition-fast);
+}
+
+.code-message-actions .action-btn:hover {
+  color: var(--text-primary);
+  background-color: var(--surface-hover);
+}
+
+.code-message-actions .action-btn svg {
+  width: 12px;
+  height: 12px;
+}
