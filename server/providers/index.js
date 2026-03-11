@@ -1,5 +1,6 @@
 import { ClaudeProvider } from './claude-provider.js';
 import { OpencodeProvider } from './opencode-provider.js';
+import { isBedrockConfigured } from '../bedrock-env.js';
 
 // Provider registry
 const providers = {
@@ -70,6 +71,7 @@ export async function clearProviderCache() {
 
 export async function initializeProviders() {
   console.log('[Providers] Initializing providers...');
+  console.log('[Providers] Bedrock configured:', isBedrockConfigured());
   try {
     // Get and initialize opencode provider
     const opencodeProvider = getProvider('opencode');
