@@ -1,5 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { BaseProvider } from './base-provider.js';
+import { getSurfaceConfig } from '../surfaces/index.js';
+import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env.js';
 
 /**
  * Claude Agent SDK provider implementation
@@ -24,14 +26,17 @@ export class ClaudeProvider extends BaseProvider {
   }
 
   /**
-   * Abort an active query for a given chatId
+   * Abort an active query for a given chatId (and optional surfaceId)
+   * @param {string} chatId
+   * @param {string} [surfaceId]
    */
-  abort(chatId) {
-    const controller = this.abortControllers.get(chatId);
+  abort(chatId, surfaceId) {
+    const key = this.getAbortKey(chatId, surfaceId);
+    const controller = this.abortControllers.get(key);
     if (controller) {
-      console.log('[Claude] Aborting query for chatId:', chatId);
+      console.log('[Claude] Aborting query for key:', key);
       controller.abort();
-      this.abortControllers.delete(chatId);
+      this.abortControllers.delete(key);
       return true;
     }
     return false;
@@ -39,33 +44,86 @@ export class ClaudeProvider extends BaseProvider {
 
   /**
    * Execute a query using Claude Agent SDK
-   * Matches the exact streaming logic from server.js
+   * Supports optional surface-routed configuration via surfaceId.
    *
    * @param {Object} params
    * @param {string} params.prompt - The user message
    * @param {string} params.chatId - Chat session identifier
-   * @param {Object} params.mcpServers - MCP server configurations (including Composio)
+   * @param {string} [params.surfaceId] - Surface identifier for config routing (e.g. 'chat', 'cowork', 'code')
+   * @param {Object} [params.mcpServers] - MCP server configurations (including Composio)
    * @param {string[]} [params.allowedTools] - List of allowed tool names
    * @param {number} [params.maxTurns] - Maximum conversation turns
+   * @param {string} [params.systemPrompt] - System prompt override
+   * @param {string} [params.model] - Model name override
    * @yields {Object} Normalized response chunks
    */
   async *query(params) {
     const {
       prompt,
       chatId,
-      mcpServers = {},
-      allowedTools = this.defaultAllowedTools,
-      maxTurns = this.defaultMaxTurns
+      surfaceId,
+      mcpServers: explicitMcpServers,
+      allowedTools: explicitAllowedTools,
+      maxTurns: explicitMaxTurns,
+      systemPrompt: explicitSystemPrompt,
+      model: explicitModel,
     } = params;
 
-    // Build query options - exact match to server.js structure
+    // Load surface config if surfaceId is provided, otherwise use defaults
+    let surfaceConfig = null;
+    if (surfaceId) {
+      try {
+        surfaceConfig = getSurfaceConfig(surfaceId);
+        console.log('[Claude] Loaded surface config for:', surfaceId);
+      } catch (err) {
+        console.warn('[Claude] Unknown surface:', surfaceId, '- using defaults');
+      }
+    }
+
+    // Merge: explicit params > surface config > constructor defaults
+    const allowedTools = explicitAllowedTools
+      || surfaceConfig?.allowedTools
+      || this.defaultAllowedTools;
+    const maxTurns = explicitMaxTurns
+      ?? surfaceConfig?.maxTurns
+      ?? this.defaultMaxTurns;
+    const mcpServers = explicitMcpServers
+      || surfaceConfig?.mcpServers
+      || {};
+    const systemPrompt = explicitSystemPrompt
+      || surfaceConfig?.systemPrompt
+      || undefined;
+    const model = explicitModel
+      || surfaceConfig?.model
+      || undefined;
+    const permissionMode = surfaceConfig?.permissionMode
+      || this.permissionMode;
+
+    // Build query options
     const queryOptions = {
       allowedTools,
       maxTurns,
       mcpServers,
-      permissionMode: this.permissionMode,
+      permissionMode,
       settingSources: ['user', 'project']  // Enable Skills from filesystem
     };
+
+    // Apply system prompt if available
+    if (systemPrompt) {
+      queryOptions.systemPrompt = systemPrompt;
+    }
+
+    // Apply model if available
+    if (model) {
+      queryOptions.model = model;
+    }
+
+    // Bedrock env passthrough: if AWS Bedrock is configured, merge env vars
+    // so the Agent SDK uses Bedrock inference instead of direct API
+    if (isBedrockConfigured()) {
+      queryOptions.env = { ...queryOptions.env, ...getBedrockEnv() };
+      console.log('[Claude] Bedrock env configured, routing through AWS');
+    }
 
     // Check for existing session - matches server.js session resumption logic
     const existingSessionId = chatId ? this.getSession(chatId) : null;
@@ -77,12 +135,14 @@ export class ClaudeProvider extends BaseProvider {
       console.log('[Claude] Resuming session:', existingSessionId);
     }
 
-    console.log('[Claude] Calling Claude Agent SDK...');
+    console.log('[Claude] Calling Claude Agent SDK...', surfaceId ? `(surface: ${surfaceId})` : '');
 
     // Create abort controller for this request
+    // Use composite key (surfaceId:chatId) for concurrent surface support
+    const abortKey = this.getAbortKey(chatId, surfaceId);
     const abortController = new AbortController();
     if (chatId) {
-      this.abortControllers.set(chatId, abortController);
+      this.abortControllers.set(abortKey, abortController);
     }
 
     try {
@@ -183,9 +243,9 @@ export class ClaudeProvider extends BaseProvider {
         throw error;
       }
     } finally {
-      // Clean up abort controller
+      // Clean up abort controller using composite key
       if (chatId) {
-        this.abortControllers.delete(chatId);
+        this.abortControllers.delete(abortKey);
       }
     }
   }
