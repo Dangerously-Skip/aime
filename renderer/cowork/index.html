@@ -7,9 +7,69 @@
   <link rel="stylesheet" href="../shared/theme.css">
   <link rel="stylesheet" href="../shared/base.css">
   <link rel="stylesheet" href="../shared/components.css">
+  <link rel="stylesheet" href="./cowork.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-  <div id="app"></div>
+  <div class="cowork-surface">
+
+    <!-- Empty state: hero with dot-grid background -->
+    <div class="cowork-empty" id="emptyState">
+      <div class="cowork-dot-grid"></div>
+      <div class="cowork-hero">
+        <h1 class="cowork-heading">Let's knock something off your list</h1>
+        <p class="cowork-subtitle">Cowork can handle complex tasks with file access, search, and app integrations.</p>
+      </div>
+    </div>
+
+    <!-- Active state: split layout (hidden initially) -->
+    <div class="cowork-active hidden" id="activeState">
+      <div class="cowork-conversation" id="conversationPanel">
+        <div class="cowork-messages" id="messageList"></div>
+      </div>
+      <div class="cowork-activity-panel" id="activityPanel">
+        <div class="activity-header">
+          <h3>Activity</h3>
+          <span class="activity-count" id="activityCount">0 tool calls</span>
+        </div>
+        <div class="activity-feed" id="activityFeed"></div>
+      </div>
+    </div>
+
+    <!-- Input area: always visible at bottom -->
+    <div class="cowork-input-area" id="inputArea">
+      <div class="cowork-input-row">
+        <button class="folder-picker-btn" id="folderPicker">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+          </svg>
+          <span id="folderLabel">Work in a folder</span>
+        </button>
+        <form class="input-form" id="coworkForm">
+          <div class="input-wrapper">
+            <textarea class="message-input" id="messageInput" placeholder="What would you like to work on?" rows="1"></textarea>
+            <div class="input-controls">
+              <div class="right-controls">
+                <select class="model-select" id="modelSelect">
+                  <option value="opus">Opus 4.6</option>
+                  <option value="sonnet">Sonnet 4.6</option>
+                  <option value="haiku">Haiku 4.5</option>
+                </select>
+                <button type="submit" class="send-btn cowork-go-btn" id="sendBtn" disabled>
+                  Let's go
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                    <path d="M5 12h14M12 5l7 7-7 7"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
   <script type="module" src="./cowork.js"></script>
 </body>
 </html>
