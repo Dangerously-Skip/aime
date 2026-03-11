@@ -29,10 +29,13 @@ export class BaseProvider {
    * @param {Object} params
    * @param {string} params.prompt - The user message
    * @param {string} params.chatId - Chat session identifier
+   * @param {string} [params.surfaceId] - Surface identifier for config routing (e.g. 'chat', 'cowork', 'code')
    * @param {string} params.userId - User identifier
    * @param {Object} params.mcpServers - MCP server configurations
    * @param {string[]} params.allowedTools - List of allowed tool names
    * @param {number} params.maxTurns - Maximum conversation turns
+   * @param {string} [params.systemPrompt] - System prompt override
+   * @param {string} [params.model] - Model name override
    * @yields {Object} Streaming response chunks
    */
   async *query(params) {
@@ -58,11 +61,24 @@ export class BaseProvider {
   }
 
   /**
+   * Build a composite key for abort controller tracking.
+   * When surfaceId is provided, multiple surfaces can run concurrent queries
+   * for the same chatId without colliding.
+   * @param {string} chatId
+   * @param {string} [surfaceId]
+   * @returns {string}
+   */
+  getAbortKey(chatId, surfaceId) {
+    return surfaceId ? `${surfaceId}:${chatId}` : chatId;
+  }
+
+  /**
    * Abort an active query for a given chatId
    * @param {string} chatId
+   * @param {string} [surfaceId] - Surface identifier for concurrent surface support
    * @returns {boolean} True if aborted, false if no active query
    */
-  abort(chatId) {
+  abort(chatId, surfaceId) {
     // Override in subclass to implement abort functionality
     return false;
   }
