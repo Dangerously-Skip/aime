@@ -1,0 +1,335 @@
+/* ==========================================================================
+   theme.css - Design System Custom Properties
+   Open Claude Cowork - Warm Dark Theme (Claude Desktop aesthetic)
+   ========================================================================== */
+
+:root {
+  /* -----------------------------------------------------------------------
+     COLOR SYSTEM - Warm Dark Palette
+     ----------------------------------------------------------------------- */
+
+  /* Backgrounds (warm dark, increasing lightness) */
+  --bg-primary: #1a1714;
+  --bg-secondary: #242019;
+  --bg-tertiary: #2d2820;
+
+  /* Surfaces (for layered UI elements) */
+  --surface-primary: #1a1714;
+  --surface-secondary: #242019;
+  --surface-elevated: #352f27;
+  --surface-hover: #3d3529;
+  --surface-active: #453c33;
+  --surface-overlay: rgba(26, 23, 20, 0.85);
+
+  /* Text (warm off-whites descending to muted) */
+  --text-primary: #e8e0d4;
+  --text-secondary: #a89e8f;
+  --text-tertiary: #7a7064;
+  --text-on-accent: #ffffff;
+  --text-disabled: #574f46;
+
+  /* Accent - Terracotta */
+  --accent-primary: #e07a5f;
+  --accent-hover: #e8917b;
+  --accent-active: #d66a4e;
+  --accent-muted: rgba(224, 122, 95, 0.15);
+  --accent-subtle: rgba(224, 122, 95, 0.08);
+
+  /* Semantic Colors */
+  --success: #81b29a;
+  --success-muted: rgba(129, 178, 154, 0.15);
+  --warning: #f2cc8f;
+  --warning-muted: rgba(242, 204, 143, 0.15);
+  --error: #e07a5f;
+  --error-muted: rgba(224, 122, 95, 0.15);
+  --info: #6b8cce;
+  --info-muted: rgba(107, 140, 206, 0.15);
+
+  /* Borders */
+  --border-primary: #3d3529;
+  --border-secondary: #2d2820;
+  --border-subtle: #252119;
+  --border-focus: #e07a5f;
+  --border-error: #e07a5f;
+
+  /* Code Block Colors */
+  --code-bg: #1e1b17;
+  --code-text: #e0d6cc;
+  --code-keyword: #e07a5f;
+  --code-string: #81b29a;
+  --code-number: #f2cc8f;
+  --code-comment: #6b6358;
+  --code-function: #6b8cce;
+  --code-variable: #e8e0d4;
+  --code-operator: #a89e8f;
+  --code-type: #d4a574;
+  --code-punctuation: #7a7064;
+  --code-line-highlight: rgba(224, 122, 95, 0.08);
+  --code-line-number: #574f46;
+  --code-selection: rgba(224, 122, 95, 0.2);
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.3), 0 2px 4px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4), 0 4px 8px rgba(0, 0, 0, 0.25);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.5), 0 8px 16px rgba(0, 0, 0, 0.3);
+  --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+
+  /* -----------------------------------------------------------------------
+     TYPOGRAPHY
+     ----------------------------------------------------------------------- */
+
+  /* Font Families */
+  --font-sans: -apple-system, 'SF Pro Display', BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  --font-serif: 'EB Garamond', Georgia, 'Times New Roman', serif;
+
+  /* Font Sizes */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 28px;
+  --text-3xl: 36px;
+
+  /* Line Heights */
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+
+  /* Font Weights */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Letter Spacing */
+  --tracking-tight: -0.5px;
+  --tracking-normal: 0;
+  --tracking-wide: 0.3px;
+  --tracking-wider: 0.5px;
+
+  /* -----------------------------------------------------------------------
+     SPACING & LAYOUT
+     ----------------------------------------------------------------------- */
+
+  /* Border Radius */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /* Spacing Scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* -----------------------------------------------------------------------
+     TRANSITIONS & ANIMATIONS
+     ----------------------------------------------------------------------- */
+
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* -----------------------------------------------------------------------
+     Z-INDEX SCALE
+     ----------------------------------------------------------------------- */
+
+  --z-base: 0;
+  --z-elevated: 10;
+  --z-sticky: 100;
+  --z-dropdown: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+}
+
+
+/* ==========================================================================
+   diff2html Dark Theme Overrides
+   For the Cowork/Code diff viewer
+   ========================================================================== */
+
+.d2h-wrapper {
+  --d2h-bg-color: var(--bg-primary);
+  --d2h-border-color: var(--border-secondary);
+}
+
+.d2h-file-wrapper {
+  border-color: var(--border-secondary) !important;
+  background-color: var(--bg-primary) !important;
+  border-radius: var(--radius-md) !important;
+  margin-bottom: var(--space-3) !important;
+}
+
+.d2h-file-header {
+  background-color: var(--surface-elevated) !important;
+  border-bottom-color: var(--border-secondary) !important;
+  padding: var(--space-2) var(--space-4) !important;
+}
+
+.d2h-file-name-wrapper {
+  color: var(--text-primary) !important;
+  font-family: var(--font-mono) !important;
+  font-size: var(--text-sm) !important;
+}
+
+.d2h-file-name {
+  color: var(--text-primary) !important;
+}
+
+.d2h-tag {
+  background-color: var(--accent-muted) !important;
+  color: var(--accent-primary) !important;
+  border-color: transparent !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: var(--text-xs) !important;
+}
+
+.d2h-diff-table {
+  font-family: var(--font-mono) !important;
+  font-size: var(--text-sm) !important;
+  border-color: var(--border-secondary) !important;
+}
+
+.d2h-code-line,
+.d2h-code-side-line {
+  background-color: var(--bg-primary) !important;
+  color: var(--code-text) !important;
+  padding: 0 var(--space-2) !important;
+}
+
+.d2h-code-line-ctn {
+  color: var(--code-text) !important;
+}
+
+/* Line numbers */
+.d2h-code-linenumber {
+  background-color: var(--bg-secondary) !important;
+  color: var(--code-line-number) !important;
+  border-right-color: var(--border-secondary) !important;
+  font-family: var(--font-mono) !important;
+  font-size: var(--text-xs) !important;
+}
+
+/* Added lines */
+.d2h-ins {
+  background-color: rgba(129, 178, 154, 0.1) !important;
+  border-color: rgba(129, 178, 154, 0.2) !important;
+}
+
+.d2h-ins .d2h-code-line-ctn {
+  color: var(--success) !important;
+}
+
+.d2h-code-line-ctn .d2h-ins {
+  background-color: rgba(129, 178, 154, 0.2) !important;
+}
+
+.d2h-ins .d2h-code-linenumber {
+  background-color: rgba(129, 178, 154, 0.12) !important;
+  color: var(--success) !important;
+  border-right-color: rgba(129, 178, 154, 0.2) !important;
+}
+
+/* Deleted lines */
+.d2h-del {
+  background-color: rgba(224, 122, 95, 0.1) !important;
+  border-color: rgba(224, 122, 95, 0.2) !important;
+}
+
+.d2h-del .d2h-code-line-ctn {
+  color: var(--error) !important;
+}
+
+.d2h-code-line-ctn .d2h-del {
+  background-color: rgba(224, 122, 95, 0.2) !important;
+}
+
+.d2h-del .d2h-code-linenumber {
+  background-color: rgba(224, 122, 95, 0.12) !important;
+  color: var(--error) !important;
+  border-right-color: rgba(224, 122, 95, 0.2) !important;
+}
+
+/* Info/context lines */
+.d2h-info {
+  background-color: var(--surface-elevated) !important;
+  color: var(--text-secondary) !important;
+  border-color: var(--border-secondary) !important;
+}
+
+.d2h-info .d2h-code-line-ctn {
+  color: var(--text-tertiary) !important;
+}
+
+/* Empty placeholder in side-by-side */
+.d2h-emptyplaceholder,
+.d2h-code-side-emptyplaceholder {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-secondary) !important;
+}
+
+/* File list (collapsed view) */
+.d2h-file-list-wrapper {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-secondary) !important;
+  border-radius: var(--radius-md) !important;
+  margin-bottom: var(--space-4) !important;
+}
+
+.d2h-file-list-header {
+  background-color: var(--surface-elevated) !important;
+  color: var(--text-primary) !important;
+  border-bottom-color: var(--border-secondary) !important;
+}
+
+.d2h-file-list-line {
+  color: var(--text-secondary) !important;
+}
+
+.d2h-file-list-line a {
+  color: var(--info) !important;
+}
+
+/* Stats (additions/deletions count) */
+.d2h-file-stats {
+  font-size: var(--text-xs) !important;
+}
+
+.d2h-file-stats .d2h-lines-added {
+  color: var(--success) !important;
+}
+
+.d2h-file-stats .d2h-lines-deleted {
+  color: var(--error) !important;
+}
+
+/* Diff change highlight within lines */
+.d2h-change {
+  background-color: rgba(242, 204, 143, 0.15) !important;
+}
+
+/* Side-by-side specific */
+.d2h-file-side-diff {
+  border-color: var(--border-secondary) !important;
+}
+
+.d2h-moved-tag {
+  background-color: var(--info-muted) !important;
+  color: var(--info) !important;
+  border-color: transparent !important;
+}
