@@ -3,9 +3,9 @@
 ## Current Position
 
 Phase: 1 (Backend)
-Plan: 3 (Multi-Surface Provider Refactor)
+Plan: 4 (Server API Expansion)
 Status: In progress
-Last activity: 2026-03-12 - Completed 1-3 (Multi-Surface Provider Refactor)
+Last activity: 2026-03-12 - Completed 1-4 (Server API Expansion)
 
 ## Decisions
 
@@ -21,6 +21,9 @@ Last activity: 2026-03-12 - Completed 1-3 (Multi-Surface Provider Refactor)
 | 8 | Graceful fallback on unknown surfaceId | 1-3 | Logs warning and uses defaults rather than throwing |
 | 9 | Composite abort key surfaceId:chatId | 1-3 | Prevents collisions between concurrent surface queries |
 | 10 | Bedrock env merged unconditionally when configured | 1-3 | If AWS credentials present, always route through Bedrock |
+| 11 | Register /:surfaceId before /api/chat | 1-4 | Express matches routes in registration order; parameterized route must come first |
+| 12 | Strip systemPrompt from surface configs API | 1-4 | Security: don't expose system prompts to client |
+| 13 | Surface configs committed with server.js | 1-4 | Direct import dependencies; server.js would fail without them |
 
 ## Blockers/Concerns
 
@@ -28,6 +31,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-11T23:01Z
-Stopped at: Completed 1-3 (Multi-Surface Provider Refactor)
+Last session: 2026-03-12T23:03Z
+Stopped at: Completed 1-4 (Server API Expansion)
 Resume file: None
