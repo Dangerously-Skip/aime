@@ -1,0 +1,137 @@
+/**
+ * Chunk types emitted by all providers during streaming.
+ */
+export type ChunkType =
+  | 'text'
+  | 'thinking'
+  | 'tool_use'
+  | 'tool_result'
+  | 'session_init'
+  | 'done'
+  | 'aborted'
+  | 'error'
+  | 'connected'
+  | 'status'
+  | 'assistant';
+
+/**
+ * A single streaming chunk yielded by a provider's query() method.
+ */
+export interface StreamChunk {
+  type: ChunkType;
+  provider: string;
+  content?: string;
+  message?: string;
+  session_id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  id?: string;
+  result?: unknown;
+  tool_use_id?: string;
+  isReasoning?: boolean;
+  [key: string]: unknown;
+}
+
+/**
+ * Parameters accepted by provider.query().
+ */
+export interface QueryParams {
+  prompt: string;
+  chatId: string;
+  surfaceId?: string;
+  userId?: string;
+  mcpServers?: Record<string, unknown>;
+  allowedTools?: string[];
+  maxTurns?: number;
+  systemPrompt?: string | { type: string; preset: string; append?: string };
+  model?: string;
+  attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>;
+  webSearch?: boolean;
+  projectInstructions?: string;
+  projectKnowledge?: string;
+  apiKey?: string;
+}
+
+/**
+ * Configuration passed to a provider constructor.
+ */
+export interface ProviderConfig {
+  allowedTools?: string[];
+  maxTurns?: number;
+  permissionMode?: string;
+  model?: string;
+  hostname?: string;
+  port?: number;
+  useExistingServer?: boolean;
+  existingServerUrl?: string | null;
+  [key: string]: unknown;
+}
+
+/**
+ * Base provider interface for AI agent providers.
+ * All providers must implement these methods.
+ */
+export abstract class BaseProvider {
+  config: ProviderConfig;
+  sessions: Map<string, string>;
+
+  constructor(config: ProviderConfig = {}) {
+    this.config = config;
+    this.sessions = new Map();
+  }
+
+  /**
+   * Get the provider name.
+   */
+  abstract get name(): string;
+
+  /**
+   * Initialize the provider.
+   */
+  async initialize(): Promise<void> {
+    // Override in subclass if needed
+  }
+
+  /**
+   * Execute a query/prompt and yield streaming responses.
+   */
+  abstract query(params: QueryParams): AsyncGenerator<StreamChunk, void, unknown>;
+
+  /**
+   * Get session ID for a chat.
+   */
+  getSession(chatId: string): string | null {
+    return this.sessions.get(chatId) || null;
+  }
+
+  /**
+   * Store a session ID for a chat.
+   */
+  setSession(chatId: string, sessionId: string): void {
+    this.sessions.set(chatId, sessionId);
+  }
+
+  /**
+   * Build a composite key for abort controller tracking.
+   * When surfaceId is provided, multiple surfaces can run concurrent queries
+   * for the same chatId without colliding.
+   */
+  getAbortKey(chatId: string, surfaceId?: string): string {
+    return surfaceId ? `${surfaceId}:${chatId}` : chatId;
+  }
+
+  /**
+   * Abort an active query for a given chatId.
+   */
+  abort(chatId: string, surfaceId?: string): boolean {
+    // Override in subclass to implement abort functionality
+    return false;
+  }
+
+  /**
+   * Cleanup resources.
+   */
+  async cleanup(): Promise<void> {
+    this.sessions.clear();
+  }
+}
