@@ -1,7 +1,7 @@
 {
   "name": "open-claude-cowork",
   "version": "1.0.0",
-  "main": "main.js",
+  "main": "main-new.js",
   "scripts": {
     "dev": "NODE_ENV=development electron .",
     "start": "electron .",
@@ -15,7 +15,8 @@
     "@opencode-ai/sdk": "latest",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "marked": "^17.0.4"
   },
   "devDependencies": {
     "electron": "^39.2.7",

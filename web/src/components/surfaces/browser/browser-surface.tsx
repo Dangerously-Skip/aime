@@ -1,0 +1,673 @@
+"use client";
+
+import { useState, useCallback, useRef, useEffect } from "react";
+import { InputArea } from "@/components/shared/input-area";
+import { MessageList } from "@/components/shared/message-list";
+import { useBrowserStore } from "@/stores/browser-store";
+import { useConversationStore } from "@/stores/conversation-store";
+import { useBrowserAgent } from "@/hooks/use-browser-agent";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import type { Message } from "@/stores/chat-store";
+import type { WebviewRef } from "@/lib/browser-tools";
+import {
+  getInspectorInjectionScript,
+  getInspectorCleanupScript,
+  getInspectorPollScript,
+  getSelectionScript,
+  captureScreenshot,
+  formatElementContext,
+  type InspectorResult,
+  type PendingContextItem,
+} from "@/lib/browser-interactions";
+import {
+  Globe,
+  Plus,
+  X,
+  ArrowLeft,
+  ArrowRight,
+  RotateCcw,
+  PanelRightClose,
+  PanelRight,
+  GripVertical,
+  Eye,
+  Brain,
+  Zap,
+  Crosshair,
+  Type,
+  Camera,
+} from "lucide-react";
+
+const EMPTY_MESSAGES: Message[] = [];
+
+function normalizeUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^[a-z0-9]+([\-\.][a-z0-9]+)*\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+}
+
+const PHASE_LABELS = {
+  idle: null,
+  observing: { icon: Eye, text: "Observing page..." },
+  thinking: { icon: Brain, text: "Thinking..." },
+  acting: { icon: Zap, text: "Acting..." },
+} as const;
+
+export function BrowserSurface() {
+  const [inputValue, setInputValue] = useState("");
+  const [urlInput, setUrlInput] = useState("");
+  const [agentVisible, setAgentVisible] = useState(true);
+  const [panelWidth, setPanelWidth] = useState(350);
+  const webviewNodeRef = useRef<(HTMLElement & WebviewRef) | null>(null);
+  const resizingRef = useRef(false);
+  const inspectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const tabs = useBrowserStore((s) => s.tabs);
+  const activeTabId = useBrowserStore((s) => s.activeTabId);
+  const addTab = useBrowserStore((s) => s.addTab);
+  const removeTab = useBrowserStore((s) => s.removeTab);
+  const setActiveTab = useBrowserStore((s) => s.setActiveTab);
+  const updateTabUrl = useBrowserStore((s) => s.updateTabUrl);
+  const currentChatId = useBrowserStore((s) => s.currentChatId);
+  const chatId = currentChatId ?? "";
+  const messages = useBrowserStore(
+    (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
+  );
+  const model = useBrowserStore((s) => s.model);
+  const isStreaming = useBrowserStore((s) => s.isStreaming);
+  const loopPhase = useBrowserStore((s) => s.loopPhase);
+  const addMessage = useBrowserStore((s) => s.addMessage);
+  const appendToLastAssistant = useBrowserStore((s) => s.appendToLastAssistant);
+  const addToolCall = useBrowserStore((s) => s.addToolCall);
+  const updateToolResult = useBrowserStore((s) => s.updateToolResult);
+  const startStreaming = useBrowserStore((s) => s.startStreaming);
+  const stopStreaming = useBrowserStore((s) => s.stopStreaming);
+  const setCurrentChat = useBrowserStore((s) => s.setCurrentChat);
+  const setLoopPhase = useBrowserStore((s) => s.setLoopPhase);
+  const inspectorMode = useBrowserStore((s) => s.inspectorMode);
+  const setInspectorMode = useBrowserStore((s) => s.setInspectorMode);
+  const pendingContext = useBrowserStore((s) => s.pendingContext);
+  const addPendingContext = useBrowserStore((s) => s.addPendingContext);
+  const removePendingContext = useBrowserStore((s) => s.removePendingContext);
+  const clearPendingContext = useBrowserStore((s) => s.clearPendingContext);
+
+  const updateConversation = useConversationStore((s) => s.updateConversation);
+  const addConversation = useConversationStore((s) => s.addConversation);
+  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+  const activeConvId = useConversationStore((s) => s.activeId);
+  const allConversations = useConversationStore((s) => s.conversations);
+
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+
+  // ── Callback ref for webview event listeners ────────────────────────────
+  const webviewCallbackRef = useCallback(
+    (node: (HTMLElement & WebviewRef) | null) => {
+      const prev = webviewNodeRef.current;
+      if (prev) {
+        prev.removeEventListener("did-navigate", handleNav);
+        prev.removeEventListener("did-navigate-in-page", handleNav);
+        prev.removeEventListener("page-title-updated", handleTitle);
+      }
+      webviewNodeRef.current = node;
+      if (node) {
+        node.addEventListener("did-navigate", handleNav);
+        node.addEventListener("did-navigate-in-page", handleNav);
+        node.addEventListener("page-title-updated", handleTitle);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  function handleNav(e: Event & { url?: string }) {
+    if (!e.url) return;
+    setUrlInput(e.url);
+    const tabId = useBrowserStore.getState().activeTabId;
+    if (tabId) useBrowserStore.getState().updateTabUrl(tabId, e.url);
+  }
+
+  function handleTitle(e: Event & { title?: string }) {
+    if (!e.title) return;
+    const tabId = useBrowserStore.getState().activeTabId;
+    if (tabId) useBrowserStore.getState().updateTabTitle(tabId, e.title);
+  }
+
+  // Ensure at least one tab exists
+  useEffect(() => {
+    if (tabs.length === 0) {
+      addTab({ id: crypto.randomUUID(), url: "", title: "New Tab", isActive: true });
+    }
+  }, [tabs.length, addTab]);
+
+  // Sync conversation
+  useEffect(() => {
+    if (!activeConvId) return;
+    const conv = allConversations.find((c) => c.id === activeConvId);
+    if (conv?.surface === "browser") setCurrentChat(activeConvId);
+  }, [activeConvId, allConversations, setCurrentChat]);
+
+  // Sync URL input with active tab
+  useEffect(() => {
+    setUrlInput(activeTab?.url || "");
+  }, [activeTab?.url]);
+
+  // ── Inspector polling ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (inspectorMode) {
+      const wv = webviewNodeRef.current;
+      if (!wv) return;
+
+      wv.executeJavaScript(getInspectorInjectionScript()).catch(() => {});
+
+      inspectorPollRef.current = setInterval(async () => {
+        try {
+          const result = await wv.executeJavaScript(getInspectorPollScript());
+          if (result) {
+            const inspectorResult = result as InspectorResult;
+            addPendingContext({
+              id: crypto.randomUUID(),
+              type: "element",
+              label: `<${inspectorResult.tag}> "${inspectorResult.text?.substring(0, 30) || ""}"`,
+              content: formatElementContext(inspectorResult),
+              timestamp: Date.now(),
+            });
+            setInspectorMode(false);
+          }
+        } catch {
+          // webview not ready
+        }
+      }, 200);
+
+      return () => {
+        if (inspectorPollRef.current) clearInterval(inspectorPollRef.current);
+        wv.executeJavaScript(getInspectorCleanupScript()).catch(() => {});
+      };
+    } else {
+      if (inspectorPollRef.current) {
+        clearInterval(inspectorPollRef.current);
+        inspectorPollRef.current = null;
+      }
+    }
+  }, [inspectorMode, addPendingContext, setInspectorMode]);
+
+  // ── Keyboard shortcut: Cmd+Shift+S for screenshot ─────────────────────
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "S") {
+        e.preventDefault();
+        handleScreenshot();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Browser agent hook ──────────────────────────────────────────────────
+  const { runAgentLoop, abort } = useBrowserAgent({
+    onText(text) {
+      const id = useBrowserStore.getState().currentChatId ?? "";
+      appendToLastAssistant(id, text);
+    },
+    onToolUse(id, name, input) {
+      const cid = useBrowserStore.getState().currentChatId ?? "";
+      addToolCall(cid, {
+        id,
+        name,
+        input,
+        status: "running",
+        startTime: Date.now(),
+      });
+    },
+    onToolResult(id, result, isError) {
+      const cid = useBrowserStore.getState().currentChatId ?? "";
+      updateToolResult(cid, id, result, isError);
+    },
+    onDone() {
+      const cid = useBrowserStore.getState().currentChatId ?? "";
+      stopStreaming(cid);
+    },
+    onError(error) {
+      const cid = useBrowserStore.getState().currentChatId ?? "";
+      stopStreaming(cid);
+      appendToLastAssistant(cid, `\n\n**Error:** ${error.message}`);
+    },
+    onPhaseChange(phase) {
+      setLoopPhase(phase);
+    },
+  });
+
+  const handleNavigate = useCallback(
+    (url: string) => {
+      const normalized = normalizeUrl(url);
+      if (!normalized) return;
+      if (activeTabId) {
+        updateTabUrl(activeTabId, normalized);
+      } else {
+        addTab({
+          id: crypto.randomUUID(),
+          url: normalized,
+          title: "New Tab",
+          isActive: true,
+        });
+      }
+      setUrlInput(normalized);
+    },
+    [activeTabId, updateTabUrl, addTab]
+  );
+
+  // ── Interaction handlers ──────────────────────────────────────────────
+  const handleToggleInspector = useCallback(() => {
+    const wv = webviewNodeRef.current;
+    if (!wv) return;
+    const next = !useBrowserStore.getState().inspectorMode;
+    if (!next) {
+      wv.executeJavaScript(getInspectorCleanupScript()).catch(() => {});
+    }
+    setInspectorMode(next);
+  }, [setInspectorMode]);
+
+  const handleGrabSelection = useCallback(async () => {
+    const wv = webviewNodeRef.current;
+    if (!wv) return;
+    try {
+      const text = (await wv.executeJavaScript(getSelectionScript())) as string;
+      if (text?.trim()) {
+        addPendingContext({
+          id: crypto.randomUUID(),
+          type: "selection",
+          label: `"${text.trim().substring(0, 40)}${text.trim().length > 40 ? "..." : ""}"`,
+          content: text.trim(),
+          timestamp: Date.now(),
+        });
+      }
+    } catch {
+      // no selection
+    }
+  }, [addPendingContext]);
+
+  const handleScreenshot = useCallback(async () => {
+    const wv = webviewNodeRef.current;
+    if (!wv) return;
+    try {
+      const dataUrl = await captureScreenshot(wv);
+      addPendingContext({
+        id: crypto.randomUUID(),
+        type: "screenshot",
+        label: "Screenshot",
+        preview: dataUrl,
+        content: dataUrl,
+        timestamp: Date.now(),
+      });
+    } catch {
+      // capture failed
+    }
+  }, [addPendingContext]);
+
+  // ── Agent submit (with conversation creation fix) ─────────────────────
+  const handleAgentSubmit = useCallback(
+    async (text: string) => {
+      // Create conversation if none exists (mirrors chat-surface pattern)
+      let id = useBrowserStore.getState().currentChatId ?? "";
+      if (!id) {
+        id = crypto.randomUUID();
+        addConversation({
+          id,
+          title: text.substring(0, 50),
+          surface: "browser",
+          lastMessage: text,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        setActiveConversation(id);
+        setCurrentChat(id);
+      }
+
+      addMessage(id, {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: text,
+        timestamp: Date.now(),
+      });
+      updateConversation(id, {
+        title: text.substring(0, 50),
+        lastMessage: text,
+        updatedAt: Date.now(),
+      });
+      addMessage(id, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+        isLoading: true,
+        isStreaming: true,
+      });
+      startStreaming(id);
+      setInputValue("");
+
+      // Capture and clear pending context
+      const context = [...useBrowserStore.getState().pendingContext];
+      clearPendingContext();
+
+      const wv = webviewNodeRef.current;
+      if (!wv) {
+        appendToLastAssistant(id, "No webview available. Navigate to a page first.");
+        stopStreaming(id);
+        return;
+      }
+
+      await runAgentLoop(text, model, wv, context.length > 0 ? context : undefined);
+    },
+    [model, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, addConversation, setActiveConversation, setCurrentChat, clearPendingContext]
+  );
+
+  // Resize handle
+  const handleMouseDown = useCallback(() => {
+    resizingRef.current = true;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const newWidth = window.innerWidth - e.clientX;
+      setPanelWidth(Math.max(250, Math.min(600, newWidth)));
+    };
+    const handleMouseUp = () => {
+      resizingRef.current = false;
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  }, []);
+
+  const phaseInfo = PHASE_LABELS[loopPhase];
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 px-2 py-1 border-b border-border bg-surface shrink-0">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors max-w-[150px] ${
+              tab.id === activeTabId
+                ? "bg-card text-foreground"
+                : "text-muted-foreground hover:bg-muted"
+            }`}
+          >
+            <Globe className="h-3 w-3 shrink-0" />
+            <span className="truncate">{tab.title || "New Tab"}</span>
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                removeTab(tab.id);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  removeTab(tab.id);
+                }
+              }}
+              className="shrink-0 hover:text-destructive"
+            >
+              <X className="h-3 w-3" />
+            </span>
+          </button>
+        ))}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6"
+          onClick={() =>
+            addTab({
+              id: crypto.randomUUID(),
+              url: "",
+              title: "New Tab",
+              isActive: true,
+            })
+          }
+        >
+          <Plus className="h-3 w-3" />
+        </Button>
+        <div className="flex-1" />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6"
+          onClick={() => setAgentVisible(!agentVisible)}
+        >
+          {agentVisible ? (
+            <PanelRightClose className="h-3.5 w-3.5" />
+          ) : (
+            <PanelRight className="h-3.5 w-3.5" />
+          )}
+        </Button>
+      </div>
+
+      {/* Navigation bar */}
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border shrink-0">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => webviewNodeRef.current?.goBack()}
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => webviewNodeRef.current?.goForward()}
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => webviewNodeRef.current?.reload()}
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </Button>
+
+        {/* Divider */}
+        <div className="w-px h-4 bg-border mx-0.5" />
+
+        {/* Inspector toggle */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={`h-7 w-7 ${inspectorMode ? "text-blue-500 bg-blue-500/10" : ""}`}
+          onClick={handleToggleInspector}
+          title="Inspect element"
+        >
+          <Crosshair className="h-3.5 w-3.5" />
+        </Button>
+
+        {/* Grab selection */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={handleGrabSelection}
+          title="Grab selected text"
+        >
+          <Type className="h-3.5 w-3.5" />
+        </Button>
+
+        {/* Screenshot */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={handleScreenshot}
+          title="Take screenshot (Cmd+Shift+S)"
+        >
+          <Camera className="h-3.5 w-3.5" />
+        </Button>
+
+        <Input
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleNavigate(urlInput);
+          }}
+          placeholder="Enter URL or search..."
+          className="h-7 text-xs flex-1 bg-card"
+        />
+      </div>
+
+      {/* Content area */}
+      <div className="flex flex-1 min-h-0">
+        {/* Browser webview */}
+        <div className={`flex-1 bg-white relative ${inspectorMode ? "ring-2 ring-blue-500 ring-inset" : ""}`}>
+          {activeTab?.url ? (
+            <webview
+              ref={webviewCallbackRef as unknown as React.RefObject<never>}
+              src={activeTab.url}
+              style={{ width: "100%", height: "100%", border: "none" }}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center bg-muted">
+              <div className="text-center space-y-5">
+                <img
+                  src="/mascot.png"
+                  alt="Mascot"
+                  width={64}
+                  height={64}
+                  className="mx-auto mascot-jiggle"
+                />
+                <p className="text-lg font-light text-muted-foreground">
+                  Where to?
+                </p>
+                <div className="grid grid-cols-3 gap-3 max-w-xs mx-auto">
+                  {[
+                    { name: "Google", url: "https://google.com", logo: "https://www.google.com/favicon.ico" },
+                    { name: "GitHub", url: "https://github.com", logo: "https://github.githubassets.com/favicons/favicon-dark.svg" },
+                    { name: "Miro", url: "https://miro.com", logo: "https://miro.com/favicon.ico" },
+                    { name: "Confluence", url: "https://confluence.atlassian.com", logo: "https://www.google.com/s2/favicons?domain=confluence.atlassian.com&sz=64" },
+                    { name: "Jira", url: "https://jira.atlassian.com", logo: "https://www.google.com/s2/favicons?domain=jira.atlassian.com&sz=64" },
+                    { name: "SharePoint", url: "https://sharepoint.com", logo: "https://www.google.com/s2/favicons?domain=sharepoint.com&sz=64" },
+                  ].map((site) => (
+                    <button
+                      key={site.name}
+                      onClick={() => handleNavigate(site.url)}
+                      className="flex flex-col items-center gap-2 rounded-xl p-3 hover:bg-background/60 transition-colors group"
+                    >
+                      <div className="h-10 w-10 rounded-xl flex items-center justify-center bg-background/40 shadow-sm group-hover:scale-110 transition-transform">
+                        <img
+                          src={site.logo}
+                          alt={site.name}
+                          width={24}
+                          height={24}
+                          className="object-contain"
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
+                        {site.name}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          {/* Inspector mode floating label */}
+          {inspectorMode && (
+            <div className="absolute top-2 left-2 bg-blue-500 text-white text-xs px-2 py-1 rounded shadow-lg pointer-events-none z-10">
+              Inspector — click to capture, ESC to cancel
+            </div>
+          )}
+        </div>
+
+        {/* Resize handle */}
+        {agentVisible && (
+          <div
+            onMouseDown={handleMouseDown}
+            className="w-1 cursor-col-resize bg-border hover:bg-primary/50 transition-colors flex items-center justify-center"
+          >
+            <GripVertical className="h-4 w-4 text-muted-foreground" />
+          </div>
+        )}
+
+        {/* Agent sidebar */}
+        {agentVisible && (
+          <div
+            className="flex flex-col bg-surface border-l border-border shrink-0"
+            style={{ width: panelWidth }}
+          >
+            <div className="px-3 py-2 border-b border-border flex items-center gap-2">
+              <span className="text-xs font-semibold">Agent</span>
+              {phaseInfo && (
+                <span className="flex items-center gap-1 text-xs text-muted-foreground animate-pulse">
+                  <phaseInfo.icon className="h-3 w-3" />
+                  {phaseInfo.text}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-1 flex-col min-h-0">
+              <MessageList messages={messages} className="text-xs" />
+
+              {/* Pending context display */}
+              {pendingContext.length > 0 && (
+                <div className="px-3 py-2 border-t border-border space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground font-medium">Context</span>
+                    <button
+                      onClick={clearPendingContext}
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {pendingContext.map((item) => (
+                      <div
+                        key={item.id}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs"
+                      >
+                        {item.type === "screenshot" && item.preview ? (
+                          <img
+                            src={item.preview}
+                            alt="Screenshot"
+                            className="h-6 w-10 rounded object-cover"
+                          />
+                        ) : item.type === "element" ? (
+                          <Crosshair className="h-3 w-3 text-blue-500 shrink-0" />
+                        ) : (
+                          <Type className="h-3 w-3 text-muted-foreground shrink-0" />
+                        )}
+                        <span className="truncate max-w-[120px]">{item.label}</span>
+                        <button
+                          onClick={() => removePendingContext(item.id)}
+                          className="hover:text-destructive shrink-0"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <InputArea
+                value={inputValue}
+                onChange={setInputValue}
+                onSubmit={handleAgentSubmit}
+                onAbort={abort}
+                isStreaming={isStreaming}
+                placeholder="Ask about this page..."
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
