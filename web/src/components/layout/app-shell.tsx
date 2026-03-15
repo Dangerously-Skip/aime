@@ -66,6 +66,9 @@ export function AppShell() {
       starred: false,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      artifacts: [],
+      timeline: [],
+      conversationIds: {},
     };
     addProject(project);
     setCreatingProject(false);

@@ -9,8 +9,15 @@ import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import { useCoworkStore } from "@/stores/cowork-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream } from "@/hooks/use-sse-stream";
+import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { useProjectContext } from "@/hooks/use-project-context";
+import { useMemoryStore } from "@/stores/memory-store";
+import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
+import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
+import { useProjectStore } from "@/stores/project-store";
+import { useAutoProject } from "@/hooks/use-auto-project";
+import { useScratchDir } from "@/hooks/use-scratch-dir";
+import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { DropOverlay } from "@/components/shared/drop-overlay";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -18,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import type { Message } from "@/stores/chat-store";
+import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
 import {
   Briefcase,
   ChevronDown,
@@ -33,6 +41,14 @@ import {
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_FILES: string[] = [];
+
+/** Truncate text at the nearest word boundary before maxLen. */
+function truncateAtWordBoundary(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const truncated = text.substring(0, maxLen);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return lastSpace > maxLen * 0.5 ? truncated.substring(0, lastSpace) : truncated;
+}
 
 const CONTEXT_TOOLS = new Set(["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Bash"]);
 const ARTIFACT_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
@@ -61,11 +77,13 @@ function SidebarCard({
   icon: Icon,
   items,
   emptyText,
+  onItemClick,
 }: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   items: string[];
   emptyText: string;
+  onItemClick?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(true);
 
@@ -91,7 +109,7 @@ function SidebarCard({
                 <button
                   key={path}
                   type="button"
-                  onClick={() => openFile(path)}
+                  onClick={() => onItemClick ? onItemClick(path) : openFile(path)}
                   className="flex w-full items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs hover:bg-muted/70 transition-colors text-left group"
                   title={path}
                 >
@@ -114,12 +132,14 @@ function SidebarPanel({
   folder,
   open,
   onToggle,
+  onArtifactClick,
 }: {
   contextFiles: string[];
   artifactFiles: string[];
   folder: string | null;
   open: boolean;
   onToggle: () => void;
+  onArtifactClick?: (path: string) => void;
 }) {
   return (
     <div className={`flex flex-col shrink-0 transition-all duration-200 ${open ? "w-[300px]" : "w-10"}`}>
@@ -169,6 +189,7 @@ function SidebarPanel({
               icon={FilePen}
               items={artifactFiles}
               emptyText="Files created or edited will appear here."
+              onItemClick={onArtifactClick}
             />
           </div>
         </ScrollArea>
@@ -181,6 +202,7 @@ export function CoworkSurface() {
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const handleFileAttach = useCallback(
     (file: AttachmentFile) => {
       setAttachments((prev) => [...prev, file]);
@@ -206,6 +228,7 @@ export function CoworkSurface() {
   const appendToLastAssistant = useCoworkStore((s) => s.appendToLastAssistant);
   const addToolCall = useCoworkStore((s) => s.addToolCall);
   const updateToolResult = useCoworkStore((s) => s.updateToolResult);
+  const updateMessage = useCoworkStore((s) => s.updateMessage);
   const addContextFile = useCoworkStore((s) => s.addContextFile);
   const addArtifactFile = useCoworkStore((s) => s.addArtifactFile);
   const startStreaming = useCoworkStore((s) => s.startStreaming);
@@ -219,7 +242,19 @@ export function CoworkSurface() {
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const displayName = useSettingsStore((s) => s.displayName);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
-  const { projectInstructions, projectKnowledge } = useProjectContext(chatId);
+  const { projectInstructions, projectKnowledge, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "cowork");
+  const scratchDir = useScratchDir(chatId);
+  const { handleFolderSelected } = useAutoProject('cowork');
+
+  const handleFolderChange = useCallback(
+    (f: string | null) => {
+      setFolder(f);
+      if (f && chatId) {
+        handleFolderSelected(f, chatId);
+      }
+    },
+    [setFolder, chatId, handleFolderSelected]
+  );
 
   useEffect(() => {
     if (!activeConvId) return;
@@ -254,6 +289,20 @@ export function CoworkSurface() {
               addContextFile(chatId, filePath);
             } else if (ARTIFACT_TOOLS.has(toolName)) {
               addArtifactFile(chatId, filePath);
+              // Also register as project artifact
+              if (currentProjectId) {
+                const fileName = filePath.split("/").pop() || filePath;
+                useProjectStore.getState().addArtifact(currentProjectId, {
+                  id: crypto.randomUUID(),
+                  name: fileName,
+                  path: filePath,
+                  type: "file",
+                  surface: "cowork",
+                  conversationId: chatId,
+                  createdAt: Date.now(),
+                  updatedAt: Date.now(),
+                });
+              }
             }
           }
           break;
@@ -267,6 +316,24 @@ export function CoworkSurface() {
           updateToolResult(chatId, id, result, event.is_error as boolean | undefined);
           break;
         }
+        case "input_request": {
+          // Agent is asking the user a question — add a question message
+          addMessage(chatId, {
+            id: (event.toolUseId as string) || `q_${Date.now()}`,
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            questionData: event.questions,
+            questionToolUseId: event.toolUseId as string,
+          });
+          break;
+        }
+        case "memory_extract":
+          handleMemoryExtractEvent(
+            event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
+            chatId,
+          );
+          break;
         case "error":
           appendToLastAssistant(
             chatId,
@@ -282,6 +349,15 @@ export function CoworkSurface() {
     },
   });
 
+  const handleQuestionAnswered = useCallback(
+    (toolUseId: string) => {
+      if (chatId) {
+        updateMessage(chatId, toolUseId, { questionAnswered: true });
+      }
+    },
+    [chatId, updateMessage]
+  );
+
   const handleSubmit = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
@@ -293,7 +369,7 @@ export function CoworkSurface() {
         id = crypto.randomUUID();
         addConversation({
           id,
-          title: trimmed.substring(0, 50),
+          title: truncateAtWordBoundary(trimmed, 50),
           surface: "cowork",
           lastMessage: trimmed,
           createdAt: Date.now(),
@@ -301,6 +377,10 @@ export function CoworkSurface() {
         });
         setActiveConversation(id);
         setCurrentChat(id);
+        // Auto-associate with project when conversation is first created
+        if (folder) {
+          handleFolderSelected(folder, id);
+        }
       }
 
       addMessage(id, {
@@ -326,6 +406,23 @@ export function CoworkSurface() {
       setInputValue("");
       const currentAttachments = [...attachments];
       setAttachments([]);
+      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
+      const priorMessages = useCoworkStore.getState().messages[id] || [];
+      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
+
+      // Register conversation with project
+      if (currentProjectId) {
+        useProjectStore.getState().addConversationToProject(currentProjectId, "cowork", id);
+      }
+
+      // Retrieve relevant memories
+      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
+        projectId: currentProjectId,
+        query: trimmed,
+      });
+      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
+      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
+
       await sendMessage(trimmed, id, "cowork", model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
@@ -333,6 +430,10 @@ export function CoworkSurface() {
         projectKnowledge: projectKnowledge || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
         apiKey: nibGatewayApiKey || undefined,
+        cwd: folder || projectFolder || scratchDir || undefined,
+        history: history.length > 0 ? history : undefined,
+        memories: memoriesStr || undefined,
+        crossSurfaceContext: crossSurfaceContext || undefined,
       });
     },
     [
@@ -436,10 +537,11 @@ export function CoworkSurface() {
                 <div className="flex items-center gap-1">
                   <AttachmentMenu
                     onFileSelect={handleFileAttach}
-                    onWebSearchToggle={() => {}}
+                    onWebSearchToggle={undefined as never}
                     webSearchEnabled={false}
+                    hideWebSearch
                   />
-                  <FolderPicker folder={folder} onFolderChange={setFolder} />
+                  <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
                 </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
@@ -465,7 +567,18 @@ export function CoworkSurface() {
         <div className="flex flex-1 min-h-0">
           {/* Messages column */}
           <div className="flex flex-1 flex-col min-w-0">
-            <MessageList messages={messages} />
+            {/* Continue in Surface handoff (when project is active) */}
+            {currentProjectId && !isStreaming && messages.length > 0 && (
+              <div className="flex items-center gap-2 px-6 py-1.5 border-b border-border/50">
+                <span className="text-xs text-muted-foreground">Continue in:</span>
+                <ContinueInSurface
+                  currentSurface="cowork"
+                  projectId={currentProjectId}
+                  conversationId={chatId}
+                />
+              </div>
+            )}
+            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">
@@ -490,7 +603,7 @@ export function CoworkSurface() {
                         onWebSearchToggle={() => {}}
                         webSearchEnabled={false}
                       />
-                      <FolderPicker folder={folder} onFolderChange={setFolder} />
+                      <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
                     </div>
                     <div className="flex items-center gap-2">
                       <ModelSelector
@@ -528,9 +641,17 @@ export function CoworkSurface() {
             folder={folder}
             open={sidebarOpen}
             onToggle={() => setSidebarOpen((prev) => !prev)}
+            onArtifactClick={setPreviewPath}
           />
         </div>
       )}
+
+      {/* Artifact file preview drawer */}
+      <FilePreviewSheet
+        path={previewPath}
+        open={!!previewPath}
+        onClose={() => setPreviewPath(null)}
+      />
     </div>
   );
 }

@@ -16,12 +16,14 @@ interface FolderPickerProps {
   folder: string | null;
   onFolderChange: (folder: string | null) => void;
   className?: string;
+  scratchActive?: boolean;
 }
 
 export function FolderPicker({
   folder,
   onFolderChange,
   className,
+  scratchActive,
 }: FolderPickerProps) {
   const { isElectron, selectFolder } = useElectron();
   const recentFolders = useSettingsStore((s) => s.recentFolders);
@@ -70,7 +72,9 @@ export function FolderPicker({
 
   const displayPath = folder
     ? folder.split("/").slice(-2).join("/")
-    : "No folder selected";
+    : scratchActive
+      ? "Scratch space"
+      : "No folder selected";
 
   return (
     <>

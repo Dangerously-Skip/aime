@@ -1,11 +1,17 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { InputArea } from "@/components/shared/input-area";
 import { MessageList } from "@/components/shared/message-list";
 import { useBrowserStore } from "@/stores/browser-store";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useSettingsStore } from "@/stores/settings-store";
 import { useBrowserAgent } from "@/hooks/use-browser-agent";
+import { useMemoryStore } from "@/stores/memory-store";
+import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
+import { useProjectStore } from "@/stores/project-store";
+import { useProjectContext } from "@/hooks/use-project-context";
+import { useHydrated } from "@/components/store-hydration";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Message } from "@/stores/chat-store";
@@ -39,6 +45,7 @@ import {
 } from "lucide-react";
 
 const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_TABS: import("@/stores/browser-store").BrowserTab[] = [];
 
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
@@ -66,14 +73,15 @@ export function BrowserSurface() {
   const resizingRef = useRef(false);
   const inspectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const tabs = useBrowserStore((s) => s.tabs);
-  const activeTabId = useBrowserStore((s) => s.activeTabId);
+  const hydrated = useHydrated();
   const addTab = useBrowserStore((s) => s.addTab);
   const removeTab = useBrowserStore((s) => s.removeTab);
   const setActiveTab = useBrowserStore((s) => s.setActiveTab);
   const updateTabUrl = useBrowserStore((s) => s.updateTabUrl);
   const currentChatId = useBrowserStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
+  const tabs = useBrowserStore((s) => (chatId ? s.tabSessions[chatId] : undefined) ?? EMPTY_TABS);
+  const activeTabId = useBrowserStore((s) => chatId ? (s.activeTabIds[chatId] ?? null) : null);
   const messages = useBrowserStore(
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
@@ -86,6 +94,7 @@ export function BrowserSurface() {
   const updateToolResult = useBrowserStore((s) => s.updateToolResult);
   const startStreaming = useBrowserStore((s) => s.startStreaming);
   const stopStreaming = useBrowserStore((s) => s.stopStreaming);
+  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
   const setCurrentChat = useBrowserStore((s) => s.setCurrentChat);
   const setLoopPhase = useBrowserStore((s) => s.setLoopPhase);
   const inspectorMode = useBrowserStore((s) => s.inspectorMode);
@@ -101,6 +110,7 @@ export function BrowserSurface() {
   const activeConvId = useConversationStore((s) => s.activeId);
   const allConversations = useConversationStore((s) => s.conversations);
 
+  const { projectId: currentProjectId } = useProjectContext(chatId, "browser");
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
   // ── Callback ref for webview event listeners ────────────────────────────
@@ -126,22 +136,27 @@ export function BrowserSurface() {
   function handleNav(e: Event & { url?: string }) {
     if (!e.url) return;
     setUrlInput(e.url);
-    const tabId = useBrowserStore.getState().activeTabId;
-    if (tabId) useBrowserStore.getState().updateTabUrl(tabId, e.url);
+    const state = useBrowserStore.getState();
+    const cid = state.currentChatId;
+    const tabId = cid ? state.activeTabIds[cid] : null;
+    if (tabId) state.updateTabUrl(tabId, e.url);
   }
 
   function handleTitle(e: Event & { title?: string }) {
     if (!e.title) return;
-    const tabId = useBrowserStore.getState().activeTabId;
-    if (tabId) useBrowserStore.getState().updateTabTitle(tabId, e.title);
+    const state = useBrowserStore.getState();
+    const cid = state.currentChatId;
+    const tabId = cid ? state.activeTabIds[cid] : null;
+    if (tabId) state.updateTabTitle(tabId, e.title);
   }
 
-  // Ensure at least one tab exists
+  // Ensure at least one tab exists (only after hydration to avoid overwriting persisted tabs)
   useEffect(() => {
+    if (!hydrated || !chatId) return;
     if (tabs.length === 0) {
       addTab({ id: crypto.randomUUID(), url: "", title: "New Tab", isActive: true });
     }
-  }, [tabs.length, addTab]);
+  }, [hydrated, chatId, tabs.length, addTab]);
 
   // Sync conversation
   useEffect(() => {
@@ -207,6 +222,13 @@ export function BrowserSurface() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Retrieve relevant memories for browser agent
+  const memories = useMemoryStore((s) => s.memories);
+  const memoriesStr = useMemo(() => {
+    const active = memories.filter((m) => !m.supersededBy).slice(0, 20);
+    return formatMemoriesForPrompt(active);
+  }, [memories]);
+
   // ── Browser agent hook ──────────────────────────────────────────────────
   const { runAgentLoop, abort } = useBrowserAgent({
     onText(text) {
@@ -239,6 +261,8 @@ export function BrowserSurface() {
     onPhaseChange(phase) {
       setLoopPhase(phase);
     },
+    apiKey: nibGatewayApiKey,
+    memories: memoriesStr || undefined,
   });
 
   const handleNavigate = useCallback(
@@ -256,8 +280,27 @@ export function BrowserSurface() {
         });
       }
       setUrlInput(normalized);
+      // Track URL as project artifact
+      if (currentProjectId && normalized) {
+        try {
+          const urlHost = new URL(normalized).hostname;
+          useProjectStore.getState().addArtifact(currentProjectId, {
+            id: crypto.randomUUID(),
+            name: urlHost,
+            path: normalized,
+            type: "url",
+            surface: "browser",
+            conversationId: chatId,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+          useProjectStore.getState().addProjectUrl(currentProjectId, normalized);
+        } catch {
+          // Invalid URL, skip
+        }
+      }
     },
-    [activeTabId, updateTabUrl, addTab]
+    [activeTabId, updateTabUrl, addTab, currentProjectId, chatId]
   );
 
   // ── Interaction handlers ──────────────────────────────────────────────
@@ -612,7 +655,7 @@ export function BrowserSurface() {
               )}
             </div>
             <div className="flex flex-1 flex-col min-h-0">
-              <MessageList messages={messages} className="text-xs" />
+              <MessageList messages={messages} className="text-xs" conversationId={chatId} />
 
               {/* Pending context display */}
               {pendingContext.length > 0 && (

@@ -37,6 +37,8 @@ interface AttachmentMenuProps {
   onAddToProject?: (projectId: string) => void
   onNewProject?: () => void
   projects?: Project[]
+  /** Hide the web search toggle (e.g. in surfaces where it's not supported) */
+  hideWebSearch?: boolean
 }
 
 export const FILE_ACCEPT = "image/*,application/pdf,.txt,.md,.csv,.json,.xml,.js,.ts,.py,.go,.rs,.rb,.java,.c,.cpp,.h,.css,.html,.yml,.yaml,.toml,.sql,.sh,.log"
@@ -120,6 +122,7 @@ export function AttachmentMenu({
   onAddToProject,
   onNewProject,
   projects,
+  hideWebSearch,
 }: AttachmentMenuProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -193,15 +196,19 @@ export function AttachmentMenu({
             </>
           )}
 
-          <DropdownMenuSeparator />
+          {!hideWebSearch && (
+            <>
+              <DropdownMenuSeparator />
 
-          <DropdownMenuCheckboxItem
-            checked={webSearchEnabled}
-            onClick={onWebSearchToggle}
-          >
-            <Globe className="h-4 w-4" />
-            Web search
-          </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={webSearchEnabled}
+                onClick={onWebSearchToggle}
+              >
+                <Globe className="h-4 w-4" />
+                Web search
+              </DropdownMenuCheckboxItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </>

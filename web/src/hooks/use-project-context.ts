@@ -2,7 +2,8 @@
 
 import { useMemo } from 'react';
 import { useConversationStore } from '@/stores/conversation-store';
-import { useProjectStore } from '@/stores/project-store';
+import { useProjectStore, type ProjectArtifact } from '@/stores/project-store';
+import { buildProjectContext } from '@/lib/project/context-builder';
 
 interface ProjectContext {
   projectInstructions: string | null;
@@ -10,9 +11,12 @@ interface ProjectContext {
   projectId: string | null;
   projectName: string | null;
   projectIcon: string | null;
+  crossSurfaceContext: string | null;
+  projectFolder: string | null;
+  projectArtifacts: ProjectArtifact[];
 }
 
-export function useProjectContext(conversationId: string): ProjectContext {
+export function useProjectContext(conversationId: string, currentSurface?: string): ProjectContext {
   const conversations = useConversationStore((s) => s.conversations);
   const projects = useProjectStore((s) => s.projects);
 
@@ -25,6 +29,9 @@ export function useProjectContext(conversationId: string): ProjectContext {
         projectId: null,
         projectName: null,
         projectIcon: null,
+        crossSurfaceContext: null,
+        projectFolder: null,
+        projectArtifacts: [],
       };
     }
 
@@ -36,6 +43,9 @@ export function useProjectContext(conversationId: string): ProjectContext {
         projectId: conversation.projectId,
         projectName: null,
         projectIcon: null,
+        crossSurfaceContext: null,
+        projectFolder: null,
+        projectArtifacts: [],
       };
     }
 
@@ -48,12 +58,25 @@ export function useProjectContext(conversationId: string): ProjectContext {
         .join('\n\n---\n\n');
     }
 
+    // Build cross-surface context
+    const surface = currentSurface || conversation.surface || '';
+    let crossSurfaceContext: string | null = null;
+    try {
+      const ctx = buildProjectContext(project, surface, conversationId);
+      crossSurfaceContext = ctx || null;
+    } catch {
+      // Context building failed, non-fatal
+    }
+
     return {
       projectInstructions: instructions,
       projectKnowledge: knowledge,
       projectId: project.id,
       projectName: project.name,
       projectIcon: project.icon || null,
+      crossSurfaceContext,
+      projectFolder: project.folder || null,
+      projectArtifacts: project.artifacts ?? [],
     };
-  }, [conversations, projects, conversationId]);
+  }, [conversations, projects, conversationId, currentSurface]);
 }

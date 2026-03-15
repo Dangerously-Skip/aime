@@ -2,6 +2,18 @@
 
 import { useCallback, useRef, useState } from 'react';
 
+/**
+ * Strip store messages to a lightweight {role, content} array suitable for the history param.
+ * Filters to user/assistant with non-empty content.
+ */
+export function stripMessagesForHistory(
+  messages: Array<{ role: string; content: string }>
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  return messages
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
+    .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface SSEEvent {
   type: string;
@@ -28,6 +40,10 @@ interface UseSSEStreamReturn {
       projectInstructions?: string
       projectKnowledge?: string
       apiKey?: string
+      cwd?: string
+      history?: Array<{ role: 'user' | 'assistant'; content: string }>
+      memories?: string
+      crossSurfaceContext?: string
     }
   ) => Promise<void>;
   isStreaming: boolean;
@@ -100,6 +116,10 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         projectInstructions?: string
         projectKnowledge?: string
         apiKey?: string
+        cwd?: string
+        history?: Array<{ role: 'user' | 'assistant'; content: string }>
+        memories?: string
+        crossSurfaceContext?: string
       }
     ): Promise<void> => {
       if (abortControllerRef.current) {
@@ -125,6 +145,10 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.projectInstructions ? { projectInstructions: extra.projectInstructions } : {}),
             ...(extra?.projectKnowledge ? { projectKnowledge: extra.projectKnowledge } : {}),
             ...(extra?.apiKey ? { apiKey: extra.apiKey } : {}),
+            ...(extra?.cwd ? { cwd: extra.cwd } : {}),
+            ...(extra?.history?.length ? { history: extra.history } : {}),
+            ...(extra?.memories ? { memories: extra.memories } : {}),
+            ...(extra?.crossSurfaceContext ? { crossSurfaceContext: extra.crossSurfaceContext } : {}),
           }),
           signal: controller.signal,
         });

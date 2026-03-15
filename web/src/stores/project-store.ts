@@ -12,6 +12,28 @@ export interface KnowledgeFile {
   addedAt: number;
 }
 
+export interface ProjectArtifact {
+  id: string;
+  name: string;
+  path: string;
+  type: 'file' | 'document' | 'url' | 'note' | 'summary';
+  mimeType?: string;
+  surface: string;
+  conversationId: string;
+  description?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectTimeline {
+  id: string;
+  surface: string;
+  conversationId: string;
+  action: string;
+  artifactIds?: string[];
+  timestamp: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -24,6 +46,12 @@ export interface Project {
   starred: boolean;
   createdAt: number;
   updatedAt: number;
+  // Cross-surface fields
+  artifacts: ProjectArtifact[];
+  timeline: ProjectTimeline[];
+  folder?: string;
+  urls?: string[];
+  conversationIds: Record<string, string[]>;  // surface → conversationIds
 }
 
 export const PROJECT_ICONS = [
@@ -39,6 +67,31 @@ export function getRandomIcon(): string {
 const PROJECT_KNOWLEDGE_LIMIT = 2 * 1024 * 1024; // 2MB per project
 const GLOBAL_KNOWLEDGE_LIMIT = 8 * 1024 * 1024;  // 8MB global
 
+/**
+ * Migrate old projects that don't have the new cross-surface fields.
+ */
+function migrateProject(p: Partial<Project> & { id: string }): Project {
+  return {
+    ...p,
+    artifacts: p.artifacts ?? [],
+    timeline: p.timeline ?? [],
+    conversationIds: p.conversationIds ?? {},
+    folder: p.folder ?? undefined,
+    urls: p.urls ?? undefined,
+    // Ensure all other fields have defaults
+    name: p.name ?? '',
+    description: p.description ?? '',
+    customInstructions: p.customInstructions ?? '',
+    knowledgeFiles: p.knowledgeFiles ?? [],
+    surfaces: p.surfaces ?? [],
+    color: p.color ?? '',
+    icon: p.icon ?? 'folder',
+    starred: p.starred ?? false,
+    createdAt: p.createdAt ?? Date.now(),
+    updatedAt: p.updatedAt ?? Date.now(),
+  } as Project;
+}
+
 interface ProjectState {
   projects: Project[];
   activeProjectId: string | null;
@@ -52,6 +105,15 @@ interface ProjectActions {
   addKnowledgeFile: (projectId: string, file: KnowledgeFile) => string | null;
   removeKnowledgeFile: (projectId: string, fileId: string) => void;
   getProject: (id: string) => Project | undefined;
+  // Cross-surface actions
+  addArtifact: (projectId: string, artifact: ProjectArtifact) => void;
+  removeArtifact: (projectId: string, artifactId: string) => void;
+  updateArtifact: (projectId: string, artifactId: string, updates: Partial<ProjectArtifact>) => void;
+  addTimelineEntry: (projectId: string, entry: ProjectTimeline) => void;
+  addConversationToProject: (projectId: string, surface: string, conversationId: string) => void;
+  getConversationsForSurface: (projectId: string, surface: string) => string[];
+  setProjectFolder: (projectId: string, folder: string) => void;
+  addProjectUrl: (projectId: string, url: string) => void;
 }
 
 export type ProjectStore = ProjectState & ProjectActions;
@@ -72,7 +134,7 @@ export const useProjectStore = create<ProjectStore>()(
 
       addProject: (project) =>
         set((state) => ({
-          projects: [project, ...state.projects],
+          projects: [migrateProject(project), ...state.projects],
         })),
 
       updateProject: (id, updates) =>
@@ -135,11 +197,134 @@ export const useProjectStore = create<ProjectStore>()(
       getProject: (id) => {
         return get().projects.find((p) => p.id === id);
       },
+
+      // ── Cross-surface actions ──────────────────────────────────────────
+
+      addArtifact: (projectId, artifact) =>
+        set((state) => ({
+          projects: state.projects.map((p) => {
+            if (p.id !== projectId) return p;
+            const migrated = migrateProject(p);
+            // Deduplicate by path — only when path is a non-empty string
+            const existing = artifact.path
+              ? migrated.artifacts.find((a) => a.path && a.path === artifact.path)
+              : null;
+            if (existing) {
+              return {
+                ...migrated,
+                artifacts: migrated.artifacts.map((a) =>
+                  a.path && a.path === artifact.path ? { ...a, ...artifact, updatedAt: Date.now() } : a
+                ),
+                updatedAt: Date.now(),
+              };
+            }
+            return {
+              ...migrated,
+              artifacts: [...migrated.artifacts, artifact],
+              updatedAt: Date.now(),
+            };
+          }),
+        })),
+
+      removeArtifact: (projectId, artifactId) =>
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId
+              ? {
+                  ...migrateProject(p),
+                  artifacts: (p.artifacts ?? []).filter((a) => a.id !== artifactId),
+                  updatedAt: Date.now(),
+                }
+              : p
+          ),
+        })),
+
+      updateArtifact: (projectId, artifactId, updates) =>
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId
+              ? {
+                  ...migrateProject(p),
+                  artifacts: (p.artifacts ?? []).map((a) =>
+                    a.id === artifactId ? { ...a, ...updates, updatedAt: Date.now() } : a
+                  ),
+                  updatedAt: Date.now(),
+                }
+              : p
+          ),
+        })),
+
+      addTimelineEntry: (projectId, entry) =>
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId
+              ? {
+                  ...migrateProject(p),
+                  timeline: [...(p.timeline ?? []), entry],
+                  updatedAt: Date.now(),
+                }
+              : p
+          ),
+        })),
+
+      addConversationToProject: (projectId, surface, conversationId) =>
+        set((state) => ({
+          projects: state.projects.map((p) => {
+            if (p.id !== projectId) return p;
+            const migrated = migrateProject(p);
+            const surfaceConvs = migrated.conversationIds[surface] ?? [];
+            if (surfaceConvs.includes(conversationId)) return p;
+            return {
+              ...migrated,
+              conversationIds: {
+                ...migrated.conversationIds,
+                [surface]: [...surfaceConvs, conversationId],
+              },
+              updatedAt: Date.now(),
+            };
+          }),
+        })),
+
+      getConversationsForSurface: (projectId, surface) => {
+        const project = get().projects.find((p) => p.id === projectId);
+        if (!project) return [];
+        return (project.conversationIds ?? {})[surface] ?? [];
+      },
+
+      setProjectFolder: (projectId, folder) =>
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId
+              ? { ...migrateProject(p), folder, updatedAt: Date.now() }
+              : p
+          ),
+        })),
+
+      addProjectUrl: (projectId, url) =>
+        set((state) => ({
+          projects: state.projects.map((p) => {
+            if (p.id !== projectId) return p;
+            const migrated = migrateProject(p);
+            const urls = migrated.urls ?? [];
+            if (urls.includes(url)) return p;
+            return {
+              ...migrated,
+              urls: [...urls, url],
+              updatedAt: Date.now(),
+            };
+          }),
+        })),
     }),
     {
       name: 'nibcowork:projects',
       storage: createJSONStorage(() => localStorage),
       skipHydration: true,
+      // Migrate on rehydration
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.projects = state.projects.map(migrateProject);
+        }
+      },
     }
   )
 );

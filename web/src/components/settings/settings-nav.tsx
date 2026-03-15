@@ -1,6 +1,6 @@
 "use client"
 
-import { User, Palette, Wrench, Link, Users, Code, Database } from "lucide-react"
+import { User, Palette, Wrench, Link, Users, Code, Database, Brain } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -10,6 +10,7 @@ const navItems = [
   { id: "connectors", label: "Connectors", icon: Link },
   { id: "cowork", label: "Cowork", icon: Users },
   { id: "code", label: "Code", icon: Code },
+  { id: "memory", label: "Memory", icon: Brain },
   { id: "data", label: "Data & Privacy", icon: Database },
 ] as const
 

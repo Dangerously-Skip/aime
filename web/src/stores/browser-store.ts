@@ -20,8 +20,8 @@ interface BrowserState {
   model: ModelId;
   isStreaming: boolean;
   loopPhase: LoopPhase;
-  tabs: BrowserTab[];
-  activeTabId: string | null;
+  tabSessions: Record<string, BrowserTab[]>;
+  activeTabIds: Record<string, string | null>;
   inspectorMode: boolean;
   pendingContext: PendingContextItem[];
 }
@@ -37,11 +37,13 @@ interface BrowserActions {
   clearMessages: (chatId: string) => void;
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
-  addTab: (tab: BrowserTab) => void;
-  removeTab: (tabId: string) => void;
-  setActiveTab: (tabId: string) => void;
-  updateTabUrl: (tabId: string, url: string) => void;
-  updateTabTitle: (tabId: string, title: string) => void;
+  addTab: (tab: BrowserTab, chatId?: string) => void;
+  removeTab: (tabId: string, chatId?: string) => void;
+  setActiveTab: (tabId: string, chatId?: string) => void;
+  updateTabUrl: (tabId: string, url: string, chatId?: string) => void;
+  updateTabTitle: (tabId: string, title: string, chatId?: string) => void;
+  getTabsForChat: (chatId: string) => BrowserTab[];
+  getActiveTabIdForChat: (chatId: string) => string | null;
   setLoopPhase: (phase: LoopPhase) => void;
   setInspectorMode: (active: boolean) => void;
   addPendingContext: (item: PendingContextItem) => void;
@@ -53,14 +55,14 @@ export type BrowserStore = BrowserState & BrowserActions;
 
 export const useBrowserStore = create<BrowserStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       messages: {},
       currentChatId: null,
       model: 'sonnet',
       isStreaming: false,
       loopPhase: 'idle',
-      tabs: [],
-      activeTabId: null,
+      tabSessions: {},
+      activeTabIds: {},
       inspectorMode: false,
       pendingContext: [],
 
@@ -160,47 +162,98 @@ export const useBrowserStore = create<BrowserStore>()(
 
       setLoopPhase: (phase) => set({ loopPhase: phase }),
 
-      addTab: (tab) =>
-        set((state) => ({
-          tabs: [...state.tabs.map((t) => ({ ...t, isActive: false })), { ...tab, isActive: true }],
-          activeTabId: tab.id,
-        })),
+      getTabsForChat: (chatId: string) => {
+        return get().tabSessions[chatId] ?? [];
+      },
 
-      removeTab: (tabId) =>
+      getActiveTabIdForChat: (chatId: string) => {
+        return get().activeTabIds[chatId] ?? null;
+      },
+
+      addTab: (tab, chatId) =>
         set((state) => {
-          const filtered = state.tabs.filter((t) => t.id !== tabId);
-          const wasActive = state.activeTabId === tabId;
+          const cid = chatId ?? state.currentChatId;
+          if (!cid) return state;
+          const existing = state.tabSessions[cid] ?? [];
+          return {
+            tabSessions: {
+              ...state.tabSessions,
+              [cid]: [...existing.map((t) => ({ ...t, isActive: false })), { ...tab, isActive: true }],
+            },
+            activeTabIds: { ...state.activeTabIds, [cid]: tab.id },
+          };
+        }),
+
+      removeTab: (tabId, chatId) =>
+        set((state) => {
+          const cid = chatId ?? state.currentChatId;
+          if (!cid) return state;
+          const tabs = state.tabSessions[cid] ?? [];
+          const filtered = tabs.filter((t) => t.id !== tabId);
+          const wasActive = state.activeTabIds[cid] === tabId;
 
           if (wasActive && filtered.length > 0) {
             const lastTab = filtered[filtered.length - 1];
             return {
-              tabs: filtered.map((t) => ({ ...t, isActive: t.id === lastTab.id })),
-              activeTabId: lastTab.id,
+              tabSessions: {
+                ...state.tabSessions,
+                [cid]: filtered.map((t) => ({ ...t, isActive: t.id === lastTab.id })),
+              },
+              activeTabIds: { ...state.activeTabIds, [cid]: lastTab.id },
             };
           }
 
           if (wasActive && filtered.length === 0) {
-            return { tabs: [], activeTabId: null };
+            return {
+              tabSessions: { ...state.tabSessions, [cid]: [] },
+              activeTabIds: { ...state.activeTabIds, [cid]: null },
+            };
           }
 
-          return { tabs: filtered };
+          return {
+            tabSessions: { ...state.tabSessions, [cid]: filtered },
+          };
         }),
 
-      setActiveTab: (tabId) =>
-        set((state) => ({
-          tabs: state.tabs.map((t) => ({ ...t, isActive: t.id === tabId })),
-          activeTabId: tabId,
-        })),
+      setActiveTab: (tabId, chatId) =>
+        set((state) => {
+          const cid = chatId ?? state.currentChatId;
+          if (!cid) return state;
+          const tabs = state.tabSessions[cid] ?? [];
+          return {
+            tabSessions: {
+              ...state.tabSessions,
+              [cid]: tabs.map((t) => ({ ...t, isActive: t.id === tabId })),
+            },
+            activeTabIds: { ...state.activeTabIds, [cid]: tabId },
+          };
+        }),
 
-      updateTabUrl: (tabId, url) =>
-        set((state) => ({
-          tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, url } : t)),
-        })),
+      updateTabUrl: (tabId, url, chatId) =>
+        set((state) => {
+          const cid = chatId ?? state.currentChatId;
+          if (!cid) return state;
+          const tabs = state.tabSessions[cid] ?? [];
+          return {
+            tabSessions: {
+              ...state.tabSessions,
+              [cid]: tabs.map((t) => (t.id === tabId ? { ...t, url } : t)),
+            },
+          };
+        }),
 
-      updateTabTitle: (tabId, title) =>
-        set((state) => ({
-          tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, title } : t)),
-        })),
+      updateTabTitle: (tabId, title, chatId) =>
+        set((state) => {
+          const cid = chatId ?? state.currentChatId;
+          if (!cid) return state;
+          const tabs = state.tabSessions[cid] ?? [];
+          return {
+            tabSessions: {
+              ...state.tabSessions,
+              [cid]: tabs.map((t) => (t.id === tabId ? { ...t, title } : t)),
+            },
+          };
+        }),
 
       setInspectorMode: (active) => set({ inspectorMode: active }),
 
@@ -221,8 +274,8 @@ export const useBrowserStore = create<BrowserStore>()(
         messages: state.messages,
         model: state.model,
         currentChatId: state.currentChatId,
-        tabs: state.tabs,
-        activeTabId: state.activeTabId,
+        tabSessions: state.tabSessions,
+        activeTabIds: state.activeTabIds,
       }),
       skipHydration: true,
     }

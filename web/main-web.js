@@ -60,8 +60,58 @@ ipcMain.handle("get-user-name", () => {
   return os.userInfo().username;
 });
 
+ipcMain.handle("get-home-dir", () => os.homedir());
+
 ipcMain.handle("open-path", async (_event, filePath) => {
   return shell.openPath(filePath);
+});
+
+ipcMain.handle("read-file", async (_event, filePath) => {
+  const fs = require("fs");
+  const path = require("path");
+  const stats = fs.statSync(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  const imageExts = [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"];
+  const binaryExts = [...imageExts, ".pdf", ".xlsx", ".docx"];
+  const isBinary = binaryExts.includes(ext);
+
+  return {
+    name: path.basename(filePath),
+    path: filePath,
+    size: stats.size,
+    ext,
+    content: isBinary
+      ? fs.readFileSync(filePath).toString("base64")
+      : fs.readFileSync(filePath, "utf-8"),
+    encoding: isBinary ? "base64" : "utf-8",
+  };
+});
+
+ipcMain.handle("write-file", async (_event, filePath, content) => {
+  const fs = require("fs");
+  const path = require("path");
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf-8");
+  return { success: true, path: filePath };
+});
+
+ipcMain.handle("save-file-dialog", async (_event, defaultName, filters) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: defaultName,
+    filters: filters || [{ name: "All Files", extensions: ["*"] }],
+  });
+  return result.canceled ? null : result.filePath;
+});
+
+ipcMain.handle("ensure-dir", async (_event, dirPath) => {
+  const fs = require("fs");
+  fs.mkdirSync(dirPath, { recursive: true });
+  return { success: true };
+});
+
+ipcMain.handle("file-exists", async (_event, filePath) => {
+  const fs = require("fs");
+  return fs.existsSync(filePath);
 });
 
 ipcMain.handle("open-auth-window", async (_event, url) => {

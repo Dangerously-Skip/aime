@@ -6,6 +6,11 @@ interface ElectronAPI {
   selectFolder: () => Promise<string | null>;
   getUserName: () => Promise<string>;
   openPath: (path: string) => Promise<string>;
+  writeFile: (path: string, content: string) => Promise<{ success: boolean; path: string }>;
+  saveFileDialog: (defaultName: string, filters?: { name: string; extensions: string[] }[]) => Promise<string | null>;
+  ensureDir: (dirPath: string) => Promise<{ success: boolean }>;
+  fileExists: (filePath: string) => Promise<boolean>;
+  getHomeDir: () => Promise<string>;
   openAuthWindow: (url: string) => Promise<void>;
   onGithubAuthResult: (callback: (data: unknown) => void) => void;
 }

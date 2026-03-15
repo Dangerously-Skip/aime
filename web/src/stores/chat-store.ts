@@ -5,6 +5,8 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 
 export type ModelId = 'sonnet' | 'opus' | 'haiku';
 
+const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
+
 export interface ToolCall {
   id: string;
   name: string;
@@ -25,6 +27,12 @@ export interface Message {
   isStreaming?: boolean;
   isLoading?: boolean;
   attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>;
+  /** AskUserQuestion data — present when the agent asks the user a question */
+  questionData?: unknown;
+  /** Links a question message to its AskUserQuestion tool call */
+  questionToolUseId?: string;
+  /** Whether the user has already answered this question */
+  questionAnswered?: boolean;
 }
 
 interface ChatState {
@@ -94,9 +102,19 @@ export const useChatStore = create<ChatStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setModel: (model) => set({ model: model as ModelId }),
+      setModel: (model) => {
+        if (VALID_MODELS.has(model)) {
+          set({ model: model as ModelId });
+        } else {
+          console.warn(`[ChatStore] Invalid model "${model}", keeping current`);
+        }
+      },
 
-      startStreaming: () => set({ isStreaming: true }),
+      startStreaming: (chatId) => set((state) => ({
+        isStreaming: true,
+        // Also mark by chatId so callers can check which chat is streaming
+        currentChatId: chatId || state.currentChatId,
+      })),
 
       stopStreaming: (chatId) =>
         set((state) => {
