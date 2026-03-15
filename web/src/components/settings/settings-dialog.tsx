@@ -12,6 +12,7 @@ import { ConnectorsSection } from "./sections/connectors-section"
 import { CoworkSection } from "./sections/cowork-section"
 import { CodeSection } from "./sections/code-section"
 import { DataSection } from "./sections/data-section"
+import { MemorySection } from "./sections/memory-section"
 
 const sectionComponents: Record<string, React.ComponentType> = {
   profile: ProfileSection,
@@ -20,6 +21,7 @@ const sectionComponents: Record<string, React.ComponentType> = {
   connectors: ConnectorsSection,
   cowork: CoworkSection,
   code: CodeSection,
+  memory: MemorySection,
   data: DataSection,
 }
 

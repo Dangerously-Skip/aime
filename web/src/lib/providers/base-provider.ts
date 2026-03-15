@@ -12,7 +12,8 @@ export type ChunkType =
   | 'error'
   | 'connected'
   | 'status'
-  | 'assistant';
+  | 'assistant'
+  | 'input_request';
 
 /**
  * A single streaming chunk yielded by a provider's query() method.
@@ -50,6 +51,10 @@ export interface QueryParams {
   projectInstructions?: string;
   projectKnowledge?: string;
   apiKey?: string;
+  cwd?: string;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Callback to send an input_request event to the client during streaming. */
+  onInputRequest?: (toolUseId: string, questions: unknown) => Promise<void>;
 }
 
 /**

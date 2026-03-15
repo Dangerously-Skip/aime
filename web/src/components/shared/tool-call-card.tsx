@@ -7,7 +7,9 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
-import { Wrench, ChevronDown, Loader2, Check, X } from "lucide-react";
+import { Wrench, ChevronDown, Loader2, Check, X, FileText } from "lucide-react";
+
+const ARTIFACT_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
 
 interface ToolCallCardProps {
   name: string;
@@ -16,6 +18,7 @@ interface ToolCallCardProps {
   status: "running" | "complete" | "error";
   startTime?: number;
   endTime?: number;
+  onArtifactClick?: (path: string) => void;
 }
 
 function formatToolPreview(input: Record<string, unknown>): string {
@@ -62,13 +65,18 @@ export function ToolCallCard({
   status,
   startTime,
   endTime,
+  onArtifactClick,
 }: ToolCallCardProps) {
   const [isOpen, setIsOpen] = useState(status === "running");
+  const [showFullOutput, setShowFullOutput] = useState(false);
   const preview = formatToolPreview(input);
   const inputStr = JSON.stringify(input, null, 2);
+  const filePath = typeof input.file_path === "string" ? input.file_path : typeof input.path === "string" ? input.path : null;
   const maxOutputLen = 2000;
-  const truncatedOutput =
-    output && output.length > maxOutputLen
+  const isOutputTruncated = output ? output.length > maxOutputLen : false;
+  const displayOutput = showFullOutput
+    ? output
+    : output && isOutputTruncated
       ? output.substring(0, maxOutputLen) + "..."
       : output;
 
@@ -116,15 +124,36 @@ export function ToolCallCard({
                 Output
               </Badge>
               <pre
-                className={`rounded p-2 text-[11px] overflow-x-auto max-h-40 overflow-y-auto ${
+                className={`rounded p-2 text-[11px] overflow-x-auto ${showFullOutput ? "max-h-[80vh]" : "max-h-40"} overflow-y-auto ${
                   status === "error"
                     ? "bg-destructive/10 text-destructive"
                     : "bg-muted/50 text-muted-foreground"
                 }`}
               >
-                {truncatedOutput}
+                {displayOutput}
               </pre>
+              {isOutputTruncated && (
+                <button
+                  type="button"
+                  onClick={() => setShowFullOutput((prev) => !prev)}
+                  className="mt-1 text-[10px] text-primary hover:underline"
+                >
+                  {showFullOutput ? "Show less" : `Show full output (${output!.length.toLocaleString()} chars)`}
+                </button>
+              )}
             </div>
+          )}
+
+          {/* Artifact preview chip for Write/Edit tools */}
+          {ARTIFACT_TOOLS.has(name) && status === "complete" && filePath && onArtifactClick && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onArtifactClick(filePath); }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 transition-colors"
+            >
+              <FileText className="h-3 w-3" />
+              Preview {filePath.split("/").pop()}
+            </button>
           )}
         </div>
       </CollapsibleContent>

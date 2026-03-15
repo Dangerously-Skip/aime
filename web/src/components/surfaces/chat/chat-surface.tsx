@@ -7,7 +7,7 @@ import { ChatTitleBar } from "@/components/shared/chat-title-bar";
 import { useChatStore } from "@/stores/chat-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream } from "@/hooks/use-sse-stream";
+import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File } from "lucide-react";
@@ -19,6 +19,12 @@ import { useFileDrop } from "@/hooks/use-file-drop";
 import { DropOverlay } from "@/components/shared/drop-overlay";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
+import { useMemoryStore } from "@/stores/memory-store";
+import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
+import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
+import { ContinueInSurface } from "@/components/shared/continue-in-surface";
+import { ArtifactPanel } from "@/components/shared/artifact-panel";
+import type { ParsedArtifact } from "@/lib/artifacts/parser";
 
 function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
   switch (category) {
@@ -29,6 +35,14 @@ function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) 
 }
 
 const EMPTY_MESSAGES: Message[] = [];
+
+/** Truncate text at the nearest word boundary before maxLen. */
+function truncateAtWordBoundary(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const truncated = text.substring(0, maxLen);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return lastSpace > maxLen * 0.5 ? truncated.substring(0, lastSpace) : truncated;
+}
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -41,6 +55,7 @@ export function ChatSurface() {
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
   const { isDragging, dropZoneProps } = useFileDrop(
     useCallback((file: AttachmentFile) => setAttachments((prev) => [...prev, file]), [])
   );
@@ -59,6 +74,7 @@ export function ChatSurface() {
     (s) => s.appendToLastAssistant
   );
   const addToolCall = useChatStore((s) => s.addToolCall);
+  const updateMessage = useChatStore((s) => s.updateMessage);
   const updateToolResult = useChatStore((s) => s.updateToolResult);
   const startStreaming = useChatStore((s) => s.startStreaming);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
@@ -82,7 +98,7 @@ export function ChatSurface() {
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
-  const { projectInstructions, projectKnowledge, projectName, projectIcon, projectId: currentProjectId } = useProjectContext(chatId);
+  const { projectInstructions, projectKnowledge, projectName, projectIcon, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "chat");
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const navigateToProject = useAppStore((s) => s.navigateToProject);
@@ -129,6 +145,22 @@ export function ChatSurface() {
             event.is_error as boolean | undefined
           );
           break;
+        case "input_request":
+          addMessage(chatId, {
+            id: (event.toolUseId as string) || `q_${Date.now()}`,
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            questionData: event.questions,
+            questionToolUseId: event.toolUseId as string,
+          });
+          break;
+        case "memory_extract":
+          handleMemoryExtractEvent(
+            event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
+            chatId,
+          );
+          break;
         case "error":
           appendToLastAssistant(
             chatId,
@@ -157,7 +189,7 @@ export function ChatSurface() {
         id = crypto.randomUUID();
         addConversation({
           id,
-          title: trimmed.substring(0, 50),
+          title: truncateAtWordBoundary(trimmed, 50),
           surface: "chat",
           lastMessage: trimmed,
           createdAt: Date.now(),
@@ -197,6 +229,24 @@ export function ChatSurface() {
       setAttachments([]);
       setWebSearchEnabled(false);
 
+      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
+      const priorMessages = useChatStore.getState().messages[id] || [];
+      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
+
+      // Register conversation with project
+      if (currentProjectId) {
+        useProjectStore.getState().addConversationToProject(currentProjectId, "chat", id);
+      }
+
+      // Retrieve relevant memories
+      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
+        projectId: currentProjectId,
+        query: trimmed,
+      });
+      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
+      // Touch accessed memories
+      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
+
       await sendMessage(trimmed, id, "chat", model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
@@ -205,6 +255,9 @@ export function ChatSurface() {
         projectInstructions: projectInstructions || undefined,
         projectKnowledge: projectKnowledge || undefined,
         apiKey: nibGatewayApiKey || undefined,
+        history: history.length > 0 ? history : undefined,
+        memories: memoriesStr || undefined,
+        crossSurfaceContext: crossSurfaceContext || undefined,
       });
     },
     [
@@ -224,6 +277,13 @@ export function ChatSurface() {
       projectInstructions,
       projectKnowledge,
     ]
+  );
+
+  const handleQuestionAnswered = useCallback(
+    (toolUseId: string) => {
+      if (chatId) updateMessage(chatId, toolUseId, { questionAnswered: true });
+    },
+    [chatId, updateMessage]
   );
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -251,6 +311,40 @@ export function ChatSurface() {
       handleSubmit(inputValue);
     }
   }
+
+  const handleArtifactSaved = useCallback(
+    (artifactId: string, filePath: string) => {
+      if (!currentProjectId) return;
+      useProjectStore.getState().updateArtifact(currentProjectId, artifactId, {
+        path: filePath,
+      });
+    },
+    [currentProjectId]
+  );
+
+  const handleArtifactClick = useCallback(
+    (pathOrArtifact: string | ParsedArtifact) => {
+      if (typeof pathOrArtifact === "string") return; // file path clicks handled elsewhere
+      const artifact = pathOrArtifact;
+      setActiveArtifact(artifact);
+
+      // Auto-register to project if one is active
+      if (currentProjectId) {
+        useProjectStore.getState().addArtifact(currentProjectId, {
+          id: artifact.id,
+          name: artifact.title,
+          path: `chat-artifact://${artifact.id}`,
+          type: "document",
+          surface: "chat",
+          conversationId: chatId,
+          description: `${artifact.type} artifact from chat`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    },
+    [currentProjectId, chatId]
+  );
 
   function handleDeleteChat() {
     removeConversation(chatId);
@@ -349,8 +443,20 @@ export function ChatSurface() {
             onProjectClick={currentProjectId ? () => navigateToProject(currentProjectId) : undefined}
           />
 
+          {/* Continue in Surface handoff (when project is active) */}
+          {currentProjectId && !isStreaming && messages.length > 0 && (
+            <div className="flex items-center gap-2 px-6 py-1.5 border-b border-border/50">
+              <span className="text-xs text-muted-foreground">Continue in:</span>
+              <ContinueInSurface
+                currentSurface="chat"
+                projectId={currentProjectId}
+                conversationId={chatId}
+              />
+            </div>
+          )}
+
           {/* Messages */}
-          <MessageList messages={messages} />
+          <MessageList messages={messages} conversationId={chatId} onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} />
 
           {/* Bottom input card */}
           <div className="px-6 pb-4 pt-2">
@@ -423,6 +529,17 @@ export function ChatSurface() {
           </div>
         </>
       )}
+
+      {/* Artifact preview panel */}
+      <ArtifactPanel
+        artifact={activeArtifact}
+        open={activeArtifact !== null}
+        onClose={() => setActiveArtifact(null)}
+        projectFolder={projectFolder}
+        conversationId={chatId}
+        projectId={currentProjectId}
+        onArtifactSaved={handleArtifactSaved}
+      />
     </div>
   );
 }

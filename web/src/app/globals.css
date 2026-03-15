@@ -149,9 +149,13 @@
   }
 }
 
-/* Smooth theme transition */
-html {
-  transition: color-scheme 0.2s;
+/* Smooth theme transition — only animate when user toggles, not on page load.
+   The inline <head> script adds "no-transition" to prevent the initial flash. */
+html.no-transition,
+html.no-transition *,
+html.no-transition *::before,
+html.no-transition *::after {
+  transition: none !important;
 }
 html.transitioning,
 html.transitioning *,
@@ -225,6 +229,16 @@ html.transitioning *::after {
   25% { transform: rotate(2deg) translateX(1px); }
   50% { transform: rotate(-2deg) translateX(-0.5px); }
   75% { transform: rotate(3deg) translateX(1px); }
+}
+
+/* Thinking word fade transition */
+.thinking-word-fade {
+  animation: thinking-fade 2.5s ease-in-out infinite;
+}
+
+@keyframes thinking-fade {
+  0%, 100% { opacity: 0.5; }
+  20%, 80% { opacity: 1; }
 }
 
 /* Code block styling for markdown */

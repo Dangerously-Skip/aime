@@ -31,6 +31,8 @@ interface UseBrowserAgentOptions {
   onDone: () => void;
   onError: (error: Error) => void;
   onPhaseChange: (phase: 'idle' | 'observing' | 'thinking' | 'acting') => void;
+  apiKey?: string | null;
+  memories?: string;
 }
 
 export function useBrowserAgent(options: UseBrowserAgentOptions) {
@@ -54,6 +56,10 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
       abortRef.current = controller;
 
       const config = getBrowserConfig();
+      let systemPrompt = config.systemPrompt as string;
+      if (optionsRef.current.memories) {
+        systemPrompt = `${systemPrompt}\n\n${optionsRef.current.memories}`;
+      }
       const messages: AnthropicMessage[] = [];
 
       try {
@@ -114,9 +120,10 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
           const { assistantBlocks, stopReason } = await sendTurn(
             messages,
             model,
-            config.systemPrompt as string,
+            systemPrompt,
             controller.signal,
             optionsRef.current,
+            optionsRef.current.apiKey,
           );
 
           if (controller.signal.aborted) break;
@@ -211,6 +218,7 @@ async function sendTurn(
   system: string,
   signal: AbortSignal,
   callbacks: Pick<UseBrowserAgentOptions, 'onText' | 'onToolUse'>,
+  apiKey?: string | null,
 ): Promise<{
   assistantBlocks: Array<{ type: string; [key: string]: unknown }>;
   stopReason: string;
@@ -223,6 +231,7 @@ async function sendTurn(
       model,
       system,
       tools: BROWSER_TOOL_SCHEMAS,
+      ...(apiKey ? { apiKey } : {}),
     }),
     signal,
   });

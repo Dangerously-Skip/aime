@@ -4,6 +4,8 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 
+const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
+
 interface CoworkState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
@@ -81,9 +83,18 @@ export const useCoworkStore = create<CoworkStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setModel: (model) => set({ model: model as ModelId }),
+      setModel: (model) => {
+        if (VALID_MODELS.has(model)) {
+          set({ model: model as ModelId });
+        } else {
+          console.warn(`[CoworkStore] Invalid model "${model}", keeping current`);
+        }
+      },
 
-      startStreaming: () => set({ isStreaming: true }),
+      startStreaming: (chatId) => set((state) => ({
+        isStreaming: true,
+        currentChatId: chatId || state.currentChatId,
+      })),
 
       stopStreaming: (chatId) =>
         set((state) => {

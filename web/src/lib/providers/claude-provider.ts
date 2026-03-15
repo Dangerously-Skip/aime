@@ -3,6 +3,7 @@ import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig }
 import { getSurfaceConfig } from '../surfaces';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { getGatewayEnv, isGatewayConfigured, mapModelForGateway } from '../gateway-env';
+import { waitForAnswer } from '../pending-questions';
 
 /**
  * Claude Agent SDK provider implementation.
@@ -60,6 +61,9 @@ export class ClaudeProvider extends BaseProvider {
       model: explicitModel,
       attachments,
       apiKey,
+      cwd,
+      history,
+      onInputRequest,
     } = params;
 
     // Load surface config if surfaceId is provided, otherwise use defaults
@@ -101,6 +105,35 @@ export class ClaudeProvider extends BaseProvider {
       settingSources: ['user', 'project'], // Enable Skills from filesystem
     };
 
+    // Intercept AskUserQuestion to collect answers from the client.
+    // canUseTool is called even with bypassPermissions for AskUserQuestion
+    // since the SDK needs to collect user answers for that tool.
+    if (onInputRequest) {
+      queryOptions.canUseTool = async (
+        toolName: string,
+        input: Record<string, unknown>,
+        { toolUseID }: { toolUseID: string },
+      ) => {
+        if (toolName !== 'AskUserQuestion') {
+          return { behavior: 'allow' as const };
+        }
+        // Send the question to the client via SSE
+        await onInputRequest(toolUseID, input.questions);
+        // Block until the client POSTs answers back
+        const answers = await waitForAnswer(toolUseID);
+        return {
+          behavior: 'allow' as const,
+          updatedInput: { ...input, answers },
+        };
+      };
+    }
+
+    // Set working directory if provided (folder picker)
+    if (cwd) {
+      queryOptions.cwd = cwd;
+      console.log('[Claude] Working directory set to:', cwd);
+    }
+
     // Apply system prompt if available
     if (systemPrompt) {
       queryOptions.systemPrompt = systemPrompt;
@@ -111,15 +144,26 @@ export class ClaudeProvider extends BaseProvider {
       queryOptions.model = model;
     }
 
+    // IMPORTANT: Always strip CLAUDECODE from subprocess env to prevent
+    // "nested session" detection when the app is launched from a Claude Code terminal.
+    const { CLAUDECODE: _cc, ...safeEnv } = process.env;
+    queryOptions.env = { ...safeEnv };
+
     // Gateway env passthrough: if nib Gateway API key is provided, route through gateway
     // This takes priority over Bedrock env
     if (apiKey && isGatewayConfigured(apiKey)) {
-      queryOptions.env = { ...(queryOptions.env as Record<string, string> || {}), ...getGatewayEnv(apiKey) };
+      queryOptions.env = {
+        ...safeEnv,
+        ...(queryOptions.env as Record<string, string> || {}),
+        ...getGatewayEnv(apiKey),
+        // Gateway LiteLLM doesn't support adaptive thinking — disable it via CLI env var
+        CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1',
+      };
       // Override model to use gateway-compatible short names
       queryOptions.model = mapModelForGateway(model);
       console.log('[Claude] Gateway configured, routing through nib AI Studio');
     } else if (isBedrockConfigured()) {
-      queryOptions.env = { ...(queryOptions.env as Record<string, string> || {}), ...getBedrockEnv() };
+      queryOptions.env = { ...safeEnv, ...(queryOptions.env as Record<string, string> || {}), ...getBedrockEnv() };
       console.log('[Claude] Bedrock env configured, routing through AWS');
     }
 
@@ -133,8 +177,17 @@ export class ClaudeProvider extends BaseProvider {
       console.log('[Claude] Resuming session:', existingSessionId);
     }
 
-    // Build prompt — use content blocks array when attachments are present
+    // Build prompt — prepend conversation history as XML when no session to resume
     let queryPrompt: unknown = prompt;
+    if (!existingSessionId && history?.length) {
+      const historyXml = history
+        .map((m) => `<msg role="${m.role}">${m.content}</msg>`)
+        .join('\n');
+      queryPrompt = `<conversation_history>\n${historyXml}\n</conversation_history>\n\n${prompt}`;
+      console.log('[Claude] Prepended conversation history (' + history.length + ' messages) as XML fallback');
+    }
+
+    // Use content blocks array when attachments are present
     if (attachments && attachments.length > 0) {
       const contentBlocks: unknown[] = [];
 

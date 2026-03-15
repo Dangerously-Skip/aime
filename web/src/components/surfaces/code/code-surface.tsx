@@ -6,6 +6,7 @@ import { FolderPicker } from "@/components/shared/folder-picker";
 import { ToolCallCard } from "@/components/shared/tool-call-card";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
 import { StreamingCursor } from "@/components/shared/streaming-cursor";
+import { QuestionCard } from "@/components/shared/question-card";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import { DropOverlay } from "@/components/shared/drop-overlay";
@@ -13,8 +14,14 @@ import { useFileDrop } from "@/hooks/use-file-drop";
 import { useCodeStore, type PermissionMode } from "@/stores/code-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream } from "@/hooks/use-sse-stream";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { useMemoryStore } from "@/stores/memory-store";
+import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
+import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
+import { useProjectStore } from "@/stores/project-store";
+import { useProjectContext } from "@/hooks/use-project-context";
+import { useAutoProject } from "@/hooks/use-auto-project";
+import { useElectron } from "@/hooks/use-electron";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,6 +42,7 @@ import {
   X,
   ImageIcon,
   File,
+  Folder,
 } from "lucide-react";
 import type { Message } from "@/stores/chat-store";
 
@@ -126,12 +134,34 @@ interface TerminalMessage {
   thinking?: string;
   isStreaming?: boolean;
   isLoading?: boolean;
+  questionData?: unknown;
+  questionToolUseId?: string;
+  questionAnswered?: boolean;
 }
 
-function TerminalOutput({ messages }: { messages: TerminalMessage[] }) {
+function TerminalOutput({
+  messages,
+  onQuestionAnswered,
+  endRef,
+}: {
+  messages: TerminalMessage[];
+  onQuestionAnswered?: (toolUseId: string, answers: Record<string, string>) => void;
+  endRef?: React.RefObject<HTMLDivElement | null>;
+}) {
   return (
     <div className="space-y-3 text-sm">
       {messages.map((msg) => {
+        if (msg.questionData) {
+          return (
+            <QuestionCard
+              key={msg.id}
+              toolUseId={msg.questionToolUseId || msg.id}
+              questions={msg.questionData as Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>}
+              answered={msg.questionAnswered}
+              onAnswer={onQuestionAnswered}
+            />
+          );
+        }
         if (msg.role === "user") {
           return (
             <div key={msg.id} className="font-mono text-foreground">
@@ -172,6 +202,7 @@ function TerminalOutput({ messages }: { messages: TerminalMessage[] }) {
           </div>
         );
       })}
+      <div ref={endRef} />
     </div>
   );
 }
@@ -367,7 +398,6 @@ function BottomBar({
 export function CodeSurface() {
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const currentChatId = useCodeStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
   const messages = useCodeStore(
@@ -386,6 +416,7 @@ export function CodeSurface() {
   const addMessage = useCodeStore((s) => s.addMessage);
   const appendToLastAssistant = useCodeStore((s) => s.appendToLastAssistant);
   const addToolCall = useCodeStore((s) => s.addToolCall);
+  const updateMessage = useCodeStore((s) => s.updateMessage);
   const updateToolResult = useCodeStore((s) => s.updateToolResult);
   const startStreaming = useCodeStore((s) => s.startStreaming);
   const stopStreaming = useCodeStore((s) => s.stopStreaming);
@@ -397,7 +428,41 @@ export function CodeSurface() {
   const activeConvId = useConversationStore((s) => s.activeId);
   const allConversations = useConversationStore((s) => s.conversations);
 
+  const { projectId: currentProjectId } = useProjectContext(chatId, "code");
+  const { handleFolderSelected } = useAutoProject('code');
+  const { isElectron, selectFolder: pickFolder } = useElectron();
   const isEmpty = messages.length === 0;
+
+  const handleFolderChange = useCallback(
+    (f: string | null) => {
+      setFolder(f);
+      if (f && chatId) {
+        handleFolderSelected(f, chatId);
+      }
+    },
+    [setFolder, chatId, handleFolderSelected]
+  );
+
+  const handleQuestionAnswered = useCallback(
+    (toolUseId: string) => {
+      if (chatId) updateMessage(chatId, toolUseId, { questionAnswered: true });
+    },
+    [chatId, updateMessage]
+  );
+
+  // Auto-scroll
+  const endRef = useRef<HTMLDivElement>(null);
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
+
+  const scrollKey = `${messages.length}-${messages[messages.length - 1]?.content?.length ?? 0}-${messages[messages.length - 1]?.toolCalls?.length ?? 0}`;
+
+  useEffect(() => {
+    if (!userScrolledUp) {
+      requestAnimationFrame(() => {
+        endRef.current?.scrollIntoView({ behavior: "instant" });
+      });
+    }
+  }, [scrollKey, userScrolledUp]);
 
   const handleAttachmentAdd = useCallback(
     (file: AttachmentFile) => setAttachments((prev) => [...prev, file]),
@@ -426,15 +491,35 @@ export function CodeSurface() {
         case "thinking":
           appendToLastAssistant(chatId, "", (event.content as string) || "");
           break;
-        case "tool_use":
+        case "tool_use": {
+          const toolName = (event.name as string) || "Unknown";
+          const toolInput = (event.input as Record<string, unknown>) || {};
           addToolCall(chatId, {
             id: (event.id as string) || `tool_${Date.now()}`,
-            name: (event.name as string) || "Unknown",
-            input: (event.input as Record<string, unknown>) || {},
+            name: toolName,
+            input: toolInput,
             status: "running",
             startTime: Date.now(),
           });
+          // Register Write/Edit artifacts with project
+          if (currentProjectId && (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit")) {
+            const filePath = (toolInput.file_path || toolInput.notebook_path) as string | undefined;
+            if (filePath) {
+              const fileName = filePath.split("/").pop() || filePath;
+              useProjectStore.getState().addArtifact(currentProjectId, {
+                id: crypto.randomUUID(),
+                name: fileName,
+                path: filePath,
+                type: "file",
+                surface: "code",
+                conversationId: chatId,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              });
+            }
+          }
           break;
+        }
         case "tool_result":
           updateToolResult(
             chatId,
@@ -443,6 +528,22 @@ export function CodeSurface() {
               ? event.result
               : JSON.stringify(event.result),
             event.is_error as boolean | undefined
+          );
+          break;
+        case "input_request":
+          addMessage(chatId, {
+            id: (event.toolUseId as string) || `q_${Date.now()}`,
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            questionData: event.questions,
+            questionToolUseId: event.toolUseId as string,
+          });
+          break;
+        case "memory_extract":
+          handleMemoryExtractEvent(
+            event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
+            chatId,
           );
           break;
         case "error":
@@ -483,6 +584,10 @@ export function CodeSurface() {
         });
         setActiveConversation(id);
         setCurrentChat(id);
+        // Auto-associate with project when conversation is first created
+        if (folder) {
+          handleFolderSelected(folder, id);
+        }
       }
 
       addMessage(id, {
@@ -509,8 +614,22 @@ export function CodeSurface() {
       setSessionStatus("streaming");
       setInputValue("");
       setAttachments([]);
+      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
+      const priorMessages = useCodeStore.getState().messages[id] || [];
+      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
+
+      // Retrieve relevant memories
+      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
+        query: trimmed,
+      });
+      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
+      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
+
       await sendMessage(trimmed, id, "code", model, {
         apiKey: nibGatewayApiKey || undefined,
+        cwd: folder || undefined,
+        history: history.length > 0 ? history : undefined,
+        memories: memoriesStr || undefined,
       });
     },
     [
@@ -533,38 +652,77 @@ export function CodeSurface() {
       <DropOverlay visible={isDragging} />
 
       {isEmpty ? (
-        /* ── Empty state: centered mascot + input ── */
+        /* ── Empty state: centered mascot + input (or folder prompt) ── */
         <div className="flex flex-1 flex-col items-center justify-center px-6 animate-in fade-in duration-300">
           <Mascot />
           <div className="w-full max-w-2xl">
-            <CodeInput
-              value={inputValue}
-              onChange={setInputValue}
-              onSubmit={handleSubmit}
-              onAbort={abort}
-              isStreaming={isStreaming}
-              permissionMode={permissionMode}
-              onPermissionModeChange={setPermissionMode}
-              model={model}
-              onModelChange={setModel}
-              placeholder="Find a small todo in the codebase and do it"
-              rows={2}
-              minHeight="min-h-[72px]"
-              attachments={attachments}
-              onAttachmentAdd={handleAttachmentAdd}
-              onAttachmentRemove={handleAttachmentRemove}
-            />
-            <BottomBar folder={folder} onFolderChange={setFolder} />
+            {folder ? (
+              <>
+                <CodeInput
+                  value={inputValue}
+                  onChange={setInputValue}
+                  onSubmit={handleSubmit}
+                  onAbort={abort}
+                  isStreaming={isStreaming}
+                  permissionMode={permissionMode}
+                  onPermissionModeChange={setPermissionMode}
+                  model={model}
+                  onModelChange={setModel}
+                  placeholder="Find a small todo in the codebase and do it"
+                  rows={2}
+                  minHeight="min-h-[72px]"
+                  attachments={attachments}
+                  onAttachmentAdd={handleAttachmentAdd}
+                  onAttachmentRemove={handleAttachmentRemove}
+                />
+                <BottomBar folder={folder} onFolderChange={handleFolderChange} />
+              </>
+            ) : (
+              <div className="rounded-2xl border border-border bg-card shadow-sm p-8 text-center">
+                <Folder className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+                <h2 className="text-lg font-medium mb-1">Select a folder to start coding</h2>
+                <p className="text-sm text-muted-foreground mb-5">
+                  Choose a project folder so Claude knows where to read and write files.
+                </p>
+                <FolderPicker
+                  folder={folder}
+                  onFolderChange={handleFolderChange}
+                  className="mx-auto"
+                />
+              </div>
+            )}
           </div>
         </div>
       ) : (
         /* ── Active state: messages + bottom input ── */
         <>
-          <ScrollArea className="flex-1 px-6 py-4">
-            <div className="max-w-3xl mx-auto">
-              <TerminalOutput messages={messages as TerminalMessage[]} />
+          <div
+            className="flex-1 min-h-0 overflow-y-auto px-6 py-4"
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+              setUserScrolledUp(!atBottom);
+            }}
+          >
+            <div className="max-w-3xl mx-auto relative">
+              <TerminalOutput
+                messages={messages as TerminalMessage[]}
+                onQuestionAnswered={handleQuestionAnswered}
+                endRef={endRef}
+              />
             </div>
-          </ScrollArea>
+            {userScrolledUp && (
+              <button
+                onClick={() => {
+                  setUserScrolledUp(false);
+                  endRef.current?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-primary/90 text-primary-foreground px-3 py-1.5 text-xs shadow-lg hover:bg-primary transition-colors"
+              >
+                Scroll to bottom
+              </button>
+            )}
+          </div>
 
           <div className="px-6 pb-4 pt-2">
             <div className="max-w-3xl mx-auto">
@@ -585,7 +743,7 @@ export function CodeSurface() {
                 onAttachmentAdd={handleAttachmentAdd}
                 onAttachmentRemove={handleAttachmentRemove}
               />
-              <BottomBar folder={folder} onFolderChange={setFolder} />
+              <BottomBar folder={folder} onFolderChange={handleFolderChange} />
             </div>
           </div>
         </>

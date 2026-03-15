@@ -36,6 +36,9 @@ interface SettingsState {
 
   // nib Gateway
   nibGatewayApiKey: string | null;
+
+  // Memory
+  autoExtractMemories: boolean;
 }
 
 interface SettingsActions {
@@ -54,6 +57,7 @@ interface SettingsActions {
   setGithubUser: (user: string | null) => void;
   clearGithubAuth: () => void;
   setNibGatewayApiKey: (key: string | null) => void;
+  setAutoExtractMemories: (enabled: boolean) => void;
   resetAll: () => void;
 }
 
@@ -74,6 +78,7 @@ const initialState: SettingsState = {
   githubToken: null,
   githubUser: null,
   nibGatewayApiKey: null,
+  autoExtractMemories: true,
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -100,7 +105,9 @@ export const useSettingsStore = create<SettingsStore>()(
       addTrustedFolder: (path) =>
         set((state) => {
           if (state.trustedFolders.includes(path)) return state;
-          return { trustedFolders: [...state.trustedFolders, path] };
+          // Limit to 100 trusted folders — drop oldest when exceeded
+          const updated = [...state.trustedFolders, path];
+          return { trustedFolders: updated.length > 100 ? updated.slice(-100) : updated };
         }),
 
       setGithubToken: (githubToken) => set({ githubToken }),
@@ -108,6 +115,8 @@ export const useSettingsStore = create<SettingsStore>()(
       clearGithubAuth: () => set({ githubToken: null, githubUser: null }),
 
       setNibGatewayApiKey: (nibGatewayApiKey) => set({ nibGatewayApiKey }),
+
+      setAutoExtractMemories: (autoExtractMemories) => set({ autoExtractMemories }),
 
       resetAll: () => set(initialState),
     }),

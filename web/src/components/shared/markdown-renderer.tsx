@@ -14,13 +14,22 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   className = "",
 }: MarkdownRendererProps) {
+  const sanitized = useMemo(() => {
+    let s = content;
+    // Strip complete <function_calls>…</function_calls> blocks (with or without antml: prefix)
+    s = s.replace(/<(antml:)?function_calls>[\s\S]*?<\/(antml:)?function_calls>/g, '');
+    // Strip trailing incomplete block (streaming — opening tag with no close yet)
+    s = s.replace(/<(antml:)?function_calls>[\s\S]*$/g, '');
+    return s.trim();
+  }, [content]);
+
   const plugins = useMemo(() => [remarkGfm], []);
   const rehypePlugins = useMemo(() => [rehypeHighlight], []);
 
   return (
     <div className={`markdown-content ${className}`}>
       <ReactMarkdown remarkPlugins={plugins} rehypePlugins={rehypePlugins}>
-        {content}
+        {sanitized}
       </ReactMarkdown>
     </div>
   );
