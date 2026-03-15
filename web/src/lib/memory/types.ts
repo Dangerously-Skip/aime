@@ -4,7 +4,8 @@ export type MemoryCategory =
   | 'pattern'       // "User always wants tests with new features"
   | 'decision'      // "Chose Next.js App Router over Pages Router for dashboard project"
   | 'skill'         // "User is proficient with React, Zustand, Tailwind"
-  | 'relationship'; // "User works with Sarah (designer) and Mike (PM)"
+  | 'relationship'  // "User works with Sarah (designer) and Mike (PM)"
+  | 'episodic';     // Conversation summary — "what happened last session"
 
 export type MemoryScope = 'global' | 'project';
 
@@ -22,6 +23,7 @@ export interface Memory {
   updatedAt: number;
   supersededBy: string | null;  // Soft-replace instead of delete
   source: 'explicit' | 'auto';
+  updatedCount?: number;        // How many times this memory has been reinforced
 }
 
 export const MEMORY_CATEGORIES: { value: MemoryCategory; label: string }[] = [
@@ -31,6 +33,7 @@ export const MEMORY_CATEGORIES: { value: MemoryCategory; label: string }[] = [
   { value: 'decision', label: 'Decision' },
   { value: 'skill', label: 'Skill' },
   { value: 'relationship', label: 'Relationship' },
+  { value: 'episodic', label: 'Session Summary' },
 ];
 
 export function suggestCategory(content: string): MemoryCategory {

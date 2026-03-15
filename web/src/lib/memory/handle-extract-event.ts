@@ -43,6 +43,7 @@ export function handleMemoryExtractEvent(
       updatedAt: Date.now(),
       supersededBy: null,
       source: 'auto',
+      updatedCount: 0,
     });
   }
 }

@@ -21,17 +21,50 @@ function extractKeywords(text: string): Set<string> {
 }
 
 /**
- * Compute keyword overlap score between a query and a memory.
+ * Build a document-frequency map across all memories.
+ * Returns how many memories contain each term.
  */
-function keywordOverlap(queryKeywords: Set<string>, memory: Memory): number {
+function buildDocumentFrequency(memories: Memory[]): Map<string, number> {
+  const df = new Map<string, number>();
+  for (const m of memories) {
+    const words = extractKeywords(m.content);
+    m.tags.forEach((t) => extractKeywords(t).forEach((w) => words.add(w)));
+    words.forEach((w) => {
+      df.set(w, (df.get(w) || 0) + 1);
+    });
+  }
+  return df;
+}
+
+/**
+ * Compute TF-IDF weighted overlap score between a query and a memory.
+ * Terms that appear in fewer memories are weighted more heavily.
+ */
+function tfidfScore(
+  queryKeywords: Set<string>,
+  memory: Memory,
+  df: Map<string, number>,
+  totalDocs: number
+): number {
   if (queryKeywords.size === 0) return 0;
+
   const memoryWords = extractKeywords(memory.content);
   memory.tags.forEach((t) => extractKeywords(t).forEach((w) => memoryWords.add(w)));
-  let overlap = 0;
-  queryKeywords.forEach((kw) => {
-    if (memoryWords.has(kw)) overlap++;
+
+  let weightedOverlap = 0;
+  let totalWeight = 0;
+
+  queryKeywords.forEach((term) => {
+    // IDF: log(N / df), with smoothing to avoid division by zero
+    const docFreq = df.get(term) || 0;
+    const idf = Math.log((totalDocs + 1) / (docFreq + 1)) + 1;
+    totalWeight += idf;
+    if (memoryWords.has(term)) {
+      weightedOverlap += idf;
+    }
   });
-  return overlap / queryKeywords.size;
+
+  return totalWeight > 0 ? weightedOverlap / totalWeight : 0;
 }
 
 /**
@@ -48,8 +81,9 @@ function recencyScore(lastAccessedAt: number): number {
  * Retrieve and rank memories for a given context.
  *
  * 1. Filter: active (not superseded) + scope match (global + current project)
- * 2. Rank by: confidence (40%) + recency (30%) + keyword overlap (30%)
- * 3. Limit to top N (default 20)
+ * 2. Separate episodic memories — always include top 3 most recent
+ * 3. Rank non-episodic by: TF-IDF relevance (40%) + confidence (30%) + recency (30%)
+ * 4. Merge episodic + ranked, limit to top N (default 20)
  */
 export function getMemoriesForContext(
   memories: Memory[],
@@ -58,30 +92,46 @@ export function getMemoriesForContext(
   const { projectId = null, query = '', limit = 20, categories } = ctx;
 
   // 1. Filter
-  let filtered = memories.filter((m) => {
-    // Must be active (not superseded)
+  const filtered = memories.filter((m) => {
     if (m.supersededBy) return false;
-    // Scope match: global always included, project only if matching
     if (m.scope === 'project' && m.projectId !== projectId) return false;
-    // Category filter
     if (categories?.length && !categories.includes(m.category)) return false;
     return true;
   });
 
-  // 2. Rank
+  // 2. Separate episodic from non-episodic
+  const episodic = filtered
+    .filter((m) => m.category === 'episodic')
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 3);
+
+  const nonEpisodic = filtered.filter((m) => m.category !== 'episodic');
+
+  // 3. Rank non-episodic with TF-IDF
   const queryKeywords = extractKeywords(query);
-  const scored = filtered.map((m) => {
-    const confidenceScore = m.confidence;
+  const df = buildDocumentFrequency(nonEpisodic);
+  const totalDocs = nonEpisodic.length;
+
+  const scored = nonEpisodic.map((m) => {
+    const relevance = queryKeywords.size > 0
+      ? tfidfScore(queryKeywords, m, df, totalDocs)
+      : 0.5;
+    const confidence = m.confidence;
     const recency = recencyScore(m.lastAccessedAt);
-    const overlap = queryKeywords.size > 0 ? keywordOverlap(queryKeywords, m) : 0.5;
-    const score = confidenceScore * 0.4 + recency * 0.3 + overlap * 0.3;
+    const score = relevance * 0.4 + confidence * 0.3 + recency * 0.3;
     return { memory: m, score };
   });
 
   scored.sort((a, b) => b.score - a.score);
 
-  // 3. Limit
-  return scored.slice(0, limit).map((s) => s.memory);
+  // 4. Merge: episodic first, then ranked non-episodic, up to limit
+  const episodicIds = new Set(episodic.map((m) => m.id));
+  const ranked = scored
+    .filter((s) => !episodicIds.has(s.memory.id))
+    .slice(0, limit - episodic.length)
+    .map((s) => s.memory);
+
+  return [...episodic, ...ranked];
 }
 
 /**
@@ -112,30 +162,55 @@ export function tagSimilarity(tagsA: string[], tagsB: string[]): number {
 }
 
 /**
- * Check if a new memory is a duplicate of an existing one.
- * Uses content overlap (lowercase Jaccard on words) + tag similarity.
+ * Compute content similarity (Jaccard on keywords) between two texts.
+ */
+export function contentSimilarity(textA: string, textB: string): number {
+  const wordsA = extractKeywords(textA);
+  const wordsB = extractKeywords(textB);
+  const allWords = new Set([...wordsA, ...wordsB]);
+  if (allWords.size === 0) return 0;
+  const intersection = new Set([...wordsA].filter((w) => wordsB.has(w)));
+  return intersection.size / allWords.size;
+}
+
+/**
+ * Find a near-duplicate or duplicate of a new memory.
+ * Returns the matching memory and the similarity level:
+ * - 'duplicate' (> 0.8): should supersede
+ * - 'similar' (> 0.6): should merge
+ * - null: no match found
+ */
+export function findSimilar(
+  memories: Memory[],
+  newContent: string,
+  newTags: string[]
+): { memory: Memory; level: 'duplicate' | 'similar' } | null {
+  const newWords = extractKeywords(newContent);
+  for (const existing of memories) {
+    if (existing.supersededBy) continue;
+    const existingWords = extractKeywords(existing.content);
+    const allWords = new Set([...newWords, ...existingWords]);
+    if (allWords.size === 0) continue;
+    const intersection = new Set([...newWords].filter((w) => existingWords.has(w)));
+    const contentSim = intersection.size / allWords.size;
+    const tagSim = tagSimilarity(newTags, existing.tags);
+    const combined = contentSim * 0.7 + tagSim * 0.3;
+    if (combined > 0.8) return { memory: existing, level: 'duplicate' };
+    if (combined > 0.6) return { memory: existing, level: 'similar' };
+  }
+  return null;
+}
+
+/**
+ * Legacy findDuplicate for backward compatibility.
  */
 export function findDuplicate(
   memories: Memory[],
   newContent: string,
   newTags: string[]
 ): Memory | null {
-  const newWords = extractKeywords(newContent);
-  for (const existing of memories) {
-    if (existing.supersededBy) continue;
-    const existingWords = extractKeywords(existing.content);
-    // Content similarity
-    const allWords = new Set([...newWords, ...existingWords]);
-    if (allWords.size === 0) continue;
-    const intersection = new Set([...newWords].filter((w) => existingWords.has(w)));
-    const contentSim = intersection.size / allWords.size;
-    // Tag similarity
-    const tagSim = tagSimilarity(newTags, existing.tags);
-    // Combined score (content weighted more)
-    const combined = contentSim * 0.7 + tagSim * 0.3;
-    if (combined > 0.8) return existing;
-  }
-  return null;
+  const result = findSimilar(memories, newContent, newTags);
+  return result?.level === 'duplicate' ? result.memory : null;
 }
 
 /**
@@ -143,6 +218,11 @@ export function findDuplicate(
  */
 export function formatMemoriesForPrompt(memories: Memory[]): string {
   if (memories.length === 0) return '';
-  const lines = memories.map((m) => `- [${m.category}] ${m.content}`);
+  const lines = memories.map((m) => {
+    if (m.category === 'episodic') {
+      return `- [session] ${m.content}`;
+    }
+    return `- [${m.category}] ${m.content}`;
+  });
   return `<user-memory>\n${lines.join('\n')}\n</user-memory>`;
 }

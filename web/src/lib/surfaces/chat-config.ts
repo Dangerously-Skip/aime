@@ -4,7 +4,7 @@ export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
   return {
     allowedTools: ['WebSearch', 'WebFetch'],
     permissionMode: 'default',
-    systemPrompt: `You are Claude, a helpful AI assistant made by Anthropic.
+    systemPrompt: `You are Tricoder, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.
 
 ## Tone & Formatting
 - Be warm, direct, and concise. Lead with the answer, then explain if needed.

@@ -3,10 +3,35 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Memory, MemoryCategory, MemoryScope } from '@/lib/memory/types';
-import { getMemoriesForContext, searchMemories, findDuplicate } from '@/lib/memory/retriever';
+import { getMemoriesForContext, searchMemories, findDuplicate, findSimilar } from '@/lib/memory/retriever';
 
-const MAX_MEMORY_COUNT = 500;
+const PRUNE_TRIGGER = 600;
+const PRUNE_TARGET = 500;
 const SUPERSEDED_CLEANUP_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/** Category weights for differential decay. Higher = longer-lived. */
+const CATEGORY_WEIGHTS: Record<string, number> = {
+  preference: 0.9,
+  skill: 0.9,
+  fact: 0.7,
+  relationship: 0.7,
+  episodic: 0.5,
+  pattern: 0.4,
+  decision: 0.3,
+};
+
+/**
+ * Compute a retention score for a memory.
+ * Higher score = more likely to be kept during pruning.
+ */
+function retentionScore(m: Memory): number {
+  const confidence = m.confidence;
+  const accessFreq = Math.min(m.accessCount / 20, 1); // normalize, cap at 20 accesses
+  const ageDays = (Date.now() - m.lastAccessedAt) / (1000 * 60 * 60 * 24);
+  const recencyDecay = Math.max(0, 1 - ageDays / 60); // 60-day decay window for pruning
+  const categoryWeight = CATEGORY_WEIGHTS[m.category] ?? 0.5;
+  return confidence * 0.3 + accessFreq * 0.3 + recencyDecay * 0.2 + categoryWeight * 0.2;
+}
 
 interface MemoryState {
   memories: Memory[];
@@ -26,7 +51,7 @@ interface MemoryActions {
   searchMemories: (query: string) => Memory[];
   addMemoryWithDedup: (memory: Memory) => void;
   touchMemory: (id: string) => void;
-  /** Hard-delete superseded memories older than 30 days and enforce count limit. */
+  /** Hard-delete superseded memories older than 30 days and prune by retention score. */
   cleanupMemories: () => number;
 }
 
@@ -74,18 +99,43 @@ export const useMemoryStore = create<MemoryStore>()(
 
       addMemoryWithDedup: (memory) => {
         const state = get();
-        const duplicate = findDuplicate(state.memories, memory.content, memory.tags);
-        if (duplicate) {
+        const match = findSimilar(state.memories, memory.content, memory.tags);
+
+        if (match?.level === 'duplicate') {
           // Supersede the old memory with the new one
           set({
             memories: [
               memory,
               ...state.memories.map((m) =>
-                m.id === duplicate.id
+                m.id === match.memory.id
                   ? { ...m, supersededBy: memory.id, updatedAt: Date.now() }
                   : m
               ),
             ],
+          });
+        } else if (match?.level === 'similar') {
+          // Merge: update existing memory's content, bump confidence, increment updatedCount
+          const existing = match.memory;
+          const mergedContent = existing.content.length >= memory.content.length
+            ? existing.content
+            : memory.content;
+          const mergedTags = [...new Set([...existing.tags, ...memory.tags])];
+          const bumpedConfidence = Math.min(1, existing.confidence + 0.05);
+          const count = (existing.updatedCount || 0) + 1;
+          set({
+            memories: state.memories.map((m) =>
+              m.id === existing.id
+                ? {
+                    ...m,
+                    content: mergedContent,
+                    tags: mergedTags,
+                    confidence: bumpedConfidence,
+                    updatedCount: count,
+                    updatedAt: Date.now(),
+                    lastAccessedAt: Date.now(),
+                  }
+                : m
+            ),
           });
         } else {
           set({ memories: [memory, ...state.memories] });
@@ -110,14 +160,18 @@ export const useMemoryStore = create<MemoryStore>()(
           return true;
         });
         const removed = state.memories.length - cleaned.length;
-        // Enforce count limit — keep most recently accessed
-        if (cleaned.length > MAX_MEMORY_COUNT) {
+
+        // Differential decay pruning: when above PRUNE_TRIGGER, prune to PRUNE_TARGET
+        if (cleaned.length > PRUNE_TRIGGER) {
           cleaned = cleaned
-            .sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
-            .slice(0, MAX_MEMORY_COUNT);
+            .map((m) => ({ memory: m, score: retentionScore(m) }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, PRUNE_TARGET)
+            .map((s) => s.memory);
         }
+
         set({ memories: cleaned });
-        return removed + (state.memories.length - removed - cleaned.length);
+        return removed + Math.max(0, state.memories.length - removed - cleaned.length);
       },
     }),
     {

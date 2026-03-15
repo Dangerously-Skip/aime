@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { MessageList } from "@/components/shared/message-list";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { FolderPicker } from "@/components/shared/folder-picker";
@@ -14,6 +14,7 @@ import { useProjectContext } from "@/hooks/use-project-context";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
+import { summarizeConversation } from "@/lib/memory/summarizer";
 import { useProjectStore } from "@/stores/project-store";
 import { useAutoProject } from "@/hooks/use-auto-project";
 import { useScratchDir } from "@/hooks/use-scratch-dir";
@@ -37,7 +38,10 @@ import {
   PanelRightClose,
   PanelRight,
   FolderOpen,
+  Globe,
 } from "lucide-react";
+import { PreviewPanel } from "@/components/shared/preview-panel";
+import { detectServerUrl } from "@/lib/artifacts/server-detector";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_FILES: string[] = [];
@@ -133,6 +137,8 @@ function SidebarPanel({
   open,
   onToggle,
   onArtifactClick,
+  previewUrl,
+  onPreviewClick,
 }: {
   contextFiles: string[];
   artifactFiles: string[];
@@ -140,6 +146,8 @@ function SidebarPanel({
   open: boolean;
   onToggle: () => void;
   onArtifactClick?: (path: string) => void;
+  previewUrl?: string | null;
+  onPreviewClick?: () => void;
 }) {
   return (
     <div className={`flex flex-col shrink-0 transition-all duration-200 ${open ? "w-[300px]" : "w-10"}`}>
@@ -191,6 +199,23 @@ function SidebarPanel({
               emptyText="Files created or edited will appear here."
               onItemClick={onArtifactClick}
             />
+
+            {/* Dev server preview chip */}
+            {previewUrl && onPreviewClick && (
+              <div className="rounded-xl border border-primary/30 bg-primary/5">
+                <button
+                  type="button"
+                  onClick={onPreviewClick}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-sm font-semibold text-primary hover:bg-primary/10 transition-colors rounded-xl"
+                >
+                  <Globe className="h-4 w-4" />
+                  <span className="flex-1 text-left">Preview</span>
+                  <span className="text-xs font-normal text-primary/70 truncate max-w-[140px]">
+                    {previewUrl.replace(/^https?:\/\//, "")}
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
         </ScrollArea>
       )}
@@ -203,6 +228,8 @@ export function CoworkSurface() {
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const handleFileAttach = useCallback(
     (file: AttachmentFile) => {
       setAttachments((prev) => [...prev, file]);
@@ -262,6 +289,19 @@ export function CoworkSurface() {
     if (conv?.surface === "cowork") setCurrentChat(activeConvId);
   }, [activeConvId, conversations, setCurrentChat]);
 
+  // Episodic memory: summarize previous conversation when switching
+  const prevChatIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prevId = prevChatIdRef.current;
+    prevChatIdRef.current = chatId || null;
+    if (prevId && prevId !== chatId) {
+      const prevMessages = useCoworkStore.getState().messages[prevId];
+      if (prevMessages && prevMessages.length > 0) {
+        summarizeConversation(prevId, prevMessages);
+      }
+    }
+  }, [chatId]);
+
   const { sendMessage, abort } = useSSEStream({
     onChunk(event) {
       switch (event.type) {
@@ -314,6 +354,11 @@ export function CoworkSurface() {
               ? event.result
               : JSON.stringify(event.result);
           updateToolResult(chatId, id, result, event.is_error as boolean | undefined);
+          // Detect dev server URLs in Bash output
+          if (result && !event.is_error) {
+            const detected = detectServerUrl(result);
+            if (detected) setPreviewUrl(detected.url);
+          }
           break;
         }
         case "input_request": {
@@ -578,7 +623,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} conversationId={chatId} />
+            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">
@@ -642,7 +687,18 @@ export function CoworkSurface() {
             open={sidebarOpen}
             onToggle={() => setSidebarOpen((prev) => !prev)}
             onArtifactClick={setPreviewPath}
+            previewUrl={previewUrl}
+            onPreviewClick={() => setPreviewOpen(true)}
           />
+
+          {/* Dev server preview panel */}
+          {previewUrl && (
+            <PreviewPanel
+              url={previewUrl}
+              open={previewOpen}
+              onClose={() => setPreviewOpen(false)}
+            />
+          )}
         </div>
       )}
 

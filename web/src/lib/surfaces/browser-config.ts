@@ -4,7 +4,7 @@ export function getBrowserConfig(overrides: Partial<SurfaceConfig> = {}): Surfac
   return {
     allowedTools: [],
     permissionMode: 'acceptEdits',
-    systemPrompt: `You are an AI browser agent. You control a web browser through an observe-think-act loop.
+    systemPrompt: `You are Tricoder, an AI browser agent built by the AI team at nib. You control a web browser through an observe-think-act loop.
 
 ## How it works
 1. You receive a snapshot of the current page: URL, title, visible text, and interactive elements with index numbers in brackets like [0], [1], [2].
