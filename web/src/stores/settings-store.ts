@@ -124,6 +124,32 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'nibcowork:settings',
       storage: createJSONStorage(() => localStorage),
       skipHydration: true,
+      version: 1,
+      migrate: (persisted: unknown, version: number) => {
+        const state = persisted as Record<string, unknown>;
+        if (version === 0) {
+          // v0 -> v1: ensure all fields exist with defaults
+          return { ...initialState, ...state } as unknown as SettingsState & SettingsActions;
+        }
+        return state as unknown as SettingsState & SettingsActions;
+      },
+      partialize: (state) => ({
+        fullName: state.fullName,
+        displayName: state.displayName,
+        workFunction: state.workFunction,
+        personalPreferences: state.personalPreferences,
+        chatFont: state.chatFont,
+        toolAccessMode: state.toolAccessMode,
+        coworkInstructions: state.coworkInstructions,
+        codeWorktreeLocation: state.codeWorktreeLocation,
+        codeBranchPrefix: state.codeBranchPrefix,
+        recentFolders: state.recentFolders,
+        trustedFolders: state.trustedFolders,
+        githubToken: state.githubToken,
+        githubUser: state.githubUser,
+        nibGatewayApiKey: state.nibGatewayApiKey,
+        autoExtractMemories: state.autoExtractMemories,
+      }),
     }
   )
 );

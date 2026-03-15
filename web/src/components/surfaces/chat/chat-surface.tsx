@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { MessageList } from "@/components/shared/message-list";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { ChatTitleBar } from "@/components/shared/chat-title-bar";
@@ -22,6 +22,7 @@ import { useAppStore } from "@/stores/app-store";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
+import { summarizeConversation } from "@/lib/memory/summarizer";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { ArtifactPanel } from "@/components/shared/artifact-panel";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
@@ -112,6 +113,19 @@ export function ChatSurface() {
     const conv = allConversations.find((c) => c.id === activeConvId);
     if (conv?.surface === "chat") setCurrentChat(activeConvId);
   }, [activeConvId, allConversations, setCurrentChat]);
+
+  // Episodic memory: summarize previous conversation when switching
+  const prevChatIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prevId = prevChatIdRef.current;
+    prevChatIdRef.current = chatId || null;
+    if (prevId && prevId !== chatId) {
+      const prevMessages = useChatStore.getState().messages[prevId];
+      if (prevMessages && prevMessages.length > 0) {
+        summarizeConversation(prevId, prevMessages);
+      }
+    }
+  }, [chatId]);
 
   const { sendMessage, abort } = useSSEStream({
     onChunk(event) {

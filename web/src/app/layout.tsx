@@ -15,8 +15,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Open Claude Cowork",
-  description: "AI-powered desktop workspace with Claude Agent SDK",
+  title: "Tricoder",
+  description: "AI-powered desktop workspace by the nib AI team",
 };
 
 export default function RootLayout({

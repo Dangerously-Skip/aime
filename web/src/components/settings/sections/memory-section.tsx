@@ -18,6 +18,7 @@ function CategoryBadge({ category }: { category: MemoryCategory }) {
     decision: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
     skill: 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
     relationship: 'bg-pink-500/10 text-pink-600 dark:text-pink-400',
+    episodic: 'bg-orange-500/10 text-orange-600 dark:text-orange-400',
   }
 
   return (

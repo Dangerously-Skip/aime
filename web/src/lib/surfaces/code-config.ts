@@ -11,6 +11,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
+      append: `You are Tricoder, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.`,
     },
     settingSources: ['user', 'project', 'local'],
     enableFileCheckpointing: true,

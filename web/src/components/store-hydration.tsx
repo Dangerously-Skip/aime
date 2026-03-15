@@ -52,7 +52,7 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
     // The inline <script> in layout.tsx already applied the correct theme class
     // from localStorage before React hydrated. We just need to rehydrate stores
     // and set up the subscriber for subsequent changes.
-    const hydrationPromise = Promise.all([
+    Promise.all([
       useAppStore.persist.rehydrate(),
       useConversationStore.persist.rehydrate(),
       useChatStore.persist.rehydrate(),
@@ -67,17 +67,19 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
       const theme = useAppStore.getState().theme;
       applyTheme(theme, false);
       setHydrated();
+    }).catch((err) => {
+      console.error('[StoreHydration] Rehydration error:', err);
+      setHydrated(); // proceed with defaults
     });
 
     // Timeout fallback: hydrate with defaults if localStorage read takes too long
-    const timeout = setTimeout(() => {
+    // Kept independent of the promise chain so it's a true safety net
+    setTimeout(() => {
       if (!hydrated) {
         console.warn('[StoreHydration] Timed out waiting for localStorage, using defaults');
         setHydrated();
       }
     }, 3000);
-
-    hydrationPromise.finally(() => clearTimeout(timeout));
 
     // Listen for theme changes (user toggling theme in settings)
     const unsub = useAppStore.subscribe((state, prev) => {
