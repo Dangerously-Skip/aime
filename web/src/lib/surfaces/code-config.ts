@@ -11,7 +11,9 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: `You are Tricoder, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.`,
+      append: `You are Quarry, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.
+Do not use emojis in your responses. Keep output clean, professional, and text-only.
+Prefer prose over bullet points in conversational responses.`,
     },
     settingSources: ['user', 'project', 'local'],
     enableFileCheckpointing: true,

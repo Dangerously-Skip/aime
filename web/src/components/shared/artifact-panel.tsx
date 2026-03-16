@@ -20,9 +20,11 @@ import {
   Download,
   Loader2,
   ExternalLink,
+  Eye,
 } from "lucide-react";
 import { MarkdownRenderer } from "./markdown-renderer";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
+import { wrapInHtmlDoc } from "@/lib/artifacts/preview";
 import {
   saveArtifactAs,
   autoSaveArtifact,
@@ -57,6 +59,7 @@ export function ArtifactPanel({
 }: ArtifactPanelProps) {
   const [copied, setCopied] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: "idle" });
+  const [htmlTab, setHtmlTab] = useState<"preview" | "code">("preview");
   const autoSavedRef = useRef<string | null>(null);
 
   // Auto-save when panel opens with a project folder
@@ -223,8 +226,47 @@ export function ArtifactPanel({
           )}
 
           {artifact && artifact.type === "html" && (
-            <div className="prose prose-sm dark:prose-invert max-w-none px-1">
-              <MarkdownRenderer content={artifact.content} />
+            <div className="flex flex-col h-full">
+              {/* Code / Preview tab bar */}
+              <div className="flex items-center gap-1 mb-2 px-1">
+                <button
+                  type="button"
+                  onClick={() => setHtmlTab("preview")}
+                  className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    htmlTab === "preview"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  <Eye className="h-3 w-3" />
+                  Preview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHtmlTab("code")}
+                  className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    htmlTab === "code"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  <Code2 className="h-3 w-3" />
+                  Code
+                </button>
+              </div>
+
+              {htmlTab === "preview" ? (
+                <iframe
+                  srcDoc={wrapInHtmlDoc(artifact.content)}
+                  sandbox="allow-scripts"
+                  className="w-full flex-1 min-h-[300px] border border-border rounded-lg bg-white"
+                  title={artifact.title}
+                />
+              ) : (
+                <pre className="rounded-lg bg-muted/40 p-4 text-xs leading-relaxed overflow-x-auto font-mono whitespace-pre-wrap break-words">
+                  <code className="language-html">{artifact.content}</code>
+                </pre>
+              )}
             </div>
           )}
 

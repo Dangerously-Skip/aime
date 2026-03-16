@@ -1,6 +1,7 @@
 {
-  "name": "web",
+  "name": "quarry",
   "version": "0.1.0",
+  "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
   "scripts": {
@@ -8,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "postinstall": "node scripts/patch-electron-name.js",
     "electron": "electron .",
     "electron:dev": "concurrently --kill-others \"next dev\" \"wait-on http://localhost:3000 && electron .\""
   },

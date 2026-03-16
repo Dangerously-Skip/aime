@@ -43,16 +43,34 @@ import {
   ImageIcon,
   File,
   Folder,
+  Globe,
 } from "lucide-react";
+import { PreviewPanel } from "@/components/shared/preview-panel";
+import { detectServerUrl, isWebAsset, findHtmlEntryPoint } from "@/lib/artifacts/server-detector";
 import type { Message } from "@/stores/chat-store";
 
 const EMPTY_MESSAGES: Message[] = [];
+
+const DANGEROUS_PATTERNS = [
+  /\brm\s+(-[rRf]+\s+|.*\/)/,
+  /\bsudo\b/,
+  /\bmkfs\b/,
+  /\bdd\s+if=/,
+  /\bchmod\s+777\b/,
+  /curl.*\|\s*(sh|bash)/,
+  /wget.*\|\s*(sh|bash)/,
+  /\bnc\s+-/,
+];
+
+function isDangerousCommand(command: string): boolean {
+  return DANGEROUS_PATTERNS.some((p) => p.test(command));
+}
 
 /* ── Pixel mascot (jiggling character) ── */
 function Mascot() {
   return (
     <img
-      src="/mascot.png"
+      src="/mascot.svg"
       alt="Mascot"
       width={80}
       height={80}
@@ -142,10 +160,12 @@ interface TerminalMessage {
 function TerminalOutput({
   messages,
   onQuestionAnswered,
+  onPreviewUrl,
   endRef,
 }: {
   messages: TerminalMessage[];
   onQuestionAnswered?: (toolUseId: string, answers: Record<string, string>) => void;
+  onPreviewUrl?: (url: string) => void;
   endRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
@@ -186,6 +206,7 @@ function TerminalOutput({
                 status={tool.status}
                 startTime={tool.startTime}
                 endTime={tool.endTime}
+                onPreviewUrl={onPreviewUrl}
               />
             ))}
             {msg.content && (
@@ -195,8 +216,14 @@ function TerminalOutput({
               </div>
             )}
             {msg.isLoading && !msg.content && (
-              <div className="pl-1 text-muted-foreground">
-                <span className="loading-asterisk inline-block">*</span>
+              <div className="pl-1">
+                <img
+                  src="/mascot.svg"
+                  alt="Thinking..."
+                  width={28}
+                  height={28}
+                  className="mascot-thinking inline-block"
+                />
               </div>
             )}
           </div>
@@ -407,6 +434,10 @@ export function CodeSurface() {
   );
   const model = useCodeStore((s) => s.model);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
+  const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
+  const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
+  const disableBashTool = useSettingsStore((s) => s.disableBashTool);
   const isStreaming = useCodeStore((s) => s.isStreaming);
   const folder = useCodeStore((s) => s.folder);
   const permissionMode = useCodeStore((s) => s.permissionMode);
@@ -418,6 +449,7 @@ export function CodeSurface() {
   const addToolCall = useCodeStore((s) => s.addToolCall);
   const updateMessage = useCodeStore((s) => s.updateMessage);
   const updateToolResult = useCodeStore((s) => s.updateToolResult);
+  const completeRunningTools = useCodeStore((s) => s.completeRunningTools);
   const startStreaming = useCodeStore((s) => s.startStreaming);
   const stopStreaming = useCodeStore((s) => s.stopStreaming);
   const setCurrentChat = useCodeStore((s) => s.setCurrentChat);
@@ -428,9 +460,45 @@ export function CodeSurface() {
   const activeConvId = useConversationStore((s) => s.activeId);
   const allConversations = useConversationStore((s) => s.conversations);
 
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  // Track HTML file paths written during this stream for preview detection
+  const pendingHtmlFiles = useRef<string[]>([]);
+  // Track non-HTML web asset files for entry point resolution
+  const pendingWebAssets = useRef<string[]>([]);
+  // Debounce timer for auto-refresh
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced refresh when non-HTML files are written alongside the current preview
+  const triggerPreviewRefresh = useCallback((filePath: string) => {
+    if (!previewUrl || !previewUrl.startsWith("file://")) return;
+    const previewDir = previewUrl.replace("file://", "").substring(0, previewUrl.replace("file://", "").lastIndexOf("/"));
+    const fileDir = filePath.substring(0, filePath.lastIndexOf("/"));
+    // Refresh if the written file is in the same directory (or a subdirectory) of the preview file
+    if (fileDir.startsWith(previewDir)) {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(() => {
+        setRefreshKey((k) => k + 1);
+      }, 500);
+    }
+  }, [previewUrl]);
+
+  // Helper to resolve entry point from pending web assets
+  const resolveWebAssetEntryPoint = useCallback(async () => {
+    if (pendingWebAssets.current.length === 0) return;
+    const lastAsset = pendingWebAssets.current[pendingWebAssets.current.length - 1];
+    const rootDir = folder || lastAsset.substring(0, lastAsset.lastIndexOf("/"));
+    const htmlPath = await findHtmlEntryPoint(lastAsset, rootDir);
+    if (htmlPath) {
+      setPreviewUrl(`file://${htmlPath}`);
+    }
+    pendingWebAssets.current = [];
+  }, [folder]);
+
   const { projectId: currentProjectId } = useProjectContext(chatId, "code");
   const { handleFolderSelected } = useAutoProject('code');
-  const { isElectron, selectFolder: pickFolder } = useElectron();
+  const { isElectron, selectFolder: pickFolder, showNotification } = useElectron();
   const isEmpty = messages.length === 0;
 
   const handleFolderChange = useCallback(
@@ -452,17 +520,35 @@ export function CodeSurface() {
 
   // Auto-scroll
   const endRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [userScrolledUp, setUserScrolledUp] = useState(false);
+  const userScrolledUpRef = useRef(false);
 
-  const scrollKey = `${messages.length}-${messages[messages.length - 1]?.content?.length ?? 0}-${messages[messages.length - 1]?.toolCalls?.length ?? 0}`;
-
+  // Auto-scroll via ResizeObserver — fires on any content size change
   useEffect(() => {
-    if (!userScrolledUp) {
+    const content = contentRef.current;
+    if (!content) return;
+    const observer = new ResizeObserver(() => {
+      if (!userScrolledUpRef.current) {
+        requestAnimationFrame(() => {
+          endRef.current?.scrollIntoView({ behavior: "instant" });
+        });
+      }
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
+  // Scroll to bottom on conversation switch
+  useEffect(() => {
+    if (messages.length > 0) {
+      userScrolledUpRef.current = false;
+      setUserScrolledUp(false);
       requestAnimationFrame(() => {
         endRef.current?.scrollIntoView({ behavior: "instant" });
       });
     }
-  }, [scrollKey, userScrolledUp]);
+  }, [messages.length === 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAttachmentAdd = useCallback(
     (file: AttachmentFile) => setAttachments((prev) => [...prev, file]),
@@ -485,6 +571,19 @@ export function CodeSurface() {
   const { sendMessage, abort } = useSSEStream({
     onChunk(event) {
       switch (event.type) {
+        case "turn_start":
+          // A new assistant turn means previous turn's tools have all executed.
+          // Mark any still-running tools as complete and check for HTML previews.
+          completeRunningTools(chatId);
+          if (pendingHtmlFiles.current.length > 0) {
+            const lastHtml = pendingHtmlFiles.current[pendingHtmlFiles.current.length - 1];
+            setPreviewUrl(`file://${lastHtml}`);
+            pendingHtmlFiles.current = [];
+            pendingWebAssets.current = [];
+          } else if (pendingWebAssets.current.length > 0) {
+            resolveWebAssetEntryPoint();
+          }
+          break;
         case "text":
           appendToLastAssistant(chatId, (event.content as string) || "");
           break;
@@ -494,42 +593,70 @@ export function CodeSurface() {
         case "tool_use": {
           const toolName = (event.name as string) || "Unknown";
           const toolInput = (event.input as Record<string, unknown>) || {};
-          addToolCall(chatId, {
+          const toolCallData: {
+            id: string;
+            name: string;
+            input: Record<string, unknown>;
+            status: "running";
+            startTime: number;
+          } = {
             id: (event.id as string) || `tool_${Date.now()}`,
             name: toolName,
             input: toolInput,
             status: "running",
             startTime: Date.now(),
-          });
-          // Register Write/Edit artifacts with project
-          if (currentProjectId && (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit")) {
+          };
+          // Tag dangerous Bash commands with a warning
+          if (
+            toolName === "Bash" &&
+            typeof toolInput.command === "string" &&
+            isDangerousCommand(toolInput.command) &&
+            (useSettingsStore.getState().blockDangerousCommands || useSettingsStore.getState().blockNetworkCommands)
+          ) {
+            toolCallData.input = { ...toolInput, __securityWarning: true };
+          }
+          addToolCall(chatId, toolCallData);
+          // Register Write/Edit artifacts with project and track HTML/web asset files
+          if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
             const filePath = (toolInput.file_path || toolInput.notebook_path) as string | undefined;
             if (filePath) {
-              const fileName = filePath.split("/").pop() || filePath;
-              useProjectStore.getState().addArtifact(currentProjectId, {
-                id: crypto.randomUUID(),
-                name: fileName,
-                path: filePath,
-                type: "file",
-                surface: "code",
-                conversationId: chatId,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              });
+              if (/\.html?$/i.test(filePath)) {
+                pendingHtmlFiles.current.push(filePath);
+              } else if (isWebAsset(filePath)) {
+                pendingWebAssets.current.push(filePath);
+                // Auto-refresh if we already have a file:// preview open
+                triggerPreviewRefresh(filePath);
+              }
+              if (currentProjectId) {
+                const fileName = filePath.split("/").pop() || filePath;
+                useProjectStore.getState().addArtifact(currentProjectId, {
+                  id: crypto.randomUUID(),
+                  name: fileName,
+                  path: filePath,
+                  type: "file",
+                  surface: "code",
+                  conversationId: chatId,
+                  createdAt: Date.now(),
+                  updatedAt: Date.now(),
+                });
+              }
             }
           }
           break;
         }
-        case "tool_result":
-          updateToolResult(
-            chatId,
-            (event.tool_use_id as string) || (event.id as string) || "",
+        case "tool_result": {
+          const toolResultId = (event.tool_use_id as string) || (event.id as string) || "";
+          const toolResult =
             typeof event.result === "string"
               ? event.result
-              : JSON.stringify(event.result),
-            event.is_error as boolean | undefined
-          );
+              : JSON.stringify(event.result);
+          updateToolResult(chatId, toolResultId, toolResult, event.is_error as boolean | undefined);
+          if (toolResult && !event.is_error) {
+            const detected = detectServerUrl(toolResult);
+            if (detected) setPreviewUrl(detected.url);
+          }
           break;
+        }
         case "input_request":
           addMessage(chatId, {
             id: (event.toolUseId as string) || `q_${Date.now()}`,
@@ -539,6 +666,9 @@ export function CodeSurface() {
             questionData: event.questions,
             questionToolUseId: event.toolUseId as string,
           });
+          if (!document.hasFocus()) {
+            showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
+          }
           break;
         case "memory_extract":
           handleMemoryExtractEvent(
@@ -555,8 +685,22 @@ export function CodeSurface() {
       }
     },
     onDone: () => {
+      // Mark any remaining running tools as complete
+      completeRunningTools(chatId);
+      // Set preview URL for any HTML files written in the last turn
+      if (pendingHtmlFiles.current.length > 0) {
+        const lastHtml = pendingHtmlFiles.current[pendingHtmlFiles.current.length - 1];
+        setPreviewUrl(`file://${lastHtml}`);
+        pendingHtmlFiles.current = [];
+        pendingWebAssets.current = [];
+      } else if (pendingWebAssets.current.length > 0) {
+        resolveWebAssetEntryPoint();
+      }
       stopStreaming(chatId);
       setSessionStatus("idle");
+      if (!document.hasFocus()) {
+        showNotification("Task complete", "Claude has finished working on your request.");
+      }
     },
     onError: (error) => {
       stopStreaming(chatId);
@@ -630,6 +774,12 @@ export function CodeSurface() {
         cwd: folder || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
+        securitySettings: {
+          blockDangerousCommands,
+          blockNetworkCommands,
+          restrictToProjectFolder,
+          disableBashTool,
+        },
       });
     },
     [
@@ -696,55 +846,90 @@ export function CodeSurface() {
       ) : (
         /* ── Active state: messages + bottom input ── */
         <>
-          <div
-            className="flex-1 min-h-0 overflow-y-auto px-6 py-4"
-            onScroll={(e) => {
-              const el = e.currentTarget;
-              const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-              setUserScrolledUp(!atBottom);
-            }}
-          >
-            <div className="max-w-3xl mx-auto relative">
-              <TerminalOutput
-                messages={messages as TerminalMessage[]}
-                onQuestionAnswered={handleQuestionAnswered}
-                endRef={endRef}
-              />
-            </div>
-            {userScrolledUp && (
+          {/* Preview chip header */}
+          {previewUrl && (
+            <div className="flex items-center gap-2 px-6 py-1.5 border-b border-border/50">
               <button
-                onClick={() => {
-                  setUserScrolledUp(false);
-                  endRef.current?.scrollIntoView({ behavior: "smooth" });
-                }}
-                className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-primary/90 text-primary-foreground px-3 py-1.5 text-xs shadow-lg hover:bg-primary transition-colors"
+                type="button"
+                onClick={() => setPreviewOpen((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs text-primary hover:bg-primary/10 transition-colors"
               >
-                Scroll to bottom
+                <Globe className="h-3 w-3" />
+                <span>Preview</span>
+                <span className="text-primary/70 font-mono truncate max-w-[200px]">
+                  {previewUrl.replace(/^https?:\/\//, "")}
+                </span>
               </button>
-            )}
-          </div>
-
-          <div className="px-6 pb-4 pt-2">
-            <div className="max-w-3xl mx-auto">
-              <CodeInput
-                value={inputValue}
-                onChange={setInputValue}
-                onSubmit={handleSubmit}
-                onAbort={abort}
-                isStreaming={isStreaming}
-                permissionMode={permissionMode}
-                onPermissionModeChange={setPermissionMode}
-                model={model}
-                onModelChange={setModel}
-                placeholder="Describe a task..."
-                rows={1}
-                minHeight="min-h-[36px]"
-                attachments={attachments}
-                onAttachmentAdd={handleAttachmentAdd}
-                onAttachmentRemove={handleAttachmentRemove}
-              />
-              <BottomBar folder={folder} onFolderChange={handleFolderChange} />
             </div>
+          )}
+
+          <div className="flex flex-1 min-h-0">
+            {/* Messages + input column */}
+            <div className="flex flex-1 flex-col min-w-0">
+              <div
+                className="flex-1 min-h-0 overflow-y-auto px-6 py-4"
+                onScroll={(e) => {
+                  const el = e.currentTarget;
+                  const scrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight >= 50;
+                  setUserScrolledUp(scrolledUp);
+                  userScrolledUpRef.current = scrolledUp;
+                }}
+              >
+                <div ref={contentRef} className="max-w-3xl mx-auto relative">
+                  <TerminalOutput
+                    messages={messages as TerminalMessage[]}
+                    onQuestionAnswered={handleQuestionAnswered}
+                    onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }}
+                    endRef={endRef}
+                  />
+                </div>
+                {userScrolledUp && (
+                  <button
+                    onClick={() => {
+                      setUserScrolledUp(false);
+                      userScrolledUpRef.current = false;
+                      endRef.current?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                    className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-primary/90 text-primary-foreground px-3 py-1.5 text-xs shadow-lg hover:bg-primary transition-colors"
+                  >
+                    Scroll to bottom
+                  </button>
+                )}
+              </div>
+
+              <div className="px-6 pb-4 pt-2">
+                <div className="max-w-3xl mx-auto">
+                  <CodeInput
+                    value={inputValue}
+                    onChange={setInputValue}
+                    onSubmit={handleSubmit}
+                    onAbort={abort}
+                    isStreaming={isStreaming}
+                    permissionMode={permissionMode}
+                    onPermissionModeChange={setPermissionMode}
+                    model={model}
+                    onModelChange={setModel}
+                    placeholder="Describe a task..."
+                    rows={1}
+                    minHeight="min-h-[36px]"
+                    attachments={attachments}
+                    onAttachmentAdd={handleAttachmentAdd}
+                    onAttachmentRemove={handleAttachmentRemove}
+                  />
+                  <BottomBar folder={folder} onFolderChange={handleFolderChange} />
+                </div>
+              </div>
+            </div>
+
+            {/* Preview panel */}
+            {previewUrl && (
+              <PreviewPanel
+                url={previewUrl}
+                open={previewOpen}
+                onClose={() => setPreviewOpen(false)}
+                refreshKey={refreshKey}
+              />
+            )}
           </div>
         </>
       )}

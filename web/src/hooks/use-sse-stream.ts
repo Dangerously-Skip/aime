@@ -44,6 +44,12 @@ interface UseSSEStreamReturn {
       history?: Array<{ role: 'user' | 'assistant'; content: string }>
       memories?: string
       crossSurfaceContext?: string
+      securitySettings?: {
+        blockDangerousCommands?: boolean
+        blockNetworkCommands?: boolean
+        restrictToProjectFolder?: boolean
+        disableBashTool?: boolean
+      }
     }
   ) => Promise<void>;
   isStreaming: boolean;
@@ -120,6 +126,12 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         history?: Array<{ role: 'user' | 'assistant'; content: string }>
         memories?: string
         crossSurfaceContext?: string
+        securitySettings?: {
+          blockDangerousCommands?: boolean
+          blockNetworkCommands?: boolean
+          restrictToProjectFolder?: boolean
+          disableBashTool?: boolean
+        }
       }
     ): Promise<void> => {
       if (abortControllerRef.current) {
@@ -149,6 +161,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.history?.length ? { history: extra.history } : {}),
             ...(extra?.memories ? { memories: extra.memories } : {}),
             ...(extra?.crossSurfaceContext ? { crossSurfaceContext: extra.crossSurfaceContext } : {}),
+            ...(extra?.securitySettings ? { securitySettings: extra.securitySettings } : {}),
           }),
           signal: controller.signal,
         });

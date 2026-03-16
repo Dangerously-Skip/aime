@@ -168,11 +168,18 @@ export class ClaudeProvider extends BaseProvider {
     }
 
     // Check for existing session - matches server.js session resumption logic
+    // Skip resume if the working directory changed (session cwd is baked in)
     const existingSessionId = chatId ? this.getSession(chatId) : null;
-    console.log('[Claude] Existing session ID for', chatId, ':', existingSessionId || 'none (new chat)');
+    const previousCwd = chatId ? this.getSessionCwd(chatId) : null;
+    const cwdChanged = cwd && previousCwd && cwd !== previousCwd;
+    if (cwdChanged) {
+      console.log('[Claude] Working directory changed from', previousCwd, 'to', cwd, '- starting fresh session');
+    } else {
+      console.log('[Claude] Existing session ID for', chatId, ':', existingSessionId || 'none (new chat)');
+    }
 
-    // If we have an existing session, resume it
-    if (existingSessionId) {
+    // If we have an existing session and cwd hasn't changed, resume it
+    if (existingSessionId && !cwdChanged) {
       queryOptions.resume = existingSessionId;
       console.log('[Claude] Resuming session:', existingSessionId);
     }
@@ -258,7 +265,7 @@ export class ClaudeProvider extends BaseProvider {
         if (c.type === 'system' && c.subtype === 'init') {
           const newSessionId = (c.session_id || (c.data as Record<string, unknown>)?.session_id || c.sessionId) as string | undefined;
           if (newSessionId && chatId) {
-            this.setSession(chatId, newSessionId);
+            this.setSession(chatId, newSessionId, cwd);
             console.log('[Claude] Session ID captured:', newSessionId);
             console.log('[Claude] Total sessions stored:', this.sessions.size);
           } else {
@@ -278,6 +285,9 @@ export class ClaudeProvider extends BaseProvider {
 
         // Handle assistant messages - extract text and tool_use blocks
         if (c.type === 'assistant' && c.message) {
+          // A new assistant message means any previous turn's tools have finished executing.
+          yield { type: 'turn_start', provider: this.name };
+
           const message = c.message as Record<string, unknown>;
           const content = message.content;
           if (Array.isArray(content)) {
@@ -303,12 +313,14 @@ export class ClaudeProvider extends BaseProvider {
           continue;
         }
 
-        // Handle tool results
+        // Handle tool results — try multiple field names for the tool use ID
+        // since different SDK versions may use different conventions
         if (c.type === 'tool_result' || c.type === 'result') {
+          const toolUseId = (c.tool_use_id || c.toolUseId || c.id) as string;
           yield {
             type: 'tool_result',
             result: (c.result || c.content || c) as unknown,
-            tool_use_id: c.tool_use_id as string,
+            tool_use_id: toolUseId,
             provider: this.name,
           };
           continue;

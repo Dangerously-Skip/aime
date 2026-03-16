@@ -7,7 +7,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
-import { Wrench, ChevronDown, Loader2, Check, X, FileText } from "lucide-react";
+import { Wrench, ChevronDown, Loader2, Check, X, FileText, Globe, AlertTriangle } from "lucide-react";
+import { detectServerUrl } from "@/lib/artifacts/server-detector";
 
 const ARTIFACT_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
 
@@ -19,6 +20,7 @@ interface ToolCallCardProps {
   startTime?: number;
   endTime?: number;
   onArtifactClick?: (path: string) => void;
+  onPreviewUrl?: (url: string) => void;
 }
 
 function formatToolPreview(input: Record<string, unknown>): string {
@@ -66,11 +68,13 @@ export function ToolCallCard({
   startTime,
   endTime,
   onArtifactClick,
+  onPreviewUrl,
 }: ToolCallCardProps) {
   const [isOpen, setIsOpen] = useState(status === "running");
   const [showFullOutput, setShowFullOutput] = useState(false);
   const preview = formatToolPreview(input);
   const inputStr = JSON.stringify(input, null, 2);
+  const hasSecurityWarning = !!input.__securityWarning;
   const filePath = typeof input.file_path === "string" ? input.file_path : typeof input.path === "string" ? input.path : null;
   const maxOutputLen = 2000;
   const isOutputTruncated = output ? output.length > maxOutputLen : false;
@@ -89,6 +93,12 @@ export function ToolCallCard({
           {preview}
         </span>
         <div className="flex items-center gap-1.5 shrink-0">
+          {hasSecurityWarning && (
+            <span className="inline-flex items-center gap-1 rounded-sm bg-orange-500/10 px-1.5 py-0.5 text-[10px] text-orange-500 font-medium">
+              <AlertTriangle className="h-3 w-3" />
+              Risky
+            </span>
+          )}
           {startTime && (
             <span className="text-muted-foreground text-[10px]">
               {formatDuration(startTime, endTime)}
@@ -145,16 +155,50 @@ export function ToolCallCard({
           )}
 
           {/* Artifact preview chip for Write/Edit tools */}
-          {ARTIFACT_TOOLS.has(name) && status === "complete" && filePath && onArtifactClick && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onArtifactClick(filePath); }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 transition-colors"
-            >
-              <FileText className="h-3 w-3" />
-              Preview {filePath.split("/").pop()}
-            </button>
-          )}
+          {ARTIFACT_TOOLS.has(name) && status === "complete" && filePath && (() => {
+            const isHtml = /\.html?$/i.test(filePath);
+            if (isHtml && onPreviewUrl) {
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onPreviewUrl(`file://${filePath}`); }}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 transition-colors"
+                >
+                  <Globe className="h-3 w-3" />
+                  Preview {filePath.split("/").pop()}
+                </button>
+              );
+            }
+            if (onArtifactClick) {
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onArtifactClick(filePath); }}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 transition-colors"
+                >
+                  <FileText className="h-3 w-3" />
+                  Preview {filePath.split("/").pop()}
+                </button>
+              );
+            }
+            return null;
+          })()}
+
+          {/* Dev server preview chip for Bash tools */}
+          {name === "Bash" && status === "complete" && output && onPreviewUrl && (() => {
+            const detected = detectServerUrl(output);
+            if (!detected) return null;
+            return (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onPreviewUrl(detected.url); }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 transition-colors"
+              >
+                <Globe className="h-3 w-3" />
+                Open Preview
+              </button>
+            );
+          })()}
         </div>
       </CollapsibleContent>
     </Collapsible>

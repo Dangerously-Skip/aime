@@ -54,7 +54,7 @@ function normalizeUrl(input: string): string {
   if (/^[a-z0-9]+([\-\.][a-z0-9]+)*\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) {
     return `https://${trimmed}`;
   }
-  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+  return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
 }
 
 const PHASE_LABELS = {
@@ -574,13 +574,16 @@ export function BrowserSurface() {
             <webview
               ref={webviewCallbackRef as unknown as React.RefObject<never>}
               src={activeTab.url}
+              partition="persist:browser"
+              useragent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+              allowpopups={"true" as unknown as boolean}
               style={{ width: "100%", height: "100%", border: "none" }}
             />
           ) : (
             <div className="flex h-full items-center justify-center bg-muted">
               <div className="text-center space-y-5">
                 <img
-                  src="/mascot.png"
+                  src="/mascot.svg"
                   alt="Mascot"
                   width={64}
                   height={64}
@@ -591,7 +594,7 @@ export function BrowserSurface() {
                 </p>
                 <div className="grid grid-cols-3 gap-3 max-w-xs mx-auto">
                   {[
-                    { name: "Google", url: "https://google.com", logo: "https://www.google.com/favicon.ico" },
+                    { name: "DuckDuckGo", url: "https://duckduckgo.com", logo: "https://duckduckgo.com/favicon.ico" },
                     { name: "GitHub", url: "https://github.com", logo: "https://github.githubassets.com/favicons/favicon-dark.svg" },
                     { name: "Miro", url: "https://miro.com", logo: "https://miro.com/favicon.ico" },
                     { name: "Confluence", url: "https://confluence.atlassian.com", logo: "https://www.google.com/s2/favicons?domain=confluence.atlassian.com&sz=64" },

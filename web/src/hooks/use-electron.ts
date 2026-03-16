@@ -11,6 +11,7 @@ interface ElectronAPI {
   ensureDir: (dirPath: string) => Promise<{ success: boolean }>;
   fileExists: (filePath: string) => Promise<boolean>;
   getHomeDir: () => Promise<string>;
+  showNotification: (title: string, body: string) => Promise<void>;
   openAuthWindow: (url: string) => Promise<void>;
   onGithubAuthResult: (callback: (data: unknown) => void) => void;
 }
@@ -25,6 +26,7 @@ interface UseElectronReturn {
   isElectron: boolean;
   selectFolder: () => Promise<string | null>;
   getUserName: () => Promise<string>;
+  showNotification: (title: string, body: string) => void;
   openAuthWindow: (url: string) => Promise<void>;
 }
 
@@ -49,11 +51,24 @@ export function useElectron(): UseElectronReturn {
     return 'user';
   }, []);
 
+  const showNotification = useCallback((title: string, body: string): void => {
+    if (typeof window === 'undefined') return;
+    if (window.electronAPI?.showNotification) {
+      window.electronAPI.showNotification(title, body);
+    } else if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body });
+    } else if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().then((perm) => {
+        if (perm === 'granted') new Notification(title, { body });
+      });
+    }
+  }, []);
+
   const openAuthWindow = useCallback(async (url: string): Promise<void> => {
     if (typeof window !== 'undefined' && window.electronAPI) {
       return window.electronAPI.openAuthWindow(url);
     }
   }, []);
 
-  return { isElectron, selectFolder, getUserName, openAuthWindow };
+  return { isElectron, selectFolder, getUserName, showNotification, openAuthWindow };
 }

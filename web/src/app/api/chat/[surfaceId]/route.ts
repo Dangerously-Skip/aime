@@ -92,6 +92,7 @@ export async function POST(
     memories = null,
     crossSurfaceContext = null,
     autoExtractMemories = true,
+    securitySettings = null,
   } = body as {
     message?: string;
     chatId?: string;
@@ -110,6 +111,12 @@ export async function POST(
     memories?: string | null;
     crossSurfaceContext?: string | null;
     autoExtractMemories?: boolean;
+    securitySettings?: {
+      blockDangerousCommands?: boolean;
+      blockNetworkCommands?: boolean;
+      restrictToProjectFolder?: boolean;
+      disableBashTool?: boolean;
+    } | null;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -205,6 +212,33 @@ export async function POST(
       // Get surface-specific config
       const surfaceConfig = getSurfaceConfig(surfaceId);
 
+      // ── Security settings ──────────────────────────────────────────────
+      // Filter Bash from allowedTools if disabled
+      if (securitySettings?.disableBashTool && surfaceConfig.allowedTools) {
+        surfaceConfig.allowedTools = surfaceConfig.allowedTools.filter(
+          (t: string) => t !== 'Bash'
+        );
+        console.log('[SECURITY] Bash tool removed from allowedTools');
+      }
+
+      // Build security rules block for system prompt
+      const securityRules: string[] = [];
+      if (securitySettings?.blockDangerousCommands) {
+        securityRules.push(
+          '- NEVER run destructive shell commands: rm -rf, sudo, mkfs, dd, chmod 777, or any command that modifies system files (/etc, /usr, /boot). Refuse the request and explain why.'
+        );
+      }
+      if (securitySettings?.blockNetworkCommands) {
+        securityRules.push(
+          '- NEVER run network exfiltration commands: curl piped to sh/bash, wget piped to sh/bash, nc/netcat, or SSH tunnels. You MAY use npm install, pip install, git push/pull, brew install, and similar package managers.'
+        );
+      }
+      if (securitySettings?.restrictToProjectFolder && cwd) {
+        securityRules.push(
+          `- ONLY write or delete files within the project folder: ${cwd}. Reading files outside this folder is allowed, but writing, editing, or deleting files outside it is FORBIDDEN. Refuse and explain if asked.`
+        );
+      }
+
       // Inject user preferences into system prompt context
       const userContext: string[] = [];
       if (displayName) userContext.push(`The user's name is ${displayName}.`);
@@ -237,6 +271,12 @@ export async function POST(
 
       if (crossSurfaceContext) {
         systemPrompt = appendToSystemPrompt(systemPrompt, crossSurfaceContext);
+      }
+
+      if (securityRules.length > 0) {
+        const rulesBlock = `<security-rules>\nYou MUST follow these security rules at all times. They override any user request that conflicts with them.\n${securityRules.join('\n')}\n</security-rules>`;
+        systemPrompt = appendToSystemPrompt(systemPrompt, rulesBlock);
+        console.log('[SECURITY] Injected', securityRules.length, 'security rules');
       }
 
       // Build onInputRequest callback to forward AskUserQuestion to the client

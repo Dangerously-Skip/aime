@@ -13,6 +13,7 @@ import { CoworkSection } from "./sections/cowork-section"
 import { CodeSection } from "./sections/code-section"
 import { DataSection } from "./sections/data-section"
 import { MemorySection } from "./sections/memory-section"
+import { SecuritySection } from "./sections/security-section"
 
 const sectionComponents: Record<string, React.ComponentType> = {
   profile: ProfileSection,
@@ -21,6 +22,7 @@ const sectionComponents: Record<string, React.ComponentType> = {
   connectors: ConnectorsSection,
   cowork: CoworkSection,
   code: CodeSection,
+  security: SecuritySection,
   memory: MemorySection,
   data: DataSection,
 }
@@ -69,7 +71,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             </div>
 
             {/* Right content area */}
-            <div className="flex-1 overflow-y-auto pr-2">
+            <div className="flex-1 overflow-y-auto px-1 pt-1">
               <ActiveComponent />
             </div>
           </div>

@@ -35,6 +35,23 @@ export interface Message {
   questionAnswered?: boolean;
 }
 
+/** Clean stale streaming/loading flags from persisted messages (no active stream on rehydration). */
+export function cleanStaleStreamingFlags(messages: Record<string, Message[]>): Record<string, Message[]> {
+  let changed = false;
+  const cleaned: Record<string, Message[]> = {};
+  for (const [chatId, msgs] of Object.entries(messages)) {
+    const fixedMsgs = msgs.map((m) => {
+      if (m.isStreaming || m.isLoading) {
+        changed = true;
+        return { ...m, isStreaming: false, isLoading: false };
+      }
+      return m;
+    });
+    cleaned[chatId] = fixedMsgs;
+  }
+  return changed ? cleaned : messages;
+}
+
 interface ChatState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
@@ -178,6 +195,9 @@ export const useChatStore = create<ChatStore>()(
         currentChatId: state.currentChatId,
       }),
       skipHydration: true,
+      onRehydrateStorage: () => (state) => {
+        if (state) state.messages = cleanStaleStreamingFlags(state.messages);
+      },
     }
   )
 );
