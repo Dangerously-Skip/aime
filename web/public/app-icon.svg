@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <clipPath id="rounded">
+      <rect width="512" height="512" rx="80"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#rounded)">
+    <rect width="512" height="512" fill="#1a1a1e"/>
+    <image href="/mascot.svg" x="56" y="56" width="400" height="400"/>
+  </g>
+</svg>

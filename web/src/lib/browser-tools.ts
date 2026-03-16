@@ -216,11 +216,16 @@ export async function executeToolInWebview(
       const url = input.url as string;
       try {
         await webview.loadURL(url);
-        // Wait a moment for navigation to settle
         await new Promise(r => setTimeout(r, 500));
         return { success: true, message: `Navigated to ${url}` };
       } catch (e) {
-        return { success: false, message: `Navigation failed: ${e instanceof Error ? e.message : String(e)}` };
+        const msg = e instanceof Error ? e.message : String(e);
+        // ERR_ABORTED (-3) = redirect happened, navigation still succeeded
+        if (msg.includes('(-3)') || msg.includes('ERR_ABORTED')) {
+          await new Promise(r => setTimeout(r, 500));
+          return { success: true, message: `Navigated to ${url} (redirected)` };
+        }
+        return { success: false, message: `Navigation failed: ${msg}` };
       }
     }
 

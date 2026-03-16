@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
+import { useElectron } from "@/hooks/use-electron";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_FILES: string[] = [];
@@ -255,6 +256,7 @@ export function CoworkSurface() {
   const appendToLastAssistant = useCoworkStore((s) => s.appendToLastAssistant);
   const addToolCall = useCoworkStore((s) => s.addToolCall);
   const updateToolResult = useCoworkStore((s) => s.updateToolResult);
+  const completeRunningTools = useCoworkStore((s) => s.completeRunningTools);
   const updateMessage = useCoworkStore((s) => s.updateMessage);
   const addContextFile = useCoworkStore((s) => s.addContextFile);
   const addArtifactFile = useCoworkStore((s) => s.addArtifactFile);
@@ -269,9 +271,14 @@ export function CoworkSurface() {
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const displayName = useSettingsStore((s) => s.displayName);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
+  const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
+  const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
+  const disableBashTool = useSettingsStore((s) => s.disableBashTool);
   const { projectInstructions, projectKnowledge, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "cowork");
   const scratchDir = useScratchDir(chatId);
   const { handleFolderSelected } = useAutoProject('cowork');
+  const { showNotification } = useElectron();
 
   const handleFolderChange = useCallback(
     (f: string | null) => {
@@ -305,6 +312,10 @@ export function CoworkSurface() {
   const { sendMessage, abort } = useSSEStream({
     onChunk(event) {
       switch (event.type) {
+        case "turn_start":
+          // New assistant turn — previous turn's tools have all completed
+          completeRunningTools(chatId);
+          break;
         case "text":
           appendToLastAssistant(chatId, (event.content as string) || "");
           break;
@@ -371,6 +382,9 @@ export function CoworkSurface() {
             questionData: event.questions,
             questionToolUseId: event.toolUseId as string,
           });
+          if (!document.hasFocus()) {
+            showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
+          }
           break;
         }
         case "memory_extract":
@@ -387,7 +401,13 @@ export function CoworkSurface() {
           break;
       }
     },
-    onDone: () => stopStreaming(chatId),
+    onDone: () => {
+      completeRunningTools(chatId);
+      stopStreaming(chatId);
+      if (!document.hasFocus()) {
+        showNotification("Task complete", "Claude has finished working on your request.");
+      }
+    },
     onError: (error) => {
       stopStreaming(chatId);
       appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
@@ -479,6 +499,12 @@ export function CoworkSurface() {
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
         crossSurfaceContext: crossSurfaceContext || undefined,
+        securitySettings: {
+          blockDangerousCommands,
+          blockNetworkCommands,
+          restrictToProjectFolder,
+          disableBashTool,
+        },
       });
     },
     [

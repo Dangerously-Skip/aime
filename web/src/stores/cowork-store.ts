@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 
 const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
@@ -27,6 +28,7 @@ interface CoworkActions {
   clearMessages: (chatId: string) => void;
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
+  completeRunningTools: (chatId: string) => void;
   setFolder: (folder: string | null) => void;
   addContextFile: (chatId: string, path: string) => void;
   addArtifactFile: (chatId: string, path: string) => void;
@@ -149,6 +151,27 @@ export const useCoworkStore = create<CoworkStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
+      completeRunningTools: (chatId) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          if (!msgs?.length) return state;
+          const lastIdx = msgs.length - 1;
+          const last = msgs[lastIdx];
+          if (last.role !== 'assistant' || !last.toolCalls) return state;
+          const hasRunning = last.toolCalls.some((tc) => tc.status === 'running');
+          if (!hasRunning) return state;
+          const updated = [...msgs];
+          updated[lastIdx] = {
+            ...last,
+            toolCalls: last.toolCalls.map((tc) =>
+              tc.status === 'running'
+                ? { ...tc, status: 'complete' as const, endTime: Date.now() }
+                : tc
+            ),
+          };
+          return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
       setFolder: (folder) => set({ folder }),
 
       addContextFile: (chatId, path) =>
@@ -184,6 +207,9 @@ export const useCoworkStore = create<CoworkStore>()(
         artifactFiles: state.artifactFiles,
       }),
       skipHydration: true,
+      onRehydrateStorage: () => (state) => {
+        if (state) state.messages = cleanStaleStreamingFlags(state.messages);
+      },
     }
   )
 );

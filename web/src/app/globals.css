@@ -221,14 +221,43 @@ html.transitioning *::after {
 
 .mascot-jiggle {
   display: inline-block;
-  animation: mascot-jiggle 0.6s ease-in-out infinite;
+  animation: mascot-bounce 2.4s ease-in-out infinite;
 }
 
-@keyframes mascot-jiggle {
-  0%, 100% { transform: rotate(-3deg) translateX(-1px); }
-  25% { transform: rotate(2deg) translateX(1px); }
-  50% { transform: rotate(-2deg) translateX(-0.5px); }
-  75% { transform: rotate(3deg) translateX(1px); }
+@keyframes mascot-bounce {
+  0%   { transform: translateX(0)    translateY(0)    rotate(0deg); }
+  10%  { transform: translateX(6px)  translateY(-10px) rotate(3deg); }
+  20%  { transform: translateX(12px) translateY(0)    rotate(0deg); }
+  30%  { transform: translateX(6px)  translateY(-8px)  rotate(-2deg); }
+  40%  { transform: translateX(0)    translateY(0)    rotate(0deg); }
+  50%  { transform: translateX(-6px) translateY(-12px) rotate(-3deg); }
+  60%  { transform: translateX(-12px) translateY(0)   rotate(0deg); }
+  70%  { transform: translateX(-6px) translateY(-6px)  rotate(2deg); }
+  80%  { transform: translateX(0)    translateY(0)    rotate(0deg); }
+  90%  { transform: translateX(4px)  translateY(-4px)  rotate(1deg); }
+  100% { transform: translateX(0)    translateY(0)    rotate(0deg); }
+}
+
+/* Mascot thinking indicator — spin → jiggle → pulse loop */
+.mascot-thinking {
+  display: inline-block;
+  animation: mascot-think 2.4s ease-in-out infinite;
+}
+
+@keyframes mascot-think {
+  /* Spin phase (0-33%) */
+  0%   { transform: rotate(0deg)   scale(1);    opacity: 1; }
+  33%  { transform: rotate(360deg) scale(1);    opacity: 1; }
+  /* Jiggle phase (33-66%) */
+  38%  { transform: rotate(365deg) translateX(1.5px)  scale(1);   opacity: 1; }
+  43%  { transform: rotate(356deg) translateX(-1.5px) scale(1);   opacity: 1; }
+  48%  { transform: rotate(363deg) translateX(1px)    scale(1);   opacity: 1; }
+  53%  { transform: rotate(358deg) translateX(-1px)   scale(1);   opacity: 1; }
+  58%  { transform: rotate(361deg) translateX(0.5px)  scale(1);   opacity: 1; }
+  66%  { transform: rotate(360deg) translateX(0)      scale(1);   opacity: 1; }
+  /* Pulse phase (66-100%) */
+  83%  { transform: rotate(360deg) scale(1.15); opacity: 0.6; }
+  100% { transform: rotate(360deg) scale(1);    opacity: 1; }
 }
 
 /* Thinking word fade transition */

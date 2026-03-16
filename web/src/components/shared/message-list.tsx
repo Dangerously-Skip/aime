@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback, useState, useMemo } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import { useSettingsStore } from "@/stores/settings-store";
 import { UserMessage } from "./user-message";
 import { AssistantMessage } from "./assistant-message";
@@ -44,32 +44,44 @@ interface MessageListProps {
   className?: string;
   onQuestionAnswered?: (toolUseId: string, answers: Record<string, string>) => void;
   onArtifactClick?: (pathOrArtifact: string | ParsedArtifact) => void;
+  onPreviewUrl?: (url: string) => void;
   conversationId?: string;
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, conversationId }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, conversationId }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [userScrolledUp, setUserScrolledUp] = useState(false);
+  const userScrolledUpRef = useRef(false);
   const chatFont = useSettingsStore((s) => s.chatFont);
   const fontClass = FONT_CLASS_MAP[chatFont] || "";
 
-  // Granular scroll key — changes on message count, last message content length, and tool call count
-  const lastMsg = messages[messages.length - 1];
-  const scrollKey = useMemo(
-    () =>
-      `${messages.length}-${lastMsg?.content?.length ?? 0}-${lastMsg?.toolCalls?.length ?? 0}`,
-    [messages.length, lastMsg?.content?.length, lastMsg?.toolCalls?.length]
-  );
-
-  // Auto-scroll on content changes
+  // Auto-scroll via ResizeObserver — fires on any content size change
   useEffect(() => {
-    if (!userScrolledUp) {
+    const content = contentRef.current;
+    if (!content) return;
+    const observer = new ResizeObserver(() => {
+      if (!userScrolledUpRef.current) {
+        requestAnimationFrame(() => {
+          endRef.current?.scrollIntoView({ behavior: "instant" });
+        });
+      }
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
+
+  // Scroll to bottom on conversation switch (messages go from 0 to >0)
+  useEffect(() => {
+    if (messages.length > 0) {
+      userScrolledUpRef.current = false;
+      setUserScrolledUp(false);
       requestAnimationFrame(() => {
         endRef.current?.scrollIntoView({ behavior: "instant" });
       });
     }
-  }, [scrollKey, userScrolledUp]);
+  }, [messages.length === 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Track user scroll position
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
@@ -77,11 +89,14 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
     const threshold = 50;
     const atBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    setUserScrolledUp(!atBottom);
+    const scrolledUp = !atBottom;
+    setUserScrolledUp(scrolledUp);
+    userScrolledUpRef.current = scrolledUp;
   }
 
   const handleScrollToBottom = useCallback(() => {
     setUserScrolledUp(false);
+    userScrolledUpRef.current = false;
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
@@ -91,7 +106,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
       onScroll={handleScroll}
       className={`relative flex-1 overflow-y-auto px-6 py-6 ${fontClass} ${className}`}
     >
-      <div className="max-w-3xl mx-auto">
+      <div ref={contentRef} className="max-w-3xl mx-auto">
       {messages.map((msg) =>
         msg.questionData ? (
           <QuestionCard
@@ -116,6 +131,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             isStreaming={msg.isStreaming}
             isLoading={msg.isLoading}
             onArtifactClick={onArtifactClick}
+            onPreviewUrl={onPreviewUrl}
             conversationId={conversationId}
           />
         ) : null

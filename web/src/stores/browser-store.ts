@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 
 export interface BrowserTab {
@@ -278,6 +279,11 @@ export const useBrowserStore = create<BrowserStore>()(
         activeTabIds: state.activeTabIds,
       }),
       skipHydration: true,
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.messages = cleanStaleStreamingFlags(state.messages);
+        }
+      },
     }
   )
 );

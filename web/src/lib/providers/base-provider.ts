@@ -6,6 +6,7 @@ export type ChunkType =
   | 'thinking'
   | 'tool_use'
   | 'tool_result'
+  | 'turn_start'
   | 'session_init'
   | 'done'
   | 'aborted'
@@ -79,10 +80,12 @@ export interface ProviderConfig {
 export abstract class BaseProvider {
   config: ProviderConfig;
   sessions: Map<string, string>;
+  sessionCwds: Map<string, string>;
 
   constructor(config: ProviderConfig = {}) {
     this.config = config;
     this.sessions = new Map();
+    this.sessionCwds = new Map();
   }
 
   /**
@@ -110,10 +113,18 @@ export abstract class BaseProvider {
   }
 
   /**
-   * Store a session ID for a chat.
+   * Store a session ID for a chat, optionally with its working directory.
    */
-  setSession(chatId: string, sessionId: string): void {
+  setSession(chatId: string, sessionId: string, cwd?: string): void {
     this.sessions.set(chatId, sessionId);
+    if (cwd) this.sessionCwds.set(chatId, cwd);
+  }
+
+  /**
+   * Get the cwd associated with a session.
+   */
+  getSessionCwd(chatId: string): string | null {
+    return this.sessionCwds.get(chatId) || null;
   }
 
   /**
@@ -138,5 +149,6 @@ export abstract class BaseProvider {
    */
   async cleanup(): Promise<void> {
     this.sessions.clear();
+    this.sessionCwds.clear();
   }
 }

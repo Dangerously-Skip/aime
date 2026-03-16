@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 
 /**
  * Provides a scratch directory path for Cowork when no user folder is selected.
- * Path: ~/.tricoder/scratch/{conversationId}/
+ * Path: ~/.quarry/scratch/{conversationId}/
  * Returns null if not in Electron or not ready.
  */
 export function useScratchDir(conversationId: string): string | null {
@@ -26,7 +26,7 @@ export function useScratchDir(conversationId: string): string | null {
 
     api.getHomeDir().then((homeDir) => {
       if (cancelled) return;
-      const path = `${homeDir}/.tricoder/scratch/${conversationId}`;
+      const path = `${homeDir}/.quarry/scratch/${conversationId}`;
       // Ensure the directory exists
       api.ensureDir(path).then(() => {
         if (!cancelled) setScratchDir(path);

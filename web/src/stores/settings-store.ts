@@ -26,6 +26,12 @@ interface SettingsState {
   codeWorktreeLocation: string;
   codeBranchPrefix: string;
 
+  // Security
+  blockDangerousCommands: boolean;
+  blockNetworkCommands: boolean;
+  restrictToProjectFolder: boolean;
+  disableBashTool: boolean;
+
   // Folder picker
   recentFolders: string[];
   trustedFolders: string[];
@@ -58,6 +64,10 @@ interface SettingsActions {
   clearGithubAuth: () => void;
   setNibGatewayApiKey: (key: string | null) => void;
   setAutoExtractMemories: (enabled: boolean) => void;
+  setBlockDangerousCommands: (enabled: boolean) => void;
+  setBlockNetworkCommands: (enabled: boolean) => void;
+  setRestrictToProjectFolder: (enabled: boolean) => void;
+  setDisableBashTool: (enabled: boolean) => void;
   resetAll: () => void;
 }
 
@@ -79,6 +89,10 @@ const initialState: SettingsState = {
   githubUser: null,
   nibGatewayApiKey: null,
   autoExtractMemories: true,
+  blockDangerousCommands: true,
+  blockNetworkCommands: false,
+  restrictToProjectFolder: true,
+  disableBashTool: false,
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -118,18 +132,33 @@ export const useSettingsStore = create<SettingsStore>()(
 
       setAutoExtractMemories: (autoExtractMemories) => set({ autoExtractMemories }),
 
+      setBlockDangerousCommands: (blockDangerousCommands) => set({ blockDangerousCommands }),
+      setBlockNetworkCommands: (blockNetworkCommands) => set({ blockNetworkCommands }),
+      setRestrictToProjectFolder: (restrictToProjectFolder) => set({ restrictToProjectFolder }),
+      setDisableBashTool: (disableBashTool) => set({ disableBashTool }),
+
       resetAll: () => set(initialState),
     }),
     {
       name: 'nibcowork:settings',
       storage: createJSONStorage(() => localStorage),
       skipHydration: true,
-      version: 1,
+      version: 2,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         if (version === 0) {
           // v0 -> v1: ensure all fields exist with defaults
           return { ...initialState, ...state } as unknown as SettingsState & SettingsActions;
+        }
+        if (version === 1) {
+          // v1 -> v2: add security settings
+          return {
+            ...state,
+            blockDangerousCommands: true,
+            blockNetworkCommands: false,
+            restrictToProjectFolder: true,
+            disableBashTool: false,
+          } as unknown as SettingsState & SettingsActions;
         }
         return state as unknown as SettingsState & SettingsActions;
       },
@@ -149,6 +178,10 @@ export const useSettingsStore = create<SettingsStore>()(
         githubUser: state.githubUser,
         nibGatewayApiKey: state.nibGatewayApiKey,
         autoExtractMemories: state.autoExtractMemories,
+        blockDangerousCommands: state.blockDangerousCommands,
+        blockNetworkCommands: state.blockNetworkCommands,
+        restrictToProjectFolder: state.restrictToProjectFolder,
+        disableBashTool: state.disableBashTool,
       }),
     }
   )

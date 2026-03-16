@@ -15,7 +15,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Tricoder",
+  title: "Quarry",
   description: "AI-powered desktop workspace by the nib AI team",
 };
 

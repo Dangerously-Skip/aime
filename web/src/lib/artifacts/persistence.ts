@@ -80,7 +80,7 @@ export function getArtifactFilename(artifact: ParsedArtifact): string {
 }
 
 export function getAutoSaveDir(projectFolder: string, conversationId: string): string {
-  return `${projectFolder}/.tricoder/artifacts/${conversationId}`;
+  return `${projectFolder}/.quarry/artifacts/${conversationId}`;
 }
 
 function getElectronAPI() {

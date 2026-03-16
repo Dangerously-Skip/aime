@@ -44,6 +44,7 @@ interface AssistantMessageProps {
   isStreaming?: boolean;
   isLoading?: boolean;
   onArtifactClick?: (path: string | ParsedArtifact) => void;
+  onPreviewUrl?: (url: string) => void;
   conversationId?: string;
 }
 
@@ -54,6 +55,7 @@ export function AssistantMessage({
   isStreaming = false,
   isLoading = false,
   onArtifactClick,
+  onPreviewUrl,
   conversationId,
 }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false);
@@ -149,6 +151,7 @@ export function AssistantMessage({
                 startTime={tool.startTime}
                 endTime={tool.endTime}
                 onArtifactClick={onArtifactClick}
+                onPreviewUrl={onPreviewUrl}
               />
             ))}
           </div>

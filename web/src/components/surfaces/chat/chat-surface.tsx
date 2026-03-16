@@ -26,6 +26,7 @@ import { summarizeConversation } from "@/lib/memory/summarizer";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { ArtifactPanel } from "@/components/shared/artifact-panel";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
+import { useElectron } from "@/hooks/use-electron";
 
 function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
   switch (category) {
@@ -104,6 +105,7 @@ export function ChatSurface() {
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const navigateToProject = useAppStore((s) => s.navigateToProject);
 
+  const { showNotification } = useElectron();
   const isEmpty = messages.length === 0;
   const currentConversation = conversations.find((c) => c.id === chatId);
   const chatTitle = currentConversation?.title || "New conversation";
@@ -168,6 +170,9 @@ export function ChatSurface() {
             questionData: event.questions,
             questionToolUseId: event.toolUseId as string,
           });
+          if (!document.hasFocus()) {
+            showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
+          }
           break;
         case "memory_extract":
           handleMemoryExtractEvent(
@@ -185,6 +190,9 @@ export function ChatSurface() {
     },
     onDone() {
       stopStreaming(chatId);
+      if (!document.hasFocus()) {
+        showNotification("Task complete", "Claude has finished working on your request.");
+      }
     },
     onError(error) {
       stopStreaming(chatId);

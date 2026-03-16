@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 
 export type PermissionMode = 'acceptEdits' | 'default' | 'plan' | 'bypass';
 export type SessionStatus = 'idle' | 'active' | 'streaming';
@@ -30,6 +31,7 @@ interface CodeActions {
   clearMessages: (chatId: string) => void;
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
+  completeRunningTools: (chatId: string) => void;
   setFolder: (folder: string | null) => void;
   setPermissionMode: (mode: PermissionMode) => void;
   setSessionStatus: (status: SessionStatus) => void;
@@ -144,6 +146,27 @@ export const useCodeStore = create<CodeStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
+      completeRunningTools: (chatId) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          if (!msgs?.length) return state;
+          const lastIdx = msgs.length - 1;
+          const last = msgs[lastIdx];
+          if (last.role !== 'assistant' || !last.toolCalls) return state;
+          const hasRunning = last.toolCalls.some((tc) => tc.status === 'running');
+          if (!hasRunning) return state;
+          const updated = [...msgs];
+          updated[lastIdx] = {
+            ...last,
+            toolCalls: last.toolCalls.map((tc) =>
+              tc.status === 'running'
+                ? { ...tc, status: 'complete' as const, endTime: Date.now() }
+                : tc
+            ),
+          };
+          return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
       setFolder: (folder) => set({ folder }),
       setPermissionMode: (mode) => set({ permissionMode: mode }),
       setSessionStatus: (status) => set({ sessionStatus: status }),
@@ -161,6 +184,9 @@ export const useCodeStore = create<CodeStore>()(
         connectionType: state.connectionType,
       }),
       skipHydration: true,
+      onRehydrateStorage: () => (state) => {
+        if (state) state.messages = cleanStaleStreamingFlags(state.messages);
+      },
     }
   )
 );
