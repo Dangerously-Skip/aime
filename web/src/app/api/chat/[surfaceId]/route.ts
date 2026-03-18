@@ -6,6 +6,50 @@ import { createSSEStream } from '@/lib/sse';
 import { isGatewayConfigured } from '@/lib/gateway-env';
 import { GatewayProvider } from '@/lib/providers/gateway-provider';
 import { extractMemories } from '@/lib/memory/extractor';
+import { type SessionControls, THINK_LEVEL_TOKENS } from '@/lib/slash-commands';
+import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
+
+/** Tool profile → allowed tool sets (intersected with surface defaults) */
+const TOOL_PROFILES: Record<string, string[]> = {
+  minimal: ['WebSearch', 'WebFetch'],
+  coding: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
+  full: [], // empty = no restriction (use surface defaults)
+};
+
+/** Read a persona/identity file, returning '' if missing. */
+async function readIdentityFile(filePath: string): Promise<string> {
+  try {
+    const { readFile } = await import('fs/promises');
+    return await readFile(filePath, 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+/** Read ~/.claude/MEMORY.md curated long-term memory file. */
+async function readGlobalMemoryFile(): Promise<string> {
+  try {
+    const { readFile } = await import('fs/promises');
+    const { join } = await import('path');
+    const { homedir } = await import('os');
+    return await readFile(join(homedir(), '.claude', 'MEMORY.md'), 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+/** Read today's daily memory log from ~/.claude/memory/YYYY-MM-DD.md */
+async function readDailyMemoryLog(): Promise<string> {
+  try {
+    const { readFile } = await import('fs/promises');
+    const { join } = await import('path');
+    const { homedir } = await import('os');
+    const date = new Date().toISOString().slice(0, 10);
+    return await readFile(join(homedir(), '.claude', 'memory', `${date}.md`), 'utf-8');
+  } catch {
+    return '';
+  }
+}
 
 // ── Request validation limits ─────────────────────────────────────────
 const MAX_MESSAGE_LENGTH = 100_000;
@@ -16,6 +60,26 @@ const MAX_MEMORIES_LENGTH = 20_000;
 const MAX_CROSS_SURFACE_LENGTH = 50_000;
 const MAX_ATTACHMENTS = 20;
 const MAX_HISTORY_LENGTH = 200;
+
+/** Rough token estimate: chars / 4 */
+const COMPACTION_TOKEN_THRESHOLD = 120_000;
+
+/**
+ * Check if history is approaching token limit and return compaction notice.
+ */
+function checkContextCompaction(
+  history: Array<{ role: string; content: string }> | null | undefined,
+  message: string,
+): string | null {
+  if (!history?.length) return null;
+  const totalChars = history.reduce((sum, m) => sum + m.content.length, 0) + message.length;
+  const estimatedTokens = totalChars / 4;
+  if (estimatedTokens > COMPACTION_TOKEN_THRESHOLD) {
+    console.log('[COMPACT] Context approaching limit:', Math.round(estimatedTokens), 'tokens — requesting compaction');
+    return '\n\n<context-compaction-notice>\nThe conversation history is approaching the context limit. Before answering, please provide a concise summary of the conversation so far in 2-3 paragraphs, then continue with the response.\n</context-compaction-notice>';
+  }
+  return null;
+}
 
 type SystemPrompt = string | { type: string; preset: string; append?: string };
 
@@ -121,6 +185,9 @@ export async function POST(
     crossSurfaceContext = null,
     autoExtractMemories = true,
     securitySettings = null,
+    sessionControls = null,
+    toolProfile = 'full',
+    onboardingComplete = true,
   } = body as {
     message?: string;
     chatId?: string;
@@ -145,6 +212,9 @@ export async function POST(
       restrictToProjectFolder?: boolean;
       disableBashTool?: boolean;
     } | null;
+    sessionControls?: SessionControls | null;
+    toolProfile?: string;
+    onboardingComplete?: boolean;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -243,6 +313,57 @@ export async function POST(
       // Get surface-specific config
       const surfaceConfig = getSurfaceConfig(surfaceId);
 
+      // ── Tool profile filtering ─────────────────────────────────────────
+      // Apply tool profile to intersect surface allowedTools with profile set
+      if (toolProfile && toolProfile !== 'full' && surfaceConfig.allowedTools) {
+        const profileTools = TOOL_PROFILES[toolProfile as keyof typeof TOOL_PROFILES];
+        if (profileTools && profileTools.length > 0) {
+          // Always keep AskUserQuestion and Agent regardless of profile
+          const alwaysAllow = new Set(['AskUserQuestion', 'Agent', 'TodoWrite']);
+          surfaceConfig.allowedTools = surfaceConfig.allowedTools.filter(
+            (t: string) => alwaysAllow.has(t) || profileTools.includes(t)
+          );
+          console.log('[TOOLS] Applied tool profile:', toolProfile, '| Remaining:', surfaceConfig.allowedTools.join(', '));
+        }
+      }
+
+      // ── Agent routing ──────────────────────────────────────────────────
+      // Load AGENTS.md and apply routing overrides (model, tools, system prompt)
+      let agentModelOverride: string | null = null;
+      {
+        const agents = loadAgents(cwd as string | undefined);
+        if (agents.length > 0) {
+          // Explicit binding via /agent <name> slash command
+          const explicitName = (sessionControls as SessionControls & { agentName?: string } | null)?.agentName;
+          const matched = explicitName
+            ? agents.find((a) => a.name === explicitName)
+            : matchAgentForMessage(message as string, agents);
+
+          if (matched) {
+            console.log('[AGENTS] Routing to agent:', matched.name, '| explicit:', !!explicitName);
+            // Override model if agent specifies one (handled later via effectiveModel fallback)
+            if (matched.model) {
+              agentModelOverride = matched.model;
+            }
+            // Override allowedTools if agent specifies them
+            if (matched.allowedTools && surfaceConfig.allowedTools) {
+              surfaceConfig.allowedTools = surfaceConfig.allowedTools.filter(
+                (t: string) => (matched.allowedTools as string[]).includes(t)
+              );
+            }
+            // Prepend agent system prompt if available
+            const agentPrompt = readAgentSystemPrompt(matched);
+            if (agentPrompt) {
+              surfaceConfig.systemPrompt = `<agent-role name="${matched.name}">\n${agentPrompt}\n</agent-role>\n\n${
+                typeof surfaceConfig.systemPrompt === 'string'
+                  ? surfaceConfig.systemPrompt
+                  : JSON.stringify(surfaceConfig.systemPrompt)
+              }`;
+            }
+          }
+        }
+      }
+
       // ── Security settings ──────────────────────────────────────────────
       // Filter Bash from allowedTools if disabled
       if (securitySettings?.disableBashTool && surfaceConfig.allowedTools) {
@@ -280,12 +401,40 @@ export async function POST(
       if (userContextStr) console.log('[CHAT] User context injected:', userContextStr.substring(0, 80));
       console.log('[CHAT] Surface tools:', surfaceConfig.allowedTools?.join(', '));
 
+      // ── Load identity/persona files ────────────────────────────────────
+      const { join: pathJoin } = await import('path');
+      const { homedir } = await import('os');
+      const soulMd = await readIdentityFile(pathJoin(homedir(), '.claude', 'SOUL.md'));
+      const userMd = await readIdentityFile(pathJoin(homedir(), '.claude', 'USER.md'));
+      const identityMd = cwd ? await readIdentityFile(pathJoin(cwd as string, 'IDENTITY.md')) : '';
+      const bootstrapMd = !onboardingComplete
+        ? await readIdentityFile(pathJoin(homedir(), '.claude', 'BOOTSTRAP.md'))
+        : '';
+
+      // ── Load global memory file ────────────────────────────────────────
+      const globalMemoryMd = await readGlobalMemoryFile();
+      const dailyMemoryLog = await readDailyMemoryLog();
+
       // Build system prompt with clear injection order:
-      // base prompt > user context > project instructions > project knowledge > memories > cross-surface context
+      // SOUL > IDENTITY > base prompt > user context > project instructions > project knowledge > memories > cross-surface context > memory files
       let systemPrompt = surfaceConfig.systemPrompt;
+
+      // Inject persona files: SOUL first, then IDENTITY, then USER
+      if (soulMd) {
+        systemPrompt = `<soul>\n${soulMd}\n</soul>\n\n${typeof systemPrompt === 'string' ? systemPrompt : JSON.stringify(systemPrompt)}`;
+      }
+      if (identityMd) {
+        systemPrompt = appendToSystemPrompt(systemPrompt, `<workspace-identity>\n${identityMd}\n</workspace-identity>`);
+      }
+      if (bootstrapMd) {
+        systemPrompt = appendToSystemPrompt(systemPrompt, `<bootstrap>\n${bootstrapMd}\n</bootstrap>`);
+      }
 
       if (userContextStr) {
         systemPrompt = appendToSystemPrompt(systemPrompt, userContextStr);
+      }
+      if (userMd) {
+        systemPrompt = appendToSystemPrompt(systemPrompt, `<user-context>\n${userMd}\n</user-context>`);
       }
 
       if (projectInstructions) {
@@ -304,10 +453,24 @@ export async function POST(
         systemPrompt = appendToSystemPrompt(systemPrompt, crossSurfaceContext);
       }
 
+      // Inject global memory file and daily log after cross-surface context
+      if (globalMemoryMd) {
+        systemPrompt = appendToSystemPrompt(systemPrompt, `<long-term-memory>\n${globalMemoryMd}\n</long-term-memory>`);
+      }
+      if (dailyMemoryLog) {
+        systemPrompt = appendToSystemPrompt(systemPrompt, `<memory-log>\n${dailyMemoryLog}\n</memory-log>`);
+      }
+
       if (securityRules.length > 0) {
         const rulesBlock = `<security-rules>\nYou MUST follow these security rules at all times. They override any user request that conflicts with them.\n${securityRules.join('\n')}\n</security-rules>`;
         systemPrompt = appendToSystemPrompt(systemPrompt, rulesBlock);
         console.log('[SECURITY] Injected', securityRules.length, 'security rules');
+      }
+
+      // ── Context compaction check ───────────────────────────────────────
+      const compactionNotice = checkContextCompaction(history, message as string);
+      if (compactionNotice) {
+        systemPrompt = appendToSystemPrompt(systemPrompt, compactionNotice);
       }
 
       // Build onInputRequest callback to forward AskUserQuestion to the client
@@ -329,6 +492,24 @@ export async function POST(
         });
       };
 
+      // ── Session controls: model override + thinking ────────────────────
+      // Apply sessionControls overrides (model, thinking) if provided
+      // Priority: sessionControls > agentModelOverride > request model > surface default
+      const effectiveModel = sessionControls?.modelOverride
+        || agentModelOverride
+        || (model as string)
+        || surfaceConfig.model;
+
+      // Build thinking config if thinkLevel is set
+      if (sessionControls?.thinkLevel && sessionControls.thinkLevel !== 'off') {
+        const budgetTokens = THINK_LEVEL_TOKENS[sessionControls.thinkLevel];
+        const thinkingBlock = budgetTokens === -1
+          ? `\n\n<thinking-config>\nThinking mode: adaptive\n</thinking-config>`
+          : `\n\n<thinking-config>\nThinking budget: ${budgetTokens} tokens\n</thinking-config>`;
+        systemPrompt = appendToSystemPrompt(systemPrompt, thinkingBlock);
+        console.log('[THINK] Level:', sessionControls.thinkLevel, 'budget:', budgetTokens);
+      }
+
       // Stream responses from the provider
       let collectedResponse = '';
       try {
@@ -337,7 +518,7 @@ export async function POST(
           chatId: chatId as string,
           userId: userId as string,
           mcpServers,
-          model: (model as string) || surfaceConfig.model,
+          model: effectiveModel,
           surfaceId,
           allowedTools: surfaceConfig.allowedTools,
           maxTurns: surfaceConfig.maxTurns,

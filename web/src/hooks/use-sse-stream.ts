@@ -50,6 +50,13 @@ interface UseSSEStreamReturn {
         restrictToProjectFolder?: boolean
         disableBashTool?: boolean
       }
+      sessionControls?: {
+        thinkLevel?: string
+        verboseMode?: boolean
+        reasoningVisible?: boolean
+        modelOverride?: string | null
+      }
+      toolProfile?: string
     }
   ) => Promise<void>;
   isStreaming: boolean;
@@ -132,6 +139,13 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           restrictToProjectFolder?: boolean
           disableBashTool?: boolean
         }
+        sessionControls?: {
+          thinkLevel?: string
+          verboseMode?: boolean
+          reasoningVisible?: boolean
+          modelOverride?: string | null
+        }
+        toolProfile?: string
       }
     ): Promise<void> => {
       if (abortControllerRef.current) {
@@ -162,6 +176,8 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.memories ? { memories: extra.memories } : {}),
             ...(extra?.crossSurfaceContext ? { crossSurfaceContext: extra.crossSurfaceContext } : {}),
             ...(extra?.securitySettings ? { securitySettings: extra.securitySettings } : {}),
+            ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
+            ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
           }),
           signal: controller.signal,
         });

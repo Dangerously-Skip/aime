@@ -44,10 +44,23 @@ import {
   ListChecks,
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
+import { CanvasPanel } from "@/components/shared/canvas-panel";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
+import { useCanvasStore } from "@/stores/canvas-store";
+import type { A2UIDocument } from "@/lib/a2ui/types";
+import { useHeartbeat } from "@/hooks/use-heartbeat";
+import { useCron } from "@/hooks/use-cron";
+import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
+import {
+  parseSlashCommand,
+  applySlashCommand,
+  getSlashSuggestions,
+  DEFAULT_SESSION_CONTROLS,
+} from "@/lib/slash-commands";
+import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_FILES: string[] = [];
@@ -80,6 +93,16 @@ function categorizeToolCall(
   toolName: string,
   toolInput: Record<string, unknown>,
 ): { category: "context" | "artifact"; path: string } | null {
+  // spawn_agent — show as context entry
+  if (toolName === "spawn_agent") {
+    const agentName = typeof toolInput.agentName === "string" ? toolInput.agentName : null;
+    const task = typeof toolInput.task === "string" ? toolInput.task : "";
+    const label = agentName
+      ? `⚡ ${agentName}: ${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`
+      : `⚡ subagent: ${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`;
+    return { category: "context", path: label };
+  }
+
   // Explicit artifact tools
   if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
     const raw = toolInput.file_path || toolInput.path || toolInput.notebook_path;
@@ -286,9 +309,22 @@ export function CoworkSurface() {
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
+  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
+  const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
+    useAtSuggestions();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const pushCanvas = useCanvasStore((s) => s.pushCanvas);
+  const clearCanvas = useCanvasStore((s) => s.clearCanvas);
+  const goBackCanvas = useCanvasStore((s) => s.goBack);
+  const goForwardCanvas = useCanvasStore((s) => s.goForward);
+  const setCanvasOpen = useCanvasStore((s) => s.setOpen);
+  const canvasDoc = useCanvasStore((s) => s.canvasDoc);
+  const canvasHistoryIndex = useCanvasStore((s) => s.historyIndex);
+  const canvasHistoryLength = useCanvasStore((s) => s.history.length);
+  const canvasOpen = useCanvasStore((s) => s.openSurfaces.has('cowork'));
   const handleFileAttach = useCallback(
     (file: AttachmentFile) => {
       setAttachments((prev) => [...prev, file]);
@@ -322,6 +358,10 @@ export function CoworkSurface() {
   const planOpen = useCoworkStore((s) => s.planOpen);
   const setPlanContent = useCoworkStore((s) => s.setPlanContent);
   const setPlanOpen = useCoworkStore((s) => s.setPlanOpen);
+  const sessionControls = useCoworkStore(
+    (s) => (chatId ? s.sessionControls[chatId] : undefined) ?? DEFAULT_SESSION_CONTROLS
+  );
+  const setSessionControls = useCoworkStore((s) => s.setSessionControls);
   const startStreaming = useCoworkStore((s) => s.startStreaming);
   const stopStreaming = useCoworkStore((s) => s.stopStreaming);
   const setCurrentChat = useCoworkStore((s) => s.setCurrentChat);
@@ -482,6 +522,19 @@ export function CoworkSurface() {
           }
           break;
         }
+        case "canvas": {
+          // Agent pushed a canvas document — open the canvas panel
+          try {
+            const doc = event.doc as A2UIDocument;
+            if (doc && doc.components) {
+              pushCanvas(doc);
+              setCanvasOpen('cowork', true);
+            }
+          } catch (e) {
+            console.error('[Cowork] Canvas parse error:', e);
+          }
+          break;
+        }
         case "memory_extract":
           handleMemoryExtractEvent(
             event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
@@ -559,6 +612,26 @@ export function CoworkSurface() {
       if (!text.trim()) return;
       const trimmed = text.trim();
 
+      // ── Slash command interception ───────────────────────────────────────
+      const parsed = parseSlashCommand(trimmed);
+      if (parsed) {
+        const result = applySlashCommand(parsed, sessionControls);
+        if (result) {
+          let id = chatId;
+          if (!id) {
+            id = crypto.randomUUID();
+            addConversation({ id, title: trimmed.substring(0, 50), surface: 'cowork', lastMessage: trimmed, createdAt: Date.now(), updatedAt: Date.now() });
+            setActiveConversation(id);
+            setCurrentChat(id);
+          }
+          setSessionControls(id, result.controls);
+          addMessage(id, { id: crypto.randomUUID(), role: 'user', content: trimmed, timestamp: Date.now() });
+          addMessage(id, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now() });
+          setInputValue('');
+          return;
+        }
+      }
+
       // Auto-create conversation if none active
       let id = chatId;
       if (!id) {
@@ -619,6 +692,7 @@ export function CoworkSurface() {
       const memoriesStr = formatMemoriesForPrompt(relevantMemories);
       relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
 
+      const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
       await sendMessage(trimmed, id, "cowork", model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
@@ -630,6 +704,7 @@ export function CoworkSurface() {
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
         crossSurfaceContext: crossSurfaceContext || undefined,
+        sessionControls: currentControls,
         securitySettings: {
           blockDangerousCommands,
           blockNetworkCommands,
@@ -661,7 +736,83 @@ export function CoworkSurface() {
     []
   );
 
+  // Fire a background agent run on the cowork surface (used by heartbeat + cron)
+  const fireBackgroundRun = useCallback(
+    (prompt: string) => {
+      const bgId = crypto.randomUUID();
+      addConversation({
+        id: bgId,
+        title: `[auto] ${prompt.slice(0, 40)}`,
+        surface: 'cowork',
+        lastMessage: prompt,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      addMessage(bgId, { id: crypto.randomUUID(), role: 'user', content: prompt, timestamp: Date.now() });
+      addMessage(bgId, { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: Date.now(), isLoading: true, isStreaming: true });
+      startStreaming(bgId);
+      void sendMessage(prompt, bgId, 'cowork', model, {
+        personalPreferences: personalPreferences || undefined,
+        displayName: displayName || undefined,
+        cwd: folder || projectFolder || scratchDir || undefined,
+      });
+    },
+    [addConversation, addMessage, startStreaming, sendMessage, model, personalPreferences, displayName, folder, projectFolder, scratchDir]
+  );
+
+  useHeartbeat(fireBackgroundRun);
+  useCron((job) => fireBackgroundRun(job.prompt));
+
+  // Compute merged suggestions: slash takes priority over @
+  const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
+    ? cmdSuggestions
+    : fileSuggestions.map((f) => ({
+        type: 'at' as const,
+        value: f.path,
+        label: '@' + f.name,
+        description: undefined,
+        meta: f.relative,
+      }));
+
+  function handleSelectSuggestion(s: CommandSuggestion) {
+    if (s.type === 'slash') {
+      setInputValue(s.value + ' ');
+      setCmdSuggestions([]);
+    } else {
+      // @ file: remove @partial from input, resolve file, add as attachment
+      const newVal = removeAtQuery(inputValue);
+      setInputValue(newVal);
+      clearAtSuggestions();
+      resolveFileAsAttachment(s.value).then((att) => {
+        if (att) setAttachments((prev) => [...prev, att]);
+      });
+    }
+    setSelectedSuggestionIdx(0);
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (activeSuggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedSuggestionIdx((i) => Math.min(i + 1, activeSuggestions.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedSuggestionIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && activeSuggestions.length > 0)) {
+        e.preventDefault();
+        handleSelectSuggestion(activeSuggestions[selectedSuggestionIdx]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setCmdSuggestions([]);
+        clearAtSuggestions();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (isStreaming) {
@@ -673,10 +824,35 @@ export function CoworkSurface() {
   }
 
   function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setInputValue(e.target.value);
+    const val = e.target.value;
+    setInputValue(val);
     const textarea = e.target;
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+
+    // Slash suggestions (only when text starts with /)
+    const slashSuggs = getSlashSuggestions(val);
+    setCmdSuggestions(
+      slashSuggs.map((cmd) => ({
+        type: 'slash' as const,
+        value: cmd.name,
+        label: cmd.name,
+        description: cmd.args,
+        meta: cmd.description,
+      }))
+    );
+
+    // @ file suggestions
+    const atQ = getAtQuery(val);
+    if (atQ !== null) {
+      const cwd = folder || projectFolder || scratchDir || '';
+      if (cwd) fetchAtSuggestions(atQ, cwd);
+      else clearAtSuggestions();
+    } else {
+      clearAtSuggestions();
+    }
+
+    setSelectedSuggestionIdx(0);
   }
 
   function handleButtonClick() {
@@ -728,6 +904,12 @@ export function CoworkSurface() {
 
           {/* Centered input card */}
           <div className="w-full max-w-2xl">
+            <CommandPicker
+              suggestions={activeSuggestions}
+              selectedIndex={selectedSuggestionIdx}
+              onSelect={handleSelectSuggestion}
+              onSelectedIndexChange={setSelectedSuggestionIdx}
+            />
             <div
               className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden"
             >
@@ -807,6 +989,12 @@ export function CoworkSurface() {
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">
               <div className="max-w-3xl mx-auto">
+                <CommandPicker
+                  suggestions={activeSuggestions}
+                  selectedIndex={selectedSuggestionIdx}
+                  onSelect={handleSelectSuggestion}
+                  onSelectedIndexChange={setSelectedSuggestionIdx}
+                />
                 <div
                   className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden"
                 >
@@ -912,6 +1100,18 @@ export function CoworkSurface() {
               onClose={() => setPreviewOpen(false)}
             />
           )}
+
+          {/* Canvas panel */}
+          <CanvasPanel
+            open={canvasOpen}
+            doc={canvasDoc}
+            onClose={() => setCanvasOpen('cowork', false)}
+            onBack={goBackCanvas}
+            onForward={goForwardCanvas}
+            onClear={clearCanvas}
+            canGoBack={canvasHistoryIndex > 0}
+            canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
+          />
         </div>
       )}
 

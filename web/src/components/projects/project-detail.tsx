@@ -29,7 +29,11 @@ import {
   Briefcase,
   Terminal,
   Globe,
+  Timer,
+  ToggleLeft,
+  ToggleRight,
 } from "lucide-react";
+import { useCronStore } from "@/stores/cron-store";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -111,10 +115,20 @@ export function ProjectDetail({
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
 
+  const cronJobs = useCronStore((s) => s.jobs.filter((j) => j.projectId === projectId));
+  const addCronJob = useCronStore((s) => s.addJob);
+  const removeCronJob = useCronStore((s) => s.removeJob);
+  const toggleCronJob = useCronStore((s) => s.toggleJob);
+
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [editingInstructions, setEditingInstructions] = useState(false);
   const [instructionsDraft, setInstructionsDraft] = useState("");
+  const [addingCron, setAddingCron] = useState(false);
+  const [cronExpr, setCronExpr] = useState("");
+  const [cronPrompt, setCronPrompt] = useState("");
+  const [cronSurface, setCronSurface] = useState("cowork");
+  const [cronError, setCronError] = useState("");
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [surfaceFilter, setSurfaceFilter] = useState<Surface | "all">("all");
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
@@ -289,6 +303,21 @@ export function ProjectDetail({
   function handleDelete() {
     removeProject(projectId);
     onBack();
+  }
+
+  async function handleAddCron() {
+    setCronError("");
+    const parts = cronExpr.trim().split(/\s+/);
+    if (parts.length !== 5) { setCronError("Must have 5 fields: min hour dom month dow"); return; }
+    if (!cronPrompt.trim()) { setCronError("Prompt is required"); return; }
+    const res = await fetch("/api/cron", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface }),
+    });
+    if (!res.ok) { const d = await res.json() as { error?: string }; setCronError(d.error ?? "Invalid"); return; }
+    addCronJob({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface, projectId, enabled: true });
+    setCronExpr(""); setCronPrompt(""); setAddingCron(false);
   }
 
   function startEditInstructions() {
@@ -522,8 +551,113 @@ export function ProjectDetail({
           </>
         )}
 
+        {/* Automations */}
+        <div className="mt-8">
+          <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Timer className="h-4 w-4 text-muted-foreground" />
+                Automations
+              </h3>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground"
+                onClick={() => setAddingCron((v) => !v)}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {addingCron && (
+              <div className="p-4 border-b border-border space-y-3 bg-muted/20">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Cron Expression</label>
+                  <input
+                    value={cronExpr}
+                    onChange={(e) => setCronExpr(e.target.value)}
+                    placeholder="0 9 * * 1"
+                    className="w-full h-8 rounded-md border border-input bg-background px-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                  <p className="text-[11px] text-muted-foreground">min hour dom month dow — e.g. every Monday 9am</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Prompt</label>
+                  <input
+                    value={cronPrompt}
+                    onChange={(e) => setCronPrompt(e.target.value)}
+                    placeholder="Summarize this week's progress"
+                    className="w-full h-8 rounded-md border border-input bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">Surface</label>
+                  <select
+                    value={cronSurface}
+                    onChange={(e) => setCronSurface(e.target.value)}
+                    className="w-full h-8 rounded-md border border-input bg-background px-3 text-xs focus:outline-none"
+                  >
+                    <option value="cowork">Cowork</option>
+                    <option value="chat">Chat</option>
+                    <option value="code">Code</option>
+                  </select>
+                </div>
+                {cronError && <p className="text-xs text-destructive">{cronError}</p>}
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleAddCron}>Save</Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setAddingCron(false); setCronError(""); }}>Cancel</Button>
+                </div>
+              </div>
+            )}
+
+            {cronJobs.length === 0 && !addingCron ? (
+              <div className="px-5 py-6 text-xs text-muted-foreground">
+                No automations yet. Add a cron job to schedule recurring agent runs for this project.
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {cronJobs.map((job) => (
+                  <div key={job.id} className="flex items-start gap-3 px-5 py-3">
+                    <button
+                      onClick={() => toggleCronJob(job.id)}
+                      className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                      title={job.enabled ? "Disable" : "Enable"}
+                    >
+                      {job.enabled
+                        ? <ToggleRight className="h-4 w-4 text-primary" />
+                        : <ToggleLeft className="h-4 w-4" />
+                      }
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-mono text-muted-foreground">{job.expression}</p>
+                      <p className="text-sm mt-0.5 truncate">{job.prompt}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{job.surfaceId}</span>
+                        {job.lastRun && (
+                          <span className="text-[10px] text-muted-foreground">
+                            last run {formatTimeAgo(job.lastRun)}
+                          </span>
+                        )}
+                        {!job.enabled && (
+                          <span className="text-[10px] text-muted-foreground italic">disabled</span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => removeCronJob(job.id)}
+                      className="shrink-0 text-muted-foreground hover:text-destructive transition-colors mt-0.5"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Bottom section — Instructions & Knowledge Files */}
-        <div className="mt-12 space-y-0">
+        <div className="mt-6 space-y-0">
           {/* Instructions */}
           <div className="rounded-xl border border-border bg-card overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">

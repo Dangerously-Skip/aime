@@ -12,6 +12,9 @@ export interface Conversation {
   createdAt: number;
   updatedAt: number;
   projectId?: string | null;
+  compactedAt?: number | null;
+  summaryContent?: string | null;
+  sessionResetAt?: number | null;
 }
 
 interface ConversationState {

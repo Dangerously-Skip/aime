@@ -5,7 +5,9 @@ import { SkillDetail } from "./skill-detail";
 import { ConnectorDetail } from "./connector-detail";
 import { BrowseConnectors } from "./browse-connectors";
 import { BrowseMarketplace } from "./browse-marketplace";
-import { Briefcase, Cable, Zap, Puzzle, ArrowRight } from "lucide-react";
+import { AutomationSection } from "./automation-section";
+import { AgentsPanel } from "./agents-panel";
+import { Briefcase, Cable, Zap, Puzzle, ArrowRight, Timer, Bot } from "lucide-react";
 
 const LANDING_ROWS = [
   {
@@ -25,6 +27,18 @@ const LANDING_ROWS = [
     title: "Browse plugins",
     description: "Tailor Quarry to a specific subject",
     section: "browse-marketplace" as const,
+  },
+  {
+    icon: Timer,
+    title: "Automation",
+    description: "Schedule cron jobs, configure webhooks, and set up heartbeat check-ins",
+    section: "automation" as const,
+  },
+  {
+    icon: Bot,
+    title: "Define agents",
+    description: "Create specialised AI agents for research, coding, writing, and more",
+    section: "agents" as const,
   },
 ];
 
@@ -87,6 +101,10 @@ export function CustomizeView() {
     content = <BrowseConnectors />;
   } else if (customizeSection === "browse-marketplace") {
     content = <BrowseMarketplace />;
+  } else if (customizeSection === "automation") {
+    content = <AutomationSection />;
+  } else if (customizeSection === "agents") {
+    content = <AgentsPanel />;
   } else {
     content = <LandingPage />;
   }

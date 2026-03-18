@@ -23,9 +23,9 @@ import {
 declare global {
   interface Window {
     feedlybacklySettings?: {
-      projectId: string;
+      apiKey: string;
       apiUrl: string;
-      hideLauncher: boolean;
+      hideLauncher?: boolean;
       guestEnabled: boolean;
     };
     FeedlyBackly?: {
@@ -60,22 +60,21 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
   const displayName = useSettingsStore((s) => s.displayName);
   const fullName = useSettingsStore((s) => s.fullName);
 
-  // Load FeedlyBackly widget script once on mount
-  useEffect(() => {
-    if (document.getElementById('feedlybackly-script')) return;
-    window.feedlybacklySettings = {
-      projectId: 'cmmvgdjlj0002sucsrl38yxn9',
-      // Proxy through Next.js to avoid CORS. The widget appends /api/v1 itself,
-      // so this base URL must NOT include /api/v1.
-      apiUrl: `${window.location.origin}/api/feedlybackly`,
-      hideLauncher: true,
-      guestEnabled: true,
-    };
-    const script = document.createElement('script');
-    script.id = 'feedlybackly-script';
-    script.src = 'https://feedlybackly-widget.apps.dangerouslyskip.com/widget.js';
-    document.body.appendChild(script);
-  }, []);
+  // TODO: Re-enable once FeedlyBackly fixes window.FeedlyBackly not being set in their widget.js
+  // Their widget.js (updated 2026-03-17) loads but does not initialize or expose any global.
+  // useEffect(() => {
+  //   if (document.getElementById('feedlybackly-script')) return;
+  //   window.feedlybacklySettings = {
+  //     apiKey: 'REDACTED-FEEDBACK-KEY',
+  //     apiUrl: 'https://feedlybackly-api.apps.dangerouslyskip.com',
+  //     hideLauncher: true,
+  //     guestEnabled: true,
+  //   };
+  //   const script = document.createElement('script');
+  //   script.id = 'feedlybackly-script';
+  //   script.src = 'https://feedlybackly-widget.apps.dangerouslyskip.com/widget.js';
+  //   document.body.appendChild(script);
+  // }, []);
 
   const openFeedback = useCallback(() => {
     const name = displayName || fullName || undefined;

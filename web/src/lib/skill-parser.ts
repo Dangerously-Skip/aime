@@ -3,6 +3,12 @@
  * Handles the simple YAML frontmatter format used by Claude Agent SDK skills.
  */
 
+export interface SkillRequires {
+  env?: string[];
+  bins?: string[];
+  platform?: string;
+}
+
 export interface SkillFrontmatter {
   name?: string;
   description?: string;
@@ -13,7 +19,51 @@ export interface SkillFrontmatter {
   model?: string;
   context?: string[];
   agent?: string;
+  requires?: SkillRequires;
   [key: string]: unknown;
+}
+
+export interface SkillGateResult {
+  disabled: boolean;
+  reason?: string;
+}
+
+/**
+ * Evaluate a skill's `requires` block against the current environment.
+ * Returns { disabled: false } if all requirements are met.
+ */
+export function evaluateSkillRequires(requires: SkillRequires | undefined): SkillGateResult {
+  if (!requires) return { disabled: false };
+
+  if (requires.platform && requires.platform !== process.platform) {
+    return { disabled: true, reason: `Requires platform: ${requires.platform} (current: ${process.platform})` };
+  }
+
+  if (requires.env) {
+    for (const envVar of requires.env) {
+      if (!process.env[envVar]) {
+        return { disabled: true, reason: `Missing env var: ${envVar}` };
+      }
+    }
+  }
+
+  if (requires.bins) {
+    // Synchronously check for binary availability via PATH
+    try {
+      const { execSync } = require('child_process');
+      for (const bin of requires.bins) {
+        try {
+          execSync(`which ${bin}`, { stdio: 'ignore' });
+        } catch {
+          return { disabled: true, reason: `Missing binary: ${bin}` };
+        }
+      }
+    } catch {
+      // execSync unavailable (browser context) — skip bin check
+    }
+  }
+
+  return { disabled: false };
 }
 
 export interface ParsedSkill {

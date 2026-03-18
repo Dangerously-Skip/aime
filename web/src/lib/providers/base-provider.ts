@@ -15,7 +15,9 @@ export type ChunkType =
   | 'connected'
   | 'status'
   | 'assistant'
-  | 'input_request';
+  | 'input_request'
+  | 'canvas'
+  | 'heartbeat_result';
 
 /**
  * A single streaming chunk yielded by a provider's query() method.
@@ -145,6 +147,15 @@ export abstract class BaseProvider {
   abort(chatId: string, surfaceId?: string): boolean {
     // Override in subclass to implement abort functionality
     return false;
+  }
+
+  /**
+   * Clear session for a chatId (used by session reset policies).
+   */
+  clearSession(chatId: string): void {
+    this.sessions.delete(chatId);
+    this.sessionCwds.delete(chatId);
+    console.log('[Provider] Session cleared for chatId:', chatId);
   }
 
   /**
