@@ -16,6 +16,7 @@ interface CodeState {
   currentChatId: string | null;
   model: ModelId;
   isStreaming: boolean;
+  streamError: string | null;
   folder: string | null;
   permissionMode: PermissionMode;
   sessionStatus: SessionStatus;
@@ -44,6 +45,8 @@ interface CodeActions {
   setPlanContent: (chatId: string, content: string) => void;
   setPlanOpen: (open: boolean) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
+  setIsStreaming: (v: boolean) => void;
+  setStreamError: (e: string | null) => void;
 }
 
 export { DEFAULT_SESSION_CONTROLS };
@@ -57,6 +60,7 @@ export const useCodeStore = create<CodeStore>()(
       currentChatId: null,
       model: 'sonnet',
       isStreaming: false,
+      streamError: null,
       folder: null,
       permissionMode: 'default',
       sessionStatus: 'idle',
@@ -196,6 +200,9 @@ export const useCodeStore = create<CodeStore>()(
         set((state) => ({
           sessionControls: { ...state.sessionControls, [chatId]: controls },
         })),
+
+      setIsStreaming: (v) => set({ isStreaming: v }),
+      setStreamError: (e) => set({ streamError: e }),
     }),
     {
       name: 'nibcowork:code',

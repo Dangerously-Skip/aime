@@ -14,6 +14,7 @@ interface CoworkState {
   currentChatId: string | null;
   model: ModelId;
   isStreaming: boolean;
+  streamError: string | null;
   folder: string | null;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
@@ -43,6 +44,8 @@ interface CoworkActions {
   setPlanOpen: (open: boolean) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   touchActivity: (chatId: string) => void;
+  setIsStreaming: (v: boolean) => void;
+  setStreamError: (e: string | null) => void;
 }
 
 export type CoworkStore = CoworkState & CoworkActions;
@@ -54,6 +57,7 @@ export const useCoworkStore = create<CoworkStore>()(
       currentChatId: null,
       model: 'opus',
       isStreaming: false,
+      streamError: null,
       folder: null,
       contextFiles: {},
       artifactFiles: {},
@@ -225,6 +229,9 @@ export const useCoworkStore = create<CoworkStore>()(
         set((state) => ({
           lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
         })),
+
+      setIsStreaming: (v) => set({ isStreaming: v }),
+      setStreamError: (e) => set({ streamError: e }),
     }),
     {
       name: 'nibcowork:cowork',

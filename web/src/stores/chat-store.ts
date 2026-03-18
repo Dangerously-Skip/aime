@@ -60,6 +60,7 @@ interface ChatState {
   currentChatId: string | null;
   model: ModelId;
   isStreaming: boolean;
+  streamError: string | null;
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
 }
@@ -78,6 +79,8 @@ interface ChatActions {
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   getSessionControls: (chatId: string) => SessionControls;
   touchActivity: (chatId: string) => void;
+  setIsStreaming: (v: boolean) => void;
+  setStreamError: (e: string | null) => void;
 }
 
 export type ChatStore = ChatState & ChatActions;
@@ -89,6 +92,7 @@ export const useChatStore = create<ChatStore>()(
       currentChatId: null,
       model: 'sonnet',
       isStreaming: false,
+      streamError: null,
       sessionControls: {},
       lastActivityAt: {},
 
@@ -209,6 +213,9 @@ export const useChatStore = create<ChatStore>()(
         set((state) => ({
           lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
         })),
+
+      setIsStreaming: (v) => set({ isStreaming: v }),
+      setStreamError: (e) => set({ streamError: e }),
     }),
     {
       name: 'nibcowork:chat',

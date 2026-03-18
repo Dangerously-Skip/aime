@@ -102,6 +102,8 @@ export function ChatSurface() {
   const startStreaming = useChatStore((s) => s.startStreaming);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const setCurrentChat = useChatStore((s) => s.setCurrentChat);
+  const setIsStreaming = useChatStore((s) => s.setIsStreaming);
+  const setStreamError = useChatStore((s) => s.setStreamError);
   const clearMessages = useChatStore((s) => s.clearMessages);
   const updateConversation = useConversationStore(
     (s) => s.updateConversation
@@ -158,6 +160,9 @@ export function ChatSurface() {
   }, [chatId]);
 
   const { sendMessage, abort } = useSSEStream({
+    chatId,
+    setIsStreaming,
+    setStreamError,
     onChunk(event) {
       switch (event.type) {
         case "text":

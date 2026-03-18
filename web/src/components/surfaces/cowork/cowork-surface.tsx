@@ -365,6 +365,8 @@ export function CoworkSurface() {
   const startStreaming = useCoworkStore((s) => s.startStreaming);
   const stopStreaming = useCoworkStore((s) => s.stopStreaming);
   const setCurrentChat = useCoworkStore((s) => s.setCurrentChat);
+  const setIsStreaming = useCoworkStore((s) => s.setIsStreaming);
+  const setStreamError = useCoworkStore((s) => s.setStreamError);
   const updateConversation = useConversationStore((s) => s.updateConversation);
   const addConversation = useConversationStore((s) => s.addConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
@@ -415,6 +417,9 @@ export function CoworkSurface() {
   }, [chatId]);
 
   const { sendMessage, abort } = useSSEStream({
+    chatId,
+    setIsStreaming,
+    setStreamError,
     onChunk(event) {
       switch (event.type) {
         case "turn_start":
