@@ -6,6 +6,7 @@ import {
   DOM_EXTRACTION_SCRIPT,
   executeToolInWebview,
   formatPageStateForModel,
+  type ConsoleLogBuffer,
   type PageState,
   type WebviewRef,
 } from '@/lib/browser-tools';
@@ -33,6 +34,7 @@ interface UseBrowserAgentOptions {
   onPhaseChange: (phase: 'idle' | 'observing' | 'thinking' | 'acting') => void;
   apiKey?: string | null;
   memories?: string;
+  consoleBuffer?: ConsoleLogBuffer;
 }
 
 export function useBrowserAgent(options: UseBrowserAgentOptions) {
@@ -147,7 +149,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
             if (block.type !== 'tool_use') continue;
 
             const toolBlock = block as { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
-            const result = await executeToolInWebview(webview, toolBlock.name, toolBlock.input);
+            const result = await executeToolInWebview(webview, toolBlock.name, toolBlock.input, optionsRef.current.consoleBuffer);
 
             optionsRef.current.onToolResult(
               toolBlock.id,

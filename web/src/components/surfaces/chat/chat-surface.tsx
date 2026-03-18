@@ -27,6 +27,7 @@ import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { ArtifactPanel } from "@/components/shared/artifact-panel";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { useElectron } from "@/hooks/use-electron";
+import { VoiceButton } from "@/components/shared/voice-button";
 
 function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
   switch (category) {
@@ -104,6 +105,7 @@ export function ChatSurface() {
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const navigateToProject = useAppStore((s) => s.navigateToProject);
+  const setSidebarMode = useAppStore((s) => s.setSidebarMode);
 
   const { showNotification } = useElectron();
   const isEmpty = messages.length === 0;
@@ -308,6 +310,11 @@ export function ChatSurface() {
     [chatId, updateMessage]
   );
 
+  const handleVoiceTranscript = useCallback(
+    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
+    []
+  );
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -425,14 +432,18 @@ export function ChatSurface() {
                 </div>
               )}
               <div className="flex items-center justify-between px-4 py-2.5">
-                <AttachmentMenu
-                  onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                  onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                  webSearchEnabled={webSearchEnabled}
-                  currentProjectId={currentProjectId}
-                  onAddToProject={(pid) => assignToProject(chatId, pid)}
-                  projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                />
+                <div className="flex items-center gap-1">
+                  <AttachmentMenu
+                    onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
+                    onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
+                    webSearchEnabled={webSearchEnabled}
+                    currentProjectId={currentProjectId}
+                    onAddToProject={(pid) => assignToProject(chatId, pid)}
+                    onNewProject={() => setSidebarMode("projects")}
+                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                  />
+                  <VoiceButton onTranscript={handleVoiceTranscript} />
+                </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
                     value={model}
@@ -514,14 +525,18 @@ export function ChatSurface() {
                   </div>
                 )}
                 <div className="flex items-center justify-between px-4 py-2.5">
-                  <AttachmentMenu
-                    onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                    onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                    webSearchEnabled={webSearchEnabled}
-                    currentProjectId={currentProjectId}
-                    onAddToProject={(pid) => assignToProject(chatId, pid)}
-                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                  />
+                  <div className="flex items-center gap-1">
+                    <AttachmentMenu
+                      onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
+                      onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
+                      webSearchEnabled={webSearchEnabled}
+                      currentProjectId={currentProjectId}
+                      onAddToProject={(pid) => assignToProject(chatId, pid)}
+                      onNewProject={() => setSidebarMode("projects")}
+                      projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                    />
+                    <VoiceButton onTranscript={handleVoiceTranscript} />
+                  </div>
                   <div className="flex items-center gap-2">
                     <ModelSelector
                       value={model}

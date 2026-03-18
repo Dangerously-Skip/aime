@@ -13,7 +13,14 @@ interface ElectronAPI {
   getHomeDir: () => Promise<string>;
   showNotification: (title: string, body: string) => Promise<void>;
   openAuthWindow: (url: string) => Promise<void>;
+  openConnectorAuthWindow: (url: string, callbackPath: string) => Promise<{ code: string | null; state: string | null; error: string | null }>;
   onGithubAuthResult: (callback: (data: unknown) => void) => void;
+  detectEditors: () => Promise<{ id: string; name: string; command: string }[]>;
+  openInEditor: (editorId: string, folderPath: string) => Promise<void>;
+  onUpdateState: (callback: (data: { state: "idle" | "checking" | "available" | "downloading" | "ready" | "error"; statusLabel: string | null }) => void) => void;
+  checkForUpdates: () => void;
+  installUpdate: () => void;
+  onOpenSettings: (callback: () => void) => void;
 }
 
 declare global {

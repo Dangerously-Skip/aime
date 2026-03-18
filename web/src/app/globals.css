@@ -140,6 +140,89 @@
   --chart-5: #C46EB4;
 }
 
+/* ── The Emma (Barbie pink + glitter) ── */
+.emma {
+  --background: #FFF0F5;
+  --foreground: #4A1942;
+  --card: #FFFFFF;
+  --card-foreground: #4A1942;
+  --popover: #FFFFFF;
+  --popover-foreground: #4A1942;
+  --primary: #E91E8C;
+  --primary-foreground: #FFFFFF;
+  --secondary: #FCE4F2;
+  --secondary-foreground: #7B2D6E;
+  --muted: #FCE4F2;
+  --muted-foreground: #B06BA8;
+  --accent: #F8D0E8;
+  --accent-foreground: #7B2D6E;
+  --destructive: #E0245E;
+  --border: #F5B8D8;
+  --input: #F5B8D8;
+  --ring: #E91E8C;
+
+  --surface: #FFF5FA;
+  --surface-foreground: #4A1942;
+  --success: #D65BBD;
+  --warning: #E87AB0;
+
+  /* Sidebar */
+  --sidebar: #FCE4F2;
+  --sidebar-foreground: #7B2D6E;
+  --sidebar-primary: #E91E8C;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #F8D0E8;
+  --sidebar-accent-foreground: #4A1942;
+  --sidebar-border: #F0A0CC;
+  --sidebar-ring: #E91E8C;
+
+  /* Charts */
+  --chart-1: #E91E8C;
+  --chart-2: #D65BBD;
+  --chart-3: #E87AB0;
+  --chart-4: #C45BC5;
+  --chart-5: #FF69B4;
+}
+
+/* The Emma — highlight.js overrides */
+.emma .hljs {
+  background: #FCE4F2 !important;
+  color: #4A1942 !important;
+}
+.emma .hljs-keyword { color: #C45BC5; }
+.emma .hljs-string { color: #D65BBD; }
+.emma .hljs-number { color: #E87AB0; }
+.emma .hljs-comment { color: #B06BA8; font-style: italic; }
+.emma .hljs-function { color: #E91E8C; }
+.emma .hljs-title { color: #E91E8C; }
+.emma .hljs-built_in { color: #FF69B4; }
+.emma .hljs-type { color: #C45BC5; }
+.emma .hljs-attr { color: #D65BBD; }
+
+/* The Emma — sparkle shimmer on primary buttons */
+.emma .bg-primary {
+  background-image: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.3) 45%,
+    rgba(255, 255, 255, 0) 55%,
+    rgba(255, 255, 255, 0.2) 80%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 200%;
+  animation: emma-shimmer 3s ease-in-out infinite;
+}
+
+@keyframes emma-shimmer {
+  0% { background-position: 200% 200%; }
+  100% { background-position: -200% -200%; }
+}
+
+/* The Emma — glitter border accent on cards */
+.emma .border-primary {
+  box-shadow: 0 0 8px rgba(233, 30, 140, 0.3), 0 0 16px rgba(233, 30, 140, 0.1);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

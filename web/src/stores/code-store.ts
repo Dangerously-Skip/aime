@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 
@@ -18,6 +19,8 @@ interface CodeState {
   permissionMode: PermissionMode;
   sessionStatus: SessionStatus;
   connectionType: ConnectionType;
+  planContent: Record<string, string>;
+  planOpen: boolean;
 }
 
 interface CodeActions {
@@ -36,6 +39,8 @@ interface CodeActions {
   setPermissionMode: (mode: PermissionMode) => void;
   setSessionStatus: (status: SessionStatus) => void;
   setConnectionType: (type: ConnectionType) => void;
+  setPlanContent: (chatId: string, content: string) => void;
+  setPlanOpen: (open: boolean) => void;
 }
 
 export type CodeStore = CodeState & CodeActions;
@@ -51,6 +56,8 @@ export const useCodeStore = create<CodeStore>()(
       permissionMode: 'default',
       sessionStatus: 'idle',
       connectionType: 'local',
+      planContent: {},
+      planOpen: false,
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -171,10 +178,17 @@ export const useCodeStore = create<CodeStore>()(
       setPermissionMode: (mode) => set({ permissionMode: mode }),
       setSessionStatus: (status) => set({ sessionStatus: status }),
       setConnectionType: (connectionType) => set({ connectionType }),
+
+      setPlanContent: (chatId, content) =>
+        set((state) => ({
+          planContent: { ...state.planContent, [chatId]: content },
+        })),
+
+      setPlanOpen: (open) => set({ planOpen: open }),
     }),
     {
       name: 'nibcowork:code',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
         model: state.model,
@@ -182,6 +196,7 @@ export const useCodeStore = create<CodeStore>()(
         folder: state.folder,
         permissionMode: state.permissionMode,
         connectionType: state.connectionType,
+        planContent: state.planContent,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

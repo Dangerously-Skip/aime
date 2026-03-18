@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useCallback, KeyboardEvent, ChangeEvent } from "react";
+import { useRef, useCallback, KeyboardEvent, ChangeEvent, ReactNode } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ArrowUp, Square } from "lucide-react";
@@ -14,6 +14,7 @@ interface InputAreaProps {
   placeholder?: string;
   disabled?: boolean;
   maxHeight?: number;
+  extraControls?: ReactNode;
 }
 
 export function InputArea({
@@ -25,6 +26,7 @@ export function InputArea({
   placeholder = "Send a message...",
   disabled = false,
   maxHeight = 200,
+  extraControls,
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -78,6 +80,7 @@ export function InputArea({
               style={{ opacity: isStreaming ? 0.6 : 1 }}
             />
           </div>
+          {extraControls}
           <Button
             size="icon"
             className={`h-8 w-8 shrink-0 rounded-lg ${

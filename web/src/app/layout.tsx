@@ -29,7 +29,7 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var h=document.documentElement;h.classList.add('no-transition');var d=JSON.parse(localStorage.getItem('nibcowork:app')||'{}');var t=(d.state||{}).theme||'light';var isDark=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(isDark)h.classList.add('dark');requestAnimationFrame(function(){requestAnimationFrame(function(){h.classList.remove('no-transition')})});}catch(e){}})();`,
+            __html: `(function(){try{var h=document.documentElement;h.classList.add('no-transition');var d=JSON.parse(localStorage.getItem('nibcowork:app')||'{}');var t=(d.state||{}).theme||'light';if(t==='emma'){h.classList.add('emma')}else{var isDark=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(isDark)h.classList.add('dark')}requestAnimationFrame(function(){requestAnimationFrame(function(){h.classList.remove('no-transition')})});}catch(e){}})();`,
           }}
         />
       </head>

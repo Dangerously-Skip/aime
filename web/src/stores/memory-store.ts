@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 import type { Memory, MemoryCategory, MemoryScope } from '@/lib/memory/types';
 import { getMemoriesForContext, searchMemories, findDuplicate, findSimilar } from '@/lib/memory/retriever';
 
@@ -176,7 +177,7 @@ export const useMemoryStore = create<MemoryStore>()(
     }),
     {
       name: 'nibcowork:memories',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
         // Run cleanup on rehydration to purge stale superseded memories

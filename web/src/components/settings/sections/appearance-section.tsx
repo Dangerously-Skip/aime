@@ -2,13 +2,14 @@
 
 import { useAppStore, type Theme } from '@/stores/app-store'
 import { useSettingsStore, type ChatFont } from '@/stores/settings-store'
-import { Sun, Moon, Monitor } from 'lucide-react'
+import { Sun, Moon, Monitor, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const themeOptions: { value: Theme; label: string; icon: React.ReactNode }[] = [
   { value: 'light', label: 'Light', icon: <Sun className="h-4 w-4" /> },
   { value: 'system', label: 'Auto', icon: <Monitor className="h-4 w-4" /> },
   { value: 'dark', label: 'Dark', icon: <Moon className="h-4 w-4" /> },
+  { value: 'emma', label: 'The Emma', icon: <Sparkles className="h-4 w-4" /> },
 ]
 
 const fontOptions: {
@@ -60,6 +61,14 @@ function ThemePreview({ value }: { value: Theme }) {
     )
   }
 
+  if (value === 'emma') {
+    return (
+      <div className="h-16 w-full rounded-md p-2" style={{ background: 'linear-gradient(135deg, #FFF0F5 0%, #FCE4F2 50%, #F8D0E8 100%)' }}>
+        <div className="h-full w-full rounded" style={{ background: 'linear-gradient(135deg, #FFFFFF 0%, #FFF5FA 100%)', boxShadow: '0 0 8px rgba(233, 30, 140, 0.15)' }} />
+      </div>
+    )
+  }
+
   // Auto: half light / half dark
   return (
     <div className="h-16 w-full rounded-md overflow-hidden flex">
@@ -84,7 +93,7 @@ export function AppearanceSection() {
       {/* Color Mode */}
       <div>
         <h3 className="text-sm font-medium mb-3">Color mode</h3>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-4 gap-3">
           {themeOptions.map((opt) => (
             <button
               key={opt.value}
