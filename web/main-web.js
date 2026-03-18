@@ -308,6 +308,13 @@ app.whenReady().then(() => {
 
   // Check for updates 3s after launch (gives window time to finish loading)
   setTimeout(() => checkForUpdates(false), 3000);
+
+  // Minute ticker — drives heartbeat and cron job evaluation in the renderer
+  setInterval(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('minute:tick', Date.now());
+    }
+  }, 60_000);
 });
 
 app.on("window-all-closed", () => {

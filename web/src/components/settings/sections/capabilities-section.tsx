@@ -20,6 +20,8 @@ interface SurfaceConfig {
 export function CapabilitiesSection() {
   const toolAccessMode = useSettingsStore((s) => s.toolAccessMode)
   const setToolAccessMode = useSettingsStore((s) => s.setToolAccessMode)
+  const toolProfile = useSettingsStore((s) => s.toolProfile)
+  const setToolProfile = useSettingsStore((s) => s.setToolProfile)
 
   const chatModel = useChatStore((s) => s.model)
   const setChatModel = useChatStore((s) => s.setModel)
@@ -92,6 +94,34 @@ export function CapabilitiesSection() {
             Always loaded
           </button>
         </div>
+      </div>
+
+      {/* Tool Profile */}
+      <div>
+        <label className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          Tool Profile
+        </label>
+        <p className="mt-1 text-xs text-muted-foreground">Limits which tools the agent can use across all surfaces.</p>
+        <div className="mt-2 inline-flex rounded-lg border border-border bg-muted p-0.5">
+          {(['minimal', 'coding', 'full'] as const).map((profile) => (
+            <button
+              key={profile}
+              onClick={() => setToolProfile(profile)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors capitalize ${
+                toolProfile === profile
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {profile}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {toolProfile === 'minimal' && 'WebSearch + WebFetch only'}
+          {toolProfile === 'coding' && 'Read/Write/Edit/Glob/Grep/Bash + Web tools'}
+          {toolProfile === 'full' && 'All surface defaults'}
+        </p>
       </div>
 
       {/* Per-surface Tool Summary */}

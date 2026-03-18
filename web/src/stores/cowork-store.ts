@@ -5,6 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
+import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 
 const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
@@ -18,6 +19,8 @@ interface CoworkState {
   artifactFiles: Record<string, string[]>;
   planContent: Record<string, string>;
   planOpen: boolean;
+  sessionControls: Record<string, SessionControls>;
+  lastActivityAt: Record<string, number>;
 }
 
 interface CoworkActions {
@@ -38,6 +41,8 @@ interface CoworkActions {
   clearSidebarFiles: (chatId: string) => void;
   setPlanContent: (chatId: string, content: string) => void;
   setPlanOpen: (open: boolean) => void;
+  setSessionControls: (chatId: string, controls: SessionControls) => void;
+  touchActivity: (chatId: string) => void;
 }
 
 export type CoworkStore = CoworkState & CoworkActions;
@@ -54,6 +59,8 @@ export const useCoworkStore = create<CoworkStore>()(
       artifactFiles: {},
       planContent: {},
       planOpen: false,
+      sessionControls: {},
+      lastActivityAt: {},
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -208,6 +215,16 @@ export const useCoworkStore = create<CoworkStore>()(
         })),
 
       setPlanOpen: (open) => set({ planOpen: open }),
+
+      setSessionControls: (chatId, controls) =>
+        set((state) => ({
+          sessionControls: { ...state.sessionControls, [chatId]: controls },
+        })),
+
+      touchActivity: (chatId) =>
+        set((state) => ({
+          lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
+        })),
     }),
     {
       name: 'nibcowork:cowork',
@@ -220,6 +237,7 @@ export const useCoworkStore = create<CoworkStore>()(
         contextFiles: state.contextFiles,
         artifactFiles: state.artifactFiles,
         planContent: state.planContent,
+        sessionControls: state.sessionControls,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

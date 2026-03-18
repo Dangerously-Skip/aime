@@ -5,6 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
+import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 
 export type PermissionMode = 'acceptEdits' | 'default' | 'plan' | 'bypass';
 export type SessionStatus = 'idle' | 'active' | 'streaming';
@@ -21,6 +22,7 @@ interface CodeState {
   connectionType: ConnectionType;
   planContent: Record<string, string>;
   planOpen: boolean;
+  sessionControls: Record<string, SessionControls>;
 }
 
 interface CodeActions {
@@ -41,7 +43,10 @@ interface CodeActions {
   setConnectionType: (type: ConnectionType) => void;
   setPlanContent: (chatId: string, content: string) => void;
   setPlanOpen: (open: boolean) => void;
+  setSessionControls: (chatId: string, controls: SessionControls) => void;
 }
+
+export { DEFAULT_SESSION_CONTROLS };
 
 export type CodeStore = CodeState & CodeActions;
 
@@ -58,6 +63,7 @@ export const useCodeStore = create<CodeStore>()(
       connectionType: 'local',
       planContent: {},
       planOpen: false,
+      sessionControls: {},
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -185,6 +191,11 @@ export const useCodeStore = create<CodeStore>()(
         })),
 
       setPlanOpen: (open) => set({ planOpen: open }),
+
+      setSessionControls: (chatId, controls) =>
+        set((state) => ({
+          sessionControls: { ...state.sessionControls, [chatId]: controls },
+        })),
     }),
     {
       name: 'nibcowork:code',

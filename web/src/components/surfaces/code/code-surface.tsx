@@ -56,6 +56,9 @@ import { detectServerUrl, isWebAsset, findHtmlEntryPoint } from "@/lib/artifacts
 import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import type { Message } from "@/stores/chat-store";
 import { ListChecks } from "lucide-react";
+import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
+import { getSlashSuggestions, parseSlashCommand, applySlashCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
+import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
 
 const EMPTY_MESSAGES: Message[] = [];
 
@@ -296,12 +299,16 @@ function CodeInput({
   projects,
   onVoiceTranscript,
   planButton,
+  cwd,
+  onSlashCommand,
 }: {
   value: string;
   onChange: (v: string) => void;
   onSubmit: (v: string) => void;
   onAbort?: () => void;
   isStreaming: boolean;
+  cwd?: string | null;
+  onSlashCommand?: (text: string) => boolean;
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
   model: string;
@@ -321,34 +328,117 @@ function CodeInput({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const PermIcon = getPermissionIcon(permissionMode);
+  const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
+  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
+  const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
+    useAtSuggestions();
+
+  const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
+    ? cmdSuggestions
+    : fileSuggestions.map((f) => ({
+        type: 'at' as const,
+        value: f.path,
+        label: '@' + f.name,
+        description: undefined,
+        meta: f.relative,
+      }));
+
+  function handleSelectSuggestion(s: CommandSuggestion) {
+    if (s.type === 'slash') {
+      onChange(s.value + ' ');
+      setCmdSuggestions([]);
+    } else {
+      const newVal = removeAtQuery(value);
+      onChange(newVal);
+      clearAtSuggestions();
+      resolveFileAsAttachment(s.value).then((att) => {
+        if (att) onAttachmentAdd(att);
+      });
+    }
+    setSelectedSuggestionIdx(0);
+  }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (activeSuggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedSuggestionIdx((i) => Math.min(i + 1, activeSuggestions.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedSuggestionIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && activeSuggestions.length > 0)) {
+        e.preventDefault();
+        handleSelectSuggestion(activeSuggestions[selectedSuggestionIdx]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setCmdSuggestions([]);
+        clearAtSuggestions();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (isStreaming) {
         onAbort?.();
       } else if (value.trim()) {
+        // Let parent handle slash commands
+        if (onSlashCommand && onSlashCommand(value.trim())) return;
         onSubmit(value.trim());
       }
     }
   }
 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    onChange(e.target.value);
+    const val = e.target.value;
+    onChange(val);
     const textarea = e.target;
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+
+    // Slash suggestions
+    setCmdSuggestions(
+      getSlashSuggestions(val).map((cmd) => ({
+        type: 'slash' as const,
+        value: cmd.name,
+        label: cmd.name,
+        description: cmd.args,
+        meta: cmd.description,
+      }))
+    );
+
+    // @ suggestions
+    const atQ = getAtQuery(val);
+    if (atQ !== null && cwd) {
+      fetchAtSuggestions(atQ, cwd);
+    } else {
+      clearAtSuggestions();
+    }
+
+    setSelectedSuggestionIdx(0);
   }
 
   function handleButtonClick() {
     if (isStreaming) {
       onAbort?.();
     } else if (value.trim()) {
+      if (onSlashCommand && onSlashCommand(value.trim())) return;
       onSubmit(value.trim());
     }
   }
 
   return (
+    <div>
+    <CommandPicker
+      suggestions={activeSuggestions}
+      selectedIndex={selectedSuggestionIdx}
+      onSelect={handleSelectSuggestion}
+      onSelectedIndexChange={setSelectedSuggestionIdx}
+    />
     <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
       <Textarea
         ref={textareaRef}
@@ -455,6 +545,7 @@ function CodeInput({
         </div>
       </div>
     </div>
+    </div>
   );
 }
 
@@ -505,6 +596,10 @@ export function CodeSurface() {
   const planOpen = useCodeStore((s) => s.planOpen);
   const setPlanContent = useCodeStore((s) => s.setPlanContent);
   const setPlanOpen = useCodeStore((s) => s.setPlanOpen);
+  const sessionControls = useCodeStore(
+    (s) => (chatId ? s.sessionControls[chatId] : undefined) ?? DEFAULT_SESSION_CONTROLS
+  );
+  const setSessionControls = useCodeStore((s) => s.setSessionControls);
   const setModel = useCodeStore((s) => s.setModel);
   const setFolder = useCodeStore((s) => s.setFolder);
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode);
@@ -838,6 +933,29 @@ export function CodeSurface() {
     },
   });
 
+  // Returns true if handled as slash command (caller should not submit)
+  const handleSlashCommand = useCallback(
+    (text: string): boolean => {
+      const parsed = parseSlashCommand(text);
+      if (!parsed) return false;
+      const result = applySlashCommand(parsed, sessionControls);
+      if (!result) return false;
+      const effectiveId = chatId || (() => {
+        const id = crypto.randomUUID();
+        addConversation({ id, title: text.substring(0, 50), surface: 'code', lastMessage: text, createdAt: Date.now(), updatedAt: Date.now() });
+        setActiveConversation(id);
+        setCurrentChat(id);
+        return id;
+      })();
+      setSessionControls(effectiveId, result.controls);
+      addMessage(effectiveId, { id: crypto.randomUUID(), role: 'user', content: text, timestamp: Date.now() });
+      addMessage(effectiveId, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now() });
+      setInputValue('');
+      return true;
+    },
+    [chatId, sessionControls, setSessionControls, addMessage, addConversation, setActiveConversation, setCurrentChat]
+  );
+
   const handleSubmit = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
@@ -900,11 +1018,13 @@ export function CodeSurface() {
       const memoriesStr = formatMemoriesForPrompt(relevantMemories);
       relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
 
+      const currentControls = useCodeStore.getState().sessionControls[id] ?? sessionControls;
       await sendMessage(trimmed, id, "code", model, {
         apiKey: nibGatewayApiKey || undefined,
         cwd: folder || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
+        sessionControls: currentControls,
         securitySettings: {
           blockDangerousCommands,
           blockNetworkCommands,
@@ -978,6 +1098,8 @@ export function CodeSurface() {
                   projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
                   onVoiceTranscript={handleVoiceTranscript}
                   planButton={planButton}
+                  cwd={folder}
+                  onSlashCommand={handleSlashCommand}
                 />
                 <BottomBar folder={folder} onFolderChange={handleFolderChange} />
               </>
