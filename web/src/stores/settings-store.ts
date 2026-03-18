@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 
 export type ChatFont = 'default' | 'sans' | 'mono' | 'system';
 export type ToolAccessMode = 'onDemand' | 'alwaysLoaded';
@@ -45,6 +46,11 @@ interface SettingsState {
 
   // Memory
   autoExtractMemories: boolean;
+
+  // Onboarding
+  onboardingComplete: boolean;
+  onboardingSkippedAt: number | null;
+  teamId: string | null;
 }
 
 interface SettingsActions {
@@ -68,6 +74,9 @@ interface SettingsActions {
   setBlockNetworkCommands: (enabled: boolean) => void;
   setRestrictToProjectFolder: (enabled: boolean) => void;
   setDisableBashTool: (enabled: boolean) => void;
+  setOnboardingComplete: (complete: boolean) => void;
+  setOnboardingSkippedAt: (timestamp: number | null) => void;
+  setTeamId: (id: string | null) => void;
   resetAll: () => void;
 }
 
@@ -93,6 +102,9 @@ const initialState: SettingsState = {
   blockNetworkCommands: false,
   restrictToProjectFolder: true,
   disableBashTool: false,
+  onboardingComplete: false,
+  onboardingSkippedAt: null,
+  teamId: null,
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -137,13 +149,17 @@ export const useSettingsStore = create<SettingsStore>()(
       setRestrictToProjectFolder: (restrictToProjectFolder) => set({ restrictToProjectFolder }),
       setDisableBashTool: (disableBashTool) => set({ disableBashTool }),
 
+      setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
+      setOnboardingSkippedAt: (onboardingSkippedAt) => set({ onboardingSkippedAt }),
+      setTeamId: (teamId) => set({ teamId }),
+
       resetAll: () => set(initialState),
     }),
     {
       name: 'nibcowork:settings',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 2,
+      version: 3,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         if (version === 0) {
@@ -158,6 +174,15 @@ export const useSettingsStore = create<SettingsStore>()(
             blockNetworkCommands: false,
             restrictToProjectFolder: true,
             disableBashTool: false,
+          } as unknown as SettingsState & SettingsActions;
+        }
+        if (version === 2) {
+          // v2 -> v3: add onboarding fields
+          return {
+            ...state,
+            onboardingComplete: false,
+            onboardingSkippedAt: null,
+            teamId: null,
           } as unknown as SettingsState & SettingsActions;
         }
         return state as unknown as SettingsState & SettingsActions;
@@ -182,6 +207,9 @@ export const useSettingsStore = create<SettingsStore>()(
         blockNetworkCommands: state.blockNetworkCommands,
         restrictToProjectFolder: state.restrictToProjectFolder,
         disableBashTool: state.disableBashTool,
+        onboardingComplete: state.onboardingComplete,
+        onboardingSkippedAt: state.onboardingSkippedAt,
+        teamId: state.teamId,
       }),
     }
   )

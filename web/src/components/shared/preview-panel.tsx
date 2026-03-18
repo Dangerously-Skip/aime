@@ -36,6 +36,8 @@ interface PreviewPanelProps {
   open: boolean;
   onClose: () => void;
   refreshKey?: number;
+  onWebviewReady?: (ref: WebviewNode | null) => void;
+  onConsoleMessage?: (level: string, message: string) => void;
 }
 
 /* ── Console log line ── */
@@ -67,7 +69,7 @@ function ConsoleLogLine({ entry }: { entry: ConsoleEntry }) {
   );
 }
 
-export function PreviewPanel({ url, open, onClose, refreshKey }: PreviewPanelProps) {
+export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, onConsoleMessage }: PreviewPanelProps) {
   const [currentUrl, setCurrentUrl] = useState(url);
   const webviewRef = useRef<WebviewNode | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<ConsoleEntry[]>([]);
@@ -114,6 +116,7 @@ export function PreviewPanel({ url, open, onClose, refreshKey }: PreviewPanelPro
         prev.removeEventListener("did-navigate", handleNav);
         prev.removeEventListener("did-navigate-in-page", handleNav);
         prev.removeEventListener("console-message", handleConsoleMessage as EventListener);
+        onWebviewReady?.(null);
       }
       webviewRef.current = node;
       if (node) {
@@ -123,10 +126,11 @@ export function PreviewPanel({ url, open, onClose, refreshKey }: PreviewPanelPro
         // Clear console on new webview mount
         setConsoleLogs([]);
         setHasErrors(false);
+        onWebviewReady?.(node);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+    [onWebviewReady]
   );
 
   function handleNav(e: Event & { url?: string }) {
@@ -141,6 +145,8 @@ export function PreviewPanel({ url, open, onClose, refreshKey }: PreviewPanelPro
   function handleConsoleMessage(e: Event & { level?: number; message?: string; line?: number; sourceId?: string }) {
     const level = CONSOLE_LEVEL_MAP[e.level ?? 0] || "log";
     if (level === "error") setHasErrors(true);
+
+    onConsoleMessage?.(level, e.message || "");
 
     setConsoleLogs((prev) => {
       const next = [

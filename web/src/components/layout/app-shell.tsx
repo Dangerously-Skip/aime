@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Sidebar } from "./sidebar";
 import { Tabbar } from "./tabbar";
 import { SurfaceRouter } from "./surface-router";
-import { useAppStore } from "@/stores/app-store";
+import { useAppStore, type Surface } from "@/stores/app-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useProjectStore } from "@/stores/project-store";
 import { getRandomIcon } from "@/stores/project-store";
@@ -13,6 +13,8 @@ import { ProjectGrid } from "@/components/projects/project-grid";
 import { ProjectDetail } from "@/components/projects/project-detail";
 import { ProjectSettings } from "@/components/projects/project-settings";
 import { ProjectCreate } from "@/components/projects/project-create";
+import { CustomizeView } from "@/components/customize/customize-view";
+import { UpdateBanner } from "@/components/shared/update-banner";
 
 export function AppShell() {
   const sidebarVisible = useAppStore((s) => s.sidebarVisible);
@@ -21,7 +23,9 @@ export function AppShell() {
   const viewingProjectId = useAppStore((s) => s.viewingProjectId);
   const setViewingProjectId = useAppStore((s) => s.setViewingProjectId);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const setActiveSurface = useAppStore((s) => s.setActiveSurface);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+  const conversations = useConversationStore((s) => s.conversations);
   const addProject = useProjectStore((s) => s.addProject);
   const { isElectron } = useElectron();
 
@@ -38,6 +42,12 @@ export function AppShell() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [setSettingsOpen]);
+
+  // Listen for "open-settings" from Electron menu (Settings… menu item)
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.electronAPI?.onOpenSettings) return;
+    window.electronAPI.onOpenSettings(() => setSettingsOpen(true));
   }, [setSettingsOpen]);
 
   // Reset project view when switching away from projects mode
@@ -76,6 +86,8 @@ export function AppShell() {
   }
 
   function handleOpenConversation(conversationId: string) {
+    const conv = conversations.find((c) => c.id === conversationId);
+    if (conv) setActiveSurface(conv.surface as Surface);
     setActiveConversation(conversationId);
     setSidebarMode("history");
     setViewingProjectId(null);
@@ -83,6 +95,7 @@ export function AppShell() {
   }
 
   const showProjects = sidebarMode === "projects";
+  const showCustomize = sidebarMode === "customize";
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
@@ -100,9 +113,11 @@ export function AppShell() {
         {/* Tabbar (also serves as drag region) */}
         <Tabbar isElectron={isElectron} />
 
-        {/* Surface area or Project views */}
+        {/* Surface area, Project views, or Customize view */}
         <div className="flex-1 min-h-0 relative">
-          {showProjects ? (
+          {showCustomize ? (
+            <CustomizeView />
+          ) : showProjects ? (
             creatingProject ? (
               <ProjectCreate
                 onCancel={() => setCreatingProject(false)}
@@ -126,6 +141,8 @@ export function AppShell() {
           )}
         </div>
       </div>
+
+      <UpdateBanner />
 
       {editingProjectId && (
         <ProjectSettings

@@ -42,6 +42,34 @@ function appendToSystemPrompt(
 
 export const runtime = 'nodejs';
 
+/**
+ * Read provisioned connector MCP server entries from ~/.claude/.mcp.json.
+ * This file is written by the connector provisioner when a user connects an app.
+ * We merge these into the mcpServers object so the Claude Agent SDK can use them.
+ */
+async function loadProvisionedMcpServers(): Promise<Record<string, unknown>> {
+  try {
+    const { readFile } = await import('fs/promises');
+    const { join } = await import('path');
+    const { homedir } = await import('os');
+    const configPath = join(homedir(), '.claude', '.mcp.json');
+    const content = await readFile(configPath, 'utf-8');
+    const config = JSON.parse(content) as { mcpServers?: Record<string, unknown> };
+    if (!config.mcpServers) return {};
+    // Strip _meta fields — the SDK doesn't understand them
+    return Object.fromEntries(
+      Object.entries(config.mcpServers).map(([key, entry]) => {
+        const { _meta, ...serverConfig } = entry as Record<string, unknown>;
+        void _meta;
+        return [key, serverConfig];
+      })
+    );
+  } catch {
+    // File missing or unreadable — no provisioned servers yet
+    return {};
+  }
+}
+
 // Singleton gateway provider — cached on globalThis so message history survives hot reload
 declare global {
   // eslint-disable-next-line no-var
@@ -204,10 +232,13 @@ export async function POST(
         : getProvider(providerName as string);
       if (useGateway) console.log('[CHAT] Using nib AI Studio gateway provider (chat-only)');
 
-      // Build MCP servers config
-      const mcpServers = composioSession
-        ? buildComposioMcpServers(composioSession)
-        : {};
+      // Build MCP servers config — merge Composio + provisioned connector servers
+      const composioServers = composioSession ? buildComposioMcpServers(composioSession) : {};
+      const provisionedServers = await loadProvisionedMcpServers();
+      const mcpServers = { ...composioServers, ...provisionedServers };
+      if (Object.keys(provisionedServers).length > 0) {
+        console.log('[CHAT] Loaded provisioned connector servers:', Object.keys(provisionedServers).join(', '));
+      }
 
       // Get surface-specific config
       const surfaceConfig = getSurfaceConfig(surfaceId);
@@ -288,6 +319,16 @@ export async function POST(
         });
       };
 
+      // Build onBrowserToolUse callback to forward browser tool calls to the client
+      const onBrowserToolUse = async (toolUseId: string, name: string, input: Record<string, unknown>) => {
+        await sse.writeEvent({
+          type: 'browser_tool_use',
+          toolUseId,
+          name,
+          input,
+        });
+      };
+
       // Stream responses from the provider
       let collectedResponse = '';
       try {
@@ -307,6 +348,7 @@ export async function POST(
           cwd: (cwd as string) || undefined,
           history: history || undefined,
           onInputRequest,
+          onBrowserToolUse,
         })) {
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);

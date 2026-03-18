@@ -4,6 +4,20 @@ import { getSurfaceConfig } from '../surfaces';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { getGatewayEnv, isGatewayConfigured, mapModelForGateway } from '../gateway-env';
 import { waitForAnswer } from '../pending-questions';
+import { BROWSER_TOOL_NAMES } from '../browser-tools';
+import { waitForBrowserToolResult } from '../pending-browser-tools';
+
+/**
+ * Cached system:init data from the most recent session.
+ */
+export interface SystemInitData {
+  skills?: unknown[];
+  plugins?: unknown[];
+  mcp_servers?: unknown[];
+  slash_commands?: unknown[];
+  agents?: unknown[];
+  [key: string]: unknown;
+}
 
 /**
  * Claude Agent SDK provider implementation.
@@ -14,6 +28,7 @@ export class ClaudeProvider extends BaseProvider {
   private defaultMaxTurns: number;
   private permissionMode: string;
   private abortControllers: Map<string, AbortController>;
+  public lastInitData: SystemInitData | null = null;
 
   constructor(config: ProviderConfig = {}) {
     super(config);
@@ -28,6 +43,25 @@ export class ClaudeProvider extends BaseProvider {
 
   get name(): string {
     return 'claude';
+  }
+
+  /**
+   * Scan ~/.claude/plugins/ for local plugin directories.
+   */
+  private async scanPlugins(): Promise<string[]> {
+    try {
+      const os = await import('os');
+      const path = await import('path');
+      const fs = await import('fs');
+      const pluginsDir = path.join(os.homedir(), '.claude', 'plugins');
+      if (!fs.existsSync(pluginsDir)) return [];
+      const entries = fs.readdirSync(pluginsDir, { withFileTypes: true });
+      return entries
+        .filter(e => e.isDirectory())
+        .map(e => path.join(pluginsDir, e.name));
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -64,6 +98,7 @@ export class ClaudeProvider extends BaseProvider {
       cwd,
       history,
       onInputRequest,
+      onBrowserToolUse,
     } = params;
 
     // Load surface config if surfaceId is provided, otherwise use defaults
@@ -96,6 +131,9 @@ export class ClaudeProvider extends BaseProvider {
     const permissionMode = surfaceConfig?.permissionMode
       || this.permissionMode;
 
+    // Scan for installed plugins to pass to SDK
+    const pluginPaths = await this.scanPlugins();
+
     // Build query options
     const queryOptions: Record<string, unknown> = {
       allowedTools,
@@ -103,35 +141,58 @@ export class ClaudeProvider extends BaseProvider {
       mcpServers,
       permissionMode,
       settingSources: ['user', 'project'], // Enable Skills from filesystem
+      ...(pluginPaths.length > 0 && {
+        plugins: pluginPaths.map(p => ({ type: 'local', path: p })),
+      }),
     };
 
-    // Intercept AskUserQuestion to collect answers from the client.
+    // Intercept AskUserQuestion and browser tools via canUseTool.
     // canUseTool is called even with bypassPermissions for AskUserQuestion
     // since the SDK needs to collect user answers for that tool.
-    if (onInputRequest) {
+    if (onInputRequest || onBrowserToolUse) {
       queryOptions.canUseTool = async (
         toolName: string,
         input: Record<string, unknown>,
         { toolUseID }: { toolUseID: string },
       ) => {
-        if (toolName !== 'AskUserQuestion') {
-          return { behavior: 'allow' as const };
+        // Handle AskUserQuestion
+        if (toolName === 'AskUserQuestion' && onInputRequest) {
+          await onInputRequest(toolUseID, input.questions);
+          const answers = await waitForAnswer(toolUseID);
+          return {
+            behavior: 'allow' as const,
+            updatedInput: { ...input, answers },
+          };
         }
-        // Send the question to the client via SSE
-        await onInputRequest(toolUseID, input.questions);
-        // Block until the client POSTs answers back
-        const answers = await waitForAnswer(toolUseID);
-        return {
-          behavior: 'allow' as const,
-          updatedInput: { ...input, answers },
-        };
+
+        // Handle browser tools — send to client webview for execution
+        if (BROWSER_TOOL_NAMES.has(toolName) && onBrowserToolUse) {
+          console.log('[Claude] Intercepting browser tool:', toolName, 'id:', toolUseID);
+          await onBrowserToolUse(toolUseID, toolName, input);
+          const result = await waitForBrowserToolResult(toolUseID);
+          return {
+            behavior: 'allow' as const,
+            updatedInput: { ...input, __browserToolResult: result.output, __isError: result.isError },
+          };
+        }
+
+        return { behavior: 'allow' as const };
       };
     }
 
-    // Set working directory if provided (folder picker)
+    // Set working directory — use selected folder, or fall back to a safe temp
+    // directory so the agent never defaults to the app's own source tree.
     if (cwd) {
       queryOptions.cwd = cwd;
       console.log('[Claude] Working directory set to:', cwd);
+    } else {
+      const os = await import('os');
+      const path = await import('path');
+      const fs = await import('fs');
+      const safeCwd = path.join(os.tmpdir(), 'quarry-sandbox');
+      fs.mkdirSync(safeCwd, { recursive: true });
+      queryOptions.cwd = safeCwd;
+      console.log('[Claude] No folder selected — using safe temp directory:', safeCwd);
     }
 
     // Apply system prompt if available
@@ -171,9 +232,11 @@ export class ClaudeProvider extends BaseProvider {
     // Skip resume if the working directory changed (session cwd is baked in)
     const existingSessionId = chatId ? this.getSession(chatId) : null;
     const previousCwd = chatId ? this.getSessionCwd(chatId) : null;
-    const cwdChanged = cwd && previousCwd && cwd !== previousCwd;
+    // Detect cwd change: if cwd is provided and either there was no previous cwd
+    // stored or it differs, treat it as a change so we start a fresh session.
+    const cwdChanged = cwd ? (!previousCwd || cwd !== previousCwd) : false;
     if (cwdChanged) {
-      console.log('[Claude] Working directory changed from', previousCwd, 'to', cwd, '- starting fresh session');
+      console.log('[Claude] Working directory changed from', previousCwd || '(none)', 'to', cwd, '- starting fresh session');
     } else {
       console.log('[Claude] Existing session ID for', chatId, ':', existingSessionId || 'none (new chat)');
     }
@@ -261,7 +324,7 @@ export class ClaudeProvider extends BaseProvider {
           console.log('[Claude] System message:', JSON.stringify(c, null, 2));
         }
 
-        // Capture session ID from system init message - matches server.js logic
+        // Capture session ID and system:init data - matches server.js logic
         if (c.type === 'system' && c.subtype === 'init') {
           const newSessionId = (c.session_id || (c.data as Record<string, unknown>)?.session_id || c.sessionId) as string | undefined;
           if (newSessionId && chatId) {
@@ -272,7 +335,18 @@ export class ClaudeProvider extends BaseProvider {
             console.log('[Claude] No session_id found in init message');
           }
 
-          // Yield session init event
+          // Cache system:init data for introspection
+          const initData: SystemInitData = {};
+          const data = (c.data || c) as Record<string, unknown>;
+          if (data.skills) initData.skills = data.skills as unknown[];
+          if (data.plugins) initData.plugins = data.plugins as unknown[];
+          if (data.mcp_servers) initData.mcp_servers = data.mcp_servers as unknown[];
+          if (data.slash_commands) initData.slash_commands = data.slash_commands as unknown[];
+          if (data.agents) initData.agents = data.agents as unknown[];
+          this.lastInitData = initData;
+          console.log('[Claude] system:init data cached:', Object.keys(initData).join(', '));
+
+          // Yield session init event with system:init data
           if (newSessionId) {
             yield {
               type: 'session_init',
@@ -280,6 +354,14 @@ export class ClaudeProvider extends BaseProvider {
               provider: this.name,
             };
           }
+
+          // Yield system_init event to forward data to client
+          yield {
+            type: 'system_init',
+            ...initData,
+            provider: this.name,
+          };
+
           continue;
         }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -8,7 +8,35 @@ import { SettingsDialog } from "@/components/settings/settings-dialog";
 import { SidebarChats } from "./sidebar-chats";
 import { SidebarProjects } from "./sidebar-projects";
 import { SidebarProjectDetail } from "./sidebar-project-detail";
-import { Settings } from "lucide-react";
+import { SidebarCustomize } from "./sidebar-customize";
+import {
+  Settings,
+  Plus,
+  Search,
+  Sparkles,
+  MessageCircle,
+  FolderKanban,
+  Flag,
+} from "lucide-react";
+
+// FeedlyBackly widget globals
+declare global {
+  interface Window {
+    feedlybacklySettings?: {
+      projectId: string;
+      apiUrl: string;
+      hideLauncher: boolean;
+      guestEnabled: boolean;
+    };
+    FeedlyBackly?: {
+      open: () => void;
+      close: () => void;
+      setUser: (user: { email?: string; name?: string }) => void;
+      setCustomData: (data: Record<string, unknown>) => void;
+    };
+  }
+}
+import { useConversationStore, type Conversation } from "@/stores/conversation-store";
 
 function getInitials(displayName: string, fullName: string): string {
   const name = displayName || fullName;
@@ -32,78 +60,181 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
   const displayName = useSettingsStore((s) => s.displayName);
   const fullName = useSettingsStore((s) => s.fullName);
 
+  // Load FeedlyBackly widget script once on mount
+  useEffect(() => {
+    if (document.getElementById('feedlybackly-script')) return;
+    window.feedlybacklySettings = {
+      projectId: 'cmmvgdjlj0002sucsrl38yxn9',
+      // Proxy through Next.js to avoid CORS. The widget appends /api/v1 itself,
+      // so this base URL must NOT include /api/v1.
+      apiUrl: `${window.location.origin}/api/feedlybackly`,
+      hideLauncher: true,
+      guestEnabled: true,
+    };
+    const script = document.createElement('script');
+    script.id = 'feedlybackly-script';
+    script.src = 'https://feedlybackly-widget.apps.dangerouslyskip.com/widget.js';
+    document.body.appendChild(script);
+  }, []);
+
+  const openFeedback = useCallback(() => {
+    const name = displayName || fullName || undefined;
+    if (window.FeedlyBackly) {
+      if (name) window.FeedlyBackly.setUser({ name });
+      window.FeedlyBackly.open();
+    }
+  }, [displayName, fullName]);
+  const activeSurface = useAppStore((s) => s.activeSurface);
+  const addConversation = useConversationStore((s) => s.addConversation);
+  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+
+  function handleNewChat() {
+    const conv: Conversation = {
+      id: crypto.randomUUID(),
+      title: "New Chat",
+      surface: activeSurface,
+      lastMessage: "",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    addConversation(conv);
+    setActiveConversation(conv.id);
+    if (sidebarMode !== "history") {
+      setSidebarMode("history");
+    }
+  }
+
   return (
     <div className="flex h-full w-[250px] flex-col bg-sidebar border-r border-sidebar-border">
       {/* Header — with traffic light padding in Electron */}
       <div
-        className="flex items-center justify-between px-3 py-2.5"
+        className="px-3 pt-2.5 pb-1 space-y-1"
         style={{
           paddingTop: isElectron ? "2rem" : undefined,
           WebkitAppRegion: isElectron ? "drag" : undefined,
         } as React.CSSProperties}
       >
-        {/* Mode switcher */}
-        <div
-          className="flex items-center bg-sidebar-accent/50 rounded-lg p-0.5"
+        {/* New Chat button */}
+        <button
+          onClick={handleNewChat}
+          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
-          <button
-            onClick={() => {
-              setSidebarMode("history");
-              setSelectedProjectId(null);
-            }}
-            className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${
-              sidebarMode === "history"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Chats
-          </button>
-          <button
-            onClick={() => setSidebarMode("projects")}
-            className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${
-              sidebarMode === "projects"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Projects
-          </button>
-        </div>
+          <Plus className="h-3.5 w-3.5" />
+          <span>New chat</span>
+        </button>
+
+        {/* Search (placeholder — could open a command palette) */}
+        <button
+          className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
+          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span>Search</span>
+        </button>
       </div>
 
-      {/* Content based on mode */}
-      {sidebarMode === "history" ? (
-        <SidebarChats />
-      ) : selectedProjectId ? (
-        <SidebarProjectDetail
-          projectId={selectedProjectId}
-          onBack={() => setSelectedProjectId(null)}
-        />
-      ) : (
-        <SidebarProjects
-          onSelectProject={(id) => setSelectedProjectId(id)}
-          onNewProject={onNewProject}
-        />
-      )}
-
-      {/* Footer — user avatar + settings */}
-      <div className="border-t border-sidebar-border">
+      {/* Navigation items */}
+      <div
+        className="px-3 py-1 space-y-0.5"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+      >
         <button
-          onClick={() => setSettingsOpen(true)}
-          className="flex w-full items-center gap-2.5 px-3 py-2.5 text-xs text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
+          onClick={() => setSidebarMode("customize")}
+          className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+            sidebarMode === "customize"
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+          }`}
         >
-          <Avatar size="sm">
-            <AvatarFallback className="bg-primary/10 text-primary text-[10px] font-semibold">
-              {getInitials(displayName, fullName)}
-            </AvatarFallback>
-          </Avatar>
-          <span className="truncate flex-1 text-left font-medium">
-            {displayName || fullName || "Settings"}
-          </span>
-          <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>Customize</span>
         </button>
+
+        <button
+          onClick={() => {
+            setSidebarMode("history");
+            setSelectedProjectId(null);
+          }}
+          className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+            sidebarMode === "history"
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+          }`}
+        >
+          <MessageCircle className="h-3.5 w-3.5" />
+          <span>Chats</span>
+        </button>
+
+        <button
+          onClick={() => setSidebarMode("projects")}
+          className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+            sidebarMode === "projects"
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+          }`}
+        >
+          <FolderKanban className="h-3.5 w-3.5" />
+          <span>Projects</span>
+        </button>
+      </div>
+
+      {/* Divider */}
+      <div className="mx-3 my-1 border-t border-sidebar-border" />
+
+      {/* Content based on mode */}
+      <div className="flex-1 min-h-0 flex flex-col">
+        {sidebarMode === "customize" ? (
+          <SidebarCustomize />
+        ) : sidebarMode === "history" ? (
+          <SidebarChats />
+        ) : selectedProjectId ? (
+          <SidebarProjectDetail
+            projectId={selectedProjectId}
+            onBack={() => setSelectedProjectId(null)}
+          />
+        ) : (
+          <SidebarProjects
+            onSelectProject={(id) => setSelectedProjectId(id)}
+            onNewProject={onNewProject}
+          />
+        )}
+      </div>
+
+      {/* Footer — user avatar + feedback + settings */}
+      <div className="border-t border-sidebar-border">
+        <div className="flex items-center px-3 py-2.5 gap-1">
+          {/* Avatar + name — opens settings */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="flex items-center gap-2.5 text-xs text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors rounded-md px-1 py-1 flex-1 min-w-0"
+          >
+            <Avatar size="sm">
+              <AvatarFallback className="bg-primary/10 text-primary text-[10px] font-semibold">
+                {getInitials(displayName, fullName)}
+              </AvatarFallback>
+            </Avatar>
+            <span className="truncate flex-1 text-left font-medium">
+              {displayName || fullName || "Settings"}
+            </span>
+          </button>
+          {/* Feedback button */}
+          <button
+            onClick={openFeedback}
+            title="Send feedback"
+            className="p-1.5 rounded-md text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
+          >
+            <Flag className="h-3.5 w-3.5" />
+          </button>
+          {/* Settings button */}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+            className="p-1.5 rounded-md text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />

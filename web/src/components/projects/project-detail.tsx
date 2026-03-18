@@ -1,29 +1,34 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
-import { useProjectStore, type Project, type KnowledgeFile } from "@/stores/project-store";
+import { useState, useRef } from "react";
+import { useProjectStore, type KnowledgeFile } from "@/stores/project-store";
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
 import { useChatStore } from "@/stores/chat-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream } from "@/hooks/use-sse-stream";
+import { buildProjectContext } from "@/lib/project/context-builder";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import type { Surface } from "@/stores/app-store";
 import {
   ArrowLeft,
   ArrowUp,
   Star,
   Ellipsis,
-  ExternalLink,
   Plus,
   Pencil,
   Trash2,
   FileText,
   Upload,
   X,
+  MessageCircle,
+  Briefcase,
+  Terminal,
+  Globe,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -34,6 +39,18 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ProjectEditDialog } from "./project-edit-dialog";
 import { ProjectIcon } from "@/components/shared/project-icon";
+
+const SURFACE_CONFIG: Record<
+  Surface,
+  { icon: React.ComponentType<{ className?: string }>; label: string; color: string }
+> = {
+  chat: { icon: MessageCircle, label: "Chat", color: "bg-blue-500/10 text-blue-600" },
+  cowork: { icon: Briefcase, label: "Cowork", color: "bg-purple-500/10 text-purple-600" },
+  code: { icon: Terminal, label: "Code", color: "bg-green-500/10 text-green-600" },
+  browser: { icon: Globe, label: "Browser", color: "bg-orange-500/10 text-orange-600" },
+};
+
+const SURFACE_ORDER: Surface[] = ["chat", "cowork", "code", "browser"];
 
 function formatTimeAgo(timestamp: number): string {
   const diff = Date.now() - timestamp;
@@ -46,6 +63,18 @@ function formatTimeAgo(timestamp: number): string {
   if (days < 30) return `${days}d ago`;
   const months = Math.floor(days / 30);
   return `${months} month${months > 1 ? "s" : ""} ago`;
+}
+
+function SurfaceBadge({ surface }: { surface: string }) {
+  const config = SURFACE_CONFIG[surface as Surface];
+  if (!config) return null;
+  const Icon = config.icon;
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${config.color}`}>
+      <Icon className="h-3 w-3" />
+      {config.label}
+    </span>
+  );
 }
 
 interface ProjectDetailProps {
@@ -87,17 +116,69 @@ export function ProjectDetail({
   const [editingInstructions, setEditingInstructions] = useState(false);
   const [instructionsDraft, setInstructionsDraft] = useState("");
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [surfaceFilter, setSurfaceFilter] = useState<Surface | "all">("all");
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
+  // Track the conversation id launched from this page so SSE handlers can target it
+  const launchedConvIdRef = useRef<string>("");
 
   const { sendMessage } = useSSEStream({
-    onChunk() {},
-    onDone() {},
-    onError() {},
+    onChunk(event) {
+      const cid = launchedConvIdRef.current;
+      if (!cid) return;
+      switch (event.type) {
+        case "text":
+          appendToLastAssistant(cid, (event.content as string) || "");
+          break;
+        case "tool_use": {
+          addToolCall(cid, {
+            id: (event.id as string) || `tool_${Date.now()}`,
+            name: (event.name as string) || "Unknown",
+            input: (event.input as Record<string, unknown>) || {},
+            status: "running",
+            startTime: Date.now(),
+          });
+          break;
+        }
+        case "tool_result": {
+          const id = (event.tool_use_id as string) || (event.id as string) || "";
+          const result = typeof event.result === "string" ? event.result : JSON.stringify(event.result);
+          updateToolResult(cid, id, result, event.is_error as boolean | undefined);
+          break;
+        }
+        case "error":
+          appendToLastAssistant(cid, `\n\n**Error:** ${(event.message as string) || "An error occurred"}`);
+          break;
+      }
+    },
+    onDone() {
+      const cid = launchedConvIdRef.current;
+      if (cid) {
+        stopStreaming(cid);
+      }
+    },
+    onError(error) {
+      const cid = launchedConvIdRef.current;
+      if (cid) {
+        stopStreaming(cid);
+        appendToLastAssistant(cid, `\n\n**Error:** ${error.message}`);
+      }
+    },
   });
 
   const projectConversations = conversations
     .filter((c) => c.projectId === projectId)
     .sort((a, b) => b.updatedAt - a.updatedAt);
+
+  const filteredConversations =
+    surfaceFilter === "all"
+      ? projectConversations
+      : projectConversations.filter((c) => c.surface === surfaceFilter);
+
+  // Count conversations per surface for filter tabs
+  const surfaceCounts: Record<string, number> = {};
+  for (const conv of projectConversations) {
+    surfaceCounts[conv.surface] = (surfaceCounts[conv.surface] || 0) + 1;
+  }
 
   if (!project) {
     return (
@@ -111,7 +192,6 @@ export function ProjectDetail({
     if (!inputValue.trim()) return;
     const trimmed = inputValue.trim();
 
-    // Create conversation
     const conv: Conversation = {
       id: crypto.randomUUID(),
       title: trimmed.substring(0, 50),
@@ -123,8 +203,8 @@ export function ProjectDetail({
     };
     addConversation(conv);
     setActiveConversation(conv.id);
+    launchedConvIdRef.current = conv.id;
 
-    // Add messages
     addMessage(conv.id, {
       id: crypto.randomUUID(),
       role: "user",
@@ -141,7 +221,6 @@ export function ProjectDetail({
     });
     startStreaming(conv.id);
 
-    // Build project context
     let projectInstructions: string | undefined;
     let projectKnowledge: string | undefined;
     if (project!.customInstructions) {
@@ -157,25 +236,32 @@ export function ProjectDetail({
     setInputValue("");
     setAttachments([]);
 
-    // Navigate to chat
     onOpenConversation(conv.id);
 
-    // Send
+    const crossSurfaceContext = buildProjectContext(project!, "chat", conv.id);
+
     sendMessage(trimmed, conv.id, "chat", model, {
       personalPreferences: personalPreferences || undefined,
       displayName: displayName || undefined,
       attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
       projectInstructions,
       projectKnowledge,
+      crossSurfaceContext: crossSurfaceContext || undefined,
       apiKey: nibGatewayApiKey || undefined,
     });
   }
 
-  function handleStartCowork() {
+  function handleStartInSurface(surface: Surface) {
+    const labels: Record<Surface, string> = {
+      chat: "New Chat",
+      cowork: "New Cowork Task",
+      code: "New Code Session",
+      browser: "New Browser Session",
+    };
     const conv: Conversation = {
       id: crypto.randomUUID(),
-      title: "New Cowork Task",
-      surface: "cowork",
+      title: labels[surface],
+      surface,
       lastMessage: "",
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -239,7 +325,7 @@ export function ProjectDetail({
   }
 
   return (
-    <div className="flex flex-1 flex-col overflow-auto">
+    <div className="h-full overflow-auto">
       <div className="w-full max-w-3xl mx-auto px-6 py-8">
         {/* Back link */}
         <button
@@ -355,33 +441,80 @@ export function ProjectDetail({
           </div>
         </div>
 
-        {/* Start in Cowork link */}
-        <button
-          onClick={handleStartCowork}
-          className="flex items-center justify-center gap-2 w-full py-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ExternalLink className="h-4 w-4" />
-          Start a task in Cowork
-        </button>
+        {/* Surface launcher buttons */}
+        <div className="flex items-center justify-center gap-3 mb-2">
+          {(["cowork", "code", "browser"] as Surface[]).map((surface) => {
+            const config = SURFACE_CONFIG[surface];
+            const Icon = config.icon;
+            return (
+              <button
+                key={surface}
+                onClick={() => handleStartInSurface(surface)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              >
+                <Icon className="h-3.5 w-3.5" />
+                Start in {config.label}
+              </button>
+            );
+          })}
+        </div>
 
         {/* Conversations list */}
         {projectConversations.length > 0 && (
           <>
             <Separator className="my-4" />
+
+            {/* Surface filter tabs */}
+            <div className="flex items-center gap-1 mb-4">
+              <button
+                onClick={() => setSurfaceFilter("all")}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  surfaceFilter === "all"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                All ({projectConversations.length})
+              </button>
+              {SURFACE_ORDER.filter((s) => surfaceCounts[s]).map((surface) => {
+                const config = SURFACE_CONFIG[surface];
+                const Icon = config.icon;
+                return (
+                  <button
+                    key={surface}
+                    onClick={() => setSurfaceFilter(surface)}
+                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                      surfaceFilter === surface
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {config.label} ({surfaceCounts[surface]})
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="space-y-0">
-              {projectConversations.map((conv) => (
+              {filteredConversations.map((conv) => (
                 <button
                   key={conv.id}
                   onClick={() => onOpenConversation(conv.id)}
                   className="flex w-full items-center justify-between py-4 border-b border-border text-left hover:bg-muted/30 -mx-2 px-2 rounded-lg transition-colors"
                 >
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      {conv.title}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Last message {formatTimeAgo(conv.updatedAt)}
-                    </p>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-foreground truncate">
+                          {conv.title}
+                        </p>
+                        <SurfaceBadge surface={conv.surface} />
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Last message {formatTimeAgo(conv.updatedAt)}
+                      </p>
+                    </div>
                   </div>
                 </button>
               ))}

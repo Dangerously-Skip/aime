@@ -8,6 +8,7 @@ export type ChunkType =
   | 'tool_result'
   | 'turn_start'
   | 'session_init'
+  | 'system_init'
   | 'done'
   | 'aborted'
   | 'error'
@@ -56,6 +57,8 @@ export interface QueryParams {
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   /** Callback to send an input_request event to the client during streaming. */
   onInputRequest?: (toolUseId: string, questions: unknown) => Promise<void>;
+  /** Callback to send a browser_tool_use event to the client during streaming. */
+  onBrowserToolUse?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => Promise<void>;
 }
 
 /**

@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 
 export type ModelId = 'sonnet' | 'opus' | 'haiku';
 
@@ -188,7 +189,7 @@ export const useChatStore = create<ChatStore>()(
     }),
     {
       name: 'nibcowork:chat',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
         model: state.model,

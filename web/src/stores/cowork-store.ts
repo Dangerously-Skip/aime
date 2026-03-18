@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 
@@ -15,6 +16,8 @@ interface CoworkState {
   folder: string | null;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
+  planContent: Record<string, string>;
+  planOpen: boolean;
 }
 
 interface CoworkActions {
@@ -33,6 +36,8 @@ interface CoworkActions {
   addContextFile: (chatId: string, path: string) => void;
   addArtifactFile: (chatId: string, path: string) => void;
   clearSidebarFiles: (chatId: string) => void;
+  setPlanContent: (chatId: string, content: string) => void;
+  setPlanOpen: (open: boolean) => void;
 }
 
 export type CoworkStore = CoworkState & CoworkActions;
@@ -47,6 +52,8 @@ export const useCoworkStore = create<CoworkStore>()(
       folder: null,
       contextFiles: {},
       artifactFiles: {},
+      planContent: {},
+      planOpen: false,
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -194,10 +201,17 @@ export const useCoworkStore = create<CoworkStore>()(
           const { [chatId]: _art, ...restArt } = state.artifactFiles;
           return { contextFiles: restCtx, artifactFiles: restArt };
         }),
+
+      setPlanContent: (chatId, content) =>
+        set((state) => ({
+          planContent: { ...state.planContent, [chatId]: content },
+        })),
+
+      setPlanOpen: (open) => set({ planOpen: open }),
     }),
     {
       name: 'nibcowork:cowork',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
         model: state.model,
@@ -205,6 +219,7 @@ export const useCoworkStore = create<CoworkStore>()(
         folder: state.folder,
         contextFiles: state.contextFiles,
         artifactFiles: state.artifactFiles,
+        planContent: state.planContent,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

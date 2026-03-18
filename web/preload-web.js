@@ -25,7 +25,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
   fileExists: (filePath) => ipcRenderer.invoke("file-exists", filePath),
   showNotification: (title, body) => ipcRenderer.invoke("show-notification", title, body),
   openAuthWindow: (url) => ipcRenderer.invoke("open-auth-window", url),
+  openConnectorAuthWindow: (url, callbackPath) => ipcRenderer.invoke("open-connector-auth-window", url, callbackPath),
   onGithubAuthResult: (callback) => {
     ipcRenderer.on("github-auth-result", (_event, data) => callback(data));
+  },
+  onUpdateState: (callback) => {
+    ipcRenderer.on("update-state", (_event, data) => callback(data));
+  },
+  checkForUpdates: () => ipcRenderer.send("check-for-updates"),
+  installUpdate: () => ipcRenderer.send("install-update"),
+  onOpenSettings: (callback) => {
+    ipcRenderer.on("open-settings", () => callback());
   },
 });
