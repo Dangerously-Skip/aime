@@ -612,6 +612,8 @@ export function CodeSurface() {
   const startStreaming = useCodeStore((s) => s.startStreaming);
   const stopStreaming = useCodeStore((s) => s.stopStreaming);
   const setCurrentChat = useCodeStore((s) => s.setCurrentChat);
+  const setIsStreaming = useCodeStore((s) => s.setIsStreaming);
+  const setStreamError = useCodeStore((s) => s.setStreamError);
   const setSessionStatus = useCodeStore((s) => s.setSessionStatus);
   const updateConversation = useConversationStore((s) => s.updateConversation);
   const addConversation = useConversationStore((s) => s.addConversation);
@@ -733,6 +735,9 @@ export function CodeSurface() {
   }, [activeConvId, allConversations, setCurrentChat]);
 
   const { sendMessage, abort } = useSSEStream({
+    chatId,
+    setIsStreaming,
+    setStreamError,
     onChunk(event) {
       switch (event.type) {
         case "turn_start":

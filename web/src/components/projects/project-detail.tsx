@@ -111,6 +111,8 @@ export function ProjectDetail({
   const addToolCall = useChatStore((s) => s.addToolCall);
   const updateToolResult = useChatStore((s) => s.updateToolResult);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
+  const setIsStreaming = useChatStore((s) => s.setIsStreaming);
+  const setStreamError = useChatStore((s) => s.setStreamError);
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
@@ -134,8 +136,12 @@ export function ProjectDetail({
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
   // Track the conversation id launched from this page so SSE handlers can target it
   const launchedConvIdRef = useRef<string>("");
+  const [activeChatId, setActiveChatId] = useState("");
 
   const { sendMessage } = useSSEStream({
+    chatId: activeChatId,
+    setIsStreaming,
+    setStreamError,
     onChunk(event) {
       const cid = launchedConvIdRef.current;
       if (!cid) return;
@@ -218,6 +224,7 @@ export function ProjectDetail({
     addConversation(conv);
     setActiveConversation(conv.id);
     launchedConvIdRef.current = conv.id;
+    setActiveChatId(conv.id);
 
     addMessage(conv.id, {
       id: crypto.randomUUID(),
