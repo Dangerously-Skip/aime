@@ -16,6 +16,7 @@ import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { summarizeConversation } from "@/lib/memory/summarizer";
 import { useProjectStore } from "@/stores/project-store";
+import { useAppStore } from "@/stores/app-store";
 import { useAutoProject } from "@/hooks/use-auto-project";
 import { useScratchDir } from "@/hooks/use-scratch-dir";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
@@ -27,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import type { Message } from "@/stores/chat-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
+import { PlanSheet } from "@/components/shared/plan-sheet";
 import {
   Briefcase,
   ChevronDown,
@@ -39,10 +41,13 @@ import {
   PanelRight,
   FolderOpen,
   Globe,
+  ListChecks,
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { useElectron } from "@/hooks/use-electron";
+import { VoiceButton } from "@/components/shared/voice-button";
+import { EditorPicker } from "@/components/shared/editor-picker";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_FILES: string[] = [];
@@ -55,12 +60,62 @@ function truncateAtWordBoundary(text: string, maxLen: number): string {
   return lastSpace > maxLen * 0.5 ? truncated.substring(0, lastSpace) : truncated;
 }
 
-const CONTEXT_TOOLS = new Set(["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Bash"]);
-const ARTIFACT_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
+// Bash patterns that indicate file creation/modification (capture group 1 = output path)
+const BASH_WRITE_PATTERNS = [
+  />\s*(\S+)/,                          // echo "x" > file, cat > file
+  /tee\s+(?:-a\s+)?(\S+)/,             // tee file, tee -a file
+  /cp\s+\S+\s+(\S+)/,                  // cp src dest
+  /mv\s+\S+\s+(\S+)/,                  // mv src dest
+  /mkdir\s+(?:-p\s+)?(\S+)/,           // mkdir -p dir
+  /touch\s+(\S+)/,                      // touch file
+];
 
-function extractFilePath(input: Record<string, unknown>): string | null {
-  const raw = input.file_path || input.path || input.pattern || input.url || input.query;
-  return typeof raw === "string" ? raw : null;
+// Bash commands that are noisy / not worth tracking in sidebar
+const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|show)|cat\s|head\s|tail\s|wc\s|which\s|type\s|env|printenv|date|whoami|uname)/;
+
+// Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools)
+const BASH_ARTIFACT_EXT = /\b([\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
+
+function categorizeToolCall(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): { category: "context" | "artifact"; path: string } | null {
+  // Explicit artifact tools
+  if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
+    const raw = toolInput.file_path || toolInput.path || toolInput.notebook_path;
+    return typeof raw === "string" ? { category: "artifact", path: raw } : null;
+  }
+
+  // Explicit context tools
+  if (toolName === "Read" || toolName === "Glob" || toolName === "Grep" ||
+      toolName === "WebSearch" || toolName === "WebFetch") {
+    const raw = toolInput.file_path || toolInput.path || toolInput.pattern || toolInput.url || toolInput.query;
+    return typeof raw === "string" ? { category: "context", path: raw } : null;
+  }
+
+  // Bash — inspect command to decide
+  if (toolName === "Bash") {
+    const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+    if (!cmd) return null;
+
+    // Check if it's a file-creation command
+    for (const pat of BASH_WRITE_PATTERNS) {
+      const m = cmd.match(pat);
+      if (m?.[1]) {
+        const p = m[1].replace(/['"]/g, "");
+        return { category: "artifact", path: p };
+      }
+    }
+
+    // Skip noisy read/explore commands
+    if (BASH_NOISE.test(cmd)) return null;
+
+    // Other Bash commands — context with a short description of the command
+    const short = cmd.length > 60 ? cmd.substring(0, 57) + "..." : cmd;
+    return { category: "context", path: `bash: ${short}` };
+  }
+
+  return null;
 }
 
 function fileDisplayName(path: string) {
@@ -137,6 +192,7 @@ function SidebarPanel({
   folder,
   open,
   onToggle,
+  onContextClick,
   onArtifactClick,
   previewUrl,
   onPreviewClick,
@@ -146,6 +202,7 @@ function SidebarPanel({
   folder: string | null;
   open: boolean;
   onToggle: () => void;
+  onContextClick?: (path: string) => void;
   onArtifactClick?: (path: string) => void;
   previewUrl?: string | null;
   onPreviewClick?: () => void;
@@ -191,6 +248,7 @@ function SidebarPanel({
               icon={FileText}
               items={contextFiles}
               emptyText="Files read during this session will appear here."
+              onItemClick={onContextClick}
             />
 
             <SidebarCard
@@ -260,6 +318,10 @@ export function CoworkSurface() {
   const updateMessage = useCoworkStore((s) => s.updateMessage);
   const addContextFile = useCoworkStore((s) => s.addContextFile);
   const addArtifactFile = useCoworkStore((s) => s.addArtifactFile);
+  const planContent = useCoworkStore((s) => (chatId ? s.planContent[chatId] : undefined));
+  const planOpen = useCoworkStore((s) => s.planOpen);
+  const setPlanContent = useCoworkStore((s) => s.setPlanContent);
+  const setPlanOpen = useCoworkStore((s) => s.setPlanOpen);
   const startStreaming = useCoworkStore((s) => s.startStreaming);
   const stopStreaming = useCoworkStore((s) => s.stopStreaming);
   const setCurrentChat = useCoworkStore((s) => s.setCurrentChat);
@@ -276,6 +338,9 @@ export function CoworkSurface() {
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
   const disableBashTool = useSettingsStore((s) => s.disableBashTool);
   const { projectInstructions, projectKnowledge, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "cowork");
+  const allProjects = useProjectStore((s) => s.projects);
+  const assignToProject = useConversationStore((s) => s.assignToProject);
+  const setSidebarMode = useAppStore((s) => s.setSidebarMode);
   const scratchDir = useScratchDir(chatId);
   const { handleFolderSelected } = useAutoProject('cowork');
   const { showNotification } = useElectron();
@@ -334,19 +399,23 @@ export function CoworkSurface() {
             startTime: Date.now(),
           });
           // Categorize into sidebar panels
-          const filePath = extractFilePath(toolInput);
-          if (filePath && chatId) {
-            if (CONTEXT_TOOLS.has(toolName)) {
-              addContextFile(chatId, filePath);
-            } else if (ARTIFACT_TOOLS.has(toolName)) {
-              addArtifactFile(chatId, filePath);
+          const categorized = categorizeToolCall(toolName, toolInput);
+          if (categorized && chatId) {
+            if (categorized.category === "context") {
+              // Don't add to Context if this path is already in Artifacts
+              const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+              if (!currentArtifacts.includes(categorized.path)) {
+                addContextFile(chatId, categorized.path);
+              }
+            } else {
+              addArtifactFile(chatId, categorized.path);
               // Also register as project artifact
               if (currentProjectId) {
-                const fileName = filePath.split("/").pop() || filePath;
+                const fileName = categorized.path.split("/").pop() || categorized.path;
                 useProjectStore.getState().addArtifact(currentProjectId, {
                   id: crypto.randomUUID(),
                   name: fileName,
-                  path: filePath,
+                  path: categorized.path,
                   type: "file",
                   surface: "cowork",
                   conversationId: chatId,
@@ -354,6 +423,14 @@ export function CoworkSurface() {
                   updatedAt: Date.now(),
                 });
               }
+            }
+          }
+          // Detect plan file writes
+          if (toolName === "Write" && chatId) {
+            const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
+            if (filePath.includes(".claude/plans/")) {
+              const content = typeof toolInput.content === "string" ? toolInput.content : "";
+              if (content) setPlanContent(chatId, content);
             }
           }
           break;
@@ -369,6 +446,24 @@ export function CoworkSurface() {
           if (result && !event.is_error) {
             const detected = detectServerUrl(result);
             if (detected) setPreviewUrl(detected.url);
+          }
+          // Detect binary files mentioned in Bash output (e.g. python-pptx writing a .pptx)
+          if (result && !event.is_error && chatId) {
+            const allMsgs = useCoworkStore.getState().messages[chatId];
+            const lastMsg = allMsgs?.at(-1);
+            const matchingTc = lastMsg?.toolCalls?.find((tc) => tc.id === id);
+            if (matchingTc?.name === "Bash") {
+              const coworkFolder = useCoworkStore.getState().folder;
+              BASH_ARTIFACT_EXT.lastIndex = 0;
+              let m;
+              while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) {
+                let filePath = m[1];
+                if (!filePath.startsWith("/") && coworkFolder) {
+                  filePath = `${coworkFolder}/${filePath}`;
+                }
+                addArtifactFile(chatId, filePath);
+              }
+            }
           }
           break;
         }
@@ -404,6 +499,42 @@ export function CoworkSurface() {
     onDone: () => {
       completeRunningTools(chatId);
       stopStreaming(chatId);
+      const allMsgs = useCoworkStore.getState().messages[chatId];
+      const lastMsg = allMsgs?.at(-1);
+      // Inline plan detection: check last assistant message for plan heading
+      if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
+        setPlanContent(chatId, lastMsg.content);
+      }
+      // Detect binary artifacts mentioned in assistant text (e.g. "saved to presentation.pptx")
+      // Only scan if the conversation had Bash tool calls (avoids false positives)
+      if (chatId && allMsgs) {
+        const hasBashCalls = allMsgs.some(
+          (m) => m.role === "assistant" && m.toolCalls?.some((tc) => tc.name === "Bash"),
+        );
+        if (hasBashCalls) {
+          const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+          const coworkFolder = useCoworkStore.getState().folder;
+          for (const m of allMsgs) {
+            if (m.role === "assistant" && m.content) {
+              BASH_ARTIFACT_EXT.lastIndex = 0;
+              let match;
+              while ((match = BASH_ARTIFACT_EXT.exec(m.content)) !== null) {
+                let filePath = match[1];
+                // Skip obvious non-file mentions (e.g. "use .pptx format")
+                if (filePath.length < 3 || filePath.startsWith(".")) continue;
+                // Resolve relative paths against cowork folder
+                if (!filePath.startsWith("/") && coworkFolder) {
+                  filePath = `${coworkFolder}/${filePath}`;
+                }
+                if (!currentArtifacts.includes(filePath)) {
+                  addArtifactFile(chatId, filePath);
+                  currentArtifacts.push(filePath); // avoid duplicates in this loop
+                }
+              }
+            }
+          }
+        }
+      }
       if (!document.hasFocus()) {
         showNotification("Task complete", "Claude has finished working on your request.");
       }
@@ -525,6 +656,11 @@ export function CoworkSurface() {
     ]
   );
 
+  const handleVoiceTranscript = useCallback(
+    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
+    []
+  );
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -611,8 +747,25 @@ export function CoworkSurface() {
                     onWebSearchToggle={undefined as never}
                     webSearchEnabled={false}
                     hideWebSearch
+                    currentProjectId={currentProjectId}
+                    onAddToProject={(pid) => assignToProject(chatId, pid)}
+                    onNewProject={() => setSidebarMode("projects")}
+                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
                   />
+                  <VoiceButton onTranscript={handleVoiceTranscript} />
                   <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
+                  <EditorPicker folder={folder} />
+                  {planContent && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() => setPlanOpen(true)}
+                    >
+                      <ListChecks className="h-3.5 w-3.5" />
+                      Plan
+                    </Button>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
@@ -673,8 +826,25 @@ export function CoworkSurface() {
                         onFileSelect={handleFileAttach}
                         onWebSearchToggle={() => {}}
                         webSearchEnabled={false}
+                        currentProjectId={currentProjectId}
+                        onAddToProject={(pid) => assignToProject(chatId, pid)}
+                        onNewProject={() => setSidebarMode("projects")}
+                        projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
                       />
+                      <VoiceButton onTranscript={handleVoiceTranscript} />
                       <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
+                      <EditorPicker folder={folder} />
+                      {planContent && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+                          onClick={() => setPlanOpen(true)}
+                        >
+                          <ListChecks className="h-3.5 w-3.5" />
+                          Plan
+                        </Button>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <ModelSelector
@@ -712,7 +882,24 @@ export function CoworkSurface() {
             folder={folder}
             open={sidebarOpen}
             onToggle={() => setSidebarOpen((prev) => !prev)}
-            onArtifactClick={setPreviewPath}
+            onContextClick={(path) => {
+              // URLs open in browser; file paths open in the preview sheet
+              if (path.startsWith("http")) {
+                window.open(path, "_blank");
+              } else {
+                // Resolve relative paths against the working folder
+                const resolved = folder && !path.startsWith("/") ? `${folder}/${path}` : path;
+                setPreviewPath(resolved);
+              }
+            }}
+            onArtifactClick={(path) => {
+              // Resolve relative paths against the working folder
+              if (folder && !path.startsWith("/")) {
+                setPreviewPath(`${folder}/${path}`);
+              } else {
+                setPreviewPath(path);
+              }
+            }}
             previewUrl={previewUrl}
             onPreviewClick={() => setPreviewOpen(true)}
           />
@@ -733,6 +920,13 @@ export function CoworkSurface() {
         path={previewPath}
         open={!!previewPath}
         onClose={() => setPreviewPath(null)}
+      />
+
+      {/* Plan sheet */}
+      <PlanSheet
+        content={planContent}
+        open={planOpen}
+        onClose={() => setPlanOpen(false)}
       />
     </div>
   );

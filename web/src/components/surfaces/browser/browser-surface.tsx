@@ -10,22 +10,28 @@ import { useBrowserAgent } from "@/hooks/use-browser-agent";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { useProjectStore } from "@/stores/project-store";
+import { useAppStore } from "@/stores/app-store";
 import { useProjectContext } from "@/hooks/use-project-context";
+import { AttachmentMenu } from "@/components/shared/attachment-menu";
+import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { useHydrated } from "@/components/store-hydration";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Message } from "@/stores/chat-store";
-import type { WebviewRef } from "@/lib/browser-tools";
+import { ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import {
   getInspectorInjectionScript,
   getInspectorCleanupScript,
   getInspectorPollScript,
   getSelectionScript,
+  getSelectionListenerScript,
+  getSelectionCleanupScript,
   captureScreenshot,
   formatElementContext,
   type InspectorResult,
   type PendingContextItem,
 } from "@/lib/browser-interactions";
+import { VoiceButton } from "@/components/shared/voice-button";
 import {
   Globe,
   Plus,
@@ -42,6 +48,7 @@ import {
   Crosshair,
   Type,
   Camera,
+  MessageSquare,
 } from "lucide-react";
 
 const EMPTY_MESSAGES: Message[] = [];
@@ -54,7 +61,7 @@ function normalizeUrl(input: string): string {
   if (/^[a-z0-9]+([\-\.][a-z0-9]+)*\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) {
     return `https://${trimmed}`;
   }
-  return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 }
 
 const PHASE_LABELS = {
@@ -72,6 +79,12 @@ export function BrowserSurface() {
   const webviewNodeRef = useRef<(HTMLElement & WebviewRef) | null>(null);
   const resizingRef = useRef(false);
   const inspectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const consoleBufferRef = useRef(new ConsoleLogBuffer());
+  const [selectionInfo, setSelectionInfo] = useState<{ text: string; x: number; y: number } | null>(null);
+  // Decoupled from activeTab.url to prevent circular navigation:
+  // did-navigate → store update → src change → re-navigate → ERR_ABORTED
+  const [webviewSrc, setWebviewSrc] = useState("");
+  const prevActiveTabIdRef = useRef<string | null>(null);
 
   const hydrated = useHydrated();
   const addTab = useBrowserStore((s) => s.addTab);
@@ -111,9 +124,42 @@ export function BrowserSurface() {
   const allConversations = useConversationStore((s) => s.conversations);
 
   const { projectId: currentProjectId } = useProjectContext(chatId, "browser");
+  const allProjects = useProjectStore((s) => s.projects);
+  const assignToProject = useConversationStore((s) => s.assignToProject);
+  const setSidebarMode = useAppStore((s) => s.setSidebarMode);
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
   // ── Callback ref for webview event listeners ────────────────────────────
+  const CONSOLE_LEVEL_MAP: Record<number, string> = { 0: 'log', 1: 'info', 2: 'warn', 3: 'error' };
+
+  function handleConsoleMessage(e: Event & { level?: number; message?: string; line?: number; sourceId?: string }) {
+    const msg = e.message || '';
+
+    // Handle selection messages from injected script
+    if (msg.startsWith('__QUARRY_SELECTION__:')) {
+      try {
+        const payload = JSON.parse(msg.slice('__QUARRY_SELECTION__:'.length));
+        setSelectionInfo({ text: payload.text, x: payload.x, y: payload.bottom + 4 });
+      } catch { /* ignore parse errors */ }
+      return;
+    }
+    if (msg === '__QUARRY_SELECTION_CLEAR__') {
+      setSelectionInfo(null);
+      return;
+    }
+
+    const level = CONSOLE_LEVEL_MAP[e.level ?? 0] || 'log';
+    consoleBufferRef.current.push(level, msg, e.line ?? 0, e.sourceId || '');
+  }
+
+  function handleInjectSelectionListener() {
+    const wv = webviewNodeRef.current;
+    if (wv) {
+      setSelectionInfo(null);
+      wv.executeJavaScript(getSelectionListenerScript()).catch(() => {});
+    }
+  }
+
   const webviewCallbackRef = useCallback(
     (node: (HTMLElement & WebviewRef) | null) => {
       const prev = webviewNodeRef.current;
@@ -121,12 +167,18 @@ export function BrowserSurface() {
         prev.removeEventListener("did-navigate", handleNav);
         prev.removeEventListener("did-navigate-in-page", handleNav);
         prev.removeEventListener("page-title-updated", handleTitle);
+        prev.removeEventListener("console-message", handleConsoleMessage as EventListener);
+        prev.removeEventListener("did-finish-load", handleInjectSelectionListener);
+        prev.removeEventListener("did-navigate", handleInjectSelectionListener);
       }
       webviewNodeRef.current = node;
       if (node) {
         node.addEventListener("did-navigate", handleNav);
         node.addEventListener("did-navigate-in-page", handleNav);
         node.addEventListener("page-title-updated", handleTitle);
+        node.addEventListener("console-message", handleConsoleMessage as EventListener);
+        node.addEventListener("did-finish-load", handleInjectSelectionListener);
+        node.addEventListener("did-navigate", handleInjectSelectionListener);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,6 +188,8 @@ export function BrowserSurface() {
   function handleNav(e: Event & { url?: string }) {
     if (!e.url) return;
     setUrlInput(e.url);
+    // Update store for persistence/display, but NOT webviewSrc.
+    // This breaks the circular: store update → src change → re-navigate → ERR_ABORTED
     const state = useBrowserStore.getState();
     const cid = state.currentChatId;
     const tabId = cid ? state.activeTabIds[cid] : null;
@@ -165,10 +219,16 @@ export function BrowserSurface() {
     if (conv?.surface === "browser") setCurrentChat(activeConvId);
   }, [activeConvId, allConversations, setCurrentChat]);
 
-  // Sync URL input with active tab
+  // Sync webviewSrc when switching tabs (not on every URL update from did-navigate)
   useEffect(() => {
-    setUrlInput(activeTab?.url || "");
-  }, [activeTab?.url]);
+    if (activeTabId && activeTabId !== prevActiveTabIdRef.current) {
+      prevActiveTabIdRef.current = activeTabId;
+      if (activeTab?.url) {
+        setWebviewSrc(activeTab.url);
+        setUrlInput(activeTab.url);
+      }
+    }
+  }, [activeTabId, activeTab?.url]);
 
   // ── Inspector polling ─────────────────────────────────────────────────
   useEffect(() => {
@@ -263,12 +323,35 @@ export function BrowserSurface() {
     },
     apiKey: nibGatewayApiKey,
     memories: memoriesStr || undefined,
+    consoleBuffer: consoleBufferRef.current,
   });
+
+  // Ensure a browser conversation exists for tab management.
+  // Returns the chatId (creating one if needed).
+  const ensureBrowserConversation = useCallback((): string => {
+    let cid = useBrowserStore.getState().currentChatId;
+    if (!cid) {
+      cid = crypto.randomUUID();
+      addConversation({
+        id: cid,
+        title: "Browser",
+        surface: "browser",
+        lastMessage: "",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      setActiveConversation(cid);
+      setCurrentChat(cid);
+    }
+    return cid;
+  }, [addConversation, setActiveConversation, setCurrentChat]);
 
   const handleNavigate = useCallback(
     (url: string) => {
       const normalized = normalizeUrl(url);
       if (!normalized) return;
+      // Ensure conversation exists so addTab/updateTabUrl don't bail
+      ensureBrowserConversation();
       if (activeTabId) {
         updateTabUrl(activeTabId, normalized);
       } else {
@@ -280,6 +363,7 @@ export function BrowserSurface() {
         });
       }
       setUrlInput(normalized);
+      setWebviewSrc(normalized); // Intentional navigation — update the webview src
       // Track URL as project artifact
       if (currentProjectId && normalized) {
         try {
@@ -300,7 +384,7 @@ export function BrowserSurface() {
         }
       }
     },
-    [activeTabId, updateTabUrl, addTab, currentProjectId, chatId]
+    [activeTabId, updateTabUrl, addTab, currentProjectId, chatId, ensureBrowserConversation]
   );
 
   // ── Interaction handlers ──────────────────────────────────────────────
@@ -351,24 +435,28 @@ export function BrowserSurface() {
     }
   }, [addPendingContext]);
 
+  const handleSendSelection = useCallback(() => {
+    if (!selectionInfo) return;
+    const text = selectionInfo.text.trim();
+    addPendingContext({
+      id: crypto.randomUUID(),
+      type: "selection",
+      label: `"${text.substring(0, 40)}${text.length > 40 ? "..." : ""}"`,
+      content: text,
+      timestamp: Date.now(),
+    });
+    setSelectionInfo(null);
+    const wv = webviewNodeRef.current;
+    if (wv) {
+      wv.executeJavaScript("window.getSelection().removeAllRanges()").catch(() => {});
+    }
+  }, [selectionInfo, addPendingContext]);
+
   // ── Agent submit (with conversation creation fix) ─────────────────────
   const handleAgentSubmit = useCallback(
     async (text: string) => {
-      // Create conversation if none exists (mirrors chat-surface pattern)
-      let id = useBrowserStore.getState().currentChatId ?? "";
-      if (!id) {
-        id = crypto.randomUUID();
-        addConversation({
-          id,
-          title: text.substring(0, 50),
-          surface: "browser",
-          lastMessage: text,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-        setActiveConversation(id);
-        setCurrentChat(id);
-      }
+      // Ensure conversation exists (reuse shared helper)
+      const id = ensureBrowserConversation();
 
       addMessage(id, {
         id: crypto.randomUUID(),
@@ -396,6 +484,14 @@ export function BrowserSurface() {
       const context = [...useBrowserStore.getState().pendingContext];
       clearPendingContext();
 
+      // Check API key is available before making the request
+      const currentApiKey = useSettingsStore.getState().nibGatewayApiKey;
+      if (!currentApiKey) {
+        appendToLastAssistant(id, "No API key configured. Go to Settings > Connectors and add your nib AI Studio Gateway key.");
+        stopStreaming(id);
+        return;
+      }
+
       const wv = webviewNodeRef.current;
       if (!wv) {
         appendToLastAssistant(id, "No webview available. Navigate to a page first.");
@@ -405,7 +501,12 @@ export function BrowserSurface() {
 
       await runAgentLoop(text, model, wv, context.length > 0 ? context : undefined);
     },
-    [model, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, addConversation, setActiveConversation, setCurrentChat, clearPendingContext]
+    [model, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext]
+  );
+
+  const handleVoiceTranscript = useCallback(
+    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
+    []
   );
 
   // Resize handle
@@ -466,14 +567,15 @@ export function BrowserSurface() {
           variant="ghost"
           size="icon"
           className="h-6 w-6"
-          onClick={() =>
+          onClick={() => {
+            ensureBrowserConversation();
             addTab({
               id: crypto.randomUUID(),
               url: "",
               title: "New Tab",
               isActive: true,
-            })
-          }
+            });
+          }}
         >
           <Plus className="h-3 w-3" />
         </Button>
@@ -570,10 +672,10 @@ export function BrowserSurface() {
       <div className="flex flex-1 min-h-0">
         {/* Browser webview */}
         <div className={`flex-1 bg-white relative ${inspectorMode ? "ring-2 ring-blue-500 ring-inset" : ""}`}>
-          {activeTab?.url ? (
+          {webviewSrc ? (
             <webview
               ref={webviewCallbackRef as unknown as React.RefObject<never>}
-              src={activeTab.url}
+              src={webviewSrc}
               partition="persist:browser"
               useragent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
               allowpopups={"true" as unknown as boolean}
@@ -594,7 +696,7 @@ export function BrowserSurface() {
                 </p>
                 <div className="grid grid-cols-3 gap-3 max-w-xs mx-auto">
                   {[
-                    { name: "DuckDuckGo", url: "https://duckduckgo.com", logo: "https://duckduckgo.com/favicon.ico" },
+                    { name: "Google", url: "https://www.google.com", logo: "https://www.google.com/favicon.ico" },
                     { name: "GitHub", url: "https://github.com", logo: "https://github.githubassets.com/favicons/favicon-dark.svg" },
                     { name: "Miro", url: "https://miro.com", logo: "https://miro.com/favicon.ico" },
                     { name: "Confluence", url: "https://confluence.atlassian.com", logo: "https://www.google.com/s2/favicons?domain=confluence.atlassian.com&sz=64" },
@@ -630,6 +732,22 @@ export function BrowserSurface() {
               Inspector — click to capture, ESC to cancel
             </div>
           )}
+          {/* Floating "Send to Chat" button on text selection */}
+          {selectionInfo && (
+            <div
+              className="absolute z-20"
+              style={{ left: selectionInfo.x, top: selectionInfo.y }}
+            >
+              <Button
+                size="sm"
+                className="h-7 text-xs shadow-lg"
+                onClick={handleSendSelection}
+              >
+                <MessageSquare className="h-3 w-3 mr-1" />
+                Send to Chat
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Resize handle */}
@@ -658,6 +776,17 @@ export function BrowserSurface() {
               )}
             </div>
             <div className="flex flex-1 flex-col min-h-0">
+              {/* Continue in Surface handoff (when project is active) */}
+              {currentProjectId && !isStreaming && messages.length > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/50">
+                  <span className="text-xs text-muted-foreground">Continue in:</span>
+                  <ContinueInSurface
+                    currentSurface="browser"
+                    projectId={currentProjectId}
+                    conversationId={chatId}
+                  />
+                </div>
+              )}
               <MessageList messages={messages} className="text-xs" conversationId={chatId} />
 
               {/* Pending context display */}
@@ -702,6 +831,20 @@ export function BrowserSurface() {
                 </div>
               )}
 
+              {/* Attachment + project menu */}
+              <div className="flex items-center gap-1 px-3 py-1 border-t border-border/50">
+                <AttachmentMenu
+                  onFileSelect={() => {}}
+                  onWebSearchToggle={() => {}}
+                  webSearchEnabled={false}
+                  hideWebSearch
+                  currentProjectId={currentProjectId}
+                  onAddToProject={(pid) => assignToProject(chatId, pid)}
+                  onNewProject={() => setSidebarMode("projects")}
+                  projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                />
+              </div>
+
               <InputArea
                 value={inputValue}
                 onChange={setInputValue}
@@ -709,6 +852,7 @@ export function BrowserSurface() {
                 onAbort={abort}
                 isStreaming={isStreaming}
                 placeholder="Ask about this page..."
+                extraControls={<VoiceButton onTranscript={handleVoiceTranscript} />}
               />
             </div>
           </div>

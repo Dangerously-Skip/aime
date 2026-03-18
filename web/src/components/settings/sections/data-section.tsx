@@ -8,7 +8,7 @@ import { useCodeStore } from '@/stores/code-store'
 import { useBrowserStore } from '@/stores/browser-store'
 import { useConversationStore } from '@/stores/conversation-store'
 import { useSettingsStore } from '@/stores/settings-store'
-import { Download, Trash2, AlertTriangle } from 'lucide-react'
+import { Download, Trash2, AlertTriangle, RotateCcw } from 'lucide-react'
 
 interface CostBreakdown {
   input: number
@@ -168,6 +168,24 @@ export function DataSection() {
         </Button>
         <p className="text-xs text-muted-foreground mt-1">
           Download all conversations and settings as JSON
+        </p>
+      </div>
+
+      {/* Restart wizard */}
+      <div>
+        <Button
+          variant="outline"
+          onClick={() => {
+            useSettingsStore.getState().setOnboardingComplete(false)
+            useSettingsStore.getState().setOnboardingSkippedAt(null)
+            window.location.reload()
+          }}
+        >
+          <RotateCcw className="h-4 w-4 mr-2" />
+          Restart setup wizard
+        </Button>
+        <p className="text-xs text-muted-foreground mt-1">
+          Re-run the first-time setup to change your team or connect apps
         </p>
       </div>
 

@@ -5,6 +5,38 @@
  * The API never executes them; it only returns tool_use blocks that the client handles.
  */
 
+// ── Console log buffer ───────────────────────────────────────────────────────
+
+interface ConsoleLogEntry {
+  level: string;
+  message: string;
+  line: number;
+  sourceId: string;
+  timestamp: number;
+}
+
+const MAX_CONSOLE_BUFFER = 200;
+
+export class ConsoleLogBuffer {
+  private entries: ConsoleLogEntry[] = [];
+
+  push(level: string, message: string, line: number = 0, sourceId: string = '') {
+    this.entries.push({ level, message, line, sourceId, timestamp: Date.now() });
+    if (this.entries.length > MAX_CONSOLE_BUFFER) {
+      this.entries = this.entries.slice(-MAX_CONSOLE_BUFFER);
+    }
+  }
+
+  flush(): string {
+    if (this.entries.length === 0) return 'No console logs captured.';
+    const lines = this.entries.map(
+      (e) => `[${e.level.toUpperCase()}] ${e.message}${e.line > 0 ? ` (line ${e.line})` : ''}`
+    );
+    this.entries = [];
+    return lines.join('\n');
+  }
+}
+
 // ── Tool schemas (Anthropic format) ──────────────────────────────────────────
 
 export const BROWSER_TOOL_SCHEMAS = [
@@ -74,6 +106,76 @@ export const BROWSER_TOOL_SCHEMAS = [
     },
   },
   {
+    name: 'go_forward',
+    description: 'Go forward to the next page in browser history.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
+    name: 'hover',
+    description: 'Hover over an interactive element by its index number. Triggers mouseenter and mouseover events, useful for revealing tooltips, dropdown menus, or hover states.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        index: { type: 'number', description: 'The element index to hover over' },
+      },
+      required: ['index'],
+    },
+  },
+  {
+    name: 'drag',
+    description: 'Drag an element from one position to another. Uses HTML5 drag and drop events.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        startIndex: { type: 'number', description: 'The element index to drag from' },
+        endIndex: { type: 'number', description: 'The element index to drop onto' },
+      },
+      required: ['startIndex', 'endIndex'],
+    },
+  },
+  {
+    name: 'select_option',
+    description: 'Select an option in a <select> dropdown by value or visible text.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        index: { type: 'number', description: 'The element index of the <select> element' },
+        value: { type: 'string', description: 'The value or visible text of the option to select' },
+      },
+      required: ['index', 'value'],
+    },
+  },
+  {
+    name: 'press_key',
+    description: 'Press a keyboard key. Supports keys like Enter, Escape, Tab, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Backspace, Delete, Space, and single characters.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        key: { type: 'string', description: 'The key to press (e.g. "Enter", "Escape", "Tab", "a")' },
+      },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'snapshot',
+    description: 'Take an ARIA accessibility tree snapshot of the current page. Returns a structured tree of roles, labels, and states. Useful for understanding page structure beyond visual elements.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
+    name: 'get_console_logs',
+    description: 'Get buffered browser console log entries (log, info, warn, error). Returns and clears the buffer.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
     name: 'wait',
     description: 'Wait for a specified number of milliseconds (useful after navigation or actions that trigger loading).',
     input_schema: {
@@ -94,6 +196,92 @@ export const BROWSER_TOOL_SCHEMAS = [
     },
   },
 ] as const;
+
+// ── All browser tool names (for server-side interception) ────────────────────
+
+export const BROWSER_TOOL_NAMES: Set<string> = new Set(
+  BROWSER_TOOL_SCHEMAS.map((s) => s.name)
+);
+
+// ── ARIA snapshot script ─────────────────────────────────────────────────────
+// Injected into the webview to build an accessibility tree representation.
+
+const ARIA_SNAPSHOT_SCRIPT = `
+(function() {
+  const IMPLICIT_ROLES = {
+    A: 'link', BUTTON: 'button', H1: 'heading', H2: 'heading', H3: 'heading',
+    H4: 'heading', H5: 'heading', H6: 'heading', IMG: 'img', INPUT: 'textbox',
+    TEXTAREA: 'textbox', SELECT: 'combobox', TABLE: 'table', THEAD: 'rowgroup',
+    TBODY: 'rowgroup', TFOOT: 'rowgroup', TR: 'row', TH: 'columnheader',
+    TD: 'cell', UL: 'list', OL: 'list', LI: 'listitem', NAV: 'navigation',
+    MAIN: 'main', HEADER: 'banner', FOOTER: 'contentinfo', ASIDE: 'complementary',
+    SECTION: 'region', ARTICLE: 'article', FORM: 'form', DIALOG: 'dialog',
+    DETAILS: 'group', SUMMARY: 'button', PROGRESS: 'progressbar', METER: 'meter',
+  };
+
+  const MAX_DEPTH = 10;
+  const MAX_NODES = 500;
+  let nodeCount = 0;
+  const lines = [];
+
+  function getRole(el) {
+    return el.getAttribute('role') || IMPLICIT_ROLES[el.tagName] || null;
+  }
+
+  function getLabel(el) {
+    return el.getAttribute('aria-label')
+      || el.getAttribute('alt')
+      || el.getAttribute('title')
+      || (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? el.getAttribute('placeholder') : null)
+      || null;
+  }
+
+  function getStates(el) {
+    const states = [];
+    const expanded = el.getAttribute('aria-expanded');
+    if (expanded) states.push(expanded === 'true' ? 'expanded' : 'collapsed');
+    if (el.getAttribute('aria-checked') === 'true') states.push('checked');
+    if (el.getAttribute('aria-selected') === 'true') states.push('selected');
+    if (el.getAttribute('aria-disabled') === 'true' || el.disabled) states.push('disabled');
+    if (el.getAttribute('aria-required') === 'true' || el.required) states.push('required');
+    return states;
+  }
+
+  function walk(el, depth) {
+    if (nodeCount >= MAX_NODES || depth > MAX_DEPTH) return;
+    if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return;
+    const style = el.nodeType === 1 ? window.getComputedStyle(el) : null;
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) return;
+    const rect = el.nodeType === 1 ? el.getBoundingClientRect() : null;
+    if (rect && rect.width === 0 && rect.height === 0) return;
+
+    const role = el.nodeType === 1 ? getRole(el) : null;
+    if (role) {
+      nodeCount++;
+      const indent = '  '.repeat(depth);
+      let label = getLabel(el);
+      if (!label) {
+        const text = (el.textContent || '').trim();
+        if (text.length > 0 && text.length <= 80) label = text;
+      }
+      const states = getStates(el);
+      let line = indent + '[' + role + ']';
+      if (label) line += ' "' + label.substring(0, 80) + '"';
+      if (states.length > 0) line += ' (' + states.join(', ') + ')';
+      lines.push(line);
+    }
+
+    if (el.childNodes) {
+      for (const child of el.childNodes) {
+        if (child.nodeType === 1) walk(child, role ? depth + 1 : depth);
+      }
+    }
+  }
+
+  walk(document.body, 0);
+  return lines.join('\\n') || 'Empty page — no ARIA roles detected.';
+})()
+`;
 
 // ── DOM extraction script ────────────────────────────────────────────────────
 // Injected into the webview via executeJavaScript(). Returns a snapshot of
@@ -210,6 +398,7 @@ export async function executeToolInWebview(
   webview: WebviewRef,
   toolName: string,
   input: Record<string, unknown>,
+  consoleBuffer?: ConsoleLogBuffer,
 ): Promise<ToolResult> {
   switch (toolName) {
     case 'navigate': {
@@ -327,6 +516,143 @@ export async function executeToolInWebview(
       } catch (e) {
         return { success: false, message: `Go back failed: ${e instanceof Error ? e.message : String(e)}` };
       }
+    }
+
+    case 'go_forward': {
+      try {
+        webview.goForward();
+        await new Promise(r => setTimeout(r, 500));
+        return { success: true, message: 'Navigated forward' };
+      } catch (e) {
+        return { success: false, message: `Go forward failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+
+    case 'hover': {
+      const index = input.index as number;
+      try {
+        const result = await webview.executeJavaScript(`
+          (function() {
+            const el = document.querySelector('[data-agent-index="${index}"]');
+            if (!el) return { success: false, message: 'Element not found at index ${index}' };
+            const rect = el.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+            el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, clientX: cx, clientY: cy }));
+            el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: cx, clientY: cy }));
+            el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: cx, clientY: cy }));
+            return { success: true, message: 'Hovered element at index ${index}: ' + (el.textContent || '').trim().substring(0, 50) };
+          })()
+        `);
+        await new Promise(r => setTimeout(r, 300));
+        return result as ToolResult;
+      } catch (e) {
+        return { success: false, message: `Hover failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+
+    case 'drag': {
+      const startIndex = input.startIndex as number;
+      const endIndex = input.endIndex as number;
+      try {
+        const result = await webview.executeJavaScript(`
+          (function() {
+            const src = document.querySelector('[data-agent-index="${startIndex}"]');
+            const dst = document.querySelector('[data-agent-index="${endIndex}"]');
+            if (!src) return { success: false, message: 'Source element not found at index ${startIndex}' };
+            if (!dst) return { success: false, message: 'Target element not found at index ${endIndex}' };
+            const srcRect = src.getBoundingClientRect();
+            const dstRect = dst.getBoundingClientRect();
+            const dt = new DataTransfer();
+            src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, clientX: srcRect.left + srcRect.width/2, clientY: srcRect.top + srcRect.height/2, dataTransfer: dt }));
+            dst.dispatchEvent(new DragEvent('dragenter', { bubbles: true, clientX: dstRect.left + dstRect.width/2, clientY: dstRect.top + dstRect.height/2, dataTransfer: dt }));
+            dst.dispatchEvent(new DragEvent('dragover', { bubbles: true, clientX: dstRect.left + dstRect.width/2, clientY: dstRect.top + dstRect.height/2, dataTransfer: dt }));
+            dst.dispatchEvent(new DragEvent('drop', { bubbles: true, clientX: dstRect.left + dstRect.width/2, clientY: dstRect.top + dstRect.height/2, dataTransfer: dt }));
+            src.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+            return { success: true, message: 'Dragged element from index ${startIndex} to index ${endIndex}' };
+          })()
+        `);
+        await new Promise(r => setTimeout(r, 300));
+        return result as ToolResult;
+      } catch (e) {
+        return { success: false, message: `Drag failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+
+    case 'select_option': {
+      const index = input.index as number;
+      const value = input.value as string;
+      try {
+        const escapedValue = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const result = await webview.executeJavaScript(`
+          (function() {
+            const el = document.querySelector('[data-agent-index="${index}"]');
+            if (!el) return { success: false, message: 'Element not found at index ${index}' };
+            if (el.tagName !== 'SELECT') return { success: false, message: 'Element at index ${index} is not a <select>' };
+            // Try matching by value first, then by visible text
+            let found = false;
+            for (const opt of el.options) {
+              if (opt.value === '${escapedValue}' || opt.textContent.trim() === '${escapedValue}') {
+                el.value = opt.value;
+                found = true;
+                break;
+              }
+            }
+            if (!found) return { success: false, message: 'Option "${escapedValue}" not found in select' };
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return { success: true, message: 'Selected option "${escapedValue}" in element at index ${index}' };
+          })()
+        `);
+        await new Promise(r => setTimeout(r, 200));
+        return result as ToolResult;
+      } catch (e) {
+        return { success: false, message: `Select failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+
+    case 'press_key': {
+      const key = input.key as string;
+      try {
+        // Map common key names to their code values
+        const keyCodeMap: Record<string, number> = {
+          Enter: 13, Escape: 27, Tab: 9, Backspace: 8, Delete: 46,
+          ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39,
+          Space: 32, ' ': 32,
+        };
+        const keyCode = keyCodeMap[key] || key.charCodeAt(0);
+        const code = key.length === 1 ? `Key${key.toUpperCase()}` : key;
+        const escapedKey = key.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+        await webview.executeJavaScript(`
+          (function() {
+            const target = document.activeElement || document.body;
+            target.dispatchEvent(new KeyboardEvent('keydown', { key: '${escapedKey}', code: '${code}', keyCode: ${keyCode}, bubbles: true }));
+            target.dispatchEvent(new KeyboardEvent('keypress', { key: '${escapedKey}', code: '${code}', keyCode: ${keyCode}, bubbles: true }));
+            target.dispatchEvent(new KeyboardEvent('keyup', { key: '${escapedKey}', code: '${code}', keyCode: ${keyCode}, bubbles: true }));
+          })()
+        `);
+        await new Promise(r => setTimeout(r, 200));
+        return { success: true, message: `Pressed key: ${key}` };
+      } catch (e) {
+        return { success: false, message: `Key press failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+
+    case 'snapshot': {
+      try {
+        const tree = await webview.executeJavaScript(ARIA_SNAPSHOT_SCRIPT);
+        return { success: true, message: tree as string };
+      } catch (e) {
+        return { success: false, message: `Snapshot failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+
+    case 'get_console_logs': {
+      if (!consoleBuffer) {
+        return { success: true, message: 'Console log capture is not available.' };
+      }
+      return { success: true, message: consoleBuffer.flush() };
     }
 
     case 'wait': {

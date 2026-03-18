@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 
 export interface KnowledgeFile {
   id: string;
@@ -317,7 +318,7 @@ export const useProjectStore = create<ProjectStore>()(
     }),
     {
       name: 'nibcowork:projects',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       // Migrate on rehydration
       onRehydrateStorage: () => (state) => {

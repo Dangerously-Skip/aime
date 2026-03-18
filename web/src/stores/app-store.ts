@@ -2,11 +2,13 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 
 export type Surface = 'chat' | 'cowork' | 'code' | 'browser';
-export type Theme = 'light' | 'dark' | 'system';
+export type Theme = 'light' | 'dark' | 'system' | 'emma';
 
-export type SidebarMode = 'history' | 'projects';
+export type SidebarMode = 'history' | 'projects' | 'customize';
+export type CustomizeSection = 'landing' | 'skills' | 'connectors' | 'browse-connectors' | 'browse-marketplace';
 
 interface AppState {
   activeSurface: Surface;
@@ -15,6 +17,9 @@ interface AppState {
   settingsOpen: boolean;
   sidebarMode: SidebarMode;
   viewingProjectId: string | null;
+  customizeSection: CustomizeSection;
+  selectedSkillId: string | null;
+  selectedConnectorId: string | null;
 }
 
 interface AppActions {
@@ -26,6 +31,9 @@ interface AppActions {
   setSidebarMode: (mode: SidebarMode) => void;
   setViewingProjectId: (id: string | null) => void;
   navigateToProject: (projectId: string) => void;
+  setCustomizeSection: (section: CustomizeSection) => void;
+  setSelectedSkillId: (id: string | null) => void;
+  setSelectedConnectorId: (id: string | null) => void;
 }
 
 export type AppStore = AppState & AppActions;
@@ -40,6 +48,9 @@ export const useAppStore = create<AppStore>()(
       settingsOpen: false,
       sidebarMode: 'history',
       viewingProjectId: null,
+      customizeSection: 'landing',
+      selectedSkillId: null,
+      selectedConnectorId: null,
 
       // Actions
       setActiveSurface: (surface) => set({ activeSurface: surface }),
@@ -50,14 +61,17 @@ export const useAppStore = create<AppStore>()(
       setSidebarMode: (mode) => set({ sidebarMode: mode }),
       setViewingProjectId: (id) => set({ viewingProjectId: id }),
       navigateToProject: (projectId) => set({ sidebarMode: 'projects', viewingProjectId: projectId }),
+      setCustomizeSection: (section) => set({ customizeSection: section, selectedSkillId: null, selectedConnectorId: null }),
+      setSelectedSkillId: (id) => set({ selectedSkillId: id }),
+      setSelectedConnectorId: (id) => set({ selectedConnectorId: id }),
     }),
     {
       name: 'nibcowork:app',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       partialize: (state) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { viewingProjectId, ...rest } = state;
+        const { viewingProjectId, selectedSkillId, selectedConnectorId, ...rest } = state;
         return rest;
       },
     }

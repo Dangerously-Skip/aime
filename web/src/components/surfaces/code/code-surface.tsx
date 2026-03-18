@@ -19,9 +19,11 @@ import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { useProjectStore } from "@/stores/project-store";
+import { useAppStore } from "@/stores/app-store";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useAutoProject } from "@/hooks/use-auto-project";
 import { useElectron } from "@/hooks/use-electron";
+import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,10 +48,31 @@ import {
   Globe,
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
+import { PlanSheet } from "@/components/shared/plan-sheet";
+import { ThinkingSection } from "@/components/shared/thinking-section";
+import { VoiceButton } from "@/components/shared/voice-button";
+import { EditorPicker } from "@/components/shared/editor-picker";
 import { detectServerUrl, isWebAsset, findHtmlEntryPoint } from "@/lib/artifacts/server-detector";
+import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import type { Message } from "@/stores/chat-store";
+import { ListChecks } from "lucide-react";
 
 const EMPTY_MESSAGES: Message[] = [];
+
+const THINKING_WORDS = [
+  "Pondering",
+  "Wibbling",
+  "Puzzling",
+  "Noodling",
+  "Mulling",
+  "Conjuring",
+  "Ruminating",
+  "Percolating",
+  "Brainstorming",
+  "Scheming",
+  "Tinkering",
+  "Contemplating",
+];
 
 const DANGEROUS_PATTERNS = [
   /\brm\s+(-[rRf]+\s+|.*\/)/,
@@ -168,6 +191,19 @@ function TerminalOutput({
   onPreviewUrl?: (url: string) => void;
   endRef?: React.RefObject<HTMLDivElement | null>;
 }) {
+  const [thinkingWordIndex, setThinkingWordIndex] = useState(() =>
+    Math.floor(Math.random() * THINKING_WORDS.length)
+  );
+  const hasLoading = messages.some((m) => m.isLoading && !m.content);
+
+  useEffect(() => {
+    if (!hasLoading) return;
+    const interval = setInterval(() => {
+      setThinkingWordIndex((i) => (i + 1) % THINKING_WORDS.length);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [hasLoading]);
+
   return (
     <div className="space-y-3 text-sm">
       {messages.map((msg) => {
@@ -193,9 +229,7 @@ function TerminalOutput({
         return (
           <div key={msg.id} className="space-y-2">
             {msg.thinking && (
-              <div className="text-xs text-muted-foreground italic pl-3 border-l-2 border-muted">
-                {msg.thinking}
-              </div>
+              <ThinkingSection content={msg.thinking} isComplete={!msg.isStreaming} />
             )}
             {msg.toolCalls?.map((tool) => (
               <ToolCallCard
@@ -209,21 +243,26 @@ function TerminalOutput({
                 onPreviewUrl={onPreviewUrl}
               />
             ))}
-            {msg.content && (
+            {msg.content ? (
               <div className="pl-1">
                 <MarkdownRenderer content={msg.content} />
                 {msg.isStreaming && <StreamingCursor />}
               </div>
-            )}
+            ) : msg.isStreaming && !msg.isLoading ? (
+              <div className="pl-1"><StreamingCursor /></div>
+            ) : null}
             {msg.isLoading && !msg.content && (
-              <div className="pl-1">
+              <div className="flex items-center gap-2 py-2 pl-1">
                 <img
-                  src="/mascot.svg"
-                  alt="Thinking..."
-                  width={28}
-                  height={28}
-                  className="mascot-thinking inline-block"
+                  src="/starburst-logo.png"
+                  alt="Loading"
+                  width={22}
+                  height={22}
+                  className="loading-pulse"
                 />
+                <span className="text-sm text-muted-foreground thinking-word-fade">
+                  {THINKING_WORDS[thinkingWordIndex]}...
+                </span>
               </div>
             )}
           </div>
@@ -251,6 +290,12 @@ function CodeInput({
   attachments,
   onAttachmentAdd,
   onAttachmentRemove,
+  currentProjectId,
+  onAddToProject,
+  onNewProject,
+  projects,
+  onVoiceTranscript,
+  planButton,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -267,6 +312,12 @@ function CodeInput({
   attachments: AttachmentFile[];
   onAttachmentAdd: (file: AttachmentFile) => void;
   onAttachmentRemove: (index: number) => void;
+  currentProjectId?: string | null;
+  onAddToProject?: (projectId: string) => void;
+  onNewProject?: () => void;
+  projects?: { id: string; name: string; icon: string }[];
+  onVoiceTranscript?: (text: string) => void;
+  planButton?: React.ReactNode;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const PermIcon = getPermissionIcon(permissionMode);
@@ -338,7 +389,13 @@ function CodeInput({
             onFileSelect={onAttachmentAdd}
             onWebSearchToggle={() => {}}
             webSearchEnabled={false}
+            currentProjectId={currentProjectId}
+            onAddToProject={onAddToProject}
+            onNewProject={onNewProject}
+            projects={projects}
           />
+          {onVoiceTranscript && <VoiceButton onTranscript={onVoiceTranscript} />}
+          {planButton}
 
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -401,7 +458,7 @@ function CodeInput({
   );
 }
 
-/* ── Bottom bar: folder + connection ── */
+/* ── Bottom bar: folder + editor + connection ── */
 function BottomBar({
   folder,
   onFolderChange,
@@ -411,11 +468,14 @@ function BottomBar({
 }) {
   return (
     <div className="flex items-center justify-between px-1 pt-2">
-      <FolderPicker
-        folder={folder}
-        onFolderChange={onFolderChange}
-        className="border-0 bg-transparent shadow-none text-muted-foreground hover:text-foreground h-6 px-1"
-      />
+      <div className="flex items-center gap-1">
+        <FolderPicker
+          folder={folder}
+          onFolderChange={onFolderChange}
+          className="border-0 bg-transparent shadow-none text-muted-foreground hover:text-foreground h-6 px-1"
+        />
+        <EditorPicker folder={folder} />
+      </div>
       <ConnectionSelector />
     </div>
   );
@@ -441,6 +501,10 @@ export function CodeSurface() {
   const isStreaming = useCodeStore((s) => s.isStreaming);
   const folder = useCodeStore((s) => s.folder);
   const permissionMode = useCodeStore((s) => s.permissionMode);
+  const planContent = useCodeStore((s) => (chatId ? s.planContent[chatId] : undefined));
+  const planOpen = useCodeStore((s) => s.planOpen);
+  const setPlanContent = useCodeStore((s) => s.setPlanContent);
+  const setPlanOpen = useCodeStore((s) => s.setPlanOpen);
   const setModel = useCodeStore((s) => s.setModel);
   const setFolder = useCodeStore((s) => s.setFolder);
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode);
@@ -463,6 +527,8 @@ export function CodeSurface() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const previewWebviewRef = useRef<WebviewRef | null>(null);
+  const consoleBufferRef = useRef(new ConsoleLogBuffer());
   // Track HTML file paths written during this stream for preview detection
   const pendingHtmlFiles = useRef<string[]>([]);
   // Track non-HTML web asset files for entry point resolution
@@ -497,6 +563,9 @@ export function CodeSurface() {
   }, [folder]);
 
   const { projectId: currentProjectId } = useProjectContext(chatId, "code");
+  const allProjects = useProjectStore((s) => s.projects);
+  const assignToProject = useConversationStore((s) => s.assignToProject);
+  const setSidebarMode = useAppStore((s) => s.setSidebarMode);
   const { handleFolderSelected } = useAutoProject('code');
   const { isElectron, selectFolder: pickFolder, showNotification } = useElectron();
   const isEmpty = messages.length === 0;
@@ -642,6 +711,14 @@ export function CodeSurface() {
               }
             }
           }
+          // Detect plan file writes
+          if (toolName === "Write" && chatId) {
+            const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
+            if (filePath.includes(".claude/plans/")) {
+              const content = typeof toolInput.content === "string" ? toolInput.content : "";
+              if (content) setPlanContent(chatId, content);
+            }
+          }
           break;
         }
         case "tool_result": {
@@ -654,6 +731,52 @@ export function CodeSurface() {
           if (toolResult && !event.is_error) {
             const detected = detectServerUrl(toolResult);
             if (detected) setPreviewUrl(detected.url);
+          }
+          break;
+        }
+        case "browser_tool_use": {
+          const browserToolId = event.toolUseId as string;
+          const browserToolName = event.name as string;
+          const browserToolInput = (event.input as Record<string, unknown>) || {};
+
+          // Show tool call in UI
+          addToolCall(chatId, {
+            id: browserToolId,
+            name: browserToolName,
+            input: browserToolInput,
+            status: "running",
+            startTime: Date.now(),
+          });
+
+          // Execute in preview webview and POST result back (async, non-blocking)
+          const wv = previewWebviewRef.current;
+          if (!wv) {
+            const errOutput = 'Preview panel is not open. Write an HTML file or start a dev server first.';
+            updateToolResult(chatId, browserToolId, errOutput, true);
+            fetch('/api/chat/browser-tool-result', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ toolUseId: browserToolId, output: errOutput, isError: true }),
+            }).catch((err) => console.error('[CodeSurface] Failed to POST browser tool result:', err));
+          } else {
+            executeToolInWebview(wv, browserToolName, browserToolInput, consoleBufferRef.current)
+              .then((browserResult) => {
+                updateToolResult(chatId, browserToolId, browserResult.message, !browserResult.success);
+                return fetch('/api/chat/browser-tool-result', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ toolUseId: browserToolId, output: browserResult.message, isError: !browserResult.success }),
+                });
+              })
+              .catch((err) => {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                updateToolResult(chatId, browserToolId, `Browser tool error: ${errMsg}`, true);
+                fetch('/api/chat/browser-tool-result', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ toolUseId: browserToolId, output: `Browser tool error: ${errMsg}`, isError: true }),
+                }).catch(() => {});
+              });
           }
           break;
         }
@@ -698,6 +821,12 @@ export function CodeSurface() {
       }
       stopStreaming(chatId);
       setSessionStatus("idle");
+      // Inline plan detection: check last assistant message for plan heading
+      const allMsgs = useCodeStore.getState().messages[chatId];
+      const lastMsg = allMsgs?.at(-1);
+      if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
+        setPlanContent(chatId, lastMsg.content);
+      }
       if (!document.hasFocus()) {
         showNotification("Task complete", "Claude has finished working on your request.");
       }
@@ -762,9 +891,11 @@ export function CodeSurface() {
       const priorMessages = useCodeStore.getState().messages[id] || [];
       const history = stripMessagesForHistory(priorMessages.slice(0, -2));
 
-      // Retrieve relevant memories
+      // Retrieve relevant memories — scope to current project so memories from
+      // other folders don't leak into the conversation context.
       const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
         query: trimmed,
+        projectId: useConversationStore.getState().conversations.find((c) => c.id === id)?.projectId ?? null,
       });
       const memoriesStr = formatMemoriesForPrompt(relevantMemories);
       relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
@@ -797,6 +928,23 @@ export function CodeSurface() {
     ]
   );
 
+  const handleVoiceTranscript = useCallback(
+    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
+    []
+  );
+
+  const planButton = planContent ? (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+      onClick={() => setPlanOpen(true)}
+    >
+      <ListChecks className="h-3.5 w-3.5" />
+      Plan
+    </Button>
+  ) : null;
+
   return (
     <div className="relative flex h-full flex-col bg-background" {...dropZoneProps}>
       <DropOverlay visible={isDragging} />
@@ -824,6 +972,12 @@ export function CodeSurface() {
                   attachments={attachments}
                   onAttachmentAdd={handleAttachmentAdd}
                   onAttachmentRemove={handleAttachmentRemove}
+                  currentProjectId={currentProjectId}
+                  onAddToProject={(pid) => assignToProject(chatId, pid)}
+                  onNewProject={() => setSidebarMode("projects")}
+                  projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                  onVoiceTranscript={handleVoiceTranscript}
+                  planButton={planButton}
                 />
                 <BottomBar folder={folder} onFolderChange={handleFolderChange} />
               </>
@@ -846,6 +1000,18 @@ export function CodeSurface() {
       ) : (
         /* ── Active state: messages + bottom input ── */
         <>
+          {/* Continue in Surface handoff (when project is active) */}
+          {currentProjectId && !isStreaming && messages.length > 0 && (
+            <div className="flex items-center gap-2 px-6 py-1.5 border-b border-border/50">
+              <span className="text-xs text-muted-foreground">Continue in:</span>
+              <ContinueInSurface
+                currentSurface="code"
+                projectId={currentProjectId}
+                conversationId={chatId}
+              />
+            </div>
+          )}
+
           {/* Preview chip header */}
           {previewUrl && (
             <div className="flex items-center gap-2 px-6 py-1.5 border-b border-border/50">
@@ -915,6 +1081,12 @@ export function CodeSurface() {
                     attachments={attachments}
                     onAttachmentAdd={handleAttachmentAdd}
                     onAttachmentRemove={handleAttachmentRemove}
+                    currentProjectId={currentProjectId}
+                    onAddToProject={(pid) => assignToProject(chatId, pid)}
+                    onNewProject={() => setSidebarMode("projects")}
+                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                    onVoiceTranscript={handleVoiceTranscript}
+                    planButton={planButton}
                   />
                   <BottomBar folder={folder} onFolderChange={handleFolderChange} />
                 </div>
@@ -928,11 +1100,20 @@ export function CodeSurface() {
                 open={previewOpen}
                 onClose={() => setPreviewOpen(false)}
                 refreshKey={refreshKey}
+                onWebviewReady={(ref) => { previewWebviewRef.current = ref as WebviewRef | null; }}
+                onConsoleMessage={(level, message) => { consoleBufferRef.current.push(level, message); }}
               />
             )}
           </div>
         </>
       )}
+
+      {/* Plan sheet */}
+      <PlanSheet
+        content={planContent}
+        open={planOpen}
+        onClose={() => setPlanOpen(false)}
+      />
     </div>
   );
 }
