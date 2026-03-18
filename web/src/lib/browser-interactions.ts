@@ -120,6 +120,56 @@ export function getSelectionScript(): string {
   return `window.getSelection().toString()`;
 }
 
+// ── Selection listener (injected into webview) ───────────────────────────────
+
+export function getSelectionListenerScript(): string {
+  return `
+(function() {
+  if (window.__quarrySelectionActive) return;
+  window.__quarrySelectionActive = true;
+
+  function onMouseUp() {
+    setTimeout(function() {
+      var sel = window.getSelection();
+      var text = sel ? sel.toString().trim() : '';
+      if (text.length > 0) {
+        var range = sel.getRangeAt(0);
+        var rect = range.getBoundingClientRect();
+        console.log('__QUARRY_SELECTION__:' + JSON.stringify({
+          text: text,
+          x: rect.x,
+          y: rect.y,
+          bottom: rect.bottom
+        }));
+      }
+    }, 10);
+  }
+
+  function onMouseDown() {
+    console.log('__QUARRY_SELECTION_CLEAR__');
+  }
+
+  window.__quarrySelectionCleanup = function() {
+    document.removeEventListener('mouseup', onMouseUp);
+    document.removeEventListener('mousedown', onMouseDown);
+    window.__quarrySelectionActive = false;
+    delete window.__quarrySelectionCleanup;
+  };
+
+  document.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('mousedown', onMouseDown);
+})()`;
+}
+
+export function getSelectionCleanupScript(): string {
+  return `
+(function() {
+  if (window.__quarrySelectionCleanup) {
+    window.__quarrySelectionCleanup();
+  }
+})()`;
+}
+
 // ── Screenshot ───────────────────────────────────────────────────────────────
 
 export async function captureScreenshot(webview: WebviewRef): Promise<string> {

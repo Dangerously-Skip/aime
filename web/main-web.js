@@ -2,9 +2,167 @@
  * Electron main process for the Next.js web version.
  * Opens a single BrowserWindow pointing at localhost:3000.
  */
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require("electron");
 const os = require("os");
 const path = require("path");
+
+// --- Auto Updater ---
+// Only active in packaged builds; disabled in dev to avoid errors.
+let autoUpdater = null;
+const isDev = !app.isPackaged;
+
+if (!isDev) {
+  try {
+    autoUpdater = require("electron-updater").autoUpdater;
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+  } catch (e) {
+    console.warn("electron-updater not available:", e.message);
+  }
+}
+
+// Update menu state — mirrors Claude Desktop UX
+let updateMenuState = "idle"; // idle | checking | available | downloading | ready | error
+let updateStatusLabel = null; // e.g. "Last checked: 2 minutes ago" or error message
+let updateCheckMenuItem = null;
+let updateStatusMenuItem = null;
+
+function buildAppMenu() {
+  const isMac = process.platform === "darwin";
+
+  const checkLabel = {
+    idle: "Check for Updates…",
+    checking: "Checking for Updates…",
+    available: "Downloading Update…",
+    downloading: "Downloading Update…",
+    ready: "Restart to Install Update",
+    error: "Check for Updates…",
+  }[updateMenuState];
+
+  const template = [
+    // macOS app menu
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: "about" },
+              { type: "separator" },
+              {
+                label: "Settings…",
+                accelerator: "CmdOrCtrl+,",
+                click: () => {
+                  if (mainWindow) mainWindow.webContents.send("open-settings");
+                },
+              },
+              { type: "separator" },
+              {
+                label: checkLabel,
+                enabled: updateMenuState === "idle" || updateMenuState === "error" || updateMenuState === "ready",
+                click: () => {
+                  if (updateMenuState === "ready" && autoUpdater) {
+                    autoUpdater.quitAndInstall();
+                  } else {
+                    checkForUpdates(true);
+                  }
+                },
+              },
+              ...(updateStatusLabel
+                ? [{ label: updateStatusLabel, enabled: false }]
+                : []),
+              { type: "separator" },
+              { role: "services" },
+              { type: "separator" },
+              { role: "hide" },
+              { role: "hideOthers" },
+              { role: "unhide" },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          },
+        ]
+      : []),
+    {
+      label: "File",
+      submenu: [isMac ? { role: "close" } : { role: "quit" }],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        ...(isMac
+          ? [
+              { role: "pasteAndMatchStyle" },
+              { role: "delete" },
+              { role: "selectAll" },
+            ]
+          : [{ role: "delete" }, { type: "separator" }, { role: "selectAll" }]),
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        ...(isMac
+          ? [{ type: "separator" }, { role: "front" }]
+          : [{ role: "close" }]),
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
+function setUpdateState(state, statusLabel = null) {
+  updateMenuState = state;
+  updateStatusLabel = statusLabel;
+  buildAppMenu();
+  // Notify renderer so it can show in-app banners if needed
+  if (mainWindow) {
+    mainWindow.webContents.send("update-state", { state, statusLabel });
+  }
+}
+
+function checkForUpdates(manual = false) {
+  if (isDev || !autoUpdater) {
+    if (manual) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "Updates",
+        message: "Auto-updates are only available in the packaged app.",
+        detail: "Run `npm run dist` to build a distributable version.",
+        buttons: ["OK"],
+      });
+    }
+    return;
+  }
+  setUpdateState("checking");
+  autoUpdater.checkForUpdates().catch((err) => {
+    const msg = `Last update attempt failed: ${err.message}`;
+    setUpdateState("error", msg);
+  });
+}
 
 // Suppress GUEST_VIEW_MANAGER_CALL errors — these are benign Electron internal
 // webview navigation failures (e.g. Google CAPTCHA redirects) that get logged
@@ -48,7 +206,53 @@ function createWindow() {
   });
 }
 
+// Auto-updater event handlers
+if (autoUpdater) {
+  autoUpdater.on("checking-for-update", () => {
+    setUpdateState("checking");
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    setUpdateState("available", `Downloading v${info.version}…`);
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    setUpdateState("idle", `Last checked: ${now}`);
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    const pct = Math.round(progress.percent);
+    setUpdateState("downloading", `Downloading update… ${pct}%`);
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    setUpdateState("ready", `v${info.version} ready — restart to install`);
+    // Show native dialog offering to restart now
+    dialog
+      .showMessageBox(mainWindow, {
+        type: "info",
+        title: "Update Ready",
+        message: `Quarry ${info.version} is ready to install`,
+        detail: "Restart now to apply the update, or install it the next time you quit.",
+        buttons: ["Restart Now", "Later"],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall();
+      });
+  });
+
+  autoUpdater.on("error", (err) => {
+    setUpdateState("error", `Last update attempt failed`);
+    console.error("Auto-updater error:", err);
+  });
+}
+
 app.whenReady().then(() => {
+  // Build the app menu (includes "Check for Updates…")
+  buildAppMenu();
+
   // Set dock icon on macOS
   if (process.platform === "darwin" && app.dock) {
     app.dock.setIcon(path.join(__dirname, "public", "app-icon.png"));
@@ -101,6 +305,9 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+
+  // Check for updates 3s after launch (gives window time to finish loading)
+  setTimeout(() => checkForUpdates(false), 3000);
 });
 
 app.on("window-all-closed", () => {
@@ -139,7 +346,7 @@ ipcMain.handle("read-file", async (_event, filePath) => {
   const stats = fs.statSync(filePath);
   const ext = path.extname(filePath).toLowerCase();
   const imageExts = [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"];
-  const binaryExts = [...imageExts, ".pdf", ".xlsx", ".docx"];
+  const binaryExts = [...imageExts, ".pdf", ".xlsx", ".xls", ".docx", ".doc", ".pptx", ".ppt"];
   const isBinary = binaryExts.includes(ext);
 
   return {
@@ -179,6 +386,11 @@ ipcMain.handle("ensure-dir", async (_event, dirPath) => {
 ipcMain.handle("file-exists", async (_event, filePath) => {
   const fs = require("fs");
   return fs.existsSync(filePath);
+});
+
+ipcMain.on("check-for-updates", () => checkForUpdates(true));
+ipcMain.on("install-update", () => {
+  if (autoUpdater) autoUpdater.quitAndInstall();
 });
 
 ipcMain.handle("show-notification", async (_event, title, body) => {
@@ -231,5 +443,56 @@ ipcMain.handle("open-auth-window", async (_event, url) => {
           .catch(() => authWindow.close());
       });
     }
+  });
+});
+
+// Generic OAuth connector auth window — intercepts the callback redirect,
+// extracts the code/state/error from the URL, and returns them directly
+// to the renderer without needing a running localhost server.
+ipcMain.handle("open-connector-auth-window", async (_event, url, callbackPath) => {
+  return new Promise((resolve, reject) => {
+    const authWindow = new BrowserWindow({
+      width: 600,
+      height: 700,
+      parent: mainWindow,
+      modal: false,
+      title: "Connect Account",
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+
+    let resolved = false;
+
+    // Intercept all navigation — check if it's heading to our callback path
+    const checkForCallback = (navUrl) => {
+      if (resolved) return;
+      try {
+        const parsed = new URL(navUrl);
+        if (parsed.pathname === callbackPath) {
+          resolved = true;
+          const code = parsed.searchParams.get("code");
+          const state = parsed.searchParams.get("state");
+          const error = parsed.searchParams.get("error");
+          const errorDescription = parsed.searchParams.get("error_description");
+          authWindow.close();
+          resolve({ code, state, error: error || errorDescription || null });
+        }
+      } catch {
+        // Not a valid URL, ignore
+      }
+    };
+
+    authWindow.webContents.on("will-navigate", (_e, navUrl) => checkForCallback(navUrl));
+    authWindow.webContents.on("will-redirect", (_e, navUrl) => checkForCallback(navUrl));
+
+    authWindow.on("closed", () => {
+      if (!resolved) {
+        resolve({ code: null, state: null, error: "canceled" });
+      }
+    });
+
+    authWindow.loadURL(url);
   });
 });

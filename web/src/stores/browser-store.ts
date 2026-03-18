@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import type { PendingContextItem } from '@/lib/browser-interactions';
@@ -270,7 +271,7 @@ export const useBrowserStore = create<BrowserStore>()(
     }),
     {
       name: 'nibcowork:browser',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
         model: state.model,

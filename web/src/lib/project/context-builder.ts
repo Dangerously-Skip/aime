@@ -1,7 +1,9 @@
-import { useProjectStore, type Project, type ProjectArtifact } from '@/stores/project-store';
+import { type Project, type ProjectArtifact } from '@/stores/project-store';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useChatStore } from '@/stores/chat-store';
 import { useCoworkStore } from '@/stores/cowork-store';
+import { useCodeStore } from '@/stores/code-store';
+import { useBrowserStore } from '@/stores/browser-store';
 
 /**
  * Get a surface-specific store for reading messages.
@@ -12,6 +14,10 @@ function getMessagesForConversation(conversationId: string, surface: string): Ar
       return useChatStore.getState().messages[conversationId] ?? [];
     case 'cowork':
       return useCoworkStore.getState().messages[conversationId] ?? [];
+    case 'code':
+      return useCodeStore.getState().messages[conversationId] ?? [];
+    case 'browser':
+      return useBrowserStore.getState().messages[conversationId] ?? [];
     default:
       return [];
   }
@@ -43,8 +49,11 @@ function summarizeConversation(messages: Array<{ role: string; content: string }
 /**
  * Build cross-surface project context for injection into system prompts.
  *
- * Gathers summaries from conversations on OTHER surfaces (up to 5 most recent),
- * lists all artifacts, and returns formatted XML string.
+ * Gathers project metadata, summaries from conversations on OTHER surfaces
+ * (up to 5 most recent), lists all artifacts, and returns formatted XML string.
+ *
+ * Uses conversation.projectId as primary lookup (reliable source of truth),
+ * falls back to project.conversationIds for any not found that way.
  */
 export function buildProjectContext(
   project: Project,
@@ -53,29 +62,68 @@ export function buildProjectContext(
 ): string {
   const parts: string[] = [];
 
-  // Cross-surface conversation summaries
-  const summaries: string[] = [];
-  const conversations = useConversationStore.getState().conversations;
+  // Project identity — always include so the AI knows what project this is
+  const metaParts: string[] = [];
+  metaParts.push(`Name: ${project.name}`);
+  if (project.description) {
+    metaParts.push(`Description: ${project.description}`);
+  }
+  if (project.customInstructions) {
+    metaParts.push(`Instructions: ${project.customInstructions}`);
+  }
+  if (project.folder) {
+    metaParts.push(`Working folder: ${project.folder}`);
+  }
+  if (project.urls && project.urls.length > 0) {
+    metaParts.push(`URLs: ${project.urls.join(', ')}`);
+  }
+  parts.push(`<project-info>\n${metaParts.join('\n')}\n</project-info>`);
 
-  for (const [surface, convIds] of Object.entries(project.conversationIds)) {
-    if (surface === currentSurface) continue; // Skip current surface
-    // Get the most recent conversations from other surfaces
-    const recentConvIds = convIds.slice(-3);
-    for (const convId of recentConvIds) {
-      if (convId === currentConversationId) continue;
-      const conv = conversations.find((c) => c.id === convId);
-      if (!conv) continue;
-      const messages = getMessagesForConversation(convId, surface);
-      if (messages.length === 0) continue;
-      const summary = summarizeConversation(messages);
-      if (summary) {
-        summaries.push(`[From ${surface.charAt(0).toUpperCase() + surface.slice(1)}]: ${summary}`);
+  // Knowledge files summary
+  if (project.knowledgeFiles.length > 0) {
+    const fileLines = project.knowledgeFiles.map((f) => `- ${f.name} (${f.type}, ${(f.size / 1024).toFixed(1)}KB)`);
+    parts.push(`<project-files>\n${fileLines.join('\n')}\n</project-files>`);
+  }
+
+  // Cross-surface conversation summaries
+  // Primary: find conversations linked via conversation.projectId
+  const allConversations = useConversationStore.getState().conversations;
+  const projectConversations = allConversations.filter(
+    (c) => c.projectId === project.id && c.id !== currentConversationId
+  );
+
+  // Also check project.conversationIds for any not found via projectId
+  const foundIds = new Set(projectConversations.map((c) => c.id));
+  for (const convIds of Object.values(project.conversationIds ?? {})) {
+    for (const convId of convIds) {
+      if (convId === currentConversationId || foundIds.has(convId)) continue;
+      const conv = allConversations.find((c) => c.id === convId);
+      if (conv) {
+        projectConversations.push(conv);
+        foundIds.add(convId);
       }
     }
   }
 
+  const summaries: string[] = [];
+  // Sort by most recent first, take up to 8
+  const sorted = projectConversations
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 8);
+
+  for (const conv of sorted) {
+    const messages = getMessagesForConversation(conv.id, conv.surface);
+    if (messages.length === 0) continue;
+    const summary = summarizeConversation(messages);
+    if (summary) {
+      const surfaceLabel = conv.surface.charAt(0).toUpperCase() + conv.surface.slice(1);
+      const titlePart = conv.title ? ` "${conv.title}"` : '';
+      summaries.push(`[${surfaceLabel}${titlePart}]: ${summary}`);
+    }
+  }
+
   if (summaries.length > 0) {
-    parts.push(`<cross-surface-summaries>\n${summaries.slice(0, 5).join('\n')}\n</cross-surface-summaries>`);
+    parts.push(`<cross-surface-summaries>\n${summaries.join('\n')}\n</cross-surface-summaries>`);
   }
 
   // Project artifacts
@@ -87,8 +135,6 @@ export function buildProjectContext(
     });
     parts.push(`<project-artifacts>\n${artifactLines.join('\n')}\n</project-artifacts>`);
   }
-
-  if (parts.length === 0) return '';
 
   return `<project-context>\n${parts.join('\n\n')}\n</project-context>`;
 }

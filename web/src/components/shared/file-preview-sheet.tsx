@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Sheet,
   SheetContent,
@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ExternalLink, FileText, Loader2 } from "lucide-react";
+import { ExternalLink, FileText, GripVertical, Loader2, X } from "lucide-react";
+import { getRenderer, UNPRINTABLE_BINARY_EXTS } from "./file-renderers";
 
 interface FileData {
   name: string;
@@ -26,50 +27,6 @@ interface FilePreviewSheetProps {
   open: boolean;
   onClose: () => void;
 }
-
-const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"]);
-
-const EXT_TO_LANG: Record<string, string> = {
-  ".js": "javascript",
-  ".jsx": "javascript",
-  ".ts": "typescript",
-  ".tsx": "typescript",
-  ".py": "python",
-  ".rb": "ruby",
-  ".go": "go",
-  ".rs": "rust",
-  ".java": "java",
-  ".c": "c",
-  ".cpp": "cpp",
-  ".h": "c",
-  ".css": "css",
-  ".scss": "scss",
-  ".html": "html",
-  ".xml": "xml",
-  ".json": "json",
-  ".yaml": "yaml",
-  ".yml": "yaml",
-  ".toml": "toml",
-  ".md": "markdown",
-  ".sql": "sql",
-  ".sh": "bash",
-  ".bash": "bash",
-  ".zsh": "bash",
-  ".dockerfile": "dockerfile",
-  ".graphql": "graphql",
-  ".swift": "swift",
-  ".kt": "kotlin",
-};
-
-const EXT_TO_MIME: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".webp": "image/webp",
-  ".ico": "image/x-icon",
-};
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -89,15 +46,31 @@ function openExternally(path: string) {
   }
 }
 
+const MIN_WIDTH = 320;
+const MAX_WIDTH = 1200;
+const DEFAULT_WIDTH = 600;
+
 export function FilePreviewSheet({ path, open, onClose }: FilePreviewSheetProps) {
   const [fileData, setFileData] = useState<FileData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const resizingRef = useRef(false);
 
   useEffect(() => {
     if (!open || !path) {
       setFileData(null);
       setError(null);
+      return;
+    }
+
+    const pathExt = `.${path.split(".").pop()?.toLowerCase() || ""}`;
+
+    // Only skip reading for truly un-renderable binary formats
+    if (UNPRINTABLE_BINARY_EXTS.has(pathExt)) {
+      setFileData(null);
+      setError(null);
+      setLoading(false);
       return;
     }
 
@@ -126,22 +99,64 @@ export function FilePreviewSheet({ path, open, onClose }: FilePreviewSheetProps)
     return () => { cancelled = true; };
   }, [open, path]);
 
-  const isImage = fileData && IMAGE_EXTS.has(fileData.ext);
-  const isPdf = fileData?.ext === ".pdf";
-  const lang = fileData ? EXT_TO_LANG[fileData.ext] : null;
+  // Drag-resize handler
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    resizingRef.current = true;
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const newWidth = window.innerWidth - ev.clientX;
+      setWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth)));
+    };
+    const handleMouseUp = () => {
+      resizingRef.current = false;
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  }, []);
+
+  const ext = fileData?.ext || (path ? `.${path.split(".").pop()?.toLowerCase()}` : "");
+  const isUnprintable = UNPRINTABLE_BINARY_EXTS.has(ext);
+  const Renderer = getRenderer(ext);
 
   return (
     <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent
         side="right"
-        className="w-full sm:max-w-xl md:max-w-2xl overflow-hidden flex flex-col"
+        showCloseButton={false}
+        className="overflow-hidden flex flex-col p-0"
+        style={{ width, maxWidth: MAX_WIDTH }}
       >
-        <SheetHeader className="shrink-0">
-          <div className="flex items-center gap-2 pr-8">
+        {/* Drag-resize handle on left edge */}
+        <div
+          onMouseDown={handleResizeStart}
+          className="absolute inset-y-0 left-0 w-1.5 cursor-col-resize bg-transparent hover:bg-primary/30 transition-colors z-10 flex items-center justify-center"
+        >
+          <GripVertical className="h-5 w-5 text-muted-foreground/0 hover:text-muted-foreground transition-colors" />
+        </div>
+
+        <SheetHeader className="shrink-0 pl-5 pr-4 pt-4 pb-2">
+          <div className="flex items-center gap-2">
             <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-            <SheetTitle className="truncate text-sm">
+            <SheetTitle className="truncate text-sm flex-1">
               {fileData?.name || path?.split("/").pop() || "File Preview"}
             </SheetTitle>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </Button>
           </div>
           <SheetDescription className="flex items-center gap-2 flex-wrap">
             {fileData && (
@@ -172,7 +187,7 @@ export function FilePreviewSheet({ path, open, onClose }: FilePreviewSheetProps)
         </SheetHeader>
 
         {/* Body */}
-        <div className="flex-1 overflow-auto min-h-0 mt-2">
+        <div className="flex-1 overflow-auto min-h-0 px-5 pb-4">
           {loading && (
             <div className="flex items-center justify-center h-full">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -191,45 +206,28 @@ export function FilePreviewSheet({ path, open, onClose }: FilePreviewSheetProps)
             </div>
           )}
 
+          {/* Unprintable binary — can't preview, offer to open externally */}
+          {isUnprintable && !fileData && !loading && !error && path && (
+            <Renderer
+              content=""
+              encoding="utf-8"
+              ext={ext}
+              name={path.split("/").pop() || ""}
+              path={path}
+              onOpenExternal={openExternally}
+            />
+          )}
+
+          {/* Render file content via the appropriate renderer */}
           {fileData && !loading && !error && (
-            <>
-              {/* Image preview */}
-              {isImage && (
-                <div className="flex items-center justify-center p-4">
-                  <img
-                    src={
-                      fileData.encoding === "base64"
-                        ? `data:${EXT_TO_MIME[fileData.ext] || "image/png"};base64,${fileData.content}`
-                        : fileData.ext === ".svg"
-                          ? `data:image/svg+xml;utf8,${encodeURIComponent(fileData.content)}`
-                          : fileData.content
-                    }
-                    alt={fileData.name}
-                    className="max-w-full max-h-[60vh] object-contain rounded-lg border border-border"
-                  />
-                </div>
-              )}
-
-              {/* PDF preview */}
-              {isPdf && (
-                <div className="flex flex-col items-center justify-center h-full gap-3">
-                  <p className="text-sm text-muted-foreground">PDF preview</p>
-                  <Button variant="outline" size="sm" onClick={() => openExternally(fileData.path)}>
-                    <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-                    Open in default app
-                  </Button>
-                </div>
-              )}
-
-              {/* Text/code preview */}
-              {!isImage && !isPdf && (
-                <pre className="rounded-lg bg-muted/40 p-4 text-xs leading-relaxed overflow-x-auto font-mono whitespace-pre-wrap break-words">
-                  <code className={lang ? `language-${lang}` : ""}>
-                    {fileData.content}
-                  </code>
-                </pre>
-              )}
-            </>
+            <Renderer
+              content={fileData.content}
+              encoding={fileData.encoding}
+              ext={fileData.ext}
+              name={fileData.name}
+              path={fileData.path}
+              onOpenExternal={openExternally}
+            />
           )}
         </div>
       </SheetContent>

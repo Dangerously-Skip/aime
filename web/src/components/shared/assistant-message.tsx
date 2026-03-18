@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { MarkdownRenderer } from "./markdown-renderer";
 import { ThinkingSection } from "./thinking-section";
-import { ToolCallCard } from "./tool-call-card";
+import { ToolCallsSummaryBar } from "./tool-calls-summary-bar";
 import { StreamingCursor } from "./streaming-cursor";
 import { ArtifactCard } from "./artifact-card";
 import { Button } from "@/components/ui/button";
@@ -114,6 +114,15 @@ export function AssistantMessage({
           <ThinkingSection content={thinking} isComplete={!isStreaming} />
         )}
 
+        {/* Tool calls summary bar */}
+        {toolCalls.length > 0 && (
+          <ToolCallsSummaryBar
+            toolCalls={toolCalls}
+            onArtifactClick={onArtifactClick}
+            onPreviewUrl={onPreviewUrl}
+          />
+        )}
+
         {/* Content — render as segments if artifacts detected, else plain markdown */}
         {content && !hasArtifacts && (
           <div className="text-sm leading-relaxed">
@@ -135,25 +144,6 @@ export function AssistantMessage({
                 />
               )
             )}
-          </div>
-        )}
-
-        {/* Tool calls */}
-        {toolCalls.length > 0 && (
-          <div className="space-y-1.5">
-            {toolCalls.map((tool) => (
-              <ToolCallCard
-                key={tool.id}
-                name={tool.name}
-                input={tool.input}
-                output={tool.output}
-                status={tool.status}
-                startTime={tool.startTime}
-                endTime={tool.endTime}
-                onArtifactClick={onArtifactClick}
-                onPreviewUrl={onPreviewUrl}
-              />
-            ))}
           </div>
         )}
 

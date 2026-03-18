@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { getGatedStorage } from '@/lib/gated-storage';
 
 export interface Conversation {
   id: string;
@@ -70,7 +71,7 @@ export const useConversationStore = create<ConversationStore>()(
     }),
     {
       name: 'nibcowork:conversations',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
     }
   )

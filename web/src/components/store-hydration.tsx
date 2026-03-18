@@ -10,6 +10,8 @@ import { useBrowserStore } from "@/stores/browser-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useProjectStore } from "@/stores/project-store";
 import { useMemoryStore } from "@/stores/memory-store";
+import { useConnectorStore } from "@/stores/connector-store";
+import { openStorageGate } from "@/lib/gated-storage";
 
 // Module-level hydration flag + listener set
 let hydrated = false;
@@ -32,18 +34,24 @@ export function useHydrated() {
   return ready;
 }
 
-function applyTheme(theme: 'light' | 'dark' | 'system', animate = true) {
+function applyTheme(theme: 'light' | 'dark' | 'system' | 'emma', animate = true) {
   const isDark =
     theme === 'dark' ||
     (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const isEmma = theme === 'emma';
 
   const html = document.documentElement;
   if (animate) html.classList.add('transitioning');
-  if (isDark) {
+
+  // Remove all theme classes first
+  html.classList.remove('dark', 'emma');
+
+  if (isEmma) {
+    html.classList.add('emma');
+  } else if (isDark) {
     html.classList.add('dark');
-  } else {
-    html.classList.remove('dark');
   }
+
   if (animate) setTimeout(() => html.classList.remove('transitioning'), 350);
 }
 
@@ -52,7 +60,12 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
     // The inline <script> in layout.tsx already applied the correct theme class
     // from localStorage before React hydrated. We just need to rehydrate stores
     // and set up the subscriber for subsequent changes.
-    Promise.all([
+    //
+    // Use Promise.allSettled so one failing store doesn't prevent the rest from
+    // loading.  Previously Promise.all meant a single error would leave ALL
+    // stores stuck on default values, causing settings (like API keys) to be
+    // "lost" — and worse, persisted over the real saved values.
+    Promise.allSettled([
       useAppStore.persist.rehydrate(),
       useConversationStore.persist.rehydrate(),
       useChatStore.persist.rehydrate(),
@@ -62,21 +75,34 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
       useSettingsStore.persist.rehydrate(),
       useProjectStore.persist.rehydrate(),
       useMemoryStore.persist.rehydrate(),
-    ]).then(() => {
+      useConnectorStore.persist.rehydrate(),
+    ]).then((results) => {
+      // Log any individual failures
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          const names = ['app', 'conversation', 'chat', 'cowork', 'code', 'browser', 'settings', 'project', 'memory', 'connector'];
+          console.error(`[StoreHydration] ${names[i]} store rehydration failed:`, r.reason);
+        }
+      });
+
       // Re-apply theme after rehydration without animation to ensure consistency
       const theme = useAppStore.getState().theme;
       applyTheme(theme, false);
+
+      // Open the storage gate so stores can now safely persist changes.
+      // Until this point, all setItem calls to localStorage were blocked to
+      // prevent default values from overwriting previously saved data.
+      openStorageGate();
+
       setHydrated();
-    }).catch((err) => {
-      console.error('[StoreHydration] Rehydration error:', err);
-      setHydrated(); // proceed with defaults
     });
 
-    // Timeout fallback: hydrate with defaults if localStorage read takes too long
-    // Kept independent of the promise chain so it's a true safety net
+    // Timeout fallback: hydrate with defaults if localStorage read takes too long.
+    // Still open the storage gate so the app remains functional.
     setTimeout(() => {
       if (!hydrated) {
         console.warn('[StoreHydration] Timed out waiting for localStorage, using defaults');
+        openStorageGate();
         setHydrated();
       }
     }, 3000);
