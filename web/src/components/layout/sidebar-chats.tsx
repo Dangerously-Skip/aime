@@ -13,6 +13,8 @@ import {
   Search,
   Trash2,
   MessageCircle,
+  Bot,
+  ChevronRight,
 } from "lucide-react";
 
 interface SidebarChatsProps {
@@ -21,12 +23,13 @@ interface SidebarChatsProps {
 
 export function SidebarChats({ projectId }: SidebarChatsProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [bgExpanded, setBgExpanded] = useState(false);
   const activeSurface = useAppStore((s) => s.activeSurface);
   const addConversation = useConversationStore((s) => s.addConversation);
   const removeConversation = useConversationStore((s) => s.removeConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
   const activeId = useConversationStore((s) => s.activeId);
-  const { groups } = useConversations(activeSurface, projectId);
+  const { groups, backgroundConversations } = useConversations(activeSurface, projectId);
 
   function handleNewChat() {
     const conv: Conversation = {
@@ -52,7 +55,7 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
     .filter((group) => group.conversations.length > 0);
 
   return (
-    <>
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1">
         <span className="text-xs font-medium text-muted-foreground">
@@ -84,9 +87,9 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
       <Separator className="bg-sidebar-border" />
 
       {/* Conversation list */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-3">
-          {filteredGroups.length === 0 && (
+          {filteredGroups.length === 0 && backgroundConversations.length === 0 && (
             <div className="px-3 py-8 text-center text-xs text-muted-foreground">
               No conversations yet
             </div>
@@ -132,8 +135,61 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
               </div>
             </div>
           ))}
+
+          {backgroundConversations.length > 0 && (
+            <div>
+              <button
+                onClick={() => setBgExpanded((v) => !v)}
+                className="flex w-full items-center gap-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronRight
+                  className={`h-3 w-3 transition-transform ${bgExpanded ? "rotate-90" : ""}`}
+                />
+                <Bot className="h-3 w-3" />
+                <span>Background runs</span>
+                <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[9px] leading-none">
+                  {backgroundConversations.length}
+                </span>
+              </button>
+              {bgExpanded && (
+                <div className="space-y-0.5 mt-0.5">
+                  {backgroundConversations.map((conv) => (
+                    <button
+                      key={conv.id}
+                      onClick={() => setActiveConversation(conv.id)}
+                      className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
+                        activeId === conv.id
+                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                      }`}
+                    >
+                      <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate flex-1">{conv.title}</span>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeConversation(conv.id);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.stopPropagation();
+                            removeConversation(conv.id);
+                          }
+                        }}
+                        className="hidden group-hover:block shrink-0"
+                      >
+                        <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </ScrollArea>
-    </>
+    </div>
   );
 }

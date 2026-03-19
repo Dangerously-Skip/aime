@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef } from 'react';
+import { streamRegistry } from '@/lib/stream-registry';
 
 /**
  * Strip store messages to a lightweight {role, content} array suitable for the history param.
@@ -24,6 +25,9 @@ interface UseSSEStreamOptions {
   onChunk: (event: SSEEvent) => void;
   onError: (error: Error) => void;
   onDone: () => void;
+  chatId: string;                            // needed for registry key
+  setIsStreaming: (v: boolean) => void;      // from store
+  setStreamError: (e: string | null) => void; // from store
 }
 
 interface UseSSEStreamReturn {
@@ -50,9 +54,15 @@ interface UseSSEStreamReturn {
         restrictToProjectFolder?: boolean
         disableBashTool?: boolean
       }
+      sessionControls?: {
+        thinkLevel?: string
+        verboseMode?: boolean
+        reasoningVisible?: boolean
+        modelOverride?: string | null
+      }
+      toolProfile?: string
     }
   ) => Promise<void>;
-  isStreaming: boolean;
   abort: () => void;
 }
 
@@ -95,17 +105,12 @@ function parseSSELines(
 }
 
 export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
-  const [isStreaming, setIsStreaming] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
   const abort = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setIsStreaming(false);
+    streamRegistry.abort(optionsRef.current.chatId);
+    optionsRef.current.setIsStreaming(false);
   }, []);
 
   const sendMessage = useCallback(
@@ -132,15 +137,24 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           restrictToProjectFolder?: boolean
           disableBashTool?: boolean
         }
+        sessionControls?: {
+          thinkLevel?: string
+          verboseMode?: boolean
+          reasoningVisible?: boolean
+          modelOverride?: string | null
+        }
+        toolProfile?: string
       }
     ): Promise<void> => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
+      // Abort any existing stream for this chatId
+      if (streamRegistry.has(chatId)) {
+        streamRegistry.abort(chatId);
       }
 
       const controller = new AbortController();
-      abortControllerRef.current = controller;
-      setIsStreaming(true);
+      streamRegistry.set(chatId, controller);
+      optionsRef.current.setIsStreaming(true);
+      optionsRef.current.setStreamError(null);
 
       try {
         const response = await fetch(`/api/chat/${surfaceId}`, {
@@ -162,6 +176,8 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.memories ? { memories: extra.memories } : {}),
             ...(extra?.crossSurfaceContext ? { crossSurfaceContext: extra.crossSurfaceContext } : {}),
             ...(extra?.securitySettings ? { securitySettings: extra.securitySettings } : {}),
+            ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
+            ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
           }),
           signal: controller.signal,
         });
@@ -207,16 +223,15 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       } catch (error: unknown) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         const err = error instanceof Error ? error : new Error(String(error));
+        optionsRef.current.setStreamError(err.message);
         optionsRef.current.onError(err);
       } finally {
-        if (abortControllerRef.current === controller) {
-          abortControllerRef.current = null;
-        }
-        setIsStreaming(false);
+        streamRegistry.clear(chatId);
+        optionsRef.current.setIsStreaming(false);
       }
     },
     []
   );
 
-  return { sendMessage, isStreaming, abort };
+  return { sendMessage, abort };
 }

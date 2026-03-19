@@ -6,6 +6,8 @@ import { getGatedStorage } from '@/lib/gated-storage';
 
 export type ChatFont = 'default' | 'sans' | 'mono' | 'system';
 export type ToolAccessMode = 'onDemand' | 'alwaysLoaded';
+export type ToolProfile = 'minimal' | 'coding' | 'full';
+export type SessionResetMode = 'manual' | 'daily' | 'idle';
 
 interface SettingsState {
   // Profile
@@ -19,6 +21,15 @@ interface SettingsState {
 
   // Capabilities
   toolAccessMode: ToolAccessMode;
+  toolProfile: ToolProfile;
+
+  // Automation
+  heartbeatEnabled: boolean;
+  heartbeatIntervalMinutes: number;
+  loopDetectionThreshold: number;
+  sessionResetMode: SessionResetMode;
+  sessionResetTime: string;
+  sessionIdleMinutes: number;
 
   // Cowork
   coworkInstructions: string;
@@ -60,6 +71,13 @@ interface SettingsActions {
   setPersonalPreferences: (prefs: string) => void;
   setChatFont: (font: ChatFont) => void;
   setToolAccessMode: (mode: ToolAccessMode) => void;
+  setToolProfile: (profile: ToolProfile) => void;
+  setHeartbeatEnabled: (enabled: boolean) => void;
+  setHeartbeatIntervalMinutes: (minutes: number) => void;
+  setLoopDetectionThreshold: (threshold: number) => void;
+  setSessionResetMode: (mode: SessionResetMode) => void;
+  setSessionResetTime: (time: string) => void;
+  setSessionIdleMinutes: (minutes: number) => void;
   setCoworkInstructions: (instructions: string) => void;
   setCodeWorktreeLocation: (location: string) => void;
   setCodeBranchPrefix: (prefix: string) => void;
@@ -89,6 +107,13 @@ const initialState: SettingsState = {
   personalPreferences: '',
   chatFont: 'default',
   toolAccessMode: 'onDemand',
+  toolProfile: 'full',
+  heartbeatEnabled: false,
+  heartbeatIntervalMinutes: 30,
+  loopDetectionThreshold: 3,
+  sessionResetMode: 'manual',
+  sessionResetTime: '04:00',
+  sessionIdleMinutes: 60,
   coworkInstructions: '',
   codeWorktreeLocation: '',
   codeBranchPrefix: '',
@@ -118,6 +143,13 @@ export const useSettingsStore = create<SettingsStore>()(
       setPersonalPreferences: (personalPreferences) => set({ personalPreferences }),
       setChatFont: (chatFont) => set({ chatFont }),
       setToolAccessMode: (toolAccessMode) => set({ toolAccessMode }),
+      setToolProfile: (toolProfile) => set({ toolProfile }),
+      setHeartbeatEnabled: (heartbeatEnabled) => set({ heartbeatEnabled }),
+      setHeartbeatIntervalMinutes: (heartbeatIntervalMinutes) => set({ heartbeatIntervalMinutes }),
+      setLoopDetectionThreshold: (loopDetectionThreshold) => set({ loopDetectionThreshold }),
+      setSessionResetMode: (sessionResetMode) => set({ sessionResetMode }),
+      setSessionResetTime: (sessionResetTime) => set({ sessionResetTime }),
+      setSessionIdleMinutes: (sessionIdleMinutes) => set({ sessionIdleMinutes }),
       setCoworkInstructions: (coworkInstructions) => set({ coworkInstructions }),
       setCodeWorktreeLocation: (codeWorktreeLocation) => set({ codeWorktreeLocation }),
       setCodeBranchPrefix: (codeBranchPrefix) => set({ codeBranchPrefix }),
@@ -159,15 +191,13 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'nibcowork:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 3,
+      version: 4,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         if (version === 0) {
-          // v0 -> v1: ensure all fields exist with defaults
           return { ...initialState, ...state } as unknown as SettingsState & SettingsActions;
         }
         if (version === 1) {
-          // v1 -> v2: add security settings
           return {
             ...state,
             blockDangerousCommands: true,
@@ -177,12 +207,24 @@ export const useSettingsStore = create<SettingsStore>()(
           } as unknown as SettingsState & SettingsActions;
         }
         if (version === 2) {
-          // v2 -> v3: add onboarding fields
           return {
             ...state,
             onboardingComplete: false,
             onboardingSkippedAt: null,
             teamId: null,
+          } as unknown as SettingsState & SettingsActions;
+        }
+        if (version === 3) {
+          // v3 -> v4: add tool profile, automation, session reset settings
+          return {
+            ...state,
+            toolProfile: 'full',
+            heartbeatEnabled: false,
+            heartbeatIntervalMinutes: 30,
+            loopDetectionThreshold: 3,
+            sessionResetMode: 'manual',
+            sessionResetTime: '04:00',
+            sessionIdleMinutes: 60,
           } as unknown as SettingsState & SettingsActions;
         }
         return state as unknown as SettingsState & SettingsActions;
@@ -194,6 +236,13 @@ export const useSettingsStore = create<SettingsStore>()(
         personalPreferences: state.personalPreferences,
         chatFont: state.chatFont,
         toolAccessMode: state.toolAccessMode,
+        toolProfile: state.toolProfile,
+        heartbeatEnabled: state.heartbeatEnabled,
+        heartbeatIntervalMinutes: state.heartbeatIntervalMinutes,
+        loopDetectionThreshold: state.loopDetectionThreshold,
+        sessionResetMode: state.sessionResetMode,
+        sessionResetTime: state.sessionResetTime,
+        sessionIdleMinutes: state.sessionIdleMinutes,
         coworkInstructions: state.coworkInstructions,
         codeWorktreeLocation: state.codeWorktreeLocation,
         codeBranchPrefix: state.codeBranchPrefix,

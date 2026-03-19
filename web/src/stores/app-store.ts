@@ -8,7 +8,7 @@ export type Surface = 'chat' | 'cowork' | 'code' | 'browser';
 export type Theme = 'light' | 'dark' | 'system' | 'emma';
 
 export type SidebarMode = 'history' | 'projects' | 'customize';
-export type CustomizeSection = 'landing' | 'skills' | 'connectors' | 'browse-connectors' | 'browse-marketplace';
+export type CustomizeSection = 'landing' | 'skills' | 'connectors' | 'browse-connectors' | 'browse-marketplace' | 'automation' | 'agents';
 
 interface AppState {
   activeSurface: Surface;
@@ -20,6 +20,8 @@ interface AppState {
   customizeSection: CustomizeSection;
   selectedSkillId: string | null;
   selectedConnectorId: string | null;
+  selectedAgentName: string | null;
+  heartbeatPanelOpen: boolean;
 }
 
 interface AppActions {
@@ -34,6 +36,8 @@ interface AppActions {
   setCustomizeSection: (section: CustomizeSection) => void;
   setSelectedSkillId: (id: string | null) => void;
   setSelectedConnectorId: (id: string | null) => void;
+  setSelectedAgentName: (name: string | null) => void;
+  setHeartbeatPanelOpen: (open: boolean) => void;
 }
 
 export type AppStore = AppState & AppActions;
@@ -51,6 +55,8 @@ export const useAppStore = create<AppStore>()(
       customizeSection: 'landing',
       selectedSkillId: null,
       selectedConnectorId: null,
+      selectedAgentName: null,
+      heartbeatPanelOpen: false,
 
       // Actions
       setActiveSurface: (surface) => set({ activeSurface: surface }),
@@ -61,9 +67,11 @@ export const useAppStore = create<AppStore>()(
       setSidebarMode: (mode) => set({ sidebarMode: mode }),
       setViewingProjectId: (id) => set({ viewingProjectId: id }),
       navigateToProject: (projectId) => set({ sidebarMode: 'projects', viewingProjectId: projectId }),
-      setCustomizeSection: (section) => set({ customizeSection: section, selectedSkillId: null, selectedConnectorId: null }),
+      setCustomizeSection: (section) => set({ customizeSection: section, selectedSkillId: null, selectedConnectorId: null, selectedAgentName: null }),
       setSelectedSkillId: (id) => set({ selectedSkillId: id }),
       setSelectedConnectorId: (id) => set({ selectedConnectorId: id }),
+      setSelectedAgentName: (name) => set({ selectedAgentName: name }),
+      setHeartbeatPanelOpen: (open) => set({ heartbeatPanelOpen: open }),
     }),
     {
       name: 'nibcowork:app',
@@ -71,7 +79,7 @@ export const useAppStore = create<AppStore>()(
       skipHydration: true,
       partialize: (state) => {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { viewingProjectId, selectedSkillId, selectedConnectorId, ...rest } = state;
+        const { viewingProjectId, selectedSkillId, selectedConnectorId, selectedAgentName, ...rest } = state;
         return rest;
       },
     }

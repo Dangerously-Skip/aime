@@ -3,8 +3,10 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 
 export type ModelId = 'sonnet' | 'opus' | 'haiku';
+export type { SessionControls };
 
 const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
@@ -58,6 +60,9 @@ interface ChatState {
   currentChatId: string | null;
   model: ModelId;
   isStreaming: boolean;
+  streamError: string | null;
+  sessionControls: Record<string, SessionControls>;
+  lastActivityAt: Record<string, number>;
 }
 
 interface ChatActions {
@@ -71,6 +76,11 @@ interface ChatActions {
   clearMessages: (chatId: string) => void;
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
+  setSessionControls: (chatId: string, controls: SessionControls) => void;
+  getSessionControls: (chatId: string) => SessionControls;
+  touchActivity: (chatId: string) => void;
+  setIsStreaming: (v: boolean) => void;
+  setStreamError: (e: string | null) => void;
 }
 
 export type ChatStore = ChatState & ChatActions;
@@ -82,6 +92,9 @@ export const useChatStore = create<ChatStore>()(
       currentChatId: null,
       model: 'sonnet',
       isStreaming: false,
+      streamError: null,
+      sessionControls: {},
+      lastActivityAt: {},
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -186,6 +199,23 @@ export const useChatStore = create<ChatStore>()(
           };
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
+
+      setSessionControls: (chatId, controls) =>
+        set((state) => ({
+          sessionControls: { ...state.sessionControls, [chatId]: controls },
+        })),
+
+      getSessionControls: (_chatId) => {
+        return DEFAULT_SESSION_CONTROLS;
+      },
+
+      touchActivity: (chatId) =>
+        set((state) => ({
+          lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
+        })),
+
+      setIsStreaming: (v) => set({ isStreaming: v }),
+      setStreamError: (e) => set({ streamError: e }),
     }),
     {
       name: 'nibcowork:chat',
@@ -194,6 +224,7 @@ export const useChatStore = create<ChatStore>()(
         messages: state.messages,
         model: state.model,
         currentChatId: state.currentChatId,
+        sessionControls: state.sessionControls,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

@@ -15,6 +15,8 @@ import { ProjectSettings } from "@/components/projects/project-settings";
 import { ProjectCreate } from "@/components/projects/project-create";
 import { CustomizeView } from "@/components/customize/customize-view";
 import { UpdateBanner } from "@/components/shared/update-banner";
+import { ReminderModal } from "@/components/shared/reminder-modal";
+import { HeartbeatPanel } from "./heartbeat-panel";
 
 export function AppShell() {
   const sidebarVisible = useAppStore((s) => s.sidebarVisible);
@@ -143,6 +145,8 @@ export function AppShell() {
       </div>
 
       <UpdateBanner />
+      <ReminderModal />
+      <HeartbeatPanel />
 
       {editingProjectId && (
         <ProjectSettings

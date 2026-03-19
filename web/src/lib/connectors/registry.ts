@@ -41,6 +41,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     auth: {
       type: 'api_key',
       envVarName: 'BUILDKITE_API_TOKEN',
+      hint: 'Go to buildkite.com/user/api-access-tokens → New API Access Token. Enable read_builds, read_pipelines, and read_organizations scopes.',
     },
     mcp: {
       transport: 'stdio',
@@ -82,6 +83,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     name: 'Zoom',
     description: 'Video conferencing & meetings',
     category: 'communication',
+    comingSoon: true,
     auth: {
       type: 'oauth2',
       authUrl: 'https://zoom.us/oauth/authorize',
@@ -151,6 +153,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   {
     id: 'sharepoint',
     name: 'SharePoint',
+    comingSoon: true,
     description: 'Document management & collaboration',
     category: 'documentation',
     auth: {
@@ -172,6 +175,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   {
     id: 'google-drive',
     name: 'Google Drive',
+    comingSoon: true,
     description: 'File storage & collaboration',
     category: 'documentation',
     auth: {
@@ -197,6 +201,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   {
     id: 'outlook',
     name: 'Outlook 365',
+    comingSoon: true,
     description: 'Email & calendar',
     category: 'communication',
     auth: {
@@ -243,6 +248,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     auth: {
       type: 'api_key',
       envVarName: 'SUMOLOGIC_ACCESS_KEY',
+      hint: 'Go to Administration → Security → Access Keys → Add Access Key. After saving, combine the two values as accessId:accessKey (colon-separated, no spaces).',
     },
     mcp: {
       transport: 'stdio',
@@ -278,6 +284,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     name: 'Miro',
     description: 'Visual collaboration & whiteboarding',
     category: 'design',
+    comingSoon: true,
     auth: {
       type: 'oauth2',
       authUrl: 'https://miro.com/oauth/authorize',

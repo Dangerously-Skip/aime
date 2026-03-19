@@ -32,6 +32,14 @@ import {
   type PendingContextItem,
 } from "@/lib/browser-interactions";
 import { VoiceButton } from "@/components/shared/voice-button";
+import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
+import {
+  parseSlashCommand,
+  applySlashCommand,
+  getSlashSuggestions,
+  DEFAULT_SESSION_CONTROLS,
+  type SessionControls,
+} from "@/lib/slash-commands";
 import {
   Globe,
   Plus,
@@ -76,6 +84,9 @@ export function BrowserSurface() {
   const [urlInput, setUrlInput] = useState("");
   const [agentVisible, setAgentVisible] = useState(true);
   const [panelWidth, setPanelWidth] = useState(350);
+  const [slashSuggestions, setSlashSuggestions] = useState<CommandSuggestion[]>([]);
+  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
+  const [sessionControls, setSessionControls] = useState<SessionControls>(DEFAULT_SESSION_CONTROLS);
   const webviewNodeRef = useRef<(HTMLElement & WebviewRef) | null>(null);
   const resizingRef = useRef(false);
   const inspectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -455,6 +466,20 @@ export function BrowserSurface() {
   // ── Agent submit (with conversation creation fix) ─────────────────────
   const handleAgentSubmit = useCallback(
     async (text: string) => {
+      // ── Slash command interception ─────────────────────────────────────
+      const parsed = parseSlashCommand(text);
+      if (parsed) {
+        const result = applySlashCommand(parsed, sessionControls);
+        if (result) {
+          setSessionControls(result.controls);
+          const id = ensureBrowserConversation();
+          addMessage(id, { id: crypto.randomUUID(), role: 'user', content: text, timestamp: Date.now() });
+          addMessage(id, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now() });
+          setInputValue('');
+          return;
+        }
+      }
+
       // Ensure conversation exists (reuse shared helper)
       const id = ensureBrowserConversation();
 
@@ -845,15 +870,43 @@ export function BrowserSurface() {
                 />
               </div>
 
-              <InputArea
-                value={inputValue}
-                onChange={setInputValue}
-                onSubmit={handleAgentSubmit}
-                onAbort={abort}
-                isStreaming={isStreaming}
-                placeholder="Ask about this page..."
-                extraControls={<VoiceButton onTranscript={handleVoiceTranscript} />}
-              />
+              <div>
+                <div className="px-4 pt-3">
+                  <div className="max-w-3xl mx-auto">
+                    <CommandPicker
+                      suggestions={slashSuggestions}
+                      selectedIndex={selectedSuggestionIdx}
+                      onSelect={(s) => {
+                        setInputValue(s.value + ' ');
+                        setSlashSuggestions([]);
+                        setSelectedSuggestionIdx(0);
+                      }}
+                      onSelectedIndexChange={setSelectedSuggestionIdx}
+                    />
+                  </div>
+                </div>
+                <InputArea
+                  value={inputValue}
+                  onChange={(val) => {
+                    setInputValue(val);
+                    setSlashSuggestions(
+                      getSlashSuggestions(val).map((cmd) => ({
+                        type: 'slash' as const,
+                        value: cmd.name,
+                        label: cmd.name,
+                        description: cmd.args,
+                        meta: cmd.description,
+                      }))
+                    );
+                    setSelectedSuggestionIdx(0);
+                  }}
+                  onSubmit={handleAgentSubmit}
+                  onAbort={abort}
+                  isStreaming={isStreaming}
+                  placeholder="Ask about this page..."
+                  extraControls={<VoiceButton onTranscript={handleVoiceTranscript} />}
+                />
+              </div>
             </div>
           </div>
         )}

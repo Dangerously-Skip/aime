@@ -28,7 +28,9 @@ function buildMcpEntry(connector: ConnectorDefinition, token: string): McpServer
       args: mcp.args,
     };
 
-    if (mcp.tokenInjection.method === 'env') {
+    // For aws_iam connectors, don't inject any token — let the MCP server
+    // inherit credentials from the environment (~/.aws/credentials, AWS_PROFILE, etc.)
+    if (mcp.tokenInjection.method === 'env' && token) {
       entry.env = { [mcp.tokenInjection.envVar]: token };
     }
 

@@ -5,6 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
+import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 
 const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
@@ -13,11 +14,14 @@ interface CoworkState {
   currentChatId: string | null;
   model: ModelId;
   isStreaming: boolean;
+  streamError: string | null;
   folder: string | null;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
   planContent: Record<string, string>;
   planOpen: boolean;
+  sessionControls: Record<string, SessionControls>;
+  lastActivityAt: Record<string, number>;
 }
 
 interface CoworkActions {
@@ -35,9 +39,15 @@ interface CoworkActions {
   setFolder: (folder: string | null) => void;
   addContextFile: (chatId: string, path: string) => void;
   addArtifactFile: (chatId: string, path: string) => void;
+  removeContextFile: (chatId: string, path: string) => void;
+  removeArtifactFile: (chatId: string, path: string) => void;
   clearSidebarFiles: (chatId: string) => void;
   setPlanContent: (chatId: string, content: string) => void;
   setPlanOpen: (open: boolean) => void;
+  setSessionControls: (chatId: string, controls: SessionControls) => void;
+  touchActivity: (chatId: string) => void;
+  setIsStreaming: (v: boolean) => void;
+  setStreamError: (e: string | null) => void;
 }
 
 export type CoworkStore = CoworkState & CoworkActions;
@@ -49,11 +59,14 @@ export const useCoworkStore = create<CoworkStore>()(
       currentChatId: null,
       model: 'opus',
       isStreaming: false,
+      streamError: null,
       folder: null,
       contextFiles: {},
       artifactFiles: {},
       planContent: {},
       planOpen: false,
+      sessionControls: {},
+      lastActivityAt: {},
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -195,6 +208,18 @@ export const useCoworkStore = create<CoworkStore>()(
           return { artifactFiles: { ...state.artifactFiles, [chatId]: [...existing, path] } };
         }),
 
+      removeContextFile: (chatId, path) =>
+        set((state) => {
+          const existing = state.contextFiles[chatId] ?? [];
+          return { contextFiles: { ...state.contextFiles, [chatId]: existing.filter((p) => p !== path) } };
+        }),
+
+      removeArtifactFile: (chatId, path) =>
+        set((state) => {
+          const existing = state.artifactFiles[chatId] ?? [];
+          return { artifactFiles: { ...state.artifactFiles, [chatId]: existing.filter((p) => p !== path) } };
+        }),
+
       clearSidebarFiles: (chatId) =>
         set((state) => {
           const { [chatId]: _ctx, ...restCtx } = state.contextFiles;
@@ -208,6 +233,19 @@ export const useCoworkStore = create<CoworkStore>()(
         })),
 
       setPlanOpen: (open) => set({ planOpen: open }),
+
+      setSessionControls: (chatId, controls) =>
+        set((state) => ({
+          sessionControls: { ...state.sessionControls, [chatId]: controls },
+        })),
+
+      touchActivity: (chatId) =>
+        set((state) => ({
+          lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
+        })),
+
+      setIsStreaming: (v) => set({ isStreaming: v }),
+      setStreamError: (e) => set({ streamError: e }),
     }),
     {
       name: 'nibcowork:cowork',
@@ -220,6 +258,7 @@ export const useCoworkStore = create<CoworkStore>()(
         contextFiles: state.contextFiles,
         artifactFiles: state.artifactFiles,
         planContent: state.planContent,
+        sessionControls: state.sessionControls,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { useConnectorStore } from "@/stores/connector-store";
 import { CONNECTOR_REGISTRY, CONNECTOR_MAP } from "@/lib/connectors/registry";
@@ -12,12 +12,18 @@ import { useMarketplace } from "@/lib/use-marketplace";
 import { CONNECTOR_LOGOS } from "./connector-logos";
 import { PluginRow } from "./plugin-row";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft,
   Search,
   Loader2,
   Cable,
   ChevronRight,
-  Check,
   Power,
   KeyRound,
   Unplug,
@@ -36,6 +42,17 @@ export function BrowseConnectors() {
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [awsError, setAwsError] = useState<string | null>(null);
+  const [apiKeyDialog, setApiKeyDialog] = useState<{ connector: ConnectorDefinition; resolve: (key: string | null) => void } | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const apiKeyInputRef = useRef<HTMLInputElement>(null);
+
+  function promptApiKey(connector: ConnectorDefinition): Promise<string | null> {
+    return new Promise((resolve) => {
+      setApiKeyInput("");
+      setApiKeyDialog({ connector, resolve });
+    });
+  }
 
   const { plugins: marketplacePlugins, loading: mpLoading } = useMarketplace();
 
@@ -58,11 +75,7 @@ export function BrowseConnectors() {
   const handleConnect = useCallback(
     async (connector: ConnectorDefinition) => {
       if (connector.auth.type === 'api_key') {
-        // For API key connectors, prompt for key
-        const key = window.prompt(
-          `Enter your ${connector.name} API token:`,
-          ""
-        );
+        const key = await promptApiKey(connector);
         if (!key) return;
 
         setConnectingId(connector.id);
@@ -80,15 +93,21 @@ export function BrowseConnectors() {
       }
 
       if (connector.auth.type === 'aws_iam') {
-        // AWS uses existing credentials — just enable and provision
+        // Run `rqp auth` to authenticate via the nib CLI — opens browser SSO if needed
         setConnectingId(connector.id);
         try {
+          const res = await fetch('/api/connectors/aws/auth', { method: 'POST' });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'rqp auth failed');
+          }
           setToken(connector.id, 'aws-iam');
           setEnabled(connector.id, true);
           await provisionConnector(connector, '');
         } catch (err) {
           console.error(`Failed to connect ${connector.id}:`, err);
           clearToken(connector.id);
+          setAwsError(err instanceof Error ? err.message : 'AWS auth failed');
         } finally {
           setConnectingId(null);
         }
@@ -156,6 +175,87 @@ export function BrowseConnectors() {
   );
 
   return (
+    <>
+    {/* AWS auth error dialog */}
+    <Dialog open={!!awsError} onOpenChange={(open) => { if (!open) setAwsError(null); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>AWS Authentication Failed</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground py-2">{awsError}</p>
+        <DialogFooter>
+          <button
+            onClick={() => setAwsError(null)}
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            OK
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    {/* API Key Input Dialog */}
+    <Dialog
+      open={!!apiKeyDialog}
+      onOpenChange={(open) => {
+        if (!open && apiKeyDialog) {
+          apiKeyDialog.resolve(null);
+          setApiKeyDialog(null);
+        }
+      }}
+    >
+      <DialogContent className="sm:max-w-md" onOpenAutoFocus={(e) => { e.preventDefault(); apiKeyInputRef.current?.focus(); }}>
+        <DialogHeader>
+          <DialogTitle>Connect {apiKeyDialog?.connector.name}</DialogTitle>
+        </DialogHeader>
+        <div className="py-2 space-y-3">
+          {apiKeyDialog?.connector.auth.hint && (
+            <p className="text-xs text-muted-foreground bg-muted rounded-md px-3 py-2 leading-relaxed">
+              {apiKeyDialog.connector.auth.hint}
+            </p>
+          )}
+          <div>
+          <label className="text-xs text-muted-foreground mb-1.5 block">
+            {apiKeyDialog?.connector.name} API token
+          </label>
+          <input
+            ref={apiKeyInputRef}
+            type="password"
+            value={apiKeyInput}
+            onChange={(e) => setApiKeyInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && apiKeyInput.trim() && apiKeyDialog) {
+                apiKeyDialog.resolve(apiKeyInput.trim());
+                setApiKeyDialog(null);
+              }
+            }}
+            placeholder="Paste your token here"
+            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+          />
+          </div>
+        </div>
+        <DialogFooter>
+          <button
+            onClick={() => { apiKeyDialog?.resolve(null); setApiKeyDialog(null); }}
+            className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={!apiKeyInput.trim()}
+            onClick={() => {
+              if (apiKeyDialog && apiKeyInput.trim()) {
+                apiKeyDialog.resolve(apiKeyInput.trim());
+                setApiKeyDialog(null);
+              }
+            }}
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Connect
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-3 px-6 py-4 border-b border-border shrink-0">
@@ -264,6 +364,7 @@ export function BrowseConnectors() {
         </div>
       </div>
     </div>
+    </>
   );
 }
 
@@ -309,7 +410,11 @@ function ConnectorRow({
 
       {/* Actions */}
       <div className="shrink-0 flex items-center gap-1.5">
-        {isConnecting ? (
+        {connector.comingSoon ? (
+          <span className="inline-flex items-center rounded-full bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+            Coming soon
+          </span>
+        ) : isConnecting ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
             Connecting
