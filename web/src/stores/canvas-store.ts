@@ -7,7 +7,7 @@ interface CanvasState {
   canvasDoc: A2UIDocument | null;
   history: A2UIDocument[];
   historyIndex: number;
-  openSurfaces: Set<string>;
+  openSurfaces: Record<string, boolean>;
 }
 
 interface CanvasActions {
@@ -25,7 +25,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
   canvasDoc: null,
   history: [],
   historyIndex: -1,
-  openSurfaces: new Set(),
+  openSurfaces: {} as Record<string, boolean>,
 
   pushCanvas: (doc) =>
     set((state) => {
@@ -61,15 +61,9 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
     }),
 
   setOpen: (surfaceId, open) =>
-    set((state) => {
-      const openSurfaces = new Set(state.openSurfaces);
-      if (open) {
-        openSurfaces.add(surfaceId);
-      } else {
-        openSurfaces.delete(surfaceId);
-      }
-      return { openSurfaces };
-    }),
+    set((state) => ({
+      openSurfaces: { ...state.openSurfaces, [surfaceId]: open },
+    })),
 
-  isOpen: (surfaceId) => get().openSurfaces.has(surfaceId),
+  isOpen: (surfaceId) => !!get().openSurfaces[surfaceId],
 }));

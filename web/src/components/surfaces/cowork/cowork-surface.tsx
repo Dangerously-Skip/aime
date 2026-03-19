@@ -18,6 +18,7 @@ import { summarizeConversation } from "@/lib/memory/summarizer";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { useAutoProject } from "@/hooks/use-auto-project";
+import { useCronStore } from "@/stores/cron-store";
 import { useScratchDir } from "@/hooks/use-scratch-dir";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { useFileDrop } from "@/hooks/use-file-drop";
@@ -53,6 +54,8 @@ import { useCanvasStore } from "@/stores/canvas-store";
 import type { A2UIDocument } from "@/lib/a2ui/types";
 import { useHeartbeat } from "@/hooks/use-heartbeat";
 import { useCron } from "@/hooks/use-cron";
+import { useReminderStore, playDing } from "@/stores/reminder-store";
+import { useHeartbeatStore } from "@/stores/heartbeat-store";
 import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
 import {
   parseSlashCommand,
@@ -231,7 +234,7 @@ function SidebarPanel({
   onPreviewClick?: () => void;
 }) {
   return (
-    <div className={`flex flex-col shrink-0 transition-all duration-200 ${open ? "w-[300px]" : "w-10"}`}>
+    <div className={`flex flex-col h-full overflow-hidden shrink-0 transition-all duration-200 ${open ? "w-[300px]" : "w-10"}`}>
       {/* Toggle button */}
       <div className={`flex items-center ${open ? "justify-end px-3" : "justify-center"} py-2`}>
         <Button
@@ -324,7 +327,7 @@ export function CoworkSurface() {
   const canvasDoc = useCanvasStore((s) => s.canvasDoc);
   const canvasHistoryIndex = useCanvasStore((s) => s.historyIndex);
   const canvasHistoryLength = useCanvasStore((s) => s.history.length);
-  const canvasOpen = useCanvasStore((s) => s.openSurfaces.has('cowork'));
+  const canvasOpen = useCanvasStore((s) => !!s.openSurfaces['cowork']);
   const handleFileAttach = useCallback(
     (file: AttachmentFile) => {
       setAttachments((prev) => [...prev, file]);
@@ -386,6 +389,7 @@ export function CoworkSurface() {
   const scratchDir = useScratchDir(chatId);
   const { handleFolderSelected } = useAutoProject('cowork');
   const { showNotification } = useElectron();
+  const showReminder = useReminderStore((s) => s.showReminder);
 
   const handleFolderChange = useCallback(
     (f: string | null) => {
@@ -443,6 +447,26 @@ export function CoworkSurface() {
             status: "running",
             startTime: Date.now(),
           });
+          // Detect QUARRY_CRON pattern in Bash commands — model echoes this to schedule reminders
+          if (toolName === "Bash") {
+            const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+            const cronIdx = cmd.indexOf("QUARRY_CRON:");
+            if (cronIdx !== -1) {
+              const rest = cmd.slice(cronIdx + "QUARRY_CRON:".length).replace(/['"\\]/g, "");
+              const sep = rest.indexOf(":");
+              if (sep !== -1) {
+                const expression = rest.slice(0, sep).trim();
+                const cronPrompt = rest.slice(sep + 1).trim().split("\n")[0];
+                if (expression && cronPrompt) {
+                  const existing = useCronStore.getState().jobs;
+                  if (!existing.some((j) => j.expression === expression && j.prompt === cronPrompt)) {
+                    useCronStore.getState().addJob({ expression, prompt: cronPrompt, surfaceId: "cowork", enabled: true });
+                    console.log("[Cowork] Cron job scheduled from Bash command:", expression, cronPrompt);
+                  }
+                }
+              }
+            }
+          }
           // Categorize into sidebar panels
           const categorized = categorizeToolCall(toolName, toolInput);
           if (categorized && chatId) {
@@ -497,6 +521,25 @@ export function CoworkSurface() {
             const allMsgs = useCoworkStore.getState().messages[chatId];
             const lastMsg = allMsgs?.at(-1);
             const matchingTc = lastMsg?.toolCalls?.find((tc) => tc.id === id);
+            // Detect QUARRY_CRON in Bash output (fallback: model computed the expression via a script)
+            if (matchingTc?.name === "Bash") {
+              const cronIdx = result.indexOf("QUARRY_CRON:");
+              if (cronIdx !== -1) {
+                const rest = result.slice(cronIdx + "QUARRY_CRON:".length).replace(/['"\\]/g, "");
+                const sep = rest.indexOf(":");
+                if (sep !== -1) {
+                  const expression = rest.slice(0, sep).trim();
+                  const cronPrompt = rest.slice(sep + 1).trim().split("\n")[0];
+                  if (expression && cronPrompt) {
+                    const existing = useCronStore.getState().jobs;
+                    if (!existing.some((j) => j.expression === expression && j.prompt === cronPrompt)) {
+                      useCronStore.getState().addJob({ expression, prompt: cronPrompt, surfaceId: "cowork", enabled: true });
+                      console.log("[Cowork] Cron job scheduled from Bash output:", expression, cronPrompt);
+                    }
+                  }
+                }
+              }
+            }
             if (matchingTc?.name === "Bash") {
               const coworkFolder = useCoworkStore.getState().folder;
               BASH_ARTIFACT_EXT.lastIndex = 0;
@@ -504,6 +547,10 @@ export function CoworkSurface() {
               while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) {
                 let filePath = m[1];
                 if (!filePath.startsWith("/") && coworkFolder) {
+                  const cwdBasename = coworkFolder.split("/").pop() || "";
+                  if (cwdBasename && filePath.startsWith(`${cwdBasename}/`)) {
+                    filePath = filePath.slice(cwdBasename.length + 1);
+                  }
                   filePath = `${coworkFolder}/${filePath}`;
                 }
                 addArtifactFile(chatId, filePath);
@@ -537,6 +584,22 @@ export function CoworkSurface() {
             }
           } catch (e) {
             console.error('[Cowork] Canvas parse error:', e);
+          }
+          break;
+        }
+        case "cron_create": {
+          // Agent created a cron job — add to cron-store so UI reflects it
+          try {
+            const input = event.input as Record<string, unknown>;
+            const expression = (input.cron || input.expression) as string;
+            const prompt = (input.prompt || input.message || input.task) as string;
+            const surfaceId = (input.surfaceId || input.surface || 'cowork') as string;
+            if (expression && prompt) {
+              useCronStore.getState().addJob({ expression, prompt, surfaceId, enabled: true });
+              console.log('[Cowork] Cron job added:', expression, prompt);
+            }
+          } catch (e) {
+            console.error('[Cowork] CronCreate parse error:', e);
           }
           break;
         }
@@ -582,6 +645,11 @@ export function CoworkSurface() {
                 if (filePath.length < 3 || filePath.startsWith(".")) continue;
                 // Resolve relative paths against cowork folder
                 if (!filePath.startsWith("/") && coworkFolder) {
+                  // Avoid double-folder: if model mentions "folderName/file.ext" and cwd ends with "folderName", strip prefix
+                  const cwdBasename = coworkFolder.split("/").pop() || "";
+                  if (cwdBasename && filePath.startsWith(`${cwdBasename}/`)) {
+                    filePath = filePath.slice(cwdBasename.length + 1);
+                  }
                   filePath = `${coworkFolder}/${filePath}`;
                 }
                 if (!currentArtifacts.includes(filePath)) {
@@ -752,6 +820,7 @@ export function CoworkSurface() {
         lastMessage: prompt,
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        isBackground: true,
       });
       addMessage(bgId, { id: crypto.randomUUID(), role: 'user', content: prompt, timestamp: Date.now() });
       addMessage(bgId, { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: Date.now(), isLoading: true, isStreaming: true });
@@ -765,8 +834,61 @@ export function CoworkSurface() {
     [addConversation, addMessage, startStreaming, sendMessage, model, personalPreferences, displayName, folder, projectFolder, scratchDir]
   );
 
-  useHeartbeat(fireBackgroundRun);
-  useCron((job) => fireBackgroundRun(job.prompt));
+  // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store
+  const runSilentHeartbeat = useCallback(
+    async (prompt: string) => {
+      try {
+        const hbId = `hb-${crypto.randomUUID()}`;
+        const resp = await fetch('/api/chat/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model }),
+        });
+        if (!resp.ok || !resp.body) return;
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let text = '';
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const event = JSON.parse(line.slice(6));
+              if (event.type === 'text' && typeof event.content === 'string') {
+                text += event.content;
+              }
+            } catch {
+              // ignore parse errors
+            }
+          }
+        }
+        const summary = text.trim();
+        if (summary) {
+          useHeartbeatStore.getState().addEntry({
+            summary,
+            type: 'heartbeat',
+            unread: true,
+            timestamp: Date.now(),
+          });
+        }
+      } catch {
+        // silent — no UI impact
+      }
+    },
+    [model]
+  );
+
+  useHeartbeat(runSilentHeartbeat);
+  useCron((job) => {
+    playDing();
+    showReminder(job.id, job.prompt);
+    fireBackgroundRun(job.prompt);
+  });
 
   // Compute merged suggestions: slash takes priority over @
   const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
@@ -975,7 +1097,7 @@ export function CoworkSurface() {
         </div>
       ) : (
         /* ── Active state: messages + sidebar (no header bar) ── */
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-1 min-h-0 overflow-hidden">
           {/* Messages column */}
           <div className="flex flex-1 flex-col min-w-0">
             {/* Continue in Surface handoff (when project is active) */}

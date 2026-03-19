@@ -11,6 +11,8 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useProjectStore } from "@/stores/project-store";
 import { useMemoryStore } from "@/stores/memory-store";
 import { useConnectorStore } from "@/stores/connector-store";
+import { useCronStore } from "@/stores/cron-store";
+import { useHeartbeatStore } from "@/stores/heartbeat-store";
 import { openStorageGate } from "@/lib/gated-storage";
 
 // Module-level hydration flag + listener set
@@ -76,11 +78,13 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
       useProjectStore.persist.rehydrate(),
       useMemoryStore.persist.rehydrate(),
       useConnectorStore.persist.rehydrate(),
+      useCronStore.persist.rehydrate(),
+      useHeartbeatStore.persist.rehydrate(),
     ]).then((results) => {
       // Log any individual failures
       results.forEach((r, i) => {
         if (r.status === 'rejected') {
-          const names = ['app', 'conversation', 'chat', 'cowork', 'code', 'browser', 'settings', 'project', 'memory', 'connector'];
+          const names = ['app', 'conversation', 'chat', 'cowork', 'code', 'browser', 'settings', 'project', 'memory', 'connector', 'cron', 'heartbeat'];
           console.error(`[StoreHydration] ${names[i]} store rehydration failed:`, r.reason);
         }
       });

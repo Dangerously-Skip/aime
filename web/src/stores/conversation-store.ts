@@ -15,6 +15,8 @@ export interface Conversation {
   compactedAt?: number | null;
   summaryContent?: string | null;
   sessionResetAt?: number | null;
+  /** True for automated background runs (heartbeat, cron) — hidden from main chat list */
+  isBackground?: boolean;
 }
 
 interface ConversationState {
@@ -76,6 +78,20 @@ export const useConversationStore = create<ConversationStore>()(
       name: 'nibcowork:conversations',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        // Retroactively flag legacy [auto] conversations created before isBackground was added
+        const needsMigration = state.conversations.some(
+          (c) => !c.isBackground && c.title.startsWith('[auto]')
+        );
+        if (needsMigration) {
+          state.conversations = state.conversations.map((c) =>
+            !c.isBackground && c.title.startsWith('[auto]')
+              ? { ...c, isBackground: true }
+              : c
+          );
+        }
+      },
     }
   )
 );

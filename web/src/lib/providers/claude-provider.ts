@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { getSurfaceConfig } from '../surfaces';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
@@ -141,11 +141,42 @@ export class ClaudeProvider extends BaseProvider {
     // Scan for installed plugins to pass to SDK
     const pluginPaths = await this.scanPlugins();
 
+    // Per-request array to collect cron jobs created via the CronCreate MCP tool
+    const pendingCronJobs: Array<{ expression: string; prompt: string; surfaceId: string }> = [];
+
+    // In-process MCP server exposing CronCreate so the model can schedule reminders
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const z = (await import('zod/v3') as any).z ?? (await import('zod/v3') as any).default ?? await import('zod/v3');
+    const quarryMcpServer = createSdkMcpServer({
+      name: 'quarry',
+      version: '1.0.0',
+      tools: [
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'CronCreate',
+          'Schedule a recurring reminder or task using a cron expression. Use this whenever the user asks to be reminded about something at a future time or on a recurring schedule. Do NOT use Bash crontab commands.',
+          {
+            expression: z.string().describe('5-field cron expression (min hour dom month dow). E.g. "32 9 * * *" for 9:32am daily, "*/10 * * * *" for every 10 minutes.'),
+            prompt: z.string().describe('The reminder message or task to run when the cron fires'),
+            surfaceId: z.string().optional().describe('Surface to run on: cowork (default), chat, or code'),
+          },
+          async ({ expression, prompt, surfaceId }: { expression: string; prompt: string; surfaceId?: string }) => {
+            if (expression && prompt) {
+              pendingCronJobs.push({ expression, prompt, surfaceId: surfaceId ?? 'cowork' });
+            }
+            return {
+              content: [{ type: 'text' as const, text: `Reminder scheduled: "${prompt}" (${expression}). It will appear in Customize → Automation → Cron Jobs.` }],
+            };
+          }
+        ),
+      ],
+    });
+
     // Build query options
     const queryOptions: Record<string, unknown> = {
       allowedTools,
       maxTurns,
-      mcpServers,
+      mcpServers: { ...mcpServers, quarry: quarryMcpServer },
       permissionMode,
       settingSources: ['user', 'project'], // Enable Skills from filesystem
       ...(pluginPaths.length > 0 && {
@@ -183,6 +214,22 @@ export class ClaudeProvider extends BaseProvider {
             },
           };
         }
+      }
+
+      // ── CronCreate (in-process MCP or direct) ─────────────────────────
+      if (toolName === 'CronCreate' || toolName.endsWith('__CronCreate') || toolName.endsWith(':CronCreate')) {
+        const expression = input.expression as string;
+        const prompt = input.prompt as string;
+        if (expression && prompt) {
+          const alreadyQueued = pendingCronJobs.some(
+            (j) => j.expression === expression && j.prompt === prompt
+          );
+          if (!alreadyQueued) {
+            pendingCronJobs.push({ expression, prompt, surfaceId: (input.surfaceId as string) ?? surfaceId ?? 'cowork' });
+            console.log('[Claude] CronCreate intercepted in canUseTool:', expression, prompt);
+          }
+        }
+        return { behavior: 'allow' as const };
       }
 
       // ── AskUserQuestion ────────────────────────────────────────────────
@@ -449,6 +496,15 @@ export class ClaudeProvider extends BaseProvider {
                     id: block.id as string,
                     provider: this.name,
                   };
+                } else if (toolName === 'CronCreate' || toolName.endsWith('__CronCreate') || toolName.endsWith(':CronCreate')) {
+                  // Intercept CronCreate (any server prefix) — emit cron_create SSE event
+                  console.log('[Claude] CronCreate tool use — emitting cron_create event, toolName:', toolName);
+                  yield {
+                    type: 'cron_create',
+                    input: toolInput,
+                    id: block.id as string,
+                    provider: this.name,
+                  };
                 } else {
                   yield {
                     type: 'tool_use',
@@ -485,6 +541,16 @@ export class ClaudeProvider extends BaseProvider {
             provider: this.name,
           };
         }
+      }
+
+      // Emit cron_create events for any jobs created via the CronCreate MCP tool
+      for (const job of pendingCronJobs) {
+        yield {
+          type: 'cron_create',
+          input: job,
+          id: `cron_${Date.now()}`,
+          provider: this.name,
+        };
       }
 
       // Signal completion
