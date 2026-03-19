@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { useMarketplace } from "@/lib/use-marketplace";
 import { PluginRow } from "./plugin-row";
-import { Cable, Trash2, RefreshCw, Loader2, Plus, ExternalLink, Globe, ChevronRight } from "lucide-react";
+import { Cable, Trash2, RefreshCw, Loader2, Plus, Globe, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddConnectorDialog } from "./add-connector-dialog";
 
@@ -23,7 +23,7 @@ interface ConnectorData {
   name: string;
   type: string;
   config: ConnectorConfig;
-  source: 'mcp_json' | 'composio';
+  source: 'mcp_json';
   disabled: boolean;
 }
 
@@ -48,20 +48,6 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
     .slice(0, 5);
 
   const fetchConnector = useCallback((id: string) => {
-    // Special case for Composio
-    if (id === "__composio__") {
-      setConnector({
-        id: "__composio__",
-        name: "Composio Tool Router",
-        type: "http",
-        config: { type: "http" },
-        source: "composio",
-        disabled: false,
-      });
-      setLoading(false);
-      return;
-    }
-
     setLoading(true);
     setError(null);
     fetch(`/api/customize/connectors/${encodeURIComponent(id)}`)
@@ -83,14 +69,14 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
   }, [connectorId, fetchConnector]);
 
   async function handleDelete() {
-    if (!connector || connector.source === "composio") return;
+    if (!connector) return;
     if (!confirm(`Remove connector "${connector.name}"? This removes it from ~/.claude/.mcp.json.`)) return;
     await fetch(`/api/customize/connectors/${encodeURIComponent(connector.id)}`, { method: "DELETE" });
     setConnector(null);
   }
 
   async function handleToggle() {
-    if (!connector || connector.source === "composio") return;
+    if (!connector) return;
     setToggling(true);
     try {
       const res = await fetch(`/api/customize/connectors/${encodeURIComponent(connector.id)}`, {
@@ -189,7 +175,6 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
     );
   }
 
-  const isComposio = connector.source === "composio";
   const config = connector.config;
 
   return (
@@ -214,103 +199,68 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
             <span className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
               {connector.type.toUpperCase()}
             </span>
-            {isComposio && (
-              <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-                Managed
-              </span>
-            )}
           </div>
         </div>
-        {!isComposio && (
-          <div className="flex items-center gap-1 shrink-0">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-destructive hover:text-destructive"
-              onClick={handleDelete}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-        )}
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-destructive hover:text-destructive"
+            onClick={handleDelete}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
 
       {/* Toggle & actions */}
       <div className="flex items-center gap-3 mb-6">
-        {!isComposio && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleToggle}
-            disabled={toggling}
-          >
-            {toggling && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
-            {connector.disabled ? "Enable" : "Disable"}
-          </Button>
-        )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleToggle}
+          disabled={toggling}
+        >
+          {toggling && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />}
+          {connector.disabled ? "Enable" : "Disable"}
+        </Button>
         <Button variant="outline" size="sm" disabled>
           <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
           Reconnect
         </Button>
-        {isComposio && (
-          <a
-            href="https://app.composio.dev"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-          >
-            <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-            Composio Dashboard
-          </a>
-        )}
       </div>
 
       {/* Configuration */}
-      {!isComposio && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-medium">Configuration</h3>
-          <div className="rounded-lg border border-border divide-y divide-border">
-            {config.type === "stdio" && (
-              <>
-                <ConfigRow label="Command" value={config.command || "-"} mono />
-                {config.args && config.args.length > 0 && (
-                  <ConfigRow label="Arguments" value={config.args.join(" ")} mono />
-                )}
-              </>
-            )}
-            {(config.type === "http" || config.type === "sse") && (
-              <ConfigRow label="URL" value={config.url || "-"} mono />
-            )}
-            {config.headers && Object.keys(config.headers).length > 0 && (
-              <ConfigRow
-                label="Headers"
-                value={Object.entries(config.headers)
-                  .map(([k, v]) => `${k}: ${v.length > 20 ? v.slice(0, 8) + "..." : v}`)
-                  .join(", ")}
-              />
-            )}
-            {config.env && Object.keys(config.env).length > 0 && (
-              <ConfigRow
-                label="Env vars"
-                value={Object.keys(config.env).join(", ")}
-              />
-            )}
-          </div>
+      <div className="space-y-4">
+        <h3 className="text-sm font-medium">Configuration</h3>
+        <div className="rounded-lg border border-border divide-y divide-border">
+          {config.type === "stdio" && (
+            <>
+              <ConfigRow label="Command" value={config.command || "-"} mono />
+              {config.args && config.args.length > 0 && (
+                <ConfigRow label="Arguments" value={config.args.join(" ")} mono />
+              )}
+            </>
+          )}
+          {(config.type === "http" || config.type === "sse") && (
+            <ConfigRow label="URL" value={config.url || "-"} mono />
+          )}
+          {config.headers && Object.keys(config.headers).length > 0 && (
+            <ConfigRow
+              label="Headers"
+              value={Object.entries(config.headers)
+                .map(([k, v]) => `${k}: ${v.length > 20 ? v.slice(0, 8) + "..." : v}`)
+                .join(", ")}
+            />
+          )}
+          {config.env && Object.keys(config.env).length > 0 && (
+            <ConfigRow
+              label="Env vars"
+              value={Object.keys(config.env).join(", ")}
+            />
+          )}
         </div>
-      )}
-
-      {/* Composio info */}
-      {isComposio && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-medium">About Composio</h3>
-          <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground leading-relaxed">
-            Composio Tool Router provides 500+ app integrations (Gmail, Slack,
-            GitHub, Jira, and more) via a managed MCP server. It is automatically
-            connected when <code className="text-xs bg-muted px-1 py-0.5 rounded">COMPOSIO_API_KEY</code> is
-            configured.
-          </div>
-        </div>
-      )}
+      </div>
 
       <AddConnectorDialog
         open={showAddDialog}

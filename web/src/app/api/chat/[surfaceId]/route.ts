@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getProvider, getAvailableProviders } from '@/lib/providers';
 import { getSurfaceConfig, getAvailableSurfaces } from '@/lib/surfaces';
-import { getOrCreateComposioSession, buildComposioMcpServers } from '@/lib/composio';
 import { createSSEStream } from '@/lib/sse';
 import { isGatewayConfigured } from '@/lib/gateway-env';
 import { GatewayProvider } from '@/lib/providers/gateway-provider';
@@ -149,9 +148,6 @@ function getGatewayInstance(): GatewayProvider {
 /**
  * Surface-routed chat endpoint.
  * POST /api/chat/:surfaceId
- *
- * Loads the surface config for the given surfaceId, initializes Composio
- * session, and streams SSE chunks from the selected provider.
  */
 export async function POST(
   req: NextRequest,
@@ -282,17 +278,6 @@ export async function POST(
     try {
       await sse.writeEvent({ type: 'connected', message: 'Processing request...' });
 
-      // Get or create Composio session for this user
-      let composioSession;
-      try {
-        await sse.writeEvent({ type: 'status', message: 'Initializing session...' });
-        composioSession = await getOrCreateComposioSession(userId as string);
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.error('[COMPOSIO] Session error:', errMsg);
-        // Continue without Composio if it fails
-      }
-
       // Get the provider instance.
       // Chat surface: use lightweight GatewayProvider (OpenAI SDK, no tools needed).
       // Cowork/Code surfaces: use ClaudeProvider with gateway env (needs agentic tool execution).
@@ -302,10 +287,8 @@ export async function POST(
         : getProvider(providerName as string);
       if (useGateway) console.log('[CHAT] Using nib AI Studio gateway provider (chat-only)');
 
-      // Build MCP servers config — merge Composio + provisioned connector servers
-      const composioServers = composioSession ? buildComposioMcpServers(composioSession) : {};
-      const provisionedServers = await loadProvisionedMcpServers();
-      const mcpServers = { ...composioServers, ...provisionedServers };
+      // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
+      const mcpServers = await loadProvisionedMcpServers();
       if (Object.keys(provisionedServers).length > 0) {
         console.log('[CHAT] Loaded provisioned connector servers:', Object.keys(provisionedServers).join(', '));
       }

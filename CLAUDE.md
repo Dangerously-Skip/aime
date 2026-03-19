@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Open Claude Cowork is an Electron desktop chat application powered by Claude Agent SDK and Composio Tool Router. Built with Next.js, React, and shadcn/ui in the `web/` directory. Supports multiple AI providers (Claude, Opencode) with real-time streaming responses via SSE.
+Nib Cowork is an Electron desktop chat application powered by the Claude Agent SDK. Built with Next.js, React, and shadcn/ui in the `web/` directory. Supports multiple AI providers (Claude, Opencode) with real-time streaming responses via SSE. OAuth connectors (GitHub, Slack, Jira, etc.) are provisioned via `~/.claude/.mcp.json` and injected into the Claude Agent SDK at request time.
 
 ## Development Commands
 
@@ -41,13 +41,15 @@ No test suite or linter is configured.
 **API Endpoints:** `POST /api/chat/[surfaceId]` (SSE streaming), `POST /api/abort`, `GET /api/providers`, `GET /api/health`, `GET /api/models`
 
 **External integrations:**
-- Composio Tool Router via MCP for 500+ app integrations (Gmail, Slack, GitHub, etc.)
+- OAuth connectors (GitHub, Slack, Jira, Confluence, Figma, etc.) provisioned to `~/.claude/.mcp.json` and loaded at request time via `loadProvisionedMcpServers()`
+- Connector registry: `web/src/lib/connectors/registry.ts` — maps connector IDs to MCP transport configs
+- OAuth flow: `web/src/lib/connectors/oauth.ts` → `/api/connectors/oauth/token` → `provisioner.ts` → `.mcp.json`
 
 ## Environment Variables
 
 Defined in `.env` (copy from `.env.example`):
 - `ANTHROPIC_API_KEY` — Required for Claude provider (starts with `sk-ant-`)
-- `COMPOSIO_API_KEY` — Required for Composio Tool Router
+- OAuth connector credentials (GitHub, Slack, Atlassian, MS365, Google, Figma, Miro, Zoom) — see `.env.example`
 
 ## Key Patterns
 

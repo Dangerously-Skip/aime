@@ -46,7 +46,7 @@ interface ConnectorEntry {
   name: string;
   type: string;
   config: McpServerConfig;
-  source: 'mcp_json' | 'composio';
+  source: 'mcp_json';
   disabled: boolean;
 }
 
@@ -56,18 +56,6 @@ interface ConnectorEntry {
 export async function GET() {
   const mcpData = readMcpJson();
   const connectors: ConnectorEntry[] = [];
-
-  // Add Composio as a special entry if configured
-  if (process.env.COMPOSIO_API_KEY) {
-    connectors.push({
-      id: '__composio__',
-      name: 'Composio Tool Router',
-      type: 'http',
-      config: { type: 'http' },
-      source: 'composio',
-      disabled: false,
-    });
-  }
 
   // Add user-configured MCP servers
   const servers = mcpData.mcpServers || {};

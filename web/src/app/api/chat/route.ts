@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import { getProvider, getAvailableProviders } from '@/lib/providers';
-import { getOrCreateComposioSession, buildComposioMcpServers } from '@/lib/composio';
 import { createSSEStream } from '@/lib/sse';
 
 export const runtime = 'nodejs';
@@ -63,24 +62,10 @@ export async function POST(req: NextRequest) {
     try {
       await sse.writeEvent({ type: 'connected', message: 'Processing request...' });
 
-      // Get or create Composio session for this user
-      let composioSession;
-      try {
-        await sse.writeEvent({ type: 'status', message: 'Initializing session...' });
-        composioSession = await getOrCreateComposioSession(userId as string);
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.error('[COMPOSIO] Session error:', errMsg);
-        // Continue without Composio if it fails
-      }
-
       // Get the provider instance
       const provider = getProvider(providerName as string);
 
-      // Build MCP servers config
-      const mcpServers = composioSession
-        ? buildComposioMcpServers(composioSession)
-        : {};
+      const mcpServers = {};
 
       console.log('[CHAT] Using provider:', provider.name);
       console.log('[CHAT] All stored sessions:', Array.from(provider.sessions.entries()));
