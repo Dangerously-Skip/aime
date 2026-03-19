@@ -44,12 +44,6 @@ export async function GET() {
     }
   } catch {}
 
-  // Add Composio if configured
-  if (process.env.COMPOSIO_API_KEY) {
-    connectorCount++;
-    connectorNames.unshift('Composio');
-  }
-
   // Count plugins
   let pluginCount = 0;
   const pluginNames: string[] = [];
