@@ -234,10 +234,9 @@ export function BrowserSurface() {
   useEffect(() => {
     if (activeTabId && activeTabId !== prevActiveTabIdRef.current) {
       prevActiveTabIdRef.current = activeTabId;
-      if (activeTab?.url) {
-        setWebviewSrc(activeTab.url);
-        setUrlInput(activeTab.url);
-      }
+      const url = activeTab?.url || "";
+      setWebviewSrc(url);
+      setUrlInput(url);
     }
   }, [activeTabId, activeTab?.url]);
 
@@ -301,6 +300,45 @@ export function BrowserSurface() {
   }, [memories]);
 
   // ── Browser agent hook ──────────────────────────────────────────────────
+  const handleSwitchTab = useCallback(async (tabId: string): Promise<(HTMLElement & import("@/lib/browser-tools").WebviewRef) | null> => {
+    const state = useBrowserStore.getState();
+    const cid = state.currentChatId;
+    if (!cid) return null;
+
+    const storeTabs = state.tabSessions[cid] ?? [];
+    const targetTab = storeTabs.find((t) => t.id === tabId);
+    if (!targetTab) return null;
+
+    // Switch the active tab in the store
+    state.setActiveTab(tabId, cid);
+
+    const url = targetTab.url || "";
+    setUrlInput(url);
+
+    const wv = webviewNodeRef.current;
+    if (wv && url) {
+      // Navigate the webview directly (don't rely on React state re-render)
+      try {
+        await wv.loadURL(url);
+      } catch (e) {
+        // ERR_ABORTED from redirects is fine
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!msg.includes('(-3)') && !msg.includes('ERR_ABORTED')) {
+          return null;
+        }
+      }
+      // Also sync React state for UI consistency
+      setWebviewSrc(url);
+      // Small extra wait for page scripts to settle
+      await new Promise((r) => setTimeout(r, 500));
+    } else {
+      // Empty URL tab — show landing page
+      setWebviewSrc("");
+    }
+
+    return webviewNodeRef.current;
+  }, []);
+
   const { runAgentLoop, abort } = useBrowserAgent({
     onText(text) {
       const id = useBrowserStore.getState().currentChatId ?? "";
@@ -335,6 +373,18 @@ export function BrowserSurface() {
     apiKey: nibGatewayApiKey,
     memories: memoriesStr || undefined,
     consoleBuffer: consoleBufferRef.current,
+    getTabs() {
+      const state = useBrowserStore.getState();
+      const cid = state.currentChatId;
+      if (!cid) return [];
+      return (state.tabSessions[cid] ?? []).map((t) => ({
+        id: t.id,
+        title: t.title,
+        url: t.url,
+        isActive: t.id === state.activeTabIds[cid],
+      }));
+    },
+    onSwitchTab: handleSwitchTab,
   });
 
   // Ensure a browser conversation exists for tab management.

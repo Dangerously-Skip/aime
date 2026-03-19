@@ -32,6 +32,7 @@ import {
   Timer,
   ToggleLeft,
   ToggleRight,
+  Users,
 } from "lucide-react";
 import { useCronStore } from "@/stores/cron-store";
 import {
@@ -776,6 +777,37 @@ export function ProjectDetail({
               </div>
             )}
           </div>
+        {/* Team / Multiplayer — Coming Soon */}
+        <div className="mt-4 rounded-xl border border-border/50 bg-card/50 overflow-hidden opacity-50 pointer-events-none select-none">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-border/50">
+            <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              Team
+            </h3>
+            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50">
+              Multiplayer Mode Coming Soon
+            </span>
+          </div>
+          <div className="px-5 py-4 space-y-3">
+            {/* Fake member rows */}
+            {["Project Owner", "Collaborator", "Viewer"].map((role) => (
+              <div key={role} className="flex items-center gap-3">
+                <div className="h-7 w-7 rounded-full bg-muted border border-border/50 shrink-0" />
+                <div className="flex-1 space-y-1">
+                  <div className="h-2.5 w-24 rounded bg-muted" />
+                  <div className="h-2 w-16 rounded bg-muted/60" />
+                </div>
+                <div className="h-5 w-14 rounded-full bg-muted/60" />
+              </div>
+            ))}
+            <div className="pt-1">
+              <div className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground/60">
+                <Plus className="h-3.5 w-3.5" />
+                Invite teammate
+              </div>
+            </div>
+          </div>
+        </div>
         </div>
       </div>
 
