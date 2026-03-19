@@ -1,13 +1,14 @@
 "use client"
 
-import { User, Palette, Wrench, Link, Users, Code, Database, Brain, Shield } from "lucide-react"
+import { User, Palette, Wrench, Link, Users, Code, Database, Brain, Shield, Fingerprint } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const navItems = [
   { id: "profile", label: "Profile", icon: User },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "capabilities", label: "Capabilities", icon: Wrench },
-  { id: "connectors", label: "Connectors", icon: Link },
+  { id: "identity", label: "Identity", icon: Fingerprint },
+  { id: "connectors", label: "Team (Billing)", icon: Link },
   { id: "cowork", label: "Cowork", icon: Users },
   { id: "code", label: "Code", icon: Code },
   { id: "security", label: "Security", icon: Shield },

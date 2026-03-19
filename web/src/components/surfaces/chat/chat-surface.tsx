@@ -28,6 +28,14 @@ import { ArtifactPanel } from "@/components/shared/artifact-panel";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
+import { parseSlashCommand, applySlashCommand, getSlashSuggestions, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
+import type { SessionControls } from "@/lib/slash-commands";
+import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
+import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
+import { useCanvasStore } from "@/stores/canvas-store";
+import { CanvasPanel } from "@/components/shared/canvas-panel";
+import type { A2UIDocument } from "@/lib/a2ui/types";
+import { useCronStore } from "@/stores/cron-store";
 
 function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
   switch (category) {
@@ -59,6 +67,20 @@ export function ChatSurface() {
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
+  const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
+  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
+  const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
+    useAtSuggestions();
+  const addCronJob = useCronStore((s) => s.addJob);
+  const pushCanvas = useCanvasStore((s) => s.pushCanvas);
+  const clearCanvas = useCanvasStore((s) => s.clearCanvas);
+  const goBackCanvas = useCanvasStore((s) => s.goBack);
+  const goForwardCanvas = useCanvasStore((s) => s.goForward);
+  const setCanvasOpen = useCanvasStore((s) => s.setOpen);
+  const canvasDoc = useCanvasStore((s) => s.canvasDoc);
+  const canvasHistoryIndex = useCanvasStore((s) => s.historyIndex);
+  const canvasHistoryLength = useCanvasStore((s) => s.history.length);
+  const canvasOpen = useCanvasStore((s) => !!s.openSurfaces['chat']);
   const { isDragging, dropZoneProps } = useFileDrop(
     useCallback((file: AttachmentFile) => setAttachments((prev) => [...prev, file]), [])
   );
@@ -82,6 +104,8 @@ export function ChatSurface() {
   const startStreaming = useChatStore((s) => s.startStreaming);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const setCurrentChat = useChatStore((s) => s.setCurrentChat);
+  const setIsStreaming = useChatStore((s) => s.setIsStreaming);
+  const setStreamError = useChatStore((s) => s.setStreamError);
   const clearMessages = useChatStore((s) => s.clearMessages);
   const updateConversation = useConversationStore(
     (s) => s.updateConversation
@@ -101,6 +125,12 @@ export function ChatSurface() {
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const toolProfile = useSettingsStore((s) => s.toolProfile);
+  const setSessionControlsInStore = useChatStore((s) => s.setSessionControls);
+  const sessionControlsMap = useChatStore((s) => s.sessionControls);
+  const sessionControls: SessionControls = chatId
+    ? (sessionControlsMap[chatId] ?? DEFAULT_SESSION_CONTROLS)
+    : DEFAULT_SESSION_CONTROLS;
   const { projectInstructions, projectKnowledge, projectName, projectIcon, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "chat");
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
@@ -132,6 +162,9 @@ export function ChatSurface() {
   }, [chatId]);
 
   const { sendMessage, abort } = useSSEStream({
+    chatId,
+    setIsStreaming,
+    setStreamError,
     onChunk(event) {
       switch (event.type) {
         case "text":
@@ -176,6 +209,32 @@ export function ChatSurface() {
             showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
           }
           break;
+        case "canvas": {
+          try {
+            const doc = event.doc as A2UIDocument;
+            if (doc && doc.components) {
+              pushCanvas(doc);
+              setCanvasOpen('chat', true);
+            }
+          } catch (e) {
+            console.error('[Chat] Canvas parse error:', e);
+          }
+          break;
+        }
+        case "cron_create": {
+          try {
+            const input = event.input as Record<string, unknown>;
+            const expression = (input.cron || input.expression) as string;
+            const prompt = (input.prompt || input.message || input.task) as string;
+            const surfaceId = (input.surfaceId || input.surface || 'cowork') as string;
+            if (expression && prompt) {
+              addCronJob({ expression, prompt, surfaceId, enabled: true });
+            }
+          } catch (e) {
+            console.error('[Chat] CronCreate parse error:', e);
+          }
+          break;
+        }
         case "memory_extract":
           handleMemoryExtractEvent(
             event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
@@ -206,6 +265,36 @@ export function ChatSurface() {
     async (text: string) => {
       if (!text.trim()) return;
       const trimmed = text.trim();
+
+      // ── Slash command interception ─────────────────────────────────────
+      const parsed = parseSlashCommand(trimmed);
+      if (parsed) {
+        const result = applySlashCommand(parsed, sessionControls);
+        if (result) {
+          // Apply the new controls
+          const currentId = chatId || crypto.randomUUID();
+          setSessionControlsInStore(currentId, result.controls);
+          // Add a system-like assistant message showing the result
+          let id = chatId;
+          if (!id) {
+            id = currentId;
+            addConversation({
+              id,
+              title: trimmed.substring(0, 50),
+              surface: "chat",
+              lastMessage: trimmed,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            });
+            setActiveConversation(id);
+            setCurrentChat(id);
+          }
+          addMessage(id, { id: crypto.randomUUID(), role: "user", content: trimmed, timestamp: Date.now() });
+          addMessage(id, { id: crypto.randomUUID(), role: "assistant", content: result.message, timestamp: Date.now() });
+          setInputValue("");
+          return;
+        }
+      }
 
       // Auto-create conversation if none active
       let id = chatId;
@@ -282,6 +371,8 @@ export function ChatSurface() {
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
         crossSurfaceContext: crossSurfaceContext || undefined,
+        sessionControls: sessionControls,
+        toolProfile: toolProfile,
       });
     },
     [
@@ -315,7 +406,55 @@ export function ChatSurface() {
     []
   );
 
+  // Merged suggestions: slash takes priority
+  const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
+    ? cmdSuggestions
+    : fileSuggestions.map((f) => ({
+        type: 'at' as const,
+        value: f.path,
+        label: '@' + f.name,
+        description: undefined,
+        meta: f.relative,
+      }));
+
+  function handleSelectSuggestion(s: CommandSuggestion) {
+    if (s.type === 'slash') {
+      setInputValue(s.value + ' ');
+      setCmdSuggestions([]);
+    } else {
+      const newVal = removeAtQuery(inputValue);
+      setInputValue(newVal);
+      clearAtSuggestions();
+      resolveFileAsAttachment(s.value).then((att) => {
+        if (att) setAttachments((prev) => [...prev, att]);
+      });
+    }
+    setSelectedSuggestionIdx(0);
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (activeSuggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedSuggestionIdx((i) => Math.min(i + 1, activeSuggestions.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedSuggestionIdx((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && activeSuggestions.length > 0)) {
+        e.preventDefault();
+        handleSelectSuggestion(activeSuggestions[selectedSuggestionIdx]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setCmdSuggestions([]);
+        clearAtSuggestions();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (isStreaming) {
@@ -327,10 +466,24 @@ export function ChatSurface() {
   }
 
   function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setInputValue(e.target.value);
+    const val = e.target.value;
+    setInputValue(val);
     const textarea = e.target;
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+    // Slash suggestions
+    setCmdSuggestions(
+      getSlashSuggestions(val).map((cmd) => ({
+        type: 'slash' as const,
+        value: cmd.name,
+        label: cmd.name,
+        description: cmd.args,
+        meta: cmd.description,
+      }))
+    );
+    // @ file suggestions: chat has no CWD so just clear them
+    clearAtSuggestions();
+    setSelectedSuggestionIdx(0);
   }
 
   function handleButtonClick() {
@@ -401,6 +554,12 @@ export function ChatSurface() {
 
           {/* Centered input card */}
           <div className="w-full max-w-2xl">
+            <CommandPicker
+              suggestions={activeSuggestions}
+              selectedIndex={selectedSuggestionIdx}
+              onSelect={handleSelectSuggestion}
+              onSelectedIndexChange={setSelectedSuggestionIdx}
+            />
             <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
               <Textarea
                 value={inputValue}
@@ -494,6 +653,12 @@ export function ChatSurface() {
           {/* Bottom input card */}
           <div className="px-6 pb-4 pt-2">
             <div className="max-w-3xl mx-auto">
+              <CommandPicker
+                suggestions={activeSuggestions}
+                selectedIndex={selectedSuggestionIdx}
+                onSelect={handleSelectSuggestion}
+                onSelectedIndexChange={setSelectedSuggestionIdx}
+              />
               <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
                 <Textarea
                   value={inputValue}
@@ -577,6 +742,22 @@ export function ChatSurface() {
         projectId={currentProjectId}
         onArtifactSaved={handleArtifactSaved}
       />
+
+      {/* Canvas panel */}
+      {canvasOpen && (
+        <div className="fixed right-0 top-0 h-full z-40">
+          <CanvasPanel
+            open={canvasOpen}
+            doc={canvasDoc}
+            onClose={() => setCanvasOpen('chat', false)}
+            onBack={goBackCanvas}
+            onForward={goForwardCanvas}
+            onClear={clearCanvas}
+            canGoBack={canvasHistoryIndex > 0}
+            canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
+          />
+        </div>
+      )}
     </div>
   );
 }

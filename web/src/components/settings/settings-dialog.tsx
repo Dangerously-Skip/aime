@@ -14,11 +14,13 @@ import { CodeSection } from "./sections/code-section"
 import { DataSection } from "./sections/data-section"
 import { MemorySection } from "./sections/memory-section"
 import { SecuritySection } from "./sections/security-section"
+import { IdentitySection } from "./sections/identity-section"
 
 const sectionComponents: Record<string, React.ComponentType> = {
   profile: ProfileSection,
   appearance: AppearanceSection,
   capabilities: CapabilitiesSection,
+  identity: IdentitySection,
   connectors: ConnectorsSection,
   cowork: CoworkSection,
   code: CodeSection,

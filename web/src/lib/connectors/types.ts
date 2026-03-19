@@ -3,6 +3,8 @@ export interface ConnectorDefinition {
   name: string;
   description: string;
   category: 'project-management' | 'communication' | 'development' | 'cloud' | 'design' | 'documentation';
+  /** If true, shows a "Coming soon" badge and disables the Connect button */
+  comingSoon?: boolean;
 
   // Auth config
   auth: {
@@ -13,6 +15,7 @@ export interface ConnectorDefinition {
     clientId?: string;
     pkce?: boolean;
     envVarName?: string; // For api_key type
+    hint?: string;       // Instruction text shown in the Connect dialog
   };
 
   // MCP server config

@@ -10,6 +10,7 @@ export interface ConversationGroup {
 
 interface UseConversationsReturn {
   groups: ConversationGroup[];
+  backgroundConversations: Conversation[];
   activeConversation: Conversation | undefined;
 }
 
@@ -57,9 +58,16 @@ export function useConversations(surface: string, projectId?: string | null): Us
   const conversations = useConversationStore((state) => state.conversations);
   const activeId = useConversationStore((state) => state.activeId);
 
+  const backgroundConversations = useMemo(() => {
+    return conversations
+      .filter((c) => c.surface === surface && c.isBackground)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [conversations, surface]);
+
   const groups = useMemo(() => {
     const now = new Date();
-    let filtered = conversations.filter((c) => c.surface === surface);
+    // Exclude background runs from the main list
+    let filtered = conversations.filter((c) => c.surface === surface && !c.isBackground);
 
     // Filter by project if specified
     if (projectId !== undefined && projectId !== null) {
@@ -100,5 +108,5 @@ export function useConversations(surface: string, projectId?: string | null): Us
     [conversations, activeId]
   );
 
-  return { groups, activeConversation };
+  return { groups, backgroundConversations, activeConversation };
 }

@@ -37,4 +37,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onOpenSettings: (callback) => {
     ipcRenderer.on("open-settings", () => callback());
   },
+  onMinuteTick: (callback) => {
+    ipcRenderer.on("minute:tick", (_event, ts) => callback(ts));
+  },
 });

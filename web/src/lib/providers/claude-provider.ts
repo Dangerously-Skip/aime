@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { getSurfaceConfig } from '../surfaces';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
@@ -6,6 +6,11 @@ import { getGatewayEnv, isGatewayConfigured, mapModelForGateway } from '../gatew
 import { waitForAnswer } from '../pending-questions';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
+
+/** Canvas tool name — intercepted to push A2UI documents to client. */
+const CANVAS_TOOL_NAME = 'canvas';
+/** Spawn-agent tool name — intercepted to fire a sub-agent HTTP request. */
+const SPAWN_AGENT_TOOL_NAME = 'spawn_agent';
 
 /**
  * Cached system:init data from the most recent session.
@@ -29,6 +34,8 @@ export class ClaudeProvider extends BaseProvider {
   private permissionMode: string;
   private abortControllers: Map<string, AbortController>;
   public lastInitData: SystemInitData | null = null;
+  /** Recent tool calls per session for loop detection: key → [{name, inputHash}] */
+  private toolCallWindows: Map<string, Array<{ name: string; inputHash: string }>> = new Map();
 
   constructor(config: ProviderConfig = {}) {
     super(config);
@@ -134,11 +141,42 @@ export class ClaudeProvider extends BaseProvider {
     // Scan for installed plugins to pass to SDK
     const pluginPaths = await this.scanPlugins();
 
+    // Per-request array to collect cron jobs created via the CronCreate MCP tool
+    const pendingCronJobs: Array<{ expression: string; prompt: string; surfaceId: string }> = [];
+
+    // In-process MCP server exposing CronCreate so the model can schedule reminders
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const z = (await import('zod/v3') as any).z ?? (await import('zod/v3') as any).default ?? await import('zod/v3');
+    const quarryMcpServer = createSdkMcpServer({
+      name: 'quarry',
+      version: '1.0.0',
+      tools: [
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'CronCreate',
+          'Schedule a recurring reminder or task using a cron expression. Use this whenever the user asks to be reminded about something at a future time or on a recurring schedule. Do NOT use Bash crontab commands.',
+          {
+            expression: z.string().describe('5-field cron expression (min hour dom month dow). E.g. "32 9 * * *" for 9:32am daily, "*/10 * * * *" for every 10 minutes.'),
+            prompt: z.string().describe('The reminder message or task to run when the cron fires'),
+            surfaceId: z.string().optional().describe('Surface to run on: cowork (default), chat, or code'),
+          },
+          async ({ expression, prompt, surfaceId }: { expression: string; prompt: string; surfaceId?: string }) => {
+            if (expression && prompt) {
+              pendingCronJobs.push({ expression, prompt, surfaceId: surfaceId ?? 'cowork' });
+            }
+            return {
+              content: [{ type: 'text' as const, text: `Reminder scheduled: "${prompt}" (${expression}). It will appear in Customize → Automation → Cron Jobs.` }],
+            };
+          }
+        ),
+      ],
+    });
+
     // Build query options
     const queryOptions: Record<string, unknown> = {
       allowedTools,
       maxTurns,
-      mcpServers,
+      mcpServers: { ...mcpServers, quarry: quarryMcpServer },
       permissionMode,
       settingSources: ['user', 'project'], // Enable Skills from filesystem
       ...(pluginPaths.length > 0 && {
@@ -146,39 +184,104 @@ export class ClaudeProvider extends BaseProvider {
       }),
     };
 
-    // Intercept AskUserQuestion and browser tools via canUseTool.
-    // canUseTool is called even with bypassPermissions for AskUserQuestion
-    // since the SDK needs to collect user answers for that tool.
-    if (onInputRequest || onBrowserToolUse) {
-      queryOptions.canUseTool = async (
-        toolName: string,
-        input: Record<string, unknown>,
-        { toolUseID }: { toolUseID: string },
-      ) => {
-        // Handle AskUserQuestion
-        if (toolName === 'AskUserQuestion' && onInputRequest) {
-          await onInputRequest(toolUseID, input.questions);
-          const answers = await waitForAnswer(toolUseID);
+    // Loop detection window for this query
+    const loopWindow: Array<{ name: string; inputHash: string }> = [];
+    const loopThreshold = 3; // configurable via settings — hard-coded for now, route can pass via params
+
+    // Intercept AskUserQuestion, browser tools, canvas tool, and loop detection via canUseTool.
+    queryOptions.canUseTool = async (
+      toolName: string,
+      input: Record<string, unknown>,
+      { toolUseID }: { toolUseID: string },
+    ) => {
+      // ── Loop detection ─────────────────────────────────────────────────
+      const inputHash = JSON.stringify(input);
+      loopWindow.push({ name: toolName, inputHash });
+      // Keep last 10 tool calls
+      if (loopWindow.length > 10) loopWindow.shift();
+      // Check for consecutive identical calls
+      if (loopWindow.length >= loopThreshold) {
+        const last = loopWindow.slice(-loopThreshold);
+        const isLoop = last.every((t) => t.name === toolName && t.inputHash === inputHash);
+        if (isLoop) {
+          console.warn('[Claude] Loop detected for tool:', toolName, 'id:', toolUseID);
           return {
             behavior: 'allow' as const,
-            updatedInput: { ...input, answers },
+            updatedInput: {
+              ...input,
+              __loopDetected: true,
+              __loopMessage: `Loop detected — you've called ${toolName} ${loopThreshold} times with identical inputs. Try a different approach or call a different tool.`,
+            },
           };
         }
+      }
 
-        // Handle browser tools — send to client webview for execution
-        if (BROWSER_TOOL_NAMES.has(toolName) && onBrowserToolUse) {
-          console.log('[Claude] Intercepting browser tool:', toolName, 'id:', toolUseID);
-          await onBrowserToolUse(toolUseID, toolName, input);
-          const result = await waitForBrowserToolResult(toolUseID);
-          return {
-            behavior: 'allow' as const,
-            updatedInput: { ...input, __browserToolResult: result.output, __isError: result.isError },
-          };
+      // ── CronCreate (in-process MCP or direct) ─────────────────────────
+      if (toolName === 'CronCreate' || toolName.endsWith('__CronCreate') || toolName.endsWith(':CronCreate')) {
+        const expression = input.expression as string;
+        const prompt = input.prompt as string;
+        if (expression && prompt) {
+          const alreadyQueued = pendingCronJobs.some(
+            (j) => j.expression === expression && j.prompt === prompt
+          );
+          if (!alreadyQueued) {
+            pendingCronJobs.push({ expression, prompt, surfaceId: (input.surfaceId as string) ?? surfaceId ?? 'cowork' });
+            console.log('[Claude] CronCreate intercepted in canUseTool:', expression, prompt);
+          }
         }
-
         return { behavior: 'allow' as const };
-      };
-    }
+      }
+
+      // ── AskUserQuestion ────────────────────────────────────────────────
+      if (toolName === 'AskUserQuestion' && onInputRequest) {
+        await onInputRequest(toolUseID, input.questions);
+        const answers = await waitForAnswer(toolUseID);
+        return {
+          behavior: 'allow' as const,
+          updatedInput: { ...input, answers },
+        };
+      }
+
+      // ── Spawn agent ────────────────────────────────────────────────────
+      if (toolName === SPAWN_AGENT_TOOL_NAME) {
+        const task = typeof input.task === 'string' ? input.task : JSON.stringify(input);
+        const subSurfaceId = typeof input.surfaceId === 'string' ? input.surfaceId : (surfaceId ?? 'cowork');
+        const subModel = typeof input.model === 'string' ? input.model : null;
+        console.log('[Claude] Intercepting spawn_agent — task:', task.slice(0, 80));
+        try {
+          const res = await fetch('http://localhost:3000/api/subagent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parentChatId: chatId, task, surfaceId: subSurfaceId, model: subModel, cwd }),
+          });
+          const data = await res.json() as { ok?: boolean; output?: string; error?: string };
+          const subOutput = data.ok ? (data.output ?? '') : `Sub-agent error: ${data.error}`;
+          return {
+            behavior: 'allow' as const,
+            updatedInput: { ...input, __spawn_agent_output: subOutput },
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            behavior: 'allow' as const,
+            updatedInput: { ...input, __spawn_agent_output: `Failed to spawn sub-agent: ${msg}` },
+          };
+        }
+      }
+
+      // ── Browser tools ──────────────────────────────────────────────────
+      if (BROWSER_TOOL_NAMES.has(toolName) && onBrowserToolUse) {
+        console.log('[Claude] Intercepting browser tool:', toolName, 'id:', toolUseID);
+        await onBrowserToolUse(toolUseID, toolName, input);
+        const result = await waitForBrowserToolResult(toolUseID);
+        return {
+          behavior: 'allow' as const,
+          updatedInput: { ...input, __browserToolResult: result.output, __isError: result.isError },
+        };
+      }
+
+      return { behavior: 'allow' as const };
+    };
 
     // Set working directory — use selected folder, or fall back to a safe temp
     // directory so the agent never defaults to the app's own source tree.
@@ -381,14 +484,37 @@ export class ClaudeProvider extends BaseProvider {
                   provider: this.name,
                 };
               } else if (block.type === 'tool_use') {
-                yield {
-                  type: 'tool_use',
-                  name: block.name as string,
-                  input: block.input as Record<string, unknown>,
-                  id: block.id as string,
-                  provider: this.name,
-                };
-                console.log('[Claude] Tool use:', block.name);
+                const toolName = block.name as string;
+                const toolInput = block.input as Record<string, unknown>;
+
+                // Intercept canvas tool — emit canvas SSE event instead of regular tool_use
+                if (toolName === CANVAS_TOOL_NAME) {
+                  console.log('[Claude] Canvas tool use — emitting canvas event');
+                  yield {
+                    type: 'canvas',
+                    doc: toolInput,
+                    id: block.id as string,
+                    provider: this.name,
+                  };
+                } else if (toolName === 'CronCreate' || toolName.endsWith('__CronCreate') || toolName.endsWith(':CronCreate')) {
+                  // Intercept CronCreate (any server prefix) — emit cron_create SSE event
+                  console.log('[Claude] CronCreate tool use — emitting cron_create event, toolName:', toolName);
+                  yield {
+                    type: 'cron_create',
+                    input: toolInput,
+                    id: block.id as string,
+                    provider: this.name,
+                  };
+                } else {
+                  yield {
+                    type: 'tool_use',
+                    name: toolName,
+                    input: toolInput,
+                    id: block.id as string,
+                    provider: this.name,
+                  };
+                  console.log('[Claude] Tool use:', toolName);
+                }
               }
             }
           }
@@ -415,6 +541,16 @@ export class ClaudeProvider extends BaseProvider {
             provider: this.name,
           };
         }
+      }
+
+      // Emit cron_create events for any jobs created via the CronCreate MCP tool
+      for (const job of pendingCronJobs) {
+        yield {
+          type: 'cron_create',
+          input: job,
+          id: `cron_${Date.now()}`,
+          provider: this.name,
+        };
       }
 
       // Signal completion
