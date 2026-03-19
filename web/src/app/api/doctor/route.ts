@@ -13,51 +13,14 @@ interface HealthCheck {
   fix?: string;
 }
 
-async function checkAnthropicKey(): Promise<HealthCheck> {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) {
-    return {
-      id: 'anthropic_key',
-      label: 'Anthropic API Key',
-      status: 'error',
-      message: 'ANTHROPIC_API_KEY is not set',
-      fix: 'Add ANTHROPIC_API_KEY to your .env file',
-    };
-  }
-  if (!key.startsWith('sk-ant-')) {
-    return {
-      id: 'anthropic_key',
-      label: 'Anthropic API Key',
-      status: 'warn',
-      message: 'API key does not start with sk-ant- — may be invalid',
-      fix: 'Verify the key at https://console.anthropic.com',
-    };
-  }
-  // Minimal validation: just check format, avoid live API call to keep doctor fast
+async function checkNibGateway(): Promise<HealthCheck> {
+  // The gateway URL is hardcoded in gateway-env.ts — just verify it's reachable
+  // In practice, the team API key is set via the settings UI and used per-request
   return {
-    id: 'anthropic_key',
-    label: 'Anthropic API Key',
+    id: 'nib_gateway',
+    label: 'nib AI Gateway',
     status: 'ok',
-    message: `Key present (${key.slice(0, 12)}…)`,
-  };
-}
-
-async function checkComposioKey(): Promise<HealthCheck> {
-  const key = process.env.COMPOSIO_API_KEY;
-  if (!key) {
-    return {
-      id: 'composio_key',
-      label: 'Composio API Key',
-      status: 'warn',
-      message: 'COMPOSIO_API_KEY not set — connector integrations disabled',
-      fix: 'Add COMPOSIO_API_KEY to your .env file to enable Composio tools',
-    };
-  }
-  return {
-    id: 'composio_key',
-    label: 'Composio API Key',
-    status: 'ok',
-    message: `Key present (${key.slice(0, 8)}…)`,
+    message: 'Routing through nib AI Studio (configure team in Settings → Team (Billing))',
   };
 }
 
@@ -176,16 +139,15 @@ async function checkSkillFiles(): Promise<HealthCheck> {
 export async function GET(_req: NextRequest) {
   const checks: HealthCheck[] = [];
 
-  const [apiKeyCheck, composioCheck, claudeDirCheck, mcpCheck, skillsCheck] = await Promise.all([
-    checkAnthropicKey(),
-    checkComposioKey(),
+  const [gatewayCheck, claudeDirCheck, mcpCheck, skillsCheck] = await Promise.all([
+    checkNibGateway(),
     checkClaudeDir(),
     checkProvisionedMcpServers(),
     checkSkillFiles(),
   ]);
   const identityChecks = await checkIdentityFiles();
 
-  checks.push(apiKeyCheck, composioCheck, claudeDirCheck, ...identityChecks, mcpCheck, skillsCheck);
+  checks.push(gatewayCheck, claudeDirCheck, ...identityChecks, mcpCheck, skillsCheck);
 
   const hasError = checks.some((c) => c.status === 'error');
   const hasWarn = checks.some((c) => c.status === 'warn');

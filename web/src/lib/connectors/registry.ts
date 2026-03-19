@@ -151,6 +151,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   {
     id: 'sharepoint',
     name: 'SharePoint',
+    comingSoon: true,
     description: 'Document management & collaboration',
     category: 'documentation',
     auth: {
@@ -172,6 +173,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   {
     id: 'google-drive',
     name: 'Google Drive',
+    comingSoon: true,
     description: 'File storage & collaboration',
     category: 'documentation',
     auth: {
@@ -197,6 +199,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   {
     id: 'outlook',
     name: 'Outlook 365',
+    comingSoon: true,
     description: 'Email & calendar',
     category: 'communication',
     auth: {

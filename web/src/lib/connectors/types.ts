@@ -3,6 +3,8 @@ export interface ConnectorDefinition {
   name: string;
   description: string;
   category: 'project-management' | 'communication' | 'development' | 'cloud' | 'design' | 'documentation';
+  /** If true, shows a "Coming soon" badge and disables the Connect button */
+  comingSoon?: boolean;
 
   // Auth config
   auth: {

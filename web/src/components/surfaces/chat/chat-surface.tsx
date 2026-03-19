@@ -35,6 +35,7 @@ import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-sugg
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasPanel } from "@/components/shared/canvas-panel";
 import type { A2UIDocument } from "@/lib/a2ui/types";
+import { useCronStore } from "@/stores/cron-store";
 
 function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
   switch (category) {
@@ -70,6 +71,7 @@ export function ChatSurface() {
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
   const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
     useAtSuggestions();
+  const addCronJob = useCronStore((s) => s.addJob);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const clearCanvas = useCanvasStore((s) => s.clearCanvas);
   const goBackCanvas = useCanvasStore((s) => s.goBack);
@@ -78,7 +80,7 @@ export function ChatSurface() {
   const canvasDoc = useCanvasStore((s) => s.canvasDoc);
   const canvasHistoryIndex = useCanvasStore((s) => s.historyIndex);
   const canvasHistoryLength = useCanvasStore((s) => s.history.length);
-  const canvasOpen = useCanvasStore((s) => s.openSurfaces.has('chat'));
+  const canvasOpen = useCanvasStore((s) => !!s.openSurfaces['chat']);
   const { isDragging, dropZoneProps } = useFileDrop(
     useCallback((file: AttachmentFile) => setAttachments((prev) => [...prev, file]), [])
   );
@@ -216,6 +218,20 @@ export function ChatSurface() {
             }
           } catch (e) {
             console.error('[Chat] Canvas parse error:', e);
+          }
+          break;
+        }
+        case "cron_create": {
+          try {
+            const input = event.input as Record<string, unknown>;
+            const expression = (input.cron || input.expression) as string;
+            const prompt = (input.prompt || input.message || input.task) as string;
+            const surfaceId = (input.surfaceId || input.surface || 'cowork') as string;
+            if (expression && prompt) {
+              addCronJob({ expression, prompt, surfaceId, enabled: true });
+            }
+          } catch (e) {
+            console.error('[Chat] CronCreate parse error:', e);
           }
           break;
         }

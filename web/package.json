@@ -34,16 +34,38 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "public/app-icon.png",
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        },
+        {
+          "target": "zip",
+          "arch": ["universal"]
+        }
+      ],
       "hardenedRuntime": true,
+      "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
+    },
+    "dmg": {
+      "background": null,
+      "icon": "build/icon.icns",
+      "iconSize": 128,
+      "contents": [
+        { "x": 380, "y": 170, "type": "link", "path": "/Applications" },
+        { "x": 130, "y": 170, "type": "file" }
+      ]
     },
     "publish": [
       {
         "provider": "github",
         "owner": "REPLACE_WITH_GITHUB_ORG",
-        "repo": "quarry"
+        "repo": "quarry",
+        "releaseType": "release"
       }
     ]
   },

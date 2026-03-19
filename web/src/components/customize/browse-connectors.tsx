@@ -309,7 +309,11 @@ function ConnectorRow({
 
       {/* Actions */}
       <div className="shrink-0 flex items-center gap-1.5">
-        {isConnecting ? (
+        {connector.comingSoon ? (
+          <span className="inline-flex items-center rounded-full bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+            Coming soon
+          </span>
+        ) : isConnecting ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
             Connecting

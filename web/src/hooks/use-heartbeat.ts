@@ -39,7 +39,7 @@ export function useHeartbeat(
       if (minutesSinceLastRef.current >= heartbeatIntervalMinutes) {
         minutesSinceLastRef.current = 0;
         onFire(
-          'Check for anything worth noting, review pending tasks, and surface any proactive insights you have.'
+          'Brief status check only — 2-3 bullet points, max 60 words. Note only urgent or time-sensitive items. No greetings, no analysis, no project commentary.'
         );
       }
     };
