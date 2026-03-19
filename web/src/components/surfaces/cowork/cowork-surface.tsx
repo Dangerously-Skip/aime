@@ -723,9 +723,14 @@ export function CoworkSurface() {
     [chatId, updateMessage]
   );
 
+  // Ref to break circular dependency: handleSubmit uses resetIdleTimer, but
+  // useHeartbeat (which provides resetIdleTimer) is called after handleSubmit.
+  const resetIdleTimerRef = useRef<(() => void) | null>(null);
+
   const handleSubmit = useCallback(
     async (text: string) => {
       if (!text.trim()) return;
+      resetIdleTimerRef.current?.();
       const trimmed = text.trim();
 
       // ── Slash command interception ───────────────────────────────────────
@@ -926,7 +931,8 @@ export function CoworkSurface() {
     [model]
   );
 
-  useHeartbeat(runSilentHeartbeat);
+  const { resetIdleTimer } = useHeartbeat(runSilentHeartbeat);
+  resetIdleTimerRef.current = resetIdleTimer;
   useCron((job) => {
     playDing();
     showReminder(job.id, job.prompt);

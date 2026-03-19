@@ -7,8 +7,9 @@ import { StepWelcome } from "./step-welcome";
 import { StepTeam } from "./step-team";
 import { StepConnectors } from "./step-connectors";
 import { StepDone } from "./step-done";
+import { StepFeedback } from "./step-feedback";
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 export function OnboardingWizard() {
   const [step, setStep] = useState(0);
@@ -128,6 +129,12 @@ export function OnboardingWizard() {
                 displayName={displayName}
                 teamId={teamId}
                 connectedApps={connectedApps}
+                onContinue={next}
+                onBack={prev}
+              />
+            )}
+            {step === 4 && (
+              <StepFeedback
                 onComplete={handleComplete}
                 onBack={prev}
               />
@@ -135,7 +142,7 @@ export function OnboardingWizard() {
           </div>
 
           {/* Skip link */}
-          {step < TOTAL_STEPS - 1 && (
+          {step < TOTAL_STEPS - 2 && (
             <div className="px-8 pb-6 pt-0 text-center">
               <button
                 onClick={handleSkip}

@@ -186,6 +186,17 @@ export const BROWSER_TOOL_SCHEMAS = [
     },
   },
   {
+    name: 'switch_tab',
+    description: 'Switch to a different browser tab by its index (0-based) from the open tabs list. After switching, the page state will be re-observed automatically. Use this to work across multiple tabs.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        tab_index: { type: 'number', description: 'The 0-based index of the tab to switch to (from the open_tabs list)' },
+      },
+      required: ['tab_index'],
+    },
+  },
+  {
     name: 'done',
     description: 'Signal that the task is complete. Call this when you have finished the user\'s request.',
     input_schema: {
@@ -669,6 +680,28 @@ export async function executeToolInWebview(
     default:
       return { success: false, message: `Unknown tool: ${toolName}` };
   }
+}
+
+// ── Tab list formatter ────────────────────────────────────────────────────────
+
+export interface TabInfo {
+  id: string;
+  title: string;
+  url: string;
+  isActive: boolean;
+}
+
+export function formatTabListForModel(tabs: TabInfo[]): string {
+  if (tabs.length <= 1) return '';
+  const lines = [`## Open Tabs (${tabs.length})`];
+  for (let i = 0; i < tabs.length; i++) {
+    const tab = tabs[i];
+    const marker = tab.isActive ? ' (active)' : '';
+    const url = tab.url || '(empty)';
+    lines.push(`[${i}] ${tab.title || 'New Tab'}${marker} — ${url}`);
+  }
+  lines.push('', 'Use the switch_tab tool to navigate between tabs.');
+  return lines.join('\n');
 }
 
 // ── Page state formatter ─────────────────────────────────────────────────────

@@ -1,13 +1,14 @@
 "use client";
 
 import { getTeamById } from "@/config/teams";
-import { ArrowLeft, PartyPopper, Check } from "lucide-react";
+import { ArrowLeft, Check } from "lucide-react";
+import Image from "next/image";
 
 interface StepDoneProps {
   displayName: string;
   teamId: string | null;
   connectedApps: string[];
-  onComplete: () => void;
+  onContinue: () => void;
   onBack: () => void;
 }
 
@@ -15,7 +16,7 @@ export function StepDone({
   displayName,
   teamId,
   connectedApps,
-  onComplete,
+  onContinue,
   onBack,
 }: StepDoneProps) {
   const team = teamId ? getTeamById(teamId) : null;
@@ -48,13 +49,17 @@ export function StepDone({
         Back
       </button>
 
-      <div className="flex items-center justify-center h-14 w-14 rounded-2xl bg-green-500/10 text-green-600 dark:text-green-400 mb-5">
-        <PartyPopper className="h-7 w-7" strokeWidth={1.5} />
-      </div>
+      <Image
+        src="/thumbs-up-robot.png"
+        alt="Robot thumbs up"
+        width={80}
+        height={80}
+        className="mb-5"
+      />
 
-      <h2 className="text-xl font-semibold tracking-tight">You&apos;re all set!</h2>
+      <h2 className="text-xl font-semibold tracking-tight">Nice work human!</h2>
       <p className="text-sm text-muted-foreground mt-2 mb-6">
-        Here&apos;s a summary of your setup
+        You are all setup.
       </p>
 
       {summaryItems.length > 0 && (
@@ -75,10 +80,10 @@ export function StepDone({
       )}
 
       <button
-        onClick={onComplete}
+        onClick={onContinue}
         className="inline-flex items-center justify-center rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
       >
-        Get started
+        Continue
       </button>
     </div>
   );

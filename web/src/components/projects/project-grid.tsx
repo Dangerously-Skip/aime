@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useProjectStore, type Project } from "@/stores/project-store";
+import { useConversationStore } from "@/stores/conversation-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, MessageSquare, Code2, Globe, Wrench } from "lucide-react";
 import { ProjectIcon } from "@/components/shared/project-icon";
 
 type SortOption = "activity" | "name" | "created";
@@ -41,10 +42,43 @@ function sortProjects(projects: Project[], sort: SortOption): Project[] {
   }
 }
 
+const SURFACE_ICONS: Record<string, { icon: typeof MessageSquare; label: string }> = {
+  chat: { icon: MessageSquare, label: "Chat" },
+  cowork: { icon: Wrench, label: "Cowork" },
+  code: { icon: Code2, label: "Code" },
+  browser: { icon: Globe, label: "Browser" },
+};
+
 export function ProjectGrid({ onSelectProject, onNewProject }: ProjectGridProps) {
   const projects = useProjectStore((s) => s.projects);
+  const conversations = useConversationStore((s) => s.conversations);
   const [searchQuery, setSearchQuery] = useState("");
   const [sort, setSort] = useState<SortOption>("activity");
+
+  // Compute per-project stats from conversations
+  const projectStats = useMemo(() => {
+    const stats: Record<string, {
+      conversationCount: number;
+      surfaces: Set<string>;
+      lastMessage: string;
+    }> = {};
+
+    for (const conv of conversations) {
+      if (!conv.projectId) continue;
+      if (!stats[conv.projectId]) {
+        stats[conv.projectId] = { conversationCount: 0, surfaces: new Set(), lastMessage: "" };
+      }
+      const s = stats[conv.projectId];
+      s.conversationCount++;
+      if (conv.surface) s.surfaces.add(conv.surface);
+      if (conv.lastMessage && conv.updatedAt > 0) {
+        if (!s.lastMessage || conv.updatedAt > (conversations.find(c => c.lastMessage === s.lastMessage)?.updatedAt ?? 0)) {
+          s.lastMessage = conv.lastMessage;
+        }
+      }
+    }
+    return stats;
+  }, [conversations]);
 
   const filtered = projects.filter((p) =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -97,28 +131,74 @@ export function ProjectGrid({ onSelectProject, onNewProject }: ProjectGridProps)
         {/* Project cards — 2-column grid like Claude.ai */}
         {sorted.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {sorted.map((project) => (
-              <button
-                key={project.id}
-                onClick={() => onSelectProject(project.id)}
-                className="flex flex-col items-start rounded-xl border border-border bg-card p-5 text-left transition-colors hover:bg-muted/50 min-h-[160px]"
-              >
-                <div className="flex items-center gap-2.5 mb-2">
-                  <ProjectIcon icon={project.icon} className="h-5 w-5 text-muted-foreground" />
-                  <h3 className="text-base font-medium text-foreground">
-                    {project.name}
-                  </h3>
-                </div>
-                {project.description && (
-                  <p className="text-sm text-muted-foreground line-clamp-3 mb-auto">
-                    {project.description}
-                  </p>
-                )}
-                <p className="text-xs text-muted-foreground mt-4">
-                  {formatTimeAgo(project.updatedAt)}
-                </p>
-              </button>
-            ))}
+            {sorted.map((project) => {
+              const stats = projectStats[project.id];
+              const convCount = stats?.conversationCount ?? 0;
+              const surfaces = stats ? Array.from(stats.surfaces) : [];
+              const lastMsg = stats?.lastMessage ?? "";
+
+              return (
+                <button
+                  key={project.id}
+                  onClick={() => onSelectProject(project.id)}
+                  className="flex flex-col items-start rounded-xl border border-border bg-card p-5 text-left transition-colors hover:bg-muted/50 min-h-[160px]"
+                >
+                  <div className="flex items-center gap-2.5 mb-2">
+                    <ProjectIcon icon={project.icon} className="h-5 w-5 text-muted-foreground" />
+                    <h3 className="text-base font-medium text-foreground">
+                      {project.name}
+                    </h3>
+                  </div>
+
+                  {project.description ? (
+                    <p className="text-sm text-muted-foreground line-clamp-2 mb-auto">
+                      {project.description}
+                    </p>
+                  ) : lastMsg ? (
+                    <p className="text-sm text-muted-foreground/70 line-clamp-2 mb-auto italic">
+                      {lastMsg}
+                    </p>
+                  ) : (
+                    <div className="mb-auto" />
+                  )}
+
+                  {/* Footer: surfaces + conversation count + time */}
+                  <div className="flex items-center gap-3 mt-4 w-full">
+                    {/* Surface badges */}
+                    {surfaces.length > 0 && (
+                      <div className="flex items-center gap-1">
+                        {surfaces.map((surface) => {
+                          const info = SURFACE_ICONS[surface];
+                          if (!info) return null;
+                          const SIcon = info.icon;
+                          return (
+                            <span
+                              key={surface}
+                              title={info.label}
+                              className="inline-flex items-center justify-center h-5 w-5 rounded bg-muted text-muted-foreground"
+                            >
+                              <SIcon className="h-3 w-3" />
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Conversation count */}
+                    {convCount > 0 && (
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <MessageSquare className="h-3 w-3" />
+                        {convCount}
+                      </span>
+                    )}
+
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      {formatTimeAgo(project.updatedAt)}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         ) : projects.length === 0 ? (
           <div className="text-center py-20">

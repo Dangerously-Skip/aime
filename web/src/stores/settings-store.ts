@@ -9,6 +9,25 @@ export type ToolAccessMode = 'onDemand' | 'alwaysLoaded';
 export type ToolProfile = 'minimal' | 'coding' | 'full';
 export type SessionResetMode = 'manual' | 'daily' | 'idle';
 
+export interface HeartbeatMode {
+  enabled: boolean;
+  time: string;         // HH:MM for morning/evening modes
+  connectors: string[]; // connector IDs to pull data from
+  idleMinutes: number;  // threshold for idle nudge mode
+}
+
+export interface HeartbeatModes {
+  morning: HeartbeatMode;
+  evening: HeartbeatMode;
+  idle: HeartbeatMode;
+}
+
+export const DEFAULT_HEARTBEAT_MODES: HeartbeatModes = {
+  morning: { enabled: false, time: '09:00', connectors: [], idleMinutes: 0 },
+  evening: { enabled: false, time: '17:30', connectors: [], idleMinutes: 0 },
+  idle:    { enabled: false, time: '',       connectors: [], idleMinutes: 120 },
+};
+
 interface SettingsState {
   // Profile
   fullName: string;
@@ -26,6 +45,7 @@ interface SettingsState {
   // Automation
   heartbeatEnabled: boolean;
   heartbeatIntervalMinutes: number;
+  heartbeatModes: HeartbeatModes;
   loopDetectionThreshold: number;
   sessionResetMode: SessionResetMode;
   sessionResetTime: string;
@@ -74,6 +94,7 @@ interface SettingsActions {
   setToolProfile: (profile: ToolProfile) => void;
   setHeartbeatEnabled: (enabled: boolean) => void;
   setHeartbeatIntervalMinutes: (minutes: number) => void;
+  setHeartbeatMode: (mode: keyof HeartbeatModes, config: Partial<HeartbeatMode>) => void;
   setLoopDetectionThreshold: (threshold: number) => void;
   setSessionResetMode: (mode: SessionResetMode) => void;
   setSessionResetTime: (time: string) => void;
@@ -110,6 +131,7 @@ const initialState: SettingsState = {
   toolProfile: 'full',
   heartbeatEnabled: false,
   heartbeatIntervalMinutes: 30,
+  heartbeatModes: DEFAULT_HEARTBEAT_MODES,
   loopDetectionThreshold: 3,
   sessionResetMode: 'manual',
   sessionResetTime: '04:00',
@@ -146,6 +168,13 @@ export const useSettingsStore = create<SettingsStore>()(
       setToolProfile: (toolProfile) => set({ toolProfile }),
       setHeartbeatEnabled: (heartbeatEnabled) => set({ heartbeatEnabled }),
       setHeartbeatIntervalMinutes: (heartbeatIntervalMinutes) => set({ heartbeatIntervalMinutes }),
+      setHeartbeatMode: (mode, config) =>
+        set((state) => ({
+          heartbeatModes: {
+            ...state.heartbeatModes,
+            [mode]: { ...state.heartbeatModes[mode], ...config },
+          },
+        })),
       setLoopDetectionThreshold: (loopDetectionThreshold) => set({ loopDetectionThreshold }),
       setSessionResetMode: (sessionResetMode) => set({ sessionResetMode }),
       setSessionResetTime: (sessionResetTime) => set({ sessionResetTime }),
@@ -191,7 +220,7 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'nibcowork:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 4,
+      version: 5,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         if (version === 0) {
@@ -227,6 +256,13 @@ export const useSettingsStore = create<SettingsStore>()(
             sessionIdleMinutes: 60,
           } as unknown as SettingsState & SettingsActions;
         }
+        if (version === 4) {
+          // v4 -> v5: replace interval-based heartbeat with mode-based
+          return {
+            ...state,
+            heartbeatModes: DEFAULT_HEARTBEAT_MODES,
+          } as unknown as SettingsState & SettingsActions;
+        }
         return state as unknown as SettingsState & SettingsActions;
       },
       partialize: (state) => ({
@@ -239,6 +275,7 @@ export const useSettingsStore = create<SettingsStore>()(
         toolProfile: state.toolProfile,
         heartbeatEnabled: state.heartbeatEnabled,
         heartbeatIntervalMinutes: state.heartbeatIntervalMinutes,
+        heartbeatModes: state.heartbeatModes,
         loopDetectionThreshold: state.loopDetectionThreshold,
         sessionResetMode: state.sessionResetMode,
         sessionResetTime: state.sessionResetTime,

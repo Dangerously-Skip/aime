@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useCronStore } from '@/stores/cron-store';
-import { useSettingsStore } from '@/stores/settings-store';
+import { useSettingsStore, type HeartbeatModes } from '@/stores/settings-store';
+import { useConnectorStore } from '@/stores/connector-store';
+import { CONNECTOR_REGISTRY } from '@/lib/connectors/registry';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -12,61 +14,13 @@ import {
   Webhook,
   Plus,
   Trash2,
-  Copy,
-  Check,
   ChevronLeft,
+  Sunrise,
+  Sunset,
+  Timer,
 } from 'lucide-react';
 import { useAppStore } from '@/stores/app-store';
 import { DoctorPanel } from './doctor-panel';
-
-// ── Webhook types / store (in-memory via API) ─────────────────────────────────
-
-interface WebhookConfig {
-  id: string;
-  token: string;
-  name: string;
-  targetSurface: string;
-  systemPrompt: string;
-  enabled: boolean;
-  createdAt: number;
-}
-
-function useWebhooks() {
-  const [webhooks, setWebhooks] = useState<WebhookConfig[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  const reload = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/webhooks');
-      const data = await res.json() as { webhooks: WebhookConfig[] };
-      setWebhooks(data.webhooks ?? []);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const create = async (name: string, targetSurface: string) => {
-    const res = await fetch('/api/webhooks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, targetSurface }),
-    });
-    await reload();
-    return res.ok;
-  };
-
-  const remove = async (id: string) => {
-    await fetch('/api/webhooks', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    });
-    await reload();
-  };
-
-  return { webhooks, loading, reload, create, remove };
-}
 
 // ── Cron panel ────────────────────────────────────────────────────────────────
 
@@ -210,152 +164,163 @@ function CronPanel() {
 // ── Webhook panel ─────────────────────────────────────────────────────────────
 
 function WebhookPanel() {
-  const { webhooks, reload, create, remove } = useWebhooks();
-  const [loaded, setLoaded] = useState(false);
-  const [name, setName] = useState('');
-  const [surface, setSurface] = useState('cowork');
-  const [adding, setAdding] = useState(false);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-
-  const ensureLoaded = () => {
-    if (!loaded) { reload(); setLoaded(true); }
-  };
-
-  const handleAdd = async () => {
-    if (!name.trim()) return;
-    await create(name.trim(), surface);
-    setName('');
-    setAdding(false);
-  };
-
-  const copyUrl = (token: string, id: string) => {
-    const url = `${window.location.origin}/api/webhooks/${token}`;
-    navigator.clipboard.writeText(url);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1500);
-  };
-
   return (
-    <div className="space-y-4" onClick={ensureLoaded}>
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          <Webhook className="h-4 w-4" />
-          Webhooks
-        </h3>
-        <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); ensureLoaded(); setAdding((v) => !v); }}>
-          <Plus className="h-3.5 w-3.5 mr-1" />
-          Add
-        </Button>
-      </div>
-
-      {adding && (
-        <div className="border border-border rounded-lg p-4 space-y-3 bg-muted/30">
-          <div className="space-y-1">
-            <label className="text-xs font-medium">Name</label>
-            <Input
-              placeholder="GitHub PR webhook"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="h-8 text-xs"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-medium">Target Surface</label>
-            <select
-              value={surface}
-              onChange={(e) => setSurface(e.target.value)}
-              className="h-8 w-full rounded-md border border-input bg-background px-3 text-xs"
-            >
-              <option value="cowork">Cowork</option>
-              <option value="chat">Chat</option>
-              <option value="code">Code</option>
-            </select>
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={handleAdd}>Create</Button>
-            <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
-          </div>
-        </div>
-      )}
-
-      {loaded && webhooks.length === 0 && !adding && (
-        <p className="text-xs text-muted-foreground">No webhooks yet. Create one to trigger agent runs from external services.</p>
-      )}
-      {!loaded && (
-        <p className="text-xs text-muted-foreground">Click anywhere to load webhooks.</p>
-      )}
-
-      <div className="space-y-2">
-        {webhooks.map((wh) => (
-          <div key={wh.id} className="flex items-start gap-3 p-3 border border-border rounded-lg">
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold">{wh.name}</p>
-              <p className="text-[11px] font-mono text-muted-foreground truncate mt-0.5">
-                /api/webhooks/{wh.token.slice(0, 12)}…
-              </p>
-              <Badge variant="secondary" className="text-[10px] h-4 px-1 mt-1">{wh.targetSurface}</Badge>
-            </div>
-            <div className="flex gap-1 shrink-0">
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 text-muted-foreground"
-                title="Copy webhook URL"
-                onClick={() => copyUrl(wh.token, wh.id)}
-              >
-                {copiedId === wh.id ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                onClick={() => remove(wh.id)}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-        ))}
-      </div>
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold flex items-center gap-2">
+        <Webhook className="h-4 w-4" />
+        Webhooks
+        <Badge variant="secondary" className="text-[10px] h-4 px-1.5">Coming soon</Badge>
+      </h3>
+      <p className="text-[11px] text-muted-foreground">
+        Trigger agent runs from external services. Requires a public URL or tunnel — coming in a future update.
+      </p>
     </div>
   );
 }
 
 // ── Heartbeat settings ────────────────────────────────────────────────────────
 
-function HeartbeatSettings() {
-  const heartbeatEnabled = useSettingsStore((s) => s.heartbeatEnabled);
-  const heartbeatIntervalMinutes = useSettingsStore((s) => s.heartbeatIntervalMinutes);
-  const setHeartbeatEnabled = useSettingsStore((s) => s.setHeartbeatEnabled);
-  const setHeartbeatIntervalMinutes = useSettingsStore((s) => s.setHeartbeatIntervalMinutes);
+function ConnectorCheckboxes({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const isAuthenticated = useConnectorStore((s) => s.isAuthenticated);
+  const connected = CONNECTOR_REGISTRY.filter((c) => !c.comingSoon && isAuthenticated(c.id));
+
+  if (connected.length === 0) {
+    return (
+      <p className="text-[11px] text-muted-foreground">
+        No connected apps yet — connect them in the Connectors section.
+      </p>
+    );
+  }
+
+  const toggle = (id: string) => {
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  };
 
   return (
-    <div className="space-y-3">
-      <h3 className="text-sm font-semibold">Heartbeat</h3>
-      <div className="flex items-center justify-between">
-        <div>
-          <label className="text-xs font-medium">Enable periodic check-ins</label>
-          <p className="text-[11px] text-muted-foreground mt-0.5">
-            Agent proactively surfaces insights on an interval
-          </p>
+    <div className="flex flex-wrap gap-1.5">
+      {connected.map((c) => {
+        const active = selected.includes(c.id);
+        return (
+          <button
+            key={c.id}
+            onClick={() => toggle(c.id)}
+            className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
+              active
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground hover:border-foreground/40'
+            }`}
+          >
+            {c.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+interface ModeCardProps {
+  icon: React.ReactNode;
+  label: string;
+  description: string;
+  modeKey: keyof HeartbeatModes;
+}
+
+function ModeCard({ icon, label, description, modeKey }: ModeCardProps) {
+  const mode = useSettingsStore((s) => s.heartbeatModes[modeKey]);
+  const setHeartbeatMode = useSettingsStore((s) => s.setHeartbeatMode);
+  const isIdle = modeKey === 'idle';
+
+  return (
+    <div className={`border rounded-lg p-3 space-y-3 transition-colors ${mode.enabled ? 'border-border' : 'border-border/50 opacity-60'}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground">{icon}</span>
+          <div>
+            <p className="text-xs font-medium">{label}</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">{description}</p>
+          </div>
         </div>
         <Switch
-          checked={heartbeatEnabled}
-          onCheckedChange={setHeartbeatEnabled}
+          checked={mode.enabled}
+          onCheckedChange={(v) => setHeartbeatMode(modeKey, { enabled: v })}
+          className="shrink-0"
         />
       </div>
-      {heartbeatEnabled && (
-        <div className="space-y-1">
-          <label className="text-xs font-medium">Interval (minutes)</label>
-          <Input
-            type="number"
-            min={1}
-            value={heartbeatIntervalMinutes}
-            onChange={(e) => setHeartbeatIntervalMinutes(Math.max(1, Number(e.target.value)))}
-            className="h-8 text-xs w-24"
-          />
+
+      {mode.enabled && (
+        <div className="space-y-2.5 pt-0.5">
+          {isIdle ? (
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-muted-foreground shrink-0">After</label>
+              <Input
+                type="number"
+                min={5}
+                value={mode.idleMinutes}
+                onChange={(e) => setHeartbeatMode(modeKey, { idleMinutes: Math.max(5, Number(e.target.value)) })}
+                className="h-7 text-xs w-20"
+              />
+              <label className="text-[11px] text-muted-foreground">minutes of inactivity</label>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-muted-foreground shrink-0">Time</label>
+              <Input
+                type="time"
+                value={mode.time}
+                onChange={(e) => setHeartbeatMode(modeKey, { time: e.target.value })}
+                className="h-7 text-xs w-28"
+              />
+            </div>
+          )}
+
+          {!isIdle && (
+            <div className="space-y-1.5">
+              <label className="text-[11px] text-muted-foreground">Pull from</label>
+              <ConnectorCheckboxes
+                selected={mode.connectors}
+                onChange={(ids) => setHeartbeatMode(modeKey, { connectors: ids })}
+              />
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+function HeartbeatSettings() {
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold">Heartbeat</h3>
+        <p className="text-[11px] text-muted-foreground mt-0.5">
+          Proactive check-ins that surface insights from your connected apps.
+        </p>
+      </div>
+      <ModeCard
+        icon={<Sunrise className="h-4 w-4" />}
+        label="Morning Briefing"
+        description="Daily briefing at a set time — what's on today, open items, key updates."
+        modeKey="morning"
+      />
+      <ModeCard
+        icon={<Sunset className="h-4 w-4" />}
+        label="Evening Wrap-up"
+        description="End-of-day summary — what got done, what's outstanding, tomorrow's priorities."
+        modeKey="evening"
+      />
+      <ModeCard
+        icon={<Timer className="h-4 w-4" />}
+        label="Idle Nudge"
+        description="A gentle check-in after a period of inactivity."
+        modeKey="idle"
+      />
     </div>
   );
 }

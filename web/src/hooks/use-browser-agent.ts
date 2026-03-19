@@ -6,14 +6,32 @@ import {
   DOM_EXTRACTION_SCRIPT,
   executeToolInWebview,
   formatPageStateForModel,
+  formatTabListForModel,
   type ConsoleLogBuffer,
   type PageState,
+  type TabInfo,
   type WebviewRef,
 } from '@/lib/browser-tools';
 import { getBrowserConfig } from '@/lib/surfaces/browser-config';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 
 const MAX_ITERATIONS = 25;
+const DOM_EXTRACT_TIMEOUT = 5000; // 5s timeout for page state extraction
+
+/** Execute JS on webview with a timeout to prevent hanging during navigation */
+async function extractPageState(webview: WebviewRef): Promise<PageState | null> {
+  try {
+    const result = await Promise.race([
+      webview.executeJavaScript(DOM_EXTRACTION_SCRIPT),
+      new Promise<null>((_, reject) =>
+        setTimeout(() => reject(new Error('DOM extraction timed out')), DOM_EXTRACT_TIMEOUT)
+      ),
+    ]);
+    return result as PageState | null;
+  } catch {
+    return null;
+  }
+}
 
 interface AnthropicMessage {
   role: 'user' | 'assistant';
@@ -35,6 +53,10 @@ interface UseBrowserAgentOptions {
   apiKey?: string | null;
   memories?: string;
   consoleBuffer?: ConsoleLogBuffer;
+  /** Current tabs for multi-tab awareness */
+  getTabs?: () => TabInfo[];
+  /** Switch to a different tab by its tab ID. Returns the new webview ref after load. */
+  onSwitchTab?: (tabId: string) => Promise<WebviewRef | null>;
 }
 
 export function useBrowserAgent(options: UseBrowserAgentOptions) {
@@ -51,7 +73,8 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
   }, []);
 
   const runAgentLoop = useCallback(
-    async (userMessage: string, model: string, webview: WebviewRef, pendingContext?: PendingContextItem[]) => {
+    async (userMessage: string, model: string, initialWebview: WebviewRef, pendingContext?: PendingContextItem[]) => {
+      let webview = initialWebview;
       // Abort any previous run
       if (abortRef.current) abortRef.current.abort();
       const controller = new AbortController();
@@ -67,15 +90,20 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
       try {
         // 1. Observe — extract current page state
         optionsRef.current.onPhaseChange('observing');
-        let pageState: PageState | null = null;
-        try {
-          pageState = (await webview.executeJavaScript(DOM_EXTRACTION_SCRIPT)) as PageState;
-        } catch {
-          // Webview may not have a page loaded yet
-        }
+        const pageState = await extractPageState(webview);
 
         // Build initial user message with page context
         const userContent: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
+
+        // Inject open tabs list for multi-tab awareness
+        const tabs = optionsRef.current.getTabs?.() ?? [];
+        if (tabs.length > 1) {
+          userContent.push({
+            type: 'text',
+            text: `<open_tabs>\n${formatTabListForModel(tabs)}\n</open_tabs>`,
+          });
+        }
+
         if (pageState) {
           userContent.push({
             type: 'text',
@@ -149,7 +177,14 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
             if (block.type !== 'tool_use') continue;
 
             const toolBlock = block as { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
-            const result = await executeToolInWebview(webview, toolBlock.name, toolBlock.input, optionsRef.current.consoleBuffer);
+
+            let result;
+            if (toolBlock.name === 'switch_tab') {
+              // Handle switch_tab specially — manipulates tabs, not the current webview
+              result = await handleSwitchTab(toolBlock.input, optionsRef.current, (newWv) => { webview = newWv; });
+            } else {
+              result = await executeToolInWebview(webview, toolBlock.name, toolBlock.input, optionsRef.current.consoleBuffer);
+            }
 
             optionsRef.current.onToolResult(
               toolBlock.id,
@@ -174,17 +209,22 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
 
           // Re-observe page state after actions
           optionsRef.current.onPhaseChange('observing');
-          let newPageState: PageState | null = null;
-          try {
-            newPageState = (await webview.executeJavaScript(DOM_EXTRACTION_SCRIPT)) as PageState;
-          } catch {
-            // Page may be navigating
-          }
+          const newPageState = await extractPageState(webview);
 
-          // Build tool results + updated page state as user message
+          // Build tool results + updated page/tab state as user message
           const userBlocks: Array<{ type: string; [key: string]: unknown }> = [
             ...toolResults,
           ];
+
+          // Include updated tab list if there are multiple tabs
+          const updatedTabs = optionsRef.current.getTabs?.() ?? [];
+          if (updatedTabs.length > 1) {
+            userBlocks.push({
+              type: 'text',
+              text: `<open_tabs>\n${formatTabListForModel(updatedTabs)}\n</open_tabs>`,
+            });
+          }
+
           if (newPageState) {
             userBlocks.push({
               type: 'text',
@@ -210,6 +250,40 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
   );
 
   return { runAgentLoop, abort };
+}
+
+// ── Internal: handle switch_tab tool ──────────────────────────────────────────
+
+import type { ToolResult } from '@/lib/browser-tools';
+
+async function handleSwitchTab(
+  input: Record<string, unknown>,
+  options: UseBrowserAgentOptions,
+  setWebview: (wv: WebviewRef) => void,
+): Promise<ToolResult> {
+  const tabIndex = input.tab_index as number;
+  const tabs = options.getTabs?.() ?? [];
+
+  if (tabIndex < 0 || tabIndex >= tabs.length) {
+    return { success: false, message: `Invalid tab index ${tabIndex}. There are ${tabs.length} tabs (0-${tabs.length - 1}).` };
+  }
+
+  const targetTab = tabs[tabIndex];
+  if (targetTab.isActive) {
+    return { success: true, message: `Already on tab [${tabIndex}] "${targetTab.title}".` };
+  }
+
+  if (!options.onSwitchTab) {
+    return { success: false, message: 'Tab switching is not available.' };
+  }
+
+  const newWebview = await options.onSwitchTab(targetTab.id);
+  if (!newWebview) {
+    return { success: false, message: 'Failed to switch tab — webview not available after switch.' };
+  }
+
+  setWebview(newWebview);
+  return { success: true, message: `Switched to tab [${tabIndex}] "${targetTab.title}" — ${targetTab.url || '(empty page)'}. Page state will be observed next.` };
 }
 
 // ── Internal: single turn SSE request ────────────────────────────────────────
