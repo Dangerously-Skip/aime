@@ -15,6 +15,7 @@ export interface ConnectorDefinition {
     clientId?: string;
     pkce?: boolean;
     envVarName?: string; // For api_key type
+    hint?: string;       // Instruction text shown in the Connect dialog
   };
 
   // MCP server config

@@ -39,6 +39,8 @@ interface CoworkActions {
   setFolder: (folder: string | null) => void;
   addContextFile: (chatId: string, path: string) => void;
   addArtifactFile: (chatId: string, path: string) => void;
+  removeContextFile: (chatId: string, path: string) => void;
+  removeArtifactFile: (chatId: string, path: string) => void;
   clearSidebarFiles: (chatId: string) => void;
   setPlanContent: (chatId: string, content: string) => void;
   setPlanOpen: (open: boolean) => void;
@@ -204,6 +206,18 @@ export const useCoworkStore = create<CoworkStore>()(
           const existing = state.artifactFiles[chatId] ?? [];
           if (existing.includes(path)) return state;
           return { artifactFiles: { ...state.artifactFiles, [chatId]: [...existing, path] } };
+        }),
+
+      removeContextFile: (chatId, path) =>
+        set((state) => {
+          const existing = state.contextFiles[chatId] ?? [];
+          return { contextFiles: { ...state.contextFiles, [chatId]: existing.filter((p) => p !== path) } };
+        }),
+
+      removeArtifactFile: (chatId, path) =>
+        set((state) => {
+          const existing = state.artifactFiles[chatId] ?? [];
+          return { artifactFiles: { ...state.artifactFiles, [chatId]: existing.filter((p) => p !== path) } };
         }),
 
       clearSidebarFiles: (chatId) =>

@@ -78,7 +78,7 @@ function truncateAtWordBoundary(text: string, maxLen: number): string {
 
 // Bash patterns that indicate file creation/modification (capture group 1 = output path)
 const BASH_WRITE_PATTERNS = [
-  />\s*(\S+)/,                          // echo "x" > file, cat > file
+  /(?<![0-9&])>\s*(?!&|\s*$)(\S+)/,    // echo "x" > file, cat > file (skip 2>&1, >&2)
   /tee\s+(?:-a\s+)?(\S+)/,             // tee file, tee -a file
   /cp\s+\S+\s+(\S+)/,                  // cp src dest
   /mv\s+\S+\s+(\S+)/,                  // mv src dest
@@ -129,6 +129,8 @@ function categorizeToolCall(
       const m = cmd.match(pat);
       if (m?.[1]) {
         const p = m[1].replace(/['"]/g, "");
+        // Skip non-file targets
+        if (p === "/dev/null" || p.startsWith("&") || /^[0-9]+$/.test(p)) continue;
         return { category: "artifact", path: p };
       }
     }
@@ -164,12 +166,14 @@ function SidebarCard({
   items,
   emptyText,
   onItemClick,
+  onItemRemove,
 }: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   items: string[];
   emptyText: string;
   onItemClick?: (path: string) => void;
+  onItemRemove?: (path: string) => void;
 }) {
   const [open, setOpen] = useState(true);
 
@@ -192,17 +196,30 @@ function SidebarCard({
           ) : (
             <div className="space-y-1.5">
               {items.map((path) => (
-                <button
+                <div
                   key={path}
-                  type="button"
-                  onClick={() => onItemClick ? onItemClick(path) : openFile(path)}
                   className="flex w-full items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs hover:bg-muted/70 transition-colors text-left group"
-                  title={path}
                 >
-                  <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="truncate group-hover:text-foreground">{fileDisplayName(path)}</span>
-                  <ChevronDown className="h-3 w-3 -rotate-90 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 ml-auto" />
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => onItemClick ? onItemClick(path) : openFile(path)}
+                    className="flex flex-1 items-center gap-2 min-w-0"
+                    title={path}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate group-hover:text-foreground">{fileDisplayName(path)}</span>
+                  </button>
+                  {onItemRemove && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onItemRemove(path); }}
+                      className="shrink-0 h-4 w-4 flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-all"
+                      title="Remove"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           )}
@@ -220,6 +237,8 @@ function SidebarPanel({
   onToggle,
   onContextClick,
   onArtifactClick,
+  onContextRemove,
+  onArtifactRemove,
   previewUrl,
   onPreviewClick,
 }: {
@@ -230,6 +249,8 @@ function SidebarPanel({
   onToggle: () => void;
   onContextClick?: (path: string) => void;
   onArtifactClick?: (path: string) => void;
+  onContextRemove?: (path: string) => void;
+  onArtifactRemove?: (path: string) => void;
   previewUrl?: string | null;
   onPreviewClick?: () => void;
 }) {
@@ -248,7 +269,7 @@ function SidebarPanel({
       </div>
 
       {open && (
-        <ScrollArea className="flex-1 px-3 pb-3">
+        <ScrollArea className="flex-1 min-h-0 px-3 pb-3">
           <div className="space-y-3">
             {/* Working folder */}
             {folder && (
@@ -275,6 +296,7 @@ function SidebarPanel({
               items={contextFiles}
               emptyText="Files read during this session will appear here."
               onItemClick={onContextClick}
+              onItemRemove={onContextRemove}
             />
 
             <SidebarCard
@@ -283,6 +305,7 @@ function SidebarPanel({
               items={artifactFiles}
               emptyText="Files created or edited will appear here."
               onItemClick={onArtifactClick}
+              onItemRemove={onArtifactRemove}
             />
 
             {/* Dev server preview chip */}
@@ -357,6 +380,8 @@ export function CoworkSurface() {
   const updateMessage = useCoworkStore((s) => s.updateMessage);
   const addContextFile = useCoworkStore((s) => s.addContextFile);
   const addArtifactFile = useCoworkStore((s) => s.addArtifactFile);
+  const removeContextFile = useCoworkStore((s) => s.removeContextFile);
+  const removeArtifactFile = useCoworkStore((s) => s.removeArtifactFile);
   const planContent = useCoworkStore((s) => (chatId ? s.planContent[chatId] : undefined));
   const planOpen = useCoworkStore((s) => s.planOpen);
   const setPlanContent = useCoworkStore((s) => s.setPlanContent);
@@ -546,6 +571,9 @@ export function CoworkSurface() {
               let m;
               while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) {
                 let filePath = m[1];
+                // Skip false positives: bare extensions, /dev/null, numeric-heavy fragments
+                if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") continue;
+                if (/^[0-9.:]+$/.test(filePath.replace(/\.(?:pdf|csv|png|jpe?g)$/i, ""))) continue;
                 if (!filePath.startsWith("/") && coworkFolder) {
                   const cwdBasename = coworkFolder.split("/").pop() || "";
                   if (cwdBasename && filePath.startsWith(`${cwdBasename}/`)) {
@@ -626,39 +654,54 @@ export function CoworkSurface() {
       if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
         setPlanContent(chatId, lastMsg.content);
       }
-      // Detect binary artifacts mentioned in assistant text (e.g. "saved to presentation.pptx")
-      // Only scan if the conversation had Bash tool calls (avoids false positives)
-      if (chatId && allMsgs) {
-        const hasBashCalls = allMsgs.some(
-          (m) => m.role === "assistant" && m.toolCalls?.some((tc) => tc.name === "Bash"),
-        );
-        if (hasBashCalls) {
-          const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
-          const coworkFolder = useCoworkStore.getState().folder;
-          for (const m of allMsgs) {
-            if (m.role === "assistant" && m.content) {
-              BASH_ARTIFACT_EXT.lastIndex = 0;
-              let match;
-              while ((match = BASH_ARTIFACT_EXT.exec(m.content)) !== null) {
-                let filePath = match[1];
-                // Skip obvious non-file mentions (e.g. "use .pptx format")
-                if (filePath.length < 3 || filePath.startsWith(".")) continue;
-                // Resolve relative paths against cowork folder
-                if (!filePath.startsWith("/") && coworkFolder) {
-                  // Avoid double-folder: if model mentions "folderName/file.ext" and cwd ends with "folderName", strip prefix
-                  const cwdBasename = coworkFolder.split("/").pop() || "";
-                  if (cwdBasename && filePath.startsWith(`${cwdBasename}/`)) {
-                    filePath = filePath.slice(cwdBasename.length + 1);
-                  }
-                  filePath = `${coworkFolder}/${filePath}`;
-                }
-                if (!currentArtifacts.includes(filePath)) {
-                  addArtifactFile(chatId, filePath);
-                  currentArtifacts.push(filePath); // avoid duplicates in this loop
-                }
+      // Detect binary artifacts mentioned in Bash tool OUTPUT (not assistant text).
+      // Only confirmed tool results are scanned — assistant text mentions like
+      // "I'll create report.pdf" are ignored to avoid phantom artifacts.
+      // (Bash tool_result detection already happens in the tool_result SSE handler above.
+      //  This block verifies existing artifacts still exist on disk and removes phantoms.)
+      if (chatId) {
+        const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+        if (currentArtifacts.length > 0 && window.electronAPI?.fileExists) {
+          for (const artifactPath of currentArtifacts) {
+            // Skip non-absolute paths and bash: labels
+            if (!artifactPath.startsWith("/")) continue;
+            window.electronAPI.fileExists(artifactPath).then((exists: boolean) => {
+              if (!exists) {
+                console.log("[Cowork] Removing phantom artifact (file not found):", artifactPath);
+                removeArtifactFile(chatId, artifactPath);
               }
-            }
+            }).catch(() => {});
           }
+        }
+      }
+      // Auto-continuation: if the agent ended mid-task (many tool calls + last message
+      // suggests more work to do), automatically send a "continue" prompt
+      if (chatId && allMsgs && allMsgs.length > 2) {
+        const totalToolCalls = allMsgs.reduce(
+          (sum, m) => sum + (m.toolCalls?.length ?? 0), 0
+        );
+        const lastContent = lastMsg?.content?.trim() ?? "";
+        const looksUnfinished = totalToolCalls >= 10 && /\b(let me|i'll|i will|now (let|i)|going to|next[,.]?\s*(i|let))\b/i.test(lastContent.slice(-300));
+        if (looksUnfinished) {
+          console.log("[Cowork] Auto-continuing — agent appears to have run out of turns mid-task");
+          // Small delay so the UI shows the partial response before we continue
+          setTimeout(() => {
+            const continuePrompt = "Continue — complete the file generation. Do not re-explain what you've done. Execute the remaining tool calls to produce the deliverable.";
+            addMessage(chatId, { id: crypto.randomUUID(), role: "user", content: continuePrompt, timestamp: Date.now(), isAutoContinue: true } as Message);
+            addMessage(chatId, { id: crypto.randomUUID(), role: "assistant", content: "", timestamp: Date.now(), isLoading: true, isStreaming: true });
+            startStreaming(chatId);
+            const currentControls = useCoworkStore.getState().sessionControls[chatId] ?? DEFAULT_SESSION_CONTROLS;
+            const priorMsgs = useCoworkStore.getState().messages[chatId] || [];
+            const hist = stripMessagesForHistory(priorMsgs.slice(0, -2));
+            void sendMessage(continuePrompt, chatId, "cowork", model, {
+              personalPreferences: personalPreferences || undefined,
+              displayName: displayName || undefined,
+              cwd: folder || projectFolder || scratchDir || undefined,
+              history: hist.length > 0 ? hist : undefined,
+              sessionControls: currentControls,
+            });
+          }, 1500);
+          return; // skip "task complete" notification
         }
       }
       if (!document.hasFocus()) {
@@ -1214,6 +1257,22 @@ export function CoworkSurface() {
               } else {
                 setPreviewPath(path);
               }
+            }}
+            onContextRemove={(path) => {
+              if (chatId) removeContextFile(chatId, path);
+            }}
+            onArtifactRemove={(path) => {
+              if (!chatId) return;
+              const resolved = folder && !path.startsWith("/") ? `${folder}/${path}` : path;
+              if (folder) {
+                // Delete the file if it's inside the working directory
+                fetch("/api/files/delete", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ path: resolved, cwd: folder }),
+                }).catch((err) => console.error("Failed to delete artifact:", err));
+              }
+              removeArtifactFile(chatId, path);
             }}
             previewUrl={previewUrl}
             onPreviewClick={() => setPreviewOpen(true)}
