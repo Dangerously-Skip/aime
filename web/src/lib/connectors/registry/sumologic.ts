@@ -8,6 +8,7 @@ export const sumologic: ConnectorDefinition = {
   auth: {
     type: 'api_key',
     envVarName: 'SUMOLOGIC_ACCESS_TOKEN',
+    hint: 'Go to Administration → Security → Access Keys → Add Access Key. After saving, combine the two values as: accessId:accessKey (colon-separated, no spaces).',
   },
   mcp: {
     transport: 'stdio',

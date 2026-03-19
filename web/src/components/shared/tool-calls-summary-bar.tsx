@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -26,12 +26,25 @@ interface ToolCallsSummaryBarProps {
   onPreviewUrl?: (url: string) => void;
 }
 
+function ElapsedTimer({ startTime }: { startTime: number }) {
+  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startTime) / 1000));
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+
+  return <span className="tabular-nums text-muted-foreground/70">({elapsed}s)</span>;
+}
+
 export function ToolCallsSummaryBar({
   toolCalls,
   onArtifactClick,
   onPreviewUrl,
 }: ToolCallsSummaryBarProps) {
-  const { running, completed, errored, label, icon } = useMemo(() => {
+  const { running, completed, errored, label, icon, runningStartTime } = useMemo(() => {
     const running = toolCalls.filter((t) => t.status === "running");
     const completed = toolCalls.filter((t) => t.status === "complete");
     const errored = toolCalls.filter((t) => t.status === "error");
@@ -39,9 +52,12 @@ export function ToolCallsSummaryBar({
 
     let label: string;
     let icon: "spinner" | "wrench" | "warning";
+    let runningStartTime: number | null = null;
 
     if (running.length > 0) {
-      const currentName = running[running.length - 1].name;
+      const current = running[running.length - 1];
+      const currentName = current.name;
+      runningStartTime = current.startTime;
       if (completed.length + errored.length === 0) {
         label = `Running ${currentName}...`;
       } else {
@@ -56,8 +72,10 @@ export function ToolCallsSummaryBar({
       icon = "wrench";
     }
 
-    return { running, completed, errored, label, icon };
+    return { running, completed, errored, label, icon, runningStartTime };
   }, [toolCalls]);
+
+  const isRunning = running.length > 0;
 
   const StatusIcon =
     icon === "spinner" ? (
@@ -70,9 +88,16 @@ export function ToolCallsSummaryBar({
 
   return (
     <Collapsible className="mb-2">
-      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors group">
+      <CollapsibleTrigger
+        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors group ${
+          isRunning ? "animate-pulse" : ""
+        }`}
+      >
         {StatusIcon}
         <span>{label}</span>
+        {isRunning && runningStartTime && (
+          <ElapsedTimer startTime={runningStartTime} />
+        )}
         <ChevronDown className="ml-auto h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180" />
       </CollapsibleTrigger>
       <CollapsibleContent>

@@ -32,10 +32,16 @@ When the user asks to be reminded about something or to schedule a recurring tas
 - When writing or editing files, the user sees them appear in the Artifacts panel — reference filenames clearly.
 - Use subagents for parallel work streams when appropriate.
 
-## Binary file formats
+## Binary file formats (PDF, PPTX, XLSX, DOCX)
 - For .pptx, .xlsx, .docx, .pdf, or other binary formats: use Bash to install the needed library (pip3 install python-pptx / openpyxl / python-docx / fpdf2) then generate with Python.
 - The Write tool only handles text files — always use Bash + Python for binary formats.
 - When mentioning generated file paths, use the filename only (e.g. "report.pdf") or a path relative to the working directory root. Never include the working folder name as a prefix.
+- **CRITICAL: Complete file generation before explaining.** When asked to produce a document, your priority is to actually generate the file. Do not narrate your plan — execute it. Install the library and run the Python generation script in a single Bash call if possible.
+
+## Managing long tasks
+- For data-gathering tasks (API calls, scraping, etc.), save intermediate results to files rather than relying on tool output staying in context. Pipe large outputs through \`| head -100\` or \`| jq '.[:10]'\` to keep context manageable.
+- Write a single self-contained Python script that does all the work (gather data + generate the document) and run it in one Bash call. This is more reliable than running 20 separate Bash commands whose outputs fill the context.
+- If a task requires many tool calls, prioritize completing the deliverable (the file the user asked for) over comprehensiveness of data gathering. A delivered report with available data is better than an incomplete task that ran out of turns.
 
 ## Tone
 - Prefer prose over bullet points for conversational responses.
@@ -43,7 +49,7 @@ When the user asks to be reminded about something or to schedule a recurring tas
     settingSources: ['user', 'project'],
     enableFileCheckpointing: true,
     model: 'opus',
-    maxTurns: 100,
+    maxTurns: 200,
     maxBudgetUsd: 5.0,
     includePartialMessages: true,
     mcpServers: {}, // Composio added at runtime if configured

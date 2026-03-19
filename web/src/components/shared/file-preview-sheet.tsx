@@ -196,7 +196,16 @@ export function FilePreviewSheet({ path, open, onClose }: FilePreviewSheetProps)
 
           {error && (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
-              <p className="text-sm text-muted-foreground">{error}</p>
+              {error.includes("ENOENT") || error.includes("no such file") ? (
+                <>
+                  <p className="text-sm font-medium text-muted-foreground">File not found</p>
+                  <p className="text-xs text-muted-foreground/70 max-w-[300px]">
+                    This file may not have been created yet, or was saved to a different location.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">{error}</p>
+              )}
               {path && (
                 <Button variant="outline" size="sm" onClick={() => openExternally(path)}>
                   <ExternalLink className="h-3.5 w-3.5 mr-1.5" />

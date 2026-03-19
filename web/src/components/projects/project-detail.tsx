@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useProjectStore, type KnowledgeFile } from "@/stores/project-store";
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
 import { useChatStore } from "@/stores/chat-store";
@@ -117,7 +117,8 @@ export function ProjectDetail({
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
 
-  const cronJobs = useCronStore((s) => s.jobs.filter((j) => j.projectId === projectId));
+  const allCronJobs = useCronStore((s) => s.jobs);
+  const cronJobs = useMemo(() => allCronJobs.filter((j) => j.projectId === projectId), [allCronJobs, projectId]);
   const addCronJob = useCronStore((s) => s.addJob);
   const removeCronJob = useCronStore((s) => s.removeJob);
   const toggleCronJob = useCronStore((s) => s.toggleJob);

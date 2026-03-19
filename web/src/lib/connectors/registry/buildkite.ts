@@ -8,6 +8,7 @@ export const buildkite: ConnectorDefinition = {
   auth: {
     type: 'api_key',
     envVarName: 'BUILDKITE_API_TOKEN',
+    hint: 'Go to buildkite.com/user/api-access-tokens → New API Access Token. Enable read_builds, read_pipelines, and read_organizations scopes.',
   },
   mcp: {
     transport: 'http',

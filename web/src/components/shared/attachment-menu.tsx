@@ -157,7 +157,7 @@ export function AttachmentMenu({
           <Paperclip className="h-4 w-4" />
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent side="top" align="start" sideOffset={8}>
+        <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-[200px]">
           <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
             <Paperclip className="h-4 w-4" />
             Add files or photos
