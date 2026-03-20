@@ -17,8 +17,10 @@
 /.next/
 /out/
 
-# production
-/build
+# production (Next.js output, not electron-builder assets)
+/build/*
+!/build/icon.*
+!/build/entitlements.*
 
 # misc
 .DS_Store
