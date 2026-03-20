@@ -68,11 +68,7 @@
             "arm64"
           ]
         }
-      ],
-      "signingHashAlgorithms": [
-        "sha256"
-      ],
-      "signDlls": true
+      ]
     },
     "nsis": {
       "oneClick": true,
