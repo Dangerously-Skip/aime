@@ -33,7 +33,9 @@
       {
         "from": "src/config/teams.json",
         "to": "teams.json",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
@@ -126,6 +128,7 @@
     "mammoth": "^1.12.0",
     "mermaid": "^11.13.0",
     "next": "16.1.6",
+    "openai": "^6.32.0",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "^5.5.207",
     "react": "19.2.3",
