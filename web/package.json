@@ -30,7 +30,10 @@
       "!node_modules/.cache"
     ],
     "extraResources": [
-      { "from": "src/config/teams.json", "to": "teams.json" }
+      {
+        "from": "src/config/teams.json",
+        "to": "teams.json"
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity",
@@ -38,11 +41,15 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["universal"]
+          "arch": [
+            "universal"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["universal"]
+          "arch": [
+            "universal"
+          ]
         }
       ],
       "hardenedRuntime": true,
@@ -51,19 +58,51 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "notarize": true
     },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "signingHashAlgorithms": [
+        "sha256"
+      ],
+      "signDlls": true
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
     "dmg": {
       "background": null,
       "icon": "build/icon.icns",
       "iconSize": 128,
       "contents": [
-        { "x": 380, "y": 170, "type": "link", "path": "/Applications" },
-        { "x": 130, "y": 170, "type": "file" }
+        {
+          "x": 380,
+          "y": 170,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 130,
+          "y": 170,
+          "type": "file"
+        }
       ]
     },
     "publish": [
       {
         "provider": "github",
-        "owner": "REPLACE_WITH_GITHUB_ORG",
+        "owner": "redacted-org",
         "repo": "quarry",
         "releaseType": "release"
       }
@@ -73,7 +112,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.74",
     "@anthropic-ai/sdk": "^0.78.0",
     "@base-ui/react": "^1.2.0",
-"@huggingface/transformers": "^3.8.1",
+    "@huggingface/transformers": "^3.8.1",
     "@nangohq/frontend": "^0.69.44",
     "@nangohq/node": "^0.69.44",
     "@opencode-ai/sdk": "^1.2.24",
