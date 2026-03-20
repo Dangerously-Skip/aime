@@ -289,8 +289,8 @@ export async function POST(
 
       // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
       const mcpServers = await loadProvisionedMcpServers();
-      if (Object.keys(provisionedServers).length > 0) {
-        console.log('[CHAT] Loaded provisioned connector servers:', Object.keys(provisionedServers).join(', '));
+      if (Object.keys(mcpServers).length > 0) {
+        console.log('[CHAT] Loaded provisioned connector servers:', Object.keys(mcpServers).join(', '));
       }
 
       // Get surface-specific config
@@ -495,6 +495,10 @@ export async function POST(
 
       // Stream responses from the provider
       let collectedResponse = '';
+      let inputChars = (message as string).length;
+      let outputChars = 0;
+      let toolCallCount = 0;
+      const streamStartMs = Date.now();
       try {
         for await (const chunk of provider.query({
           prompt: message as string,
@@ -516,10 +520,13 @@ export async function POST(
         })) {
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);
+            toolCallCount++;
           }
           if (chunk.type === 'text') {
             console.log('[SSE] Sending text chunk, length:', chunk.content?.length || 0);
-            collectedResponse += (chunk.content as string) || '';
+            const text = (chunk.content as string) || '';
+            collectedResponse += text;
+            outputChars += text.length;
           }
           await sse.writeEvent(chunk);
         }
@@ -550,6 +557,26 @@ export async function POST(
         }
       }
 
+      // Emit done event with usage metrics (token estimates from char counts)
+      const durationMs = Date.now() - streamStartMs;
+      const inputTokens = Math.round(inputChars / 4);
+      const outputTokens = Math.round(outputChars / 4);
+      // Per-token cost estimates (Sonnet pricing as default)
+      const modelName = effectiveModel || 'claude-sonnet-4-6';
+      const inputCostPer1k = modelName.includes('opus') ? 0.015 : modelName.includes('haiku') ? 0.00025 : 0.003;
+      const outputCostPer1k = modelName.includes('opus') ? 0.075 : modelName.includes('haiku') ? 0.00125 : 0.015;
+      const cost = (inputTokens / 1000) * inputCostPer1k + (outputTokens / 1000) * outputCostPer1k;
+      await sse.writeEvent({
+        type: 'done',
+        usage: {
+          inputTokens,
+          outputTokens,
+          cost: Math.round(cost * 10000) / 10000,
+          model: modelName,
+          durationMs,
+          toolCallCount,
+        },
+      });
       console.log('[CHAT] Stream completed for surface:', surfaceId);
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error);
