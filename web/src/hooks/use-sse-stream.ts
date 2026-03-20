@@ -21,10 +21,22 @@ export interface SSEEvent {
   [key: string]: unknown;
 }
 
+export interface StreamUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  model: string;
+  durationMs: number;
+  toolCallCount: number;
+  ttftMs?: number;
+  clarificationCount?: number;
+}
+
 interface UseSSEStreamOptions {
   onChunk: (event: SSEEvent) => void;
   onError: (error: Error) => void;
   onDone: () => void;
+  onUsage?: (usage: StreamUsage) => void;
   chatId: string;                            // needed for registry key
   setIsStreaming: (v: boolean) => void;      // from store
   setStreamError: (e: string | null) => void; // from store
@@ -156,6 +168,9 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       optionsRef.current.setIsStreaming(true);
       optionsRef.current.setStreamError(null);
 
+      let firstTokenAt: number | null = null;
+      let clarificationCount = 0;
+
       try {
         const response = await fetch(`/api/chat/${surfaceId}`, {
           method: 'POST',
@@ -209,7 +224,27 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           buffer += decoder.decode(result.value, { stream: true });
           buffer = parseSSELines(
             buffer,
-            optionsRef.current.onChunk,
+            (event) => {
+              // Track TTFT on first text/thinking event
+              if (!firstTokenAt && (event.type === 'text' || event.type === 'thinking')) {
+                firstTokenAt = Date.now();
+              }
+              // Count clarification prompts
+              if (event.type === 'input_request') {
+                clarificationCount++;
+              }
+              // Intercept done event to extract usage metrics
+              if (event.type === 'done' && event.usage && optionsRef.current.onUsage) {
+                const ttftMs = firstTokenAt ? firstTokenAt - (Date.now() - (event.usage as Record<string,number>).durationMs) : undefined;
+                optionsRef.current.onUsage({
+                  ...(event.usage as StreamUsage),
+                  ttftMs,
+                  clarificationCount,
+                });
+                return; // don't pass done event to onChunk
+              }
+              optionsRef.current.onChunk(event);
+            },
             () => { done = true; }
           );
 

@@ -16,6 +16,7 @@ import {
   Bot,
   ChevronRight,
 } from "lucide-react";
+import { RoiBadge } from "@/components/shared/roi-badge";
 
 interface SidebarChatsProps {
   projectId?: string | null;
@@ -113,6 +114,14 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
                   >
                     <MessageCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <span className="truncate flex-1">{conv.title}</span>
+                    {conv.roi && (
+                      <RoiBadge
+                        roi={conv.roi}
+                        tokenUsage={conv.tokenUsage}
+                        effortEstimate={conv.effortEstimate}
+                        size="xs"
+                      />
+                    )}
                     <span
                       role="button"
                       tabIndex={0}

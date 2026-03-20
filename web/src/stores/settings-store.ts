@@ -82,9 +82,13 @@ interface SettingsState {
   onboardingComplete: boolean;
   onboardingSkippedAt: number | null;
   teamId: string | null;
+
+  // ROI / Telemetry
+  devHourlyRate: number;
 }
 
 interface SettingsActions {
+  setDevHourlyRate: (rate: number) => void;
   setFullName: (name: string) => void;
   setDisplayName: (name: string) => void;
   setWorkFunction: (fn: string) => void;
@@ -152,6 +156,7 @@ const initialState: SettingsState = {
   onboardingComplete: false,
   onboardingSkippedAt: null,
   teamId: null,
+  devHourlyRate: 150,
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -213,6 +218,7 @@ export const useSettingsStore = create<SettingsStore>()(
       setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
       setOnboardingSkippedAt: (onboardingSkippedAt) => set({ onboardingSkippedAt }),
       setTeamId: (teamId) => set({ teamId }),
+      setDevHourlyRate: (devHourlyRate) => set({ devHourlyRate }),
 
       resetAll: () => set(initialState),
     }),
@@ -220,7 +226,7 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'nibcowork:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 5,
+      version: 6,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         if (version === 0) {
@@ -263,6 +269,13 @@ export const useSettingsStore = create<SettingsStore>()(
             heartbeatModes: DEFAULT_HEARTBEAT_MODES,
           } as unknown as SettingsState & SettingsActions;
         }
+        if (version === 5) {
+          // v5 -> v6: add devHourlyRate for ROI tracking
+          return {
+            ...state,
+            devHourlyRate: 150,
+          } as unknown as SettingsState & SettingsActions;
+        }
         return state as unknown as SettingsState & SettingsActions;
       },
       partialize: (state) => ({
@@ -296,6 +309,7 @@ export const useSettingsStore = create<SettingsStore>()(
         onboardingComplete: state.onboardingComplete,
         onboardingSkippedAt: state.onboardingSkippedAt,
         teamId: state.teamId,
+        devHourlyRate: state.devHourlyRate,
       }),
     }
   )

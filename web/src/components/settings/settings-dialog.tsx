@@ -15,6 +15,7 @@ import { DataSection } from "./sections/data-section"
 import { MemorySection } from "./sections/memory-section"
 import { SecuritySection } from "./sections/security-section"
 import { IdentitySection } from "./sections/identity-section"
+import { RoiSection } from "./sections/roi-section"
 
 const sectionComponents: Record<string, React.ComponentType> = {
   profile: ProfileSection,
@@ -27,6 +28,7 @@ const sectionComponents: Record<string, React.ComponentType> = {
   security: SecuritySection,
   memory: MemorySection,
   data: DataSection,
+  roi: RoiSection,
 }
 
 interface SettingsDialogProps {

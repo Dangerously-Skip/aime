@@ -229,6 +229,78 @@ function SidebarCard({
   );
 }
 
+function TaskMetricsCard({ metrics }: {
+  metrics: {
+    cost?: number;
+    humanHours?: number;
+    complexity?: string;
+    multiplier?: number;
+    dollarsSaved?: number;
+    taskType?: string;
+    language?: string;
+    ttftMs?: number;
+  };
+}) {
+  const [open, setOpen] = useState(false);
+  const hasData = metrics.cost !== undefined || metrics.multiplier !== undefined;
+  if (!hasData) return null;
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-card/50">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-sm font-semibold hover:bg-muted/30 transition-colors rounded-t-xl"
+      >
+        <span className="flex-1 text-left text-xs">Task Metrics</span>
+        <ChevronDown
+          className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "" : "-rotate-90"}`}
+        />
+      </button>
+      {open && (
+        <div className="px-4 pb-3 space-y-1">
+          {metrics.cost !== undefined && (
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Agent cost</span>
+              <span className="font-mono">${metrics.cost.toFixed(4)}</span>
+            </div>
+          )}
+          {metrics.humanHours !== undefined && (
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Human est.</span>
+              <span className="font-mono">~{metrics.humanHours}h {metrics.complexity ? `(${metrics.complexity})` : ""}</span>
+            </div>
+          )}
+          {metrics.multiplier !== undefined && (
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">ROI</span>
+              <span className="font-mono font-semibold text-green-600 dark:text-green-400">{metrics.multiplier.toFixed(1)}× faster</span>
+            </div>
+          )}
+          {metrics.dollarsSaved !== undefined && (
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">$ saved</span>
+              <span className="font-mono">${metrics.dollarsSaved.toFixed(0)}</span>
+            </div>
+          )}
+          {metrics.taskType && (
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Task type</span>
+              <span className="font-mono">{metrics.taskType}{metrics.language ? ` / ${metrics.language}` : ""}</span>
+            </div>
+          )}
+          {metrics.ttftMs !== undefined && (
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">TTFT</span>
+              <span className="font-mono">{(metrics.ttftMs / 1000).toFixed(1)}s</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SidebarPanel({
   contextFiles,
   artifactFiles,
@@ -241,6 +313,7 @@ function SidebarPanel({
   onArtifactRemove,
   previewUrl,
   onPreviewClick,
+  taskMetrics,
 }: {
   contextFiles: string[];
   artifactFiles: string[];
@@ -253,6 +326,16 @@ function SidebarPanel({
   onArtifactRemove?: (path: string) => void;
   previewUrl?: string | null;
   onPreviewClick?: () => void;
+  taskMetrics?: {
+    cost?: number;
+    humanHours?: number;
+    complexity?: string;
+    multiplier?: number;
+    dollarsSaved?: number;
+    taskType?: string;
+    language?: string;
+    ttftMs?: number;
+  };
 }) {
   return (
     <div className={`flex flex-col h-full overflow-hidden shrink-0 transition-all duration-200 ${open ? "w-[300px]" : "w-10"}`}>
@@ -307,6 +390,9 @@ function SidebarPanel({
               onItemClick={onArtifactClick}
               onItemRemove={onArtifactRemove}
             />
+
+            {/* Task Metrics panel */}
+            {taskMetrics && <TaskMetricsCard metrics={taskMetrics} />}
 
             {/* Dev server preview chip */}
             {previewUrl && onPreviewClick && (
@@ -396,6 +482,7 @@ export function CoworkSurface() {
   const setIsStreaming = useCoworkStore((s) => s.setIsStreaming);
   const setStreamError = useCoworkStore((s) => s.setStreamError);
   const updateConversation = useConversationStore((s) => s.updateConversation);
+  const updateConversationMetrics = useConversationStore((s) => s.updateConversationMetrics);
   const addConversation = useConversationStore((s) => s.addConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
   const activeConvId = useConversationStore((s) => s.activeId);
@@ -407,6 +494,7 @@ export function CoworkSurface() {
   const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
   const disableBashTool = useSettingsStore((s) => s.disableBashTool);
+  const devHourlyRate = useSettingsStore((s) => s.devHourlyRate);
   const { projectInstructions, projectKnowledge, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "cowork");
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
@@ -449,6 +537,61 @@ export function CoworkSurface() {
     chatId,
     setIsStreaming,
     setStreamError,
+    onUsage(usage) {
+      const id = useCoworkStore.getState().currentChatId;
+      if (!id) return;
+      // Store token usage
+      updateConversationMetrics(id, {
+        tokenUsage: {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cost: usage.cost,
+          model: usage.model,
+          durationMs: usage.durationMs,
+          toolCallCount: usage.toolCallCount,
+          ttftMs: usage.ttftMs,
+        },
+      });
+      // Trigger effort estimation in background
+      const allMsgs = useCoworkStore.getState().messages[id] ?? [];
+      const toolCallCounts: Record<string, number> = {};
+      allMsgs.forEach((m) => m.toolCalls?.forEach((tc) => {
+        toolCallCounts[tc.name] = (toolCallCounts[tc.name] || 0) + 1;
+      }));
+      const toolCallsArr = Object.entries(toolCallCounts).map(([name, count]) => ({ name, count }));
+      const artifactCount = (useCoworkStore.getState().artifactFiles[id] ?? []).length;
+      fetch('/api/telemetry/estimate-effort', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          toolCalls: toolCallsArr,
+          artifactCount,
+          messageCount: allMsgs.length,
+          durationMs: usage.durationMs,
+          model: usage.model,
+        }),
+      }).then((r) => r.json()).then(({ estimate }) => {
+        if (!estimate) return;
+        const humanHours = estimate.estimatedHours ?? 0;
+        const agentCostDollars = usage.cost;
+        const agentDurationMs = usage.durationMs;
+        const humanCost = humanHours * devHourlyRate;
+        const agentHours = agentDurationMs / 3_600_000;
+        const multiplier = Math.round((humanHours / Math.max(agentHours, 0.001)) * 10) / 10;
+        const dollarsSaved = Math.round((humanCost - agentCostDollars) * 100) / 100;
+        updateConversationMetrics(id, {
+          effortEstimate: {
+            hours: humanHours,
+            complexity: estimate.complexity,
+            reasoning: estimate.reasoning,
+            taskType: estimate.taskType,
+            domain: estimate.domain,
+            language: estimate.language,
+          },
+          roi: { multiplier, dollarsSaved },
+        });
+      }).catch(() => {});
+    },
     onChunk(event) {
       switch (event.type) {
         case "turn_start":
@@ -1282,6 +1425,20 @@ export function CoworkSurface() {
             }}
             previewUrl={previewUrl}
             onPreviewClick={() => setPreviewOpen(true)}
+            taskMetrics={(() => {
+              const conv = conversations.find((c) => c.id === chatId);
+              if (!conv) return undefined;
+              return {
+                cost: conv.tokenUsage?.cost,
+                ttftMs: conv.tokenUsage?.ttftMs,
+                humanHours: conv.effortEstimate?.hours,
+                complexity: conv.effortEstimate?.complexity,
+                taskType: conv.effortEstimate?.taskType,
+                language: conv.effortEstimate?.language,
+                multiplier: conv.roi?.multiplier,
+                dollarsSaved: conv.roi?.dollarsSaved,
+              };
+            })()}
           />
 
           {/* Dev server preview panel */}

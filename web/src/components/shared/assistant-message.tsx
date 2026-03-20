@@ -7,8 +7,9 @@ import { ToolCallsSummaryBar } from "./tool-calls-summary-bar";
 import { StreamingCursor } from "./streaming-cursor";
 import { ArtifactCard } from "./artifact-card";
 import { Button } from "@/components/ui/button";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, ThumbsUp, ThumbsDown } from "lucide-react";
 import { MemoryButton } from "./memory-button";
+import { useConversationStore } from "@/stores/conversation-store";
 import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 
@@ -43,6 +44,7 @@ interface AssistantMessageProps {
   toolCalls?: ToolCall[];
   isStreaming?: boolean;
   isLoading?: boolean;
+  isLastAssistantMessage?: boolean;
   onArtifactClick?: (path: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
   conversationId?: string;
@@ -54,11 +56,16 @@ export function AssistantMessage({
   toolCalls = [],
   isStreaming = false,
   isLoading = false,
+  isLastAssistantMessage = false,
   onArtifactClick,
   onPreviewUrl,
   conversationId,
 }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false);
+  const updateConversationMetrics = useConversationStore((s) => s.updateConversationMetrics);
+  const currentRating = useConversationStore((s) =>
+    conversationId ? s.conversations.find((c) => c.id === conversationId)?.userRating : undefined
+  );
   const [thinkingWordIndex, setThinkingWordIndex] = useState(() =>
     Math.floor(Math.random() * THINKING_WORDS.length)
   );
@@ -88,6 +95,11 @@ export function AssistantMessage({
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
+  }
+
+  function handleRate(rating: 1 | -1) {
+    if (!conversationId) return;
+    updateConversationMetrics(conversationId, { userRating: rating });
   }
 
   return (
@@ -163,6 +175,29 @@ export function AssistantMessage({
               )}
             </Button>
             <MemoryButton content={content} conversationId={conversationId} />
+            {/* Rating buttons — only on last assistant message */}
+            {isLastAssistantMessage && conversationId && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={`h-7 w-7 transition-colors ${currentRating === 1 ? "text-green-500" : "text-muted-foreground hover:text-green-500"}`}
+                  onClick={() => handleRate(1)}
+                  title="This was helpful"
+                >
+                  <ThumbsUp className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={`h-7 w-7 transition-colors ${currentRating === -1 ? "text-red-500" : "text-muted-foreground hover:text-red-500"}`}
+                  onClick={() => handleRate(-1)}
+                  title="This was not helpful"
+                >
+                  <ThumbsDown className="h-3.5 w-3.5" />
+                </Button>
+              </>
+            )}
           </div>
         )}
       </div>
