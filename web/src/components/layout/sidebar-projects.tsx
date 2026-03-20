@@ -100,6 +100,16 @@ export function SidebarProjects({ onSelectProject, onNewProject }: SidebarProjec
   );
 }
 
+function useProjectRoi(projectId: string) {
+  const conversations = useConversationStore((s) => s.conversations);
+  const projConvs = conversations.filter((c) => c.projectId === projectId && c.roi);
+  if (projConvs.length === 0) return null;
+  const totalHoursSaved = projConvs.reduce((s, c) => s + (c.effortEstimate?.hours ?? 0), 0);
+  const totalDollarsSaved = projConvs.reduce((s, c) => s + (c.roi?.dollarsSaved ?? 0), 0);
+  const avgMultiplier = projConvs.reduce((s, c) => s + (c.roi?.multiplier ?? 0), 0) / projConvs.length;
+  return { totalHoursSaved, totalDollarsSaved, avgMultiplier };
+}
+
 function ProjectCard({
   project,
   conversationCount,
@@ -113,6 +123,7 @@ function ProjectCard({
   onClick: () => void;
   onDelete: () => void;
 }) {
+  const roi = useProjectRoi(project.id);
   return (
     <button
       onClick={onClick}
@@ -131,6 +142,11 @@ function ProjectCard({
           <span>&middot;</span>
           <span>{lastUpdated}</span>
         </div>
+        {roi && (
+          <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+            ~{roi.totalHoursSaved.toFixed(0)}h saved · ${Math.max(0, roi.totalDollarsSaved).toFixed(0)} · {roi.avgMultiplier.toFixed(1)}× avg
+          </div>
+        )}
       </div>
       <span
         role="button"

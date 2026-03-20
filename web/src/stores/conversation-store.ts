@@ -4,6 +4,41 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 
+export interface ConversationTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  model: string;
+  durationMs: number;
+  toolCallCount: number;
+  ttftMs?: number;
+}
+
+export interface ConversationEffortEstimate {
+  hours: number;
+  complexity: 'low' | 'medium' | 'high';
+  reasoning: string;
+  taskType: string;
+  domain: string;
+  language: string;
+}
+
+export interface ConversationROI {
+  multiplier: number;
+  dollarsSaved: number;
+}
+
+export interface ConversationSessionStats {
+  toolCallCount: number;
+  artifactCount: number;
+  messageCount: number;
+  aborted: boolean;
+  clarificationCount: number;
+  thinkingUsed: boolean;
+  connectors: string[];
+  toolProfile: string;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -17,6 +52,11 @@ export interface Conversation {
   sessionResetAt?: number | null;
   /** True for automated background runs (heartbeat, cron) — hidden from main chat list */
   isBackground?: boolean;
+  tokenUsage?: ConversationTokenUsage;
+  effortEstimate?: ConversationEffortEstimate;
+  roi?: ConversationROI;
+  sessionStats?: ConversationSessionStats;
+  userRating?: 1 | -1;
 }
 
 interface ConversationState {
@@ -24,11 +64,20 @@ interface ConversationState {
   activeId: string | null;
 }
 
+export type ConversationMetrics = {
+  tokenUsage?: ConversationTokenUsage;
+  effortEstimate?: ConversationEffortEstimate;
+  roi?: ConversationROI;
+  sessionStats?: Partial<ConversationSessionStats>;
+  userRating?: 1 | -1;
+};
+
 interface ConversationActions {
   addConversation: (conversation: Conversation) => void;
   removeConversation: (id: string) => void;
   setActiveConversation: (id: string | null) => void;
   updateConversation: (id: string, updates: Partial<Omit<Conversation, 'id'>>) => void;
+  updateConversationMetrics: (id: string, metrics: ConversationMetrics) => void;
   getConversationsForSurface: (surface: string) => Conversation[];
   assignToProject: (conversationId: string, projectId: string | null) => void;
 }
@@ -61,6 +110,21 @@ export const useConversationStore = create<ConversationStore>()(
           conversations: state.conversations.map((c) =>
             c.id === id ? { ...c, ...updates, updatedAt: Date.now() } : c
           ),
+        })),
+
+      updateConversationMetrics: (id, metrics) =>
+        set((state) => ({
+          conversations: state.conversations.map((c) => {
+            if (c.id !== id) return c;
+            return {
+              ...c,
+              ...(metrics.tokenUsage ? { tokenUsage: metrics.tokenUsage } : {}),
+              ...(metrics.effortEstimate ? { effortEstimate: metrics.effortEstimate } : {}),
+              ...(metrics.roi ? { roi: metrics.roi } : {}),
+              ...(metrics.sessionStats ? { sessionStats: { ...c.sessionStats, ...metrics.sessionStats } as ConversationSessionStats } : {}),
+              ...(metrics.userRating !== undefined ? { userRating: metrics.userRating } : {}),
+            };
+          }),
         })),
 
       getConversationsForSurface: (surface) => {

@@ -107,8 +107,10 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
       className={`relative flex-1 overflow-y-auto px-6 py-6 ${fontClass} ${className}`}
     >
       <div ref={contentRef} className="max-w-3xl mx-auto">
-      {messages.map((msg) =>
-        msg.questionData ? (
+      {messages.map((msg, idx) => {
+        const isLastAssistant = msg.role === "assistant" && !msg.isStreaming && !msg.isLoading &&
+          messages.slice(idx + 1).every((m) => m.role !== "assistant" || !!m.questionData);
+        return msg.questionData ? (
           <QuestionCard
             key={msg.id}
             toolUseId={msg.questionToolUseId || msg.id}
@@ -130,12 +132,13 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             toolCalls={msg.toolCalls}
             isStreaming={msg.isStreaming}
             isLoading={msg.isLoading}
+            isLastAssistantMessage={isLastAssistant}
             onArtifactClick={onArtifactClick}
             onPreviewUrl={onPreviewUrl}
             conversationId={conversationId}
           />
-        ) : null
-      )}
+        ) : null;
+      })}
       <div ref={endRef} />
       </div>
 
