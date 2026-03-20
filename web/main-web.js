@@ -249,6 +249,37 @@ if (autoUpdater) {
   });
 }
 
+/** Send an app_lifecycle telemetry event to the Next.js API. */
+function sendLifecycleEvent(action) {
+  const pkg = (() => { try { return require('./package.json'); } catch { return {}; } })();
+  const payload = {
+    events: [{
+      schema_version: '1.0',
+      event_type: 'app_lifecycle',
+      timestamp: new Date().toISOString(),
+      identity: { app_version: pkg.version ?? '1.0.0' },
+      data: { action, app_version: pkg.version ?? '1.0.0' },
+    }],
+    flush: action === 'close',
+  };
+  // Fire-and-forget — use http to avoid ESM import issues in main process
+  try {
+    const http = require('http');
+    const body = JSON.stringify(payload);
+    const req = http.request({
+      hostname: 'localhost',
+      port: 3000,
+      path: '/api/telemetry/events',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    });
+    req.write(body);
+    req.end();
+  } catch {
+    // Non-fatal
+  }
+}
+
 app.whenReady().then(() => {
   // Build the app menu (includes "Check for Updates…")
   buildAppMenu();
@@ -306,6 +337,9 @@ app.whenReady().then(() => {
 
   createWindow();
 
+  // Fire app_lifecycle open event after window is ready (slight delay so Next.js is up)
+  setTimeout(() => sendLifecycleEvent('open'), 5000);
+
   // Check for updates 3s after launch (gives window time to finish loading)
   setTimeout(() => checkForUpdates(false), 3000);
 
@@ -315,6 +349,10 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('minute:tick', Date.now());
     }
   }, 60_000);
+});
+
+app.on("before-quit", () => {
+  sendLifecycleEvent('close');
 });
 
 app.on("window-all-closed", () => {
