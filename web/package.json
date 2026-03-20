@@ -55,6 +55,7 @@
           ]
         }
       ],
+      "identity": null,
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
