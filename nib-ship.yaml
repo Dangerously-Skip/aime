@@ -1,0 +1,7 @@
+name: quarry
+lineOfBusiness: etdp
+deployTarget: static-site
+prod: false
+zone: secure
+itbu: dai
+stage: kaos
