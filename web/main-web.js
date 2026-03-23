@@ -321,8 +321,10 @@ app.whenReady().then(async () => {
   // In packaged builds, spawn the Next.js standalone server ourselves.
   if (app.isPackaged) {
     const { utilityProcess } = require("electron");
-    const serverScript = path.join(process.resourcesPath, '.next', 'standalone', 'web', 'server.js');
+    const standaloneDir = path.join(process.resourcesPath, '.next', 'standalone', 'web');
+    const serverScript = path.join(standaloneDir, 'server.js');
     utilityProcess.fork(serverScript, [], {
+      cwd: standaloneDir,
       env: {
         ...process.env,
         PORT: String(port),
