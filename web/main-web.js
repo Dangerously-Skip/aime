@@ -1,10 +1,39 @@
 /**
  * Electron main process for the Next.js web version.
- * Opens a single BrowserWindow pointing at localhost:3000.
+ * Opens a single BrowserWindow pointing at a dynamically selected localhost port.
  */
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require("electron");
 const os = require("os");
 const path = require("path");
+const net = require("net");
+
+/** Find an available TCP port by binding to port 0 and reading the OS assignment. */
+function findFreePort() {
+  return new Promise((resolve) => {
+    const server = net.createServer().listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+/** Poll until the given port accepts a TCP connection (server is ready). */
+function waitForPort(port, timeout = 60000) {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    function attempt() {
+      const socket = net.createConnection({ port, host: '127.0.0.1' });
+      socket.on('connect', () => { socket.destroy(); resolve(); });
+      socket.on('error', () => {
+        if (Date.now() - start > timeout) {
+          return reject(new Error(`Timed out waiting for port ${port}`));
+        }
+        setTimeout(attempt, 300);
+      });
+    }
+    attempt();
+  });
+}
 
 // --- Auto Updater ---
 // Only active in packaged builds; disabled in dev to avoid errors.
@@ -178,7 +207,7 @@ app.setName("Quarry");
 
 let mainWindow;
 
-function createWindow() {
+function createWindow(port) {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -195,7 +224,7 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadURL("http://localhost:3000");
+  mainWindow.loadURL(`http://localhost:${port}`);
 
   if (process.env.NODE_ENV === "development") {
     mainWindow.webContents.openDevTools({ mode: "detach" });
@@ -268,7 +297,7 @@ function sendLifecycleEvent(action) {
     const body = JSON.stringify(payload);
     const req = http.request({
       hostname: 'localhost',
-      port: 3000,
+      port: parseInt(process.env.PORT || '3000', 10),
       path: '/api/telemetry/events',
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
@@ -280,7 +309,36 @@ function sendLifecycleEvent(action) {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Determine the port: dev-with-port.js sets PORT in env; for packaged builds we find one here.
+  let port = parseInt(process.env.PORT || '0', 10);
+  if (!port) {
+    port = await findFreePort();
+  }
+  // Make PORT available to child processes and sendLifecycleEvent
+  process.env.PORT = String(port);
+
+  // In packaged builds, spawn the Next.js standalone server ourselves.
+  if (app.isPackaged) {
+    const { utilityProcess } = require("electron");
+    const serverScript = path.join(process.resourcesPath, '.next', 'standalone', 'server.js');
+    utilityProcess.fork(serverScript, [], {
+      env: {
+        ...process.env,
+        PORT: String(port),
+        HOSTNAME: '127.0.0.1',
+        NODE_ENV: 'production',
+      },
+    });
+    try {
+      await waitForPort(port);
+    } catch (err) {
+      console.error('Failed to start production server:', err.message);
+      app.quit();
+      return;
+    }
+  }
+
   // Build the app menu (includes "Check for Updates…")
   buildAppMenu();
 
@@ -335,7 +393,7 @@ app.whenReady().then(() => {
     console.error("Unhandled rejection:", reason);
   });
 
-  createWindow();
+  createWindow(port);
 
   // Fire app_lifecycle open event after window is ready (slight delay so Next.js is up)
   setTimeout(() => sendLifecycleEvent('open'), 5000);
