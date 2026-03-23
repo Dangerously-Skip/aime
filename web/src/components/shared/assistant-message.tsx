@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Copy, Check, ThumbsUp, ThumbsDown } from "lucide-react";
 import { MemoryButton } from "./memory-button";
 import { useConversationStore } from "@/stores/conversation-store";
+import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
 import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 
@@ -100,6 +101,14 @@ export function AssistantMessage({
   function handleRate(rating: 1 | -1) {
     if (!conversationId) return;
     updateConversationMetrics(conversationId, { userRating: rating });
+    const conv = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
+    sendUserFeedbackEvent({
+      surface: conv?.surface ?? 'unknown',
+      rating,
+      model: conv?.tokenUsage?.model,
+      taskType: conv?.effortEstimate?.taskType,
+      domain: conv?.effortEstimate?.domain,
+    });
   }
 
   return (
