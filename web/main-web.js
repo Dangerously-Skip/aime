@@ -320,10 +320,43 @@ app.whenReady().then(async () => {
 
   // In packaged builds, spawn the Next.js standalone server ourselves.
   if (app.isPackaged) {
+    const fs = require("fs");
     const { utilityProcess } = require("electron");
     const standaloneDir = path.join(process.resourcesPath, '.next', 'standalone', 'web');
     const serverScript = path.join(standaloneDir, 'server.js');
-    utilityProcess.fork(serverScript, [], {
+
+    // Debug: verify paths exist
+    console.log('[Quarry] resourcesPath:', process.resourcesPath);
+    console.log('[Quarry] standaloneDir:', standaloneDir);
+    console.log('[Quarry] serverScript:', serverScript);
+    console.log('[Quarry] serverScript exists:', fs.existsSync(serverScript));
+    console.log('[Quarry] standaloneDir contents:', fs.existsSync(standaloneDir) ? fs.readdirSync(standaloneDir).slice(0, 20) : 'DIR NOT FOUND');
+    console.log('[Quarry] .next dir exists:', fs.existsSync(path.join(standaloneDir, '.next')));
+    console.log('[Quarry] starting server on port:', port);
+
+    if (!fs.existsSync(serverScript)) {
+      // Try to find server.js anywhere in resources
+      const findServer = (dir, depth = 0) => {
+        if (depth > 3) return [];
+        const results = [];
+        try {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (entry.name === 'server.js' && entry.isFile()) results.push(path.join(dir, entry.name));
+            if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+              results.push(...findServer(path.join(dir, entry.name), depth + 1));
+            }
+          }
+        } catch {}
+        return results;
+      };
+      console.log('[Quarry] server.js NOT FOUND at expected path. Searching...');
+      console.log('[Quarry] found:', findServer(process.resourcesPath));
+      dialog.showErrorBox('Quarry - Server Not Found', `Could not find server.js at:\n${serverScript}\n\nresourcesPath: ${process.resourcesPath}`);
+      app.quit();
+      return;
+    }
+
+    const child = utilityProcess.fork(serverScript, [], {
       cwd: standaloneDir,
       env: {
         ...process.env,
@@ -331,11 +364,18 @@ app.whenReady().then(async () => {
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
       },
+      stdio: 'pipe',
     });
+
+    child.stderr.on('data', (data) => console.error('[Next.js server]', data.toString()));
+    child.stdout.on('data', (data) => console.log('[Next.js server]', data.toString()));
+    child.on('exit', (code) => console.error('[Quarry] Next.js server exited with code:', code));
+
     try {
       await waitForPort(port);
     } catch (err) {
       console.error('Failed to start production server:', err.message);
+      dialog.showErrorBox('Quarry - Server Failed', `The Next.js server failed to start on port ${port}.\n\nCheck Console.app for logs.`);
       app.quit();
       return;
     }
