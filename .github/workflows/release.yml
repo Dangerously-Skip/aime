@@ -24,6 +24,10 @@ jobs:
         working-directory: web
         run: npm ci
 
+      - name: Create teams.json placeholder
+        working-directory: web
+        run: cp src/config/teams.example.json src/config/teams.json
+
       - name: Build Next.js
         working-directory: web
         run: npx next build
@@ -55,6 +59,10 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: npm ci
+
+      - name: Create teams.json placeholder
+        working-directory: web
+        run: cp src/config/teams.example.json src/config/teams.json
 
       - name: Build Next.js
         working-directory: web
