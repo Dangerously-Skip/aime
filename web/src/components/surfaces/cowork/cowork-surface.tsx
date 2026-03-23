@@ -18,6 +18,7 @@ import { summarizeConversation } from "@/lib/memory/summarizer";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { useAutoProject } from "@/hooks/use-auto-project";
+import { sendConversationCompletedEvent } from "@/lib/telemetry/events";
 import { useCronStore } from "@/stores/cron-store";
 import { useScratchDir } from "@/hooks/use-scratch-dir";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
@@ -589,6 +590,39 @@ export function CoworkSurface() {
             language: estimate.language,
           },
           roi: { multiplier, dollarsSaved },
+        });
+
+        // Send conversation_completed analytics event
+        const conv = useConversationStore.getState().conversations.find((c) => c.id === id);
+        const now = new Date();
+        sendConversationCompletedEvent({
+          surface: conv?.surface ?? 'cowork',
+          model: usage.model,
+          toolProfile: conv?.sessionStats?.toolProfile,
+          hasProject: !!conv?.projectId,
+          connectors: conv?.sessionStats?.connectors ?? [],
+          connectorCount: (conv?.sessionStats?.connectors ?? []).length,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          costUsd: agentCostDollars,
+          durationMs: agentDurationMs,
+          ttftMs: usage.ttftMs,
+          toolCallCount: usage.toolCallCount,
+          artifactCount,
+          messageCount: allMsgs.length,
+          clarificationCount: conv?.sessionStats?.clarificationCount ?? 0,
+          aborted: conv?.sessionStats?.aborted ?? false,
+          thinkingUsed: conv?.sessionStats?.thinkingUsed ?? false,
+          estimatedHumanHours: humanHours,
+          taskType: estimate.taskType,
+          domain: estimate.domain,
+          language: estimate.language,
+          complexity: estimate.complexity,
+          effortReasoning: estimate.reasoning,
+          roiMultiplier: multiplier,
+          dollarsSaved,
+          hourOfDay: now.getHours(),
+          dayOfWeek: now.getDay(),
         });
       }).catch(() => {});
     },
