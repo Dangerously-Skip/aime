@@ -204,7 +204,7 @@ export function BrowseConnectors() {
         }
       }}
     >
-      <DialogContent className="sm:max-w-md" onOpenAutoFocus={(e) => { e.preventDefault(); apiKeyInputRef.current?.focus(); }}>
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Connect {apiKeyDialog?.connector.name}</DialogTitle>
         </DialogHeader>
