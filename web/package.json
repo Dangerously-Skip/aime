@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -70,12 +70,11 @@
           ]
         }
       ],
-      "identity": null,
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": false
+      "notarize": true
     },
     "win": {
       "icon": "build/icon.ico",
