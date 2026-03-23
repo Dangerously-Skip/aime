@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -29,7 +29,8 @@
     "extraResources": [
       {
         "from": ".next/standalone/web",
-        "to": ".next/standalone/web"
+        "to": ".next/standalone/web",
+        "filter": ["**/*", "!.next/cache/**", "!.next/node_modules/**"]
       },
       {
         "from": ".next/static",
