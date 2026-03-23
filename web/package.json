@@ -23,14 +23,26 @@
     "files": [
       "main-web.js",
       "preload-web.js",
-      ".next/standalone/**/*",
-      ".next/static/**/*",
       "public/**/*",
-      "src/config/teams.json",
-      "node_modules/**/*",
-      "!node_modules/.cache"
+      "src/config/teams.json"
     ],
     "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": ".next/standalone"
+      },
+      {
+        "from": ".next/static",
+        "to": ".next/standalone/.next/static"
+      },
+      {
+        "from": "public",
+        "to": ".next/standalone/public"
+      },
+      {
+        "from": "node_modules",
+        "to": ".next/standalone/node_modules"
+      },
       {
         "from": "src/config/teams.json",
         "to": "teams.json",
