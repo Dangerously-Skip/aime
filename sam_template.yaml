@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: Quarry desktop app release hosting - S3 CloudFront and scoped IAM user for GitHub Actions uploads
+
+Resources:
+  Website:
+    Type: RQP::StaticSite
+    Properties:
+      Content: file://content.zip
+      CustomErrorResponses:
+        - ErrorCode: 404
+          ResponseCode: 200
+          ResponsePagePath: 'index.html'
+        - ErrorCode: 403
+          ResponseCode: 200
+          ResponsePagePath: 'index.html'
+
+  # IAM user for GitHub Actions to upload release artifacts
+  GithubUploaderUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-github-uploader'
+      Policies:
+        - PolicyName: S3UploadOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource: !Sub '${Website.BucketArn}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt Website.BucketArn
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                Resource: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${Website.DistributionId}'
+
+  GithubUploaderAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref GithubUploaderUser
+
+Outputs:
+  BucketName:
+    Value: !GetAtt Website.BucketName
+    Description: S3 bucket name for release artifacts
+  CloudFrontDomain:
+    Value: !GetAtt Website.DomainName
+    Description: CloudFront URL for auto-updater
+  CloudFrontDistributionId:
+    Value: !GetAtt Website.DistributionId
+    Description: CloudFront distribution ID
+  UploaderAccessKeyId:
+    Value: !Ref GithubUploaderAccessKey
+    Description: Access Key ID for GitHub Actions (add to GitHub secrets)
+  UploaderSecretAccessKey:
+    Value: !GetAtt GithubUploaderAccessKey.SecretAccessKey
+    Description: Secret Access Key for GitHub Actions (add to GitHub secrets)

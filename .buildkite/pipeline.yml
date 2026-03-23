@@ -1,0 +1,56 @@
+env:
+  AWS_REGION: ap-southeast-2
+  APPLICATION: quarry
+  SLICE: $BUILDKITE_BRANCH
+  LINE_OF_BUSINESS: etdp
+  VERSION: "1.0.0.${BUILDKITE_BRANCH}-${BUILDKITE_BUILD_NUMBER}"
+  SAMOA_IMAGE: 441581275790.dkr.ecr.ap-southeast-2.amazonaws.com/samoa:2
+  ZONE: secure
+  ITBU: dai
+
+steps:
+  # Run SAMOA to generate deployment scripts
+  - label: ':hammer: Run samoa'
+    commands:
+      - 'docker pull "$$SAMOA_IMAGE"'
+      - 'docker run --rm --tty --volume "$$PWD":/app --volume "$$HOME":/root "$$SAMOA_IMAGE"'
+    plugins:
+      - ssh://git@github.com/redacted-org/image-pull-buildkite-plugin.git#v1.1.0
+    env:
+      IMAGE_REGISTRY: ecr
+    agents:
+      queue: elastic
+    artifact_paths:
+      - samoa_deploy.sh
+      - samoa_template.yaml
+
+  - wait
+
+  # Deploy static site stack to KAOS (creates S3 bucket + CloudFront + IAM user)
+  - label: ':shipit: Deploy releases infra to KAOS'
+    commands:
+      - 'buildkite-agent artifact download "samoa_*" .'
+      - './samoa_deploy.sh samoa_template.yaml'
+    agents:
+      queue: elastic
+    env:
+      STAGE: kaos
+    concurrency: 1
+    concurrency_group: ${BUILDKITE_PIPELINE_SLUG}/deploy/${BUILDKITE_BRANCH}/kaos-secure
+
+  - wait
+
+  - block: ':warning: Delete stack (feature branches only)'
+    branches: '!master'
+
+  - label: ':gun: Delete from KAOS'
+    commands:
+      - 'buildkite-agent artifact download "samoa_*" .'
+      - './samoa_deploy.sh --delete-stack'
+    agents:
+      queue: elastic
+    env:
+      STAGE: kaos
+    concurrency: 1
+    concurrency_group: ${BUILDKITE_PIPELINE_SLUG}/deploy/${BUILDKITE_BRANCH}/kaos-secure
+    branches: '!master'
