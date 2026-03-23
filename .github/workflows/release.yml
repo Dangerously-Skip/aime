@@ -32,6 +32,10 @@ jobs:
         working-directory: web
         run: npx next build
 
+      - name: Clean broken symlinks from standalone
+        working-directory: web
+        run: find .next/standalone -type l ! -exec test -e {} \; -delete 2>/dev/null; find .next/standalone -name '*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*' -not -path '*/node_modules/.package-lock.json' -delete 2>/dev/null; true
+
       - name: Build and publish (macOS)
         working-directory: web
         env:
