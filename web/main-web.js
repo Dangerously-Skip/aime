@@ -463,7 +463,7 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
+    createWindow(parseInt(process.env.PORT || '3000', 10));
   }
 });
 
