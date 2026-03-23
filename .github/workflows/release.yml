@@ -24,9 +24,9 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Create teams.json placeholder
+      - name: Create teams.json
         working-directory: web
-        run: cp src/config/teams.example.json src/config/teams.json
+        run: echo '${{ secrets.TEAMS_JSON }}' > src/config/teams.json
 
       - name: Build Next.js
         working-directory: web
@@ -60,9 +60,9 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Create teams.json placeholder
+      - name: Create teams.json
         working-directory: web
-        run: cp src/config/teams.example.json src/config/teams.json
+        run: echo '${{ secrets.TEAMS_JSON }}' > src/config/teams.json
 
       - name: Build Next.js
         working-directory: web
