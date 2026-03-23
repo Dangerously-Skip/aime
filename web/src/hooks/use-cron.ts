@@ -3,13 +3,7 @@
 import { useEffect } from 'react';
 import { useCronStore, matchesCron } from '@/stores/cron-store';
 
-declare global {
-  interface Window {
-    electronAPI?: {
-      onMinuteTick?: (callback: (ts: number) => void) => void;
-    };
-  }
-}
+// ElectronAPI type is declared globally in use-electron.ts
 
 /**
  * Evaluates enabled cron jobs on every minute:tick and fires

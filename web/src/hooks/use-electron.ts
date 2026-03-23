@@ -21,6 +21,7 @@ interface ElectronAPI {
   checkForUpdates: () => void;
   installUpdate: () => void;
   onOpenSettings: (callback: () => void) => void;
+  onMinuteTick?: (callback: (ts: number) => void) => void;
 }
 
 declare global {

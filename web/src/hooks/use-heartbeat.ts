@@ -4,13 +4,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useSettingsStore } from '@/stores/settings-store';
 import { CONNECTOR_MAP } from '@/lib/connectors/registry';
 
-declare global {
-  interface Window {
-    electronAPI?: {
-      onMinuteTick?: (callback: (ts: number) => void) => void;
-    };
-  }
-}
+// ElectronAPI type is declared globally in use-electron.ts
 
 function connectorNames(ids: string[]): string {
   return ids.map((id) => CONNECTOR_MAP[id]?.name).filter(Boolean).join(', ');
