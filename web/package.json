@@ -11,7 +11,7 @@
     "lint": "eslint",
     "postinstall": "node scripts/patch-electron-name.js && cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.min.mjs",
     "electron": "electron .",
-    "electron:dev": "concurrently --kill-others \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:dev": "node scripts/dev-with-port.js",
     "setup:mcp": "node scripts/setup-mcp-servers.js",
     "dist": "next build && electron-builder --mac",
     "dist:win": "next build && electron-builder --win",
@@ -23,7 +23,8 @@
     "files": [
       "main-web.js",
       "preload-web.js",
-      ".next/**/*",
+      ".next/standalone/**/*",
+      ".next/static/**/*",
       "public/**/*",
       "src/config/teams.json",
       "node_modules/**/*",
