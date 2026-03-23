@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -38,10 +38,6 @@
       {
         "from": "public",
         "to": ".next/standalone/public"
-      },
-      {
-        "from": "node_modules",
-        "to": ".next/standalone/node_modules"
       },
       {
         "from": "src/config/teams.json",
