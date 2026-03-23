@@ -24,6 +24,10 @@ jobs:
         working-directory: web
         run: npm ci
 
+      - name: Build Next.js
+        working-directory: web
+        run: npx next build
+
       - name: Build and publish (macOS)
         working-directory: web
         env:
@@ -33,7 +37,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac --publish always
+        run: |
+          ulimit -n 65536
+          npx electron-builder --mac --publish always
 
   build-win:
     runs-on: windows-latest
@@ -49,6 +55,10 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: npm ci
+
+      - name: Build Next.js
+        working-directory: web
+        run: npx next build
 
       - name: Build and publish (Windows)
         working-directory: web
