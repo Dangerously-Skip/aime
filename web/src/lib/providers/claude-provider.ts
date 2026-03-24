@@ -184,6 +184,15 @@ export class ClaudeProvider extends BaseProvider {
       }),
     };
 
+    // In packaged Electron builds, the SDK can't find its CLI binary via import.meta.url
+    // because the standalone server relocates node_modules. Point it to the correct path.
+    // QUARRY_RESOURCES_PATH is set by main-web.js when spawning the standalone server.
+    if (process.env.QUARRY_RESOURCES_PATH) {
+      const path = await import('path');
+      const sdkDir = path.join(process.env.QUARRY_RESOURCES_PATH, '.next', 'standalone', 'web', 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+      queryOptions.pathToClaudeCodeExecutable = path.join(sdkDir, 'cli.js');
+    }
+
     // Loop detection window for this query
     const loopWindow: Array<{ name: string; inputHash: string }> = [];
     const loopThreshold = 3; // configurable via settings — hard-coded for now, route can pass via params
