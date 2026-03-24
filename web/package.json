@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -43,6 +43,10 @@
       {
         "from": "node_modules/@anthropic-ai/claude-agent-sdk",
         "to": ".next/standalone/web/node_modules/@anthropic-ai/claude-agent-sdk"
+      },
+      {
+        "from": "node_modules/@anthropic-ai/claude-agent-sdk/cli.js",
+        "to": ".next/standalone/web/node_modules/@anthropic-ai/l/cli.js"
       },
       {
         "from": "src/config/teams.json",

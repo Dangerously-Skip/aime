@@ -186,10 +186,9 @@ export class ClaudeProvider extends BaseProvider {
     };
 
     // In packaged Electron builds, the SDK can't find its CLI binary via import.meta.url
-    // because the standalone server relocates node_modules. Point it to the correct path.
-    // QUARRY_RESOURCES_PATH is set by main-web.js when spawning the standalone server.
-    // Read at runtime via a helper to prevent Next.js from inlining/tree-shaking.
-    const sdkCliPath = getClaudeSDKPath();
+    // because the bundler minifies module paths. The instrumentation hook sets a global
+    // with the real path at server startup (see src/instrumentation.ts).
+    const sdkCliPath = (globalThis as Record<string, unknown>).__quarryClaudeSDKPath as string | undefined;
     if (sdkCliPath) {
       queryOptions.pathToClaudeCodeExecutable = sdkCliPath;
     }

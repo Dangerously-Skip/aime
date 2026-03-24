@@ -58,12 +58,14 @@ export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OA
 
   // The redirect_uri registered with the OAuth provider.
   // In Electron, the auth window intercepts the redirect before it hits the server,
-  // so this URL doesn't need to be reachable — it just needs to match what's
-  // registered with the provider.
-  // We use window.location.origin so the URI automatically matches whatever port
-  // the app is running on (3000 in dev, production port in prod). This is the
-  // URL you register with each OAuth provider dashboard.
-  const redirectUri = `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'}${CALLBACK_PATH}`;
+  // so the URL doesn't need to be reachable — it just needs to match what's
+  // registered with the provider dashboard.
+  // Always use localhost:3000 as the registered callback origin since that's what's
+  // configured in each OAuth provider. Electron intercepts the redirect by URL path
+  // matching regardless of port.
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.openConnectorAuthWindow;
+  const callbackOrigin = isElectron ? 'http://localhost:3000' : (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+  const redirectUri = `${callbackOrigin}${CALLBACK_PATH}`;
 
   // Build authorization URL
   const params = new URLSearchParams({
