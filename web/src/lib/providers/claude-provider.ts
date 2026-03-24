@@ -3,6 +3,7 @@ import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig }
 import { getSurfaceConfig } from '../surfaces';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { getGatewayEnv, isGatewayConfigured, mapModelForGateway } from '../gateway-env';
+import { getClaudeSDKPath } from './sdk-path';
 import { waitForAnswer } from '../pending-questions';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
@@ -187,10 +188,10 @@ export class ClaudeProvider extends BaseProvider {
     // In packaged Electron builds, the SDK can't find its CLI binary via import.meta.url
     // because the standalone server relocates node_modules. Point it to the correct path.
     // QUARRY_RESOURCES_PATH is set by main-web.js when spawning the standalone server.
-    if (process.env.QUARRY_RESOURCES_PATH) {
-      const path = await import('path');
-      const sdkDir = path.join(process.env.QUARRY_RESOURCES_PATH, '.next', 'standalone', 'web', 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
-      queryOptions.pathToClaudeCodeExecutable = path.join(sdkDir, 'cli.js');
+    // Read at runtime via a helper to prevent Next.js from inlining/tree-shaking.
+    const sdkCliPath = getClaudeSDKPath();
+    if (sdkCliPath) {
+      queryOptions.pathToClaudeCodeExecutable = sdkCliPath;
     }
 
     // Loop detection window for this query
