@@ -313,7 +313,24 @@ app.whenReady().then(async () => {
   // Determine the port: dev-with-port.js sets PORT in env; for packaged builds we find one here.
   let port = parseInt(process.env.PORT || '0', 10);
   if (!port) {
-    port = await findFreePort();
+    // Use a fixed port for packaged builds so localStorage persists across launches.
+    // Fall back to a random port if the preferred one is in use.
+    if (app.isPackaged) {
+      const preferred = 19532;
+      try {
+        await new Promise((resolve, reject) => {
+          const s = net.createServer().listen(preferred, '127.0.0.1', () => {
+            s.close(() => resolve(undefined));
+          });
+          s.on('error', reject);
+        });
+        port = preferred;
+      } catch {
+        port = await findFreePort();
+      }
+    } else {
+      port = await findFreePort();
+    }
   }
   // Make PORT available to child processes and sendLifecycleEvent
   process.env.PORT = String(port);
@@ -356,6 +373,32 @@ app.whenReady().then(async () => {
       return;
     }
 
+    // Copy the Claude SDK cli.js outside the app bundle so it can be executed
+    // without codesign/sandbox restrictions. Write the path to a marker file
+    // so the Next.js server can find it.
+    const sdkSrcPath = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js');
+    const sdkDestDir = path.join(app.getPath('userData'), 'claude-sdk');
+    const sdkDestPath = path.join(sdkDestDir, 'cli.js');
+    const sdkMarkerPath = path.join(app.getPath('userData'), '.quarry-sdk-path');
+    try {
+      fs.mkdirSync(sdkDestDir, { recursive: true });
+      // Copy cli.js + vendor directory (contains ripgrep etc)
+      fs.copyFileSync(sdkSrcPath, sdkDestPath);
+      fs.chmodSync(sdkDestPath, 0o755);
+      // Also copy the vendor directory if it exists
+      const vendorSrc = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'vendor');
+      const vendorDest = path.join(sdkDestDir, 'vendor');
+      if (fs.existsSync(vendorSrc) && !fs.existsSync(vendorDest)) {
+        fs.cpSync(vendorSrc, vendorDest, { recursive: true });
+      }
+      fs.writeFileSync(sdkMarkerPath, sdkDestPath, 'utf-8');
+      console.log('[Quarry] SDK cli.js copied to:', sdkDestPath);
+    } catch (e) {
+      // Fallback: just write the in-bundle path
+      fs.writeFileSync(sdkMarkerPath, sdkSrcPath, 'utf-8');
+      console.warn('[Quarry] Failed to copy SDK, using in-bundle path:', e.message);
+    }
+
     const child = utilityProcess.fork(serverScript, [], {
       cwd: standaloneDir,
       env: {
@@ -364,6 +407,9 @@ app.whenReady().then(async () => {
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
         QUARRY_RESOURCES_PATH: process.resourcesPath,
+        QUARRY_SDK_CLI_PATH: sdkDestPath,
+        // Ensure node is available in PATH for the Claude Agent SDK to spawn cli.js
+        PATH: ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', process.env.PATH].filter(Boolean).join(':'),
       },
       stdio: 'pipe',
     });
