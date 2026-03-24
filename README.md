@@ -1,62 +1,110 @@
-# Nib Cowork
+# Quarry
 
-An Electron desktop AI workspace powered by the Claude Agent SDK. Built with Next.js, React, and shadcn/ui.
+A desktop AI workspace for nib teams. Select your team, start working.
 
-## Features
+![Quarry](docs/hero.png)
 
-- **Multi-surface workspace** — Chat, Cowork (agent), Code, and Browser surfaces
-- **Real-time streaming** — SSE token-by-token responses
-- **OAuth connectors** — GitHub, Slack, Jira, Confluence, Figma, Google Drive, and more via MCP
-- **Tool visualization** — Context and Artifacts panels showing tool inputs/outputs
-- **Agent routing** — AGENTS.md-based routing with model/tool overrides
-- **Skills** — Extend Claude with custom `SKILL.md` capabilities
-- **Memory** — Auto-extracted memories + daily logs + long-term MEMORY.md
+## Download
 
-## Tech Stack
+| Platform | Download |
+|----------|----------|
+| Mac (Apple Silicon) | [Quarry-arm64.dmg](https://github.com/redacted-org/quarry/releases/latest) |
+| Mac (Intel) | [Quarry.dmg](https://github.com/redacted-org/quarry/releases/latest) |
+| Windows | [Quarry-Setup.exe](https://github.com/redacted-org/quarry/releases/latest) |
 
-| Component | Technology |
-|-----------|------------|
-| Desktop | Electron.js |
-| Frontend | Next.js + React + shadcn/ui |
-| AI | Claude Agent SDK |
-| Tools | MCP (OAuth connectors provisioned to `~/.claude/.mcp.json`) |
-| Streaming | Server-Sent Events (SSE) |
-| State | Zustand + persist |
+Auto-updates are built in. Once installed, new versions are downloaded and applied automatically.
 
-## Quick Start
+## What it does
+
+Quarry gives every nib team member an AI coding assistant that runs locally on their machine. It connects to Claude via your team's API key (configured automatically when you select your team during onboarding).
+
+### Surfaces
+
+- **Chat** — conversational AI with file attachments and web search
+- **Cowork** — full agent workspace with folder picker, tool visualization (Context + Artifacts panels), and project management
+- **Code** — code-focused surface for development tasks
+- **Browser** — built-in browser for research and testing
+
+### Connectors
+
+Connect your work apps via OAuth (one-click setup during onboarding or in Customize):
+
+- GitHub (repos, PRs, issues)
+- Slack (channels, messages)
+- Jira (projects, tickets, boards)
+- Confluence (spaces, pages, docs)
+- Figma (design files)
+
+Connected apps are exposed to Claude as MCP tools, allowing it to read issues, post messages, review PRs, and more.
+
+### Other features
+
+- **Model selection** — switch between Claude Opus, Sonnet, and Haiku
+- **Voice input** — local speech-to-text via Whisper
+- **Agent routing** — AGENTS.md-based routing with custom tool profiles
+- **Memory** — automatic context extraction across conversations
+- **Project management** — organize work across multiple codebases
+- **Conversation history** — searchable chat history with daily grouping
+
+## Development
 
 ```bash
-cd web && npm install
+cd web
+cp .env.example .env    # Add OAuth client credentials
+npm install
 npm run electron:dev
 ```
 
-Copy `.env.example` to `.env` and add your API keys.
+No test suite or linter is configured.
 
-## Configuration
+### Environment variables
 
-### Required
-- `ANTHROPIC_API_KEY` — from [console.anthropic.com](https://console.anthropic.com)
+Copy `.env.example` to `.env` and fill in the OAuth credentials for the connectors you want to enable. The `ANTHROPIC_API_KEY` is provided automatically via team selection (stored in `src/config/teams.json`).
 
-### OAuth Connectors (optional)
-Set client credentials in `.env` to enable built-in OAuth flows for GitHub, Slack, Jira, Confluence, MS365, Google Drive, Figma, Miro, Zoom. See `.env.example` for all variables.
+### Architecture
 
-Connected apps are provisioned to `~/.claude/.mcp.json` and loaded automatically on each chat request.
-
-## Project Structure
+Electron + Next.js app. All source code is in `web/`.
 
 ```
 web/
-├── electron/                  # Electron main + preload
-├── src/
-│   ├── app/api/               # Next.js API routes (chat SSE, connectors, settings)
-│   ├── components/surfaces/   # Chat, Cowork, Code, Browser surfaces
-│   ├── lib/connectors/        # OAuth flow, registry, provisioner
-│   ├── stores/                # Zustand stores
-│   └── hooks/                 # Custom React hooks
+  main-web.js                     # Electron main process
+  preload-web.js                  # IPC bridge
+  src/
+    app/api/                      # Next.js API routes (SSE streaming, connectors, settings)
+    components/
+      surfaces/                   # Chat, Cowork, Code, Browser
+      shared/                     # Message list, input, tool cards
+      settings/                   # Settings dialog + sections
+      customize/                  # Connectors, automations
+      layout/                     # Sidebar, tabbar, app shell
+    stores/                       # Zustand stores (chat, cowork, conversation, settings, app)
+    hooks/                        # React hooks (SSE stream, electron, voice, heartbeat)
+    lib/
+      providers/                  # AI provider adapters (Claude, Gateway)
+      connectors/                 # OAuth registry + provisioner
+      surfaces/                   # Surface configs + allowed tools
 ```
 
-## Resources
+### Building
 
-- [Claude Agent SDK](https://docs.anthropic.com/en/docs/claude-agent-sdk)
-- [Model Context Protocol](https://modelcontextprotocol.io)
-- [Electron Docs](https://www.electronjs.org/docs)
+Releases are built via GitHub Actions on tag push:
+
+```bash
+git tag v0.5.0
+git push origin v0.5.0
+# GitHub Actions builds Mac (signed + notarized) + Windows
+# Artifacts published to GitHub Releases
+```
+
+The build pipeline is defined in `.github/workflows/release.yml`.
+
+## Tech stack
+
+| Layer | Technology |
+|-------|------------|
+| Desktop | Electron 41 |
+| UI | Next.js 16 + React 19 + shadcn/ui |
+| AI | Claude Agent SDK |
+| Connectors | MCP (Model Context Protocol) |
+| Streaming | Server-Sent Events |
+| State | Zustand |
