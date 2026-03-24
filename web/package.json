@@ -41,6 +41,10 @@
         "to": ".next/standalone/web/public"
       },
       {
+        "from": "node_modules/@anthropic-ai/claude-agent-sdk",
+        "to": ".next/standalone/web/node_modules/@anthropic-ai/claude-agent-sdk"
+      },
+      {
         "from": "src/config/teams.json",
         "to": "teams.json",
         "filter": [

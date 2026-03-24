@@ -363,6 +363,7 @@ app.whenReady().then(async () => {
         PORT: String(port),
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
+        QUARRY_RESOURCES_PATH: process.resourcesPath,
       },
       stdio: 'pipe',
     });
