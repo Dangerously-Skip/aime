@@ -408,6 +408,9 @@ app.whenReady().then(async () => {
         NODE_ENV: 'production',
         QUARRY_RESOURCES_PATH: process.resourcesPath,
         QUARRY_SDK_CLI_PATH: sdkDestPath,
+        // Point the SDK's config dir to Quarry's own directory so it doesn't
+        // write to ~/.claude/settings.json (which belongs to Claude Code).
+        CLAUDE_CONFIG_DIR: path.join(os.homedir(), '.quarry'),
         // Ensure node is available in PATH for the Claude Agent SDK to spawn cli.js
         PATH: ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', process.env.PATH].filter(Boolean).join(':'),
       },

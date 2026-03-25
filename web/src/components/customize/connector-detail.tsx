@@ -70,7 +70,7 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
 
   async function handleDelete() {
     if (!connector) return;
-    if (!confirm(`Remove connector "${connector.name}"? This removes it from ~/.claude/.mcp.json.`)) return;
+    if (!confirm(`Remove connector "${connector.name}"? This removes it from ~/.claude/.quarry-mcp.json.`)) return;
     await fetch(`/api/customize/connectors/${encodeURIComponent(connector.id)}`, { method: "DELETE" });
     setConnector(null);
   }
@@ -107,7 +107,7 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
         <h2 className="text-lg font-semibold">Connectors</h2>
         <p className="text-sm text-muted-foreground mt-1 max-w-sm">
           Connectors are MCP servers defined in{" "}
-          <code className="text-xs bg-muted px-1 py-0.5 rounded">~/.claude/.mcp.json</code>.
+          <code className="text-xs bg-muted px-1 py-0.5 rounded">~/.claude/.quarry-mcp.json</code>.
           Select a connector from the sidebar or add a new one.
         </p>
         <div className="flex items-center gap-2 mt-4">

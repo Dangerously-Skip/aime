@@ -321,8 +321,13 @@ export class ClaudeProvider extends BaseProvider {
 
     // IMPORTANT: Always strip CLAUDECODE from subprocess env to prevent
     // "nested session" detection when the app is launched from a Claude Code terminal.
+    const os = await import('os');
+    const path = await import('path');
     const { CLAUDECODE: _cc, ...safeEnv } = process.env;
-    queryOptions.env = { ...safeEnv };
+    queryOptions.env = {
+      ...safeEnv,
+      CLAUDE_CONFIG_DIR: path.join(os.homedir(), '.quarry'),
+    };
 
     // Gateway env passthrough: if nib Gateway API key is provided, route through gateway
     // This takes priority over Bedrock env

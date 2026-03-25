@@ -10,7 +10,7 @@ import { homedir } from 'os';
  */
 
 const MCP_CONFIG_DIR = join(homedir(), '.claude');
-const MCP_CONFIG_PATH = join(MCP_CONFIG_DIR, '.mcp.json');
+const MCP_CONFIG_PATH = join(MCP_CONFIG_DIR, '.quarry-mcp.json');
 
 interface McpConfig {
   mcpServers?: Record<string, unknown>;
