@@ -84,6 +84,7 @@ export function BrowserSurface() {
   const [urlInput, setUrlInput] = useState("");
   const [agentVisible, setAgentVisible] = useState(true);
   const [panelWidth, setPanelWidth] = useState(350);
+  const [attachments, setAttachments] = useState<import("@/stores/chat-store").Attachment[]>([]);
   const [slashSuggestions, setSlashSuggestions] = useState<CommandSuggestion[]>([]);
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
   const [sessionControls, setSessionControls] = useState<SessionControls>(DEFAULT_SESSION_CONTROLS);
@@ -909,7 +910,7 @@ export function BrowserSurface() {
               {/* Attachment + project menu */}
               <div className="flex items-center gap-1 px-3 py-1 border-t border-border/50">
                 <AttachmentMenu
-                  onFileSelect={() => {}}
+                  onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
                   onWebSearchToggle={() => {}}
                   webSearchEnabled={false}
                   hideWebSearch
