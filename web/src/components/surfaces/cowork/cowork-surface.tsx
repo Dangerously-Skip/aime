@@ -501,7 +501,7 @@ export function CoworkSurface() {
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
   const scratchDir = useScratchDir(chatId);
-  const { handleFolderSelected } = useAutoProject('cowork');
+  // Auto-project creation disabled — users create projects manually
   const { showNotification } = useElectron();
   const showReminder = useReminderStore((s) => s.showReminder);
 
@@ -509,10 +509,9 @@ export function CoworkSurface() {
     (f: string | null) => {
       if (chatId) {
         setFolder(chatId, f);
-        if (f) handleFolderSelected(f, chatId);
       }
     },
-    [setFolder, chatId, handleFolderSelected]
+    [setFolder, chatId]
   );
 
   useEffect(() => {
@@ -944,10 +943,7 @@ export function CoworkSurface() {
         });
         setActiveConversation(id);
         setCurrentChat(id);
-        // Auto-associate with project when conversation is first created
-        if (folder) {
-          handleFolderSelected(folder, id);
-        }
+        // Folder is set per-chat via folderByChat — no auto-project creation
       }
 
       addMessage(id, {
