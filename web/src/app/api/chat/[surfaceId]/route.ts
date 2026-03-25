@@ -106,20 +106,15 @@ function appendToSystemPrompt(
 export const runtime = 'nodejs';
 
 /**
- * Read provisioned connector MCP server entries from ~/.claude/.mcp.json.
- * This file is written by the connector provisioner when a user connects an app.
- * We merge these into the mcpServers object so the Claude Agent SDK can use them.
+ * Read MCP server entries from a JSON config file.
+ * Strips _meta fields that the SDK doesn't understand.
  */
-async function loadProvisionedMcpServers(): Promise<Record<string, unknown>> {
+async function readMcpConfigFile(configPath: string): Promise<Record<string, unknown>> {
   try {
     const { readFile } = await import('fs/promises');
-    const { join } = await import('path');
-    const { homedir } = await import('os');
-    const configPath = join(homedir(), '.claude', '.mcp.json');
     const content = await readFile(configPath, 'utf-8');
     const config = JSON.parse(content) as { mcpServers?: Record<string, unknown> };
     if (!config.mcpServers) return {};
-    // Strip _meta fields — the SDK doesn't understand them
     return Object.fromEntries(
       Object.entries(config.mcpServers).map(([key, entry]) => {
         const { _meta, ...serverConfig } = entry as Record<string, unknown>;
@@ -128,9 +123,27 @@ async function loadProvisionedMcpServers(): Promise<Record<string, unknown>> {
       })
     );
   } catch {
-    // File missing or unreadable — no provisioned servers yet
     return {};
   }
+}
+
+/**
+ * Load provisioned MCP servers by merging Claude Code's ~/.claude/.mcp.json
+ * with Quarry's own ~/.claude/.quarry-mcp.json.
+ * Quarry's entries take precedence for duplicate keys.
+ */
+async function loadProvisionedMcpServers(): Promise<Record<string, unknown>> {
+  const { join } = await import('path');
+  const { homedir } = await import('os');
+  const claudeDir = join(homedir(), '.claude');
+
+  const [claudeCodeServers, quarryServers] = await Promise.all([
+    readMcpConfigFile(join(claudeDir, '.mcp.json')),
+    readMcpConfigFile(join(claudeDir, '.quarry-mcp.json')),
+  ]);
+
+  // Merge with Quarry's entries taking precedence
+  return { ...claudeCodeServers, ...quarryServers };
 }
 
 // Singleton gateway provider — cached on globalThis so message history survives hot reload

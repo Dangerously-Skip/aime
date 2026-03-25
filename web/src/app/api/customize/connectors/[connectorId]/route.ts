@@ -5,7 +5,7 @@ import os from 'os';
 
 export const runtime = 'nodejs';
 
-const MCP_JSON_PATH = path.join(os.homedir(), '.claude', '.mcp.json');
+const MCP_JSON_PATH = path.join(os.homedir(), '.claude', '.quarry-mcp.json');
 
 interface McpServerConfig {
   type: 'stdio' | 'http' | 'sse';

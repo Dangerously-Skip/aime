@@ -7,7 +7,7 @@ export const runtime = 'nodejs';
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const SKILLS_DIR = path.join(CLAUDE_DIR, 'skills');
 const PLUGINS_DIR = path.join(CLAUDE_DIR, 'plugins');
-const MCP_JSON_PATH = path.join(CLAUDE_DIR, '.mcp.json');
+const MCP_JSON_PATH = path.join(CLAUDE_DIR, '.quarry-mcp.json');
 
 /**
  * GET /api/customize/status — Aggregate status of skills, connectors, plugins

@@ -7,7 +7,7 @@
 import type { AnalyticsEvent } from './analytics-client';
 import { sendEvents } from './analytics-client';
 
-const BUFFER_PATH_SEGMENT = '.claude/analytics-buffer.jsonl';
+const BUFFER_PATH_SEGMENT = '.quarry/analytics-buffer.jsonl';
 const FLUSH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 let memoryBuffer: AnalyticsEvent[] = [];
