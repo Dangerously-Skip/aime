@@ -15,7 +15,7 @@ interface CoworkState {
   model: ModelId;
   isStreaming: boolean;
   streamError: string | null;
-  folder: string | null;
+  folderByChat: Record<string, string | null>;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
   planContent: Record<string, string>;
@@ -36,7 +36,7 @@ interface CoworkActions {
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   completeRunningTools: (chatId: string) => void;
-  setFolder: (folder: string | null) => void;
+  setFolder: (chatId: string, folder: string | null) => void;
   addContextFile: (chatId: string, path: string) => void;
   addArtifactFile: (chatId: string, path: string) => void;
   removeContextFile: (chatId: string, path: string) => void;
@@ -60,7 +60,7 @@ export const useCoworkStore = create<CoworkStore>()(
       model: 'opus',
       isStreaming: false,
       streamError: null,
-      folder: null,
+      folderByChat: {},
       contextFiles: {},
       artifactFiles: {},
       planContent: {},
@@ -192,7 +192,9 @@ export const useCoworkStore = create<CoworkStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setFolder: (folder) => set({ folder }),
+      setFolder: (chatId, folder) => set((state) => ({
+        folderByChat: { ...state.folderByChat, [chatId]: folder },
+      })),
 
       addContextFile: (chatId, path) =>
         set((state) => {
@@ -254,7 +256,7 @@ export const useCoworkStore = create<CoworkStore>()(
         messages: state.messages,
         model: state.model,
         currentChatId: state.currentChatId,
-        folder: state.folder,
+        folderByChat: state.folderByChat,
         contextFiles: state.contextFiles,
         artifactFiles: state.artifactFiles,
         planContent: state.planContent,

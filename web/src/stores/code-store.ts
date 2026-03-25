@@ -17,7 +17,7 @@ interface CodeState {
   model: ModelId;
   isStreaming: boolean;
   streamError: string | null;
-  folder: string | null;
+  folderByChat: Record<string, string | null>;
   permissionMode: PermissionMode;
   sessionStatus: SessionStatus;
   connectionType: ConnectionType;
@@ -38,7 +38,7 @@ interface CodeActions {
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   completeRunningTools: (chatId: string) => void;
-  setFolder: (folder: string | null) => void;
+  setFolder: (chatId: string, folder: string | null) => void;
   setPermissionMode: (mode: PermissionMode) => void;
   setSessionStatus: (status: SessionStatus) => void;
   setConnectionType: (type: ConnectionType) => void;
@@ -61,7 +61,7 @@ export const useCodeStore = create<CodeStore>()(
       model: 'sonnet',
       isStreaming: false,
       streamError: null,
-      folder: null,
+      folderByChat: {},
       permissionMode: 'default',
       sessionStatus: 'idle',
       connectionType: 'local',
@@ -184,7 +184,9 @@ export const useCodeStore = create<CodeStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setFolder: (folder) => set({ folder }),
+      setFolder: (chatId, folder) => set((state) => ({
+        folderByChat: { ...state.folderByChat, [chatId]: folder },
+      })),
       setPermissionMode: (mode) => set({ permissionMode: mode }),
       setSessionStatus: (status) => set({ sessionStatus: status }),
       setConnectionType: (connectionType) => set({ connectionType }),
@@ -211,7 +213,7 @@ export const useCodeStore = create<CodeStore>()(
         messages: state.messages,
         model: state.model,
         currentChatId: state.currentChatId,
-        folder: state.folder,
+        folderByChat: state.folderByChat,
         permissionMode: state.permissionMode,
         connectionType: state.connectionType,
         planContent: state.planContent,
