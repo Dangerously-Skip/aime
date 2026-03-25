@@ -663,7 +663,7 @@ export function CodeSurface() {
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
-  const { handleFolderSelected } = useAutoProject('code');
+  // Auto-project creation disabled — users create projects manually
   const { isElectron, selectFolder: pickFolder, showNotification } = useElectron();
   const isEmpty = messages.length === 0;
 
@@ -671,10 +671,9 @@ export function CodeSurface() {
     (f: string | null) => {
       if (chatId) {
         setFolder(chatId, f);
-        if (f) handleFolderSelected(f, chatId);
       }
     },
-    [setFolder, chatId, handleFolderSelected]
+    [setFolder, chatId]
   );
 
   const handleQuestionAnswered = useCallback(
@@ -980,10 +979,7 @@ export function CodeSurface() {
         });
         setActiveConversation(id);
         setCurrentChat(id);
-        // Auto-associate with project when conversation is first created
-        if (folder) {
-          handleFolderSelected(folder, id);
-        }
+        // Folder is set per-chat via folderByChat — no auto-project creation
       }
 
       addMessage(id, {
