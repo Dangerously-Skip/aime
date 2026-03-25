@@ -590,7 +590,7 @@ export function CodeSurface() {
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
   const disableBashTool = useSettingsStore((s) => s.disableBashTool);
   const isStreaming = useCodeStore((s) => s.isStreaming);
-  const folder = useCodeStore((s) => s.folder);
+  const folder = useCodeStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
   const permissionMode = useCodeStore((s) => s.permissionMode);
   const planContent = useCodeStore((s) => (chatId ? s.planContent[chatId] : undefined));
   const planOpen = useCodeStore((s) => s.planOpen);
@@ -669,9 +669,9 @@ export function CodeSurface() {
 
   const handleFolderChange = useCallback(
     (f: string | null) => {
-      setFolder(f);
-      if (f && chatId) {
-        handleFolderSelected(f, chatId);
+      if (chatId) {
+        setFolder(chatId, f);
+        if (f) handleFolderSelected(f, chatId);
       }
     },
     [setFolder, chatId, handleFolderSelected]
@@ -1041,6 +1041,7 @@ export function CodeSurface() {
     [
       chatId,
       model,
+      folder,
       attachments,
       addMessage,
       addConversation,

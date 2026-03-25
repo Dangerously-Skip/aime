@@ -454,7 +454,7 @@ export function CoworkSurface() {
   );
   const model = useCoworkStore((s) => s.model);
   const isStreaming = useCoworkStore((s) => s.isStreaming);
-  const folder = useCoworkStore((s) => s.folder);
+  const folder = useCoworkStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
   const contextFiles = useCoworkStore((s) => (chatId ? s.contextFiles[chatId] : undefined) ?? EMPTY_FILES);
   const artifactFiles = useCoworkStore((s) => (chatId ? s.artifactFiles[chatId] : undefined) ?? EMPTY_FILES);
   const setModel = useCoworkStore((s) => s.setModel);
@@ -507,9 +507,9 @@ export function CoworkSurface() {
 
   const handleFolderChange = useCallback(
     (f: string | null) => {
-      setFolder(f);
-      if (f && chatId) {
-        handleFolderSelected(f, chatId);
+      if (chatId) {
+        setFolder(chatId, f);
+        if (f) handleFolderSelected(f, chatId);
       }
     },
     [setFolder, chatId, handleFolderSelected]
@@ -1014,6 +1014,7 @@ export function CoworkSurface() {
     [
       chatId,
       model,
+      folder,
       addMessage,
       startStreaming,
       sendMessage,
