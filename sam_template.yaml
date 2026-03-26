@@ -8,6 +8,10 @@ Resources:
     Properties:
       Cpu: 256
       Memory: 512
+      ContainerDefinitions:
+        - Name: web
+          PortMappings:
+            - ContainerPort: 80
 
   Service:
     Type: RQP::FargateService
