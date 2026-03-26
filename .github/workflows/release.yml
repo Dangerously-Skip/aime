@@ -8,9 +8,6 @@ on:
 permissions:
   contents: write
 
-env:
-  RELEASES_URL: ${{ secrets.RELEASES_URL }}
-
 jobs:
   build-mac:
     runs-on: macos-latest
@@ -118,7 +115,7 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create GitHub Release (changelog + trigger for Buildkite promotion)
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
@@ -126,11 +123,11 @@ jobs:
           body: |
             ## Install
 
-            Download from the internal releases page (nib network):
-            `${{ secrets.RELEASES_URL }}`
+            Download from the internal releases page (VPN required):
+            https://quarry-releases.internal.invalid
 
-            Existing installs will auto-update.
+            Existing installs will auto-update when connected to VPN.
 
-            ## Promote to S3
+            ## Promote
 
-            Buildkite will automatically sync these artifacts to S3/CloudFront.
+            Trigger the `promote-release` Buildkite pipeline with this tag as the message to push artifacts to S3.

@@ -1,7 +1,16 @@
 name: quarry
 lineOfBusiness: etdp
-deployTarget: static-site
+deployTarget: fargate
 prod: false
 zone: secure
 itbu: dai
 stage: kaos
+services:
+  releases:
+    dnsSuffix: releases
+    stackSuffix: releases
+    port: 80
+    cpu: 256
+    memory: 512
+    healthCheckPath: /health
+    directory: infrastructure/releases

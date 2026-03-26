@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: 'AWS::Serverless-2016-10-31'
-Description: Quarry releases - nginx proxy to S3 on internal domain (VPN-only)
+Description: Quarry releases - nginx file server on internal domain (VPN-only)
 
 Resources:
   Task:

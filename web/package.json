@@ -121,7 +121,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "${env.RELEASES_URL}",
+        "url": "https://quarry-releases.internal.invalid",
         "channel": "latest"
       }
     ]
