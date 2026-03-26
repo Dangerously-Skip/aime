@@ -3,27 +3,32 @@ env:
   APPLICATION: quarry
   SLICE: $BUILDKITE_BRANCH
   LINE_OF_BUSINESS: etdp
-  VERSION: "1.0.0.${BUILDKITE_BRANCH}-${BUILDKITE_BUILD_NUMBER}"
+  VERSION: "1.0.${BUILDKITE_BUILD_NUMBER}"
   SAMOA_IMAGE: 441581275790.dkr.ecr.ap-southeast-2.amazonaws.com/samoa:2
   ZONE: secure
   ITBU: dai
 
 steps:
-  # Package the download landing page into content.zip for the static site
-  - label: ':package: Package landing page'
-    commands:
-      - 'cd releases && zip -r ../content.zip .'
+  # Build and push the nginx releases image to ECR
+  - label: ':docker: Build releases image'
+    plugins:
+      - ssh://git@github.com/redacted-org/image-pull-buildkite-plugin.git#v1.1.0
+      - ssh://git@github.com/redacted-org/image-publish-buildkite-plugin.git#v4.4.3:
+          command: build
+          dockerfile: infrastructure/releases/Dockerfile
+          context: infrastructure/releases
+          image: ${APPLICATION}-releases
+          tag: "1.0.${BUILDKITE_BUILD_NUMBER}-${BUILDKITE_BRANCH}"
+    env:
+      IMAGE_REGISTRY: ecr
     agents:
       queue: elastic
-    artifact_paths:
-      - content.zip
 
   - wait
 
   # Run SAMOA to generate deployment scripts
   - label: ':hammer: Run samoa'
     commands:
-      - 'buildkite-agent artifact download "content.zip" .'
       - 'docker pull "$$SAMOA_IMAGE"'
       - 'docker run --rm --tty --volume "$$PWD":/app --volume "$$HOME":/root "$$SAMOA_IMAGE"'
     plugins:
@@ -38,8 +43,8 @@ steps:
 
   - wait
 
-  # Deploy static site stack to KAOS (creates S3 bucket + CloudFront + IAM uploader)
-  - label: ':shipit: Deploy releases infra to KAOS'
+  # Deploy Fargate service to KAOS
+  - label: ':shipit: Deploy releases service to KAOS'
     commands:
       - 'buildkite-agent artifact download "samoa_*" .'
       - 'chmod +x samoa_deploy.sh'
