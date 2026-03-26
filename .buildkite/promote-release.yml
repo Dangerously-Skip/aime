@@ -6,17 +6,18 @@ env:
   ITBU: dai
 
 steps:
-  - label: ':mag: Resolve stack outputs'
+  - label: ':mag: Resolve stack resources'
     commands:
       - |
-        # Get the S3 bucket and CloudFront distribution from the deployed stack
+        # Discover S3 bucket and CloudFront from stack resources (no Outputs needed)
         STACK_NAME="kaos-secure-quarry-master"
-        BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-          --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)
-        CF_DIST=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-          --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text)
-        CF_DOMAIN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-          --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomain'].OutputValue" --output text)
+
+        BUCKET=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+          --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" --output text)
+        CF_DIST=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+          --query "StackResources[?ResourceType=='AWS::CloudFront::Distribution'].PhysicalResourceId" --output text)
+        CF_DOMAIN=$(aws cloudfront get-distribution --id "$CF_DIST" \
+          --query "Distribution.DomainName" --output text)
 
         echo "Bucket: $BUCKET"
         echo "CloudFront Distribution: $CF_DIST"

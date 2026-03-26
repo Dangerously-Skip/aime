@@ -7,14 +7,3 @@ Resources:
     Type: RQP::StaticSite
     Properties:
       Content: file://content.zip
-
-Outputs:
-  BucketName:
-    Value: !GetAtt Website.BucketName
-    Description: S3 bucket name for release artifacts
-  CloudFrontDomain:
-    Value: !GetAtt Website.DomainName
-    Description: CloudFront URL for electron-updater
-  CloudFrontDistributionId:
-    Value: !GetAtt Website.DistributionId
-    Description: CloudFront distribution ID for cache invalidation
