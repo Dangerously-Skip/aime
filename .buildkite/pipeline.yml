@@ -9,9 +9,21 @@ env:
   ITBU: dai
 
 steps:
+  # Package the download landing page into content.zip for the static site
+  - label: ':package: Package landing page'
+    commands:
+      - 'cd releases && zip -r ../content.zip .'
+    agents:
+      queue: elastic
+    artifact_paths:
+      - content.zip
+
+  - wait
+
   # Run SAMOA to generate deployment scripts
   - label: ':hammer: Run samoa'
     commands:
+      - 'buildkite-agent artifact download "content.zip" .'
       - 'docker pull "$$SAMOA_IMAGE"'
       - 'docker run --rm --tty --volume "$$PWD":/app --volume "$$HOME":/root "$$SAMOA_IMAGE"'
     plugins:
@@ -26,10 +38,11 @@ steps:
 
   - wait
 
-  # Deploy static site stack to KAOS (creates S3 bucket + CloudFront + IAM user)
+  # Deploy static site stack to KAOS (creates S3 bucket + CloudFront + IAM uploader)
   - label: ':shipit: Deploy releases infra to KAOS'
     commands:
       - 'buildkite-agent artifact download "samoa_*" .'
+      - 'chmod +x samoa_deploy.sh'
       - './samoa_deploy.sh samoa_template.yaml'
     agents:
       queue: elastic
@@ -46,6 +59,7 @@ steps:
   - label: ':gun: Delete from KAOS'
     commands:
       - 'buildkite-agent artifact download "samoa_*" .'
+      - 'chmod +x samoa_deploy.sh'
       - './samoa_deploy.sh --delete-stack'
     agents:
       queue: elastic

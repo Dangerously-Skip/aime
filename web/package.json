@@ -120,10 +120,9 @@
     },
     "publish": [
       {
-        "provider": "github",
-        "owner": "redacted-org",
-        "repo": "quarry",
-        "releaseType": "release"
+        "provider": "generic",
+        "url": "${env.RELEASES_URL}",
+        "channel": "latest"
       }
     ]
   },
