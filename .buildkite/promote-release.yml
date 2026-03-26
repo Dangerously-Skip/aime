@@ -10,7 +10,7 @@ steps:
     commands:
       - |
         # Discover S3 bucket and CloudFront from stack resources (no Outputs needed)
-        STACK_NAME="kaos-secure-quarry-master"
+        STACK_NAME="quarry-master-stack"
 
         BUCKET=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
           --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" --output text)
@@ -18,12 +18,17 @@ steps:
           --query "StackResources[?ResourceType=='AWS::CloudFront::Distribution'].PhysicalResourceId" --output text)
         CF_DOMAIN=$(aws cloudfront get-distribution --id "$CF_DIST" \
           --query "Distribution.DomainName" --output text)
+        # CloudFront origin path includes the S3 prefix (e.g. /quarry/master/5)
+        ORIGIN_PATH=$(aws cloudfront get-distribution --id "$CF_DIST" \
+          --query "Distribution.DistributionConfig.Origins.Items[0].OriginPath" --output text)
 
         echo "Bucket: $BUCKET"
         echo "CloudFront Distribution: $CF_DIST"
         echo "CloudFront Domain: $CF_DOMAIN"
+        echo "S3 prefix: $ORIGIN_PATH"
 
         buildkite-agent meta-data set "s3_bucket" "$BUCKET"
+        buildkite-agent meta-data set "s3_prefix" "$ORIGIN_PATH"
         buildkite-agent meta-data set "cf_distribution_id" "$CF_DIST"
         buildkite-agent meta-data set "cf_domain" "$CF_DOMAIN"
     agents:
@@ -67,15 +72,16 @@ steps:
     commands:
       - |
         BUCKET=$(buildkite-agent meta-data get "s3_bucket")
+        S3_PREFIX=$(buildkite-agent meta-data get "s3_prefix")
         buildkite-agent artifact download "release-artifacts/*" .
 
-        echo "Uploading to s3://$BUCKET/"
-        aws s3 sync release-artifacts/ "s3://$BUCKET/" \
+        echo "Uploading to s3://$BUCKET$S3_PREFIX/"
+        aws s3 sync release-artifacts/ "s3://$BUCKET$S3_PREFIX/" \
           --exclude "*.blockmap" \
           --size-only
 
         echo "--- Bucket contents:"
-        aws s3 ls "s3://$BUCKET/"
+        aws s3 ls "s3://$BUCKET$S3_PREFIX/"
     agents:
       queue: elastic
 
