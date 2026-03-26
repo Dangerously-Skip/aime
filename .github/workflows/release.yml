@@ -124,7 +124,7 @@ jobs:
             ## Install
 
             Download from the internal releases page (VPN required):
-            https://quarry-releases.internal.invalid
+            https://quarry.internal.invalid
 
             Existing installs will auto-update when connected to VPN.
 
