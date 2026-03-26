@@ -376,47 +376,37 @@ export class ClaudeProvider extends BaseProvider {
       console.log('[Claude] Prepended conversation history (' + history.length + ' messages) as XML fallback');
     }
 
-    // Use content blocks array when attachments are present
+    // Inline attachment content into prompt string (Agent SDK only accepts string prompts)
     if (attachments && attachments.length > 0) {
-      const contentBlocks: unknown[] = [];
+      const attachmentTexts: string[] = [];
 
       for (const att of attachments) {
         if (att.category === 'image') {
-          // Extract base64 data and media type from data URL
-          const match = att.content.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          if (match) {
-            contentBlocks.push({
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: match[1],
-                data: match[2],
-              },
-            });
-          }
+          attachmentTexts.push(`[Attached image: ${att.name}]\n(Image content is attached but cannot be displayed in text mode. The user attached an image file.)`);
         } else if (att.category === 'document') {
-          // PDF: content is already raw base64
-          contentBlocks.push({
-            type: 'document',
-            source: {
-              type: 'base64',
-              media_type: 'application/pdf',
-              data: att.content,
-            },
-          });
+          // PDF: decode base64 to extract readable text via simple heuristic
+          // The Agent SDK cannot process binary content blocks — inline what we can
+          try {
+            const decoded = Buffer.from(att.content, 'base64').toString('utf-8');
+            // Extract readable text (strip binary PDF artifacts)
+            const readable = decoded.replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s{3,}/g, '\n').trim();
+            if (readable.length > 100) {
+              attachmentTexts.push(`[Attached PDF: ${att.name}]\n<document>\n${readable.slice(0, 200000)}\n</document>`);
+            } else {
+              attachmentTexts.push(`[Attached PDF: ${att.name}]\n(PDF content could not be extracted as text. The file may contain only scanned images.)`);
+            }
+          } catch {
+            attachmentTexts.push(`[Attached PDF: ${att.name}]\n(PDF content could not be decoded.)`);
+          }
         } else {
-          // Text files: inline as text block
-          contentBlocks.push({
-            type: 'text',
-            text: `[File: ${att.name}]\n\`\`\`\n${att.content}\n\`\`\``,
-          });
+          // Text files: inline directly
+          attachmentTexts.push(`[File: ${att.name}]\n\`\`\`\n${att.content}\n\`\`\``);
         }
       }
 
-      // Add user message as final text block
-      contentBlocks.push({ type: 'text', text: prompt });
-      queryPrompt = contentBlocks;
-      console.log('[Claude] Using content blocks with', attachments.length, 'attachment(s)');
+      const attachmentContext = attachmentTexts.join('\n\n');
+      queryPrompt = `${attachmentContext}\n\n${queryPrompt}`;
+      console.log('[Claude] Inlined', attachments.length, 'attachment(s) into prompt');
     }
 
     console.log('[Claude] Calling Claude Agent SDK...', surfaceId ? `(surface: ${surfaceId})` : '');

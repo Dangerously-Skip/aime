@@ -294,11 +294,14 @@ export async function POST(
       // Get the provider instance.
       // Chat surface: use lightweight GatewayProvider (OpenAI SDK, no tools needed).
       // Cowork/Code surfaces: use ClaudeProvider with gateway env (needs agentic tool execution).
-      const useGateway = isGatewayConfigured(apiKey as string | null) && surfaceId === 'chat';
+      // When attachments are present, bypass gateway — Claude API handles PDFs/images natively.
+      const hasAttachments = attachments && attachments.length > 0;
+      const useGateway = isGatewayConfigured(apiKey as string | null) && surfaceId === 'chat' && !hasAttachments;
       const provider = useGateway
         ? getGatewayInstance()
         : getProvider(providerName as string);
       if (useGateway) console.log('[CHAT] Using nib AI Studio gateway provider (chat-only)');
+      if (hasAttachments && surfaceId === 'chat') console.log('[CHAT] Bypassing gateway — attachments require Claude API');
 
       // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
       const mcpServers = await loadProvisionedMcpServers();
