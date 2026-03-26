@@ -6,6 +6,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
       'WebSearch', 'WebFetch', 'Agent', 'NotebookEdit',
       'TodoWrite', 'AskUserQuestion', 'EnterWorktree',
+      'ExcelRead', 'ExcelWrite', 'ExcelEdit',
     ],
     permissionMode: 'acceptEdits',
     systemPrompt: {

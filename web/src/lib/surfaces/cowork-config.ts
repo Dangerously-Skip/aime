@@ -5,6 +5,7 @@ export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): Surface
     allowedTools: [
       'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash',
       'WebSearch', 'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'canvas', 'spawn_agent',
+      'ExcelRead', 'ExcelWrite', 'ExcelEdit',
     ],
     permissionMode: 'acceptEdits',
     systemPrompt: `You are Quarry, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.

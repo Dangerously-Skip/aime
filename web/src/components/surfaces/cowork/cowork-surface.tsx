@@ -108,14 +108,18 @@ function categorizeToolCall(
   }
 
   // Explicit artifact tools
-  if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
+  if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit" ||
+      toolName === "ExcelWrite" || toolName === "ExcelEdit" ||
+      toolName.endsWith("__ExcelWrite") || toolName.endsWith("__ExcelEdit") ||
+      toolName.endsWith(":ExcelWrite") || toolName.endsWith(":ExcelEdit")) {
     const raw = toolInput.file_path || toolInput.path || toolInput.notebook_path;
     return typeof raw === "string" ? { category: "artifact", path: raw } : null;
   }
 
   // Explicit context tools
   if (toolName === "Read" || toolName === "Glob" || toolName === "Grep" ||
-      toolName === "WebSearch" || toolName === "WebFetch") {
+      toolName === "WebSearch" || toolName === "WebFetch" ||
+      toolName === "ExcelRead" || toolName.endsWith("__ExcelRead") || toolName.endsWith(":ExcelRead")) {
     const raw = toolInput.file_path || toolInput.path || toolInput.pattern || toolInput.url || toolInput.query;
     return typeof raw === "string" ? { category: "context", path: raw } : null;
   }
@@ -805,6 +809,20 @@ export function CoworkSurface() {
           } catch (e) {
             console.error('[Cowork] CronCreate parse error:', e);
           }
+          break;
+        }
+        case "document_extracting": {
+          // Show extraction status in console — could add UI indicator
+          console.log('[Cowork] Extracting document:', event.name);
+          break;
+        }
+        case "document_extracted": {
+          // Add extracted document to context sidebar
+          const extractedPath = event.extractedPath as string | undefined;
+          if (extractedPath && chatId) {
+            addContextFile(chatId, extractedPath);
+          }
+          console.log('[Cowork] Document extracted:', event.name, 'path:', extractedPath, 'length:', event.textLength);
           break;
         }
         case "memory_extract":

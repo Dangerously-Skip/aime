@@ -17,7 +17,9 @@ export type ChunkType =
   | 'assistant'
   | 'input_request'
   | 'canvas'
-  | 'heartbeat_result';
+  | 'heartbeat_result'
+  | 'document_extracting'
+  | 'document_extracted';
 
 /**
  * A single streaming chunk yielded by a provider's query() method.
@@ -50,7 +52,7 @@ export interface QueryParams {
   maxTurns?: number;
   systemPrompt?: string | { type: string; preset: string; append?: string };
   model?: string;
-  attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>;
+  attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string; extractedPath?: string }>;
   webSearch?: boolean;
   projectInstructions?: string;
   projectKnowledge?: string;

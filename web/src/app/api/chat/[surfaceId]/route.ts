@@ -205,7 +205,7 @@ export async function POST(
     model?: string | null;
     personalPreferences?: string | null;
     displayName?: string | null;
-    attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }> | null;
+    attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string; extractedPath?: string }> | null;
     webSearch?: boolean;
     projectInstructions?: string | null;
     projectKnowledge?: string | null;
@@ -507,6 +507,66 @@ export async function POST(
           : `\n\n<thinking-config>\nThinking budget: ${budgetTokens} tokens\n</thinking-config>`;
         systemPrompt = appendToSystemPrompt(systemPrompt, thinkingBlock);
         console.log('[THINK] Level:', sessionControls.thinkLevel, 'budget:', budgetTokens);
+      }
+
+      // ── Document extraction ───────────────────────────────────────────
+      // Run extraction on non-text/non-image attachments before sending to provider
+      if (attachments && attachments.length > 0) {
+        const { extractDocument } = await import('@/lib/extractors');
+        const { join: ej } = await import('path');
+        const { homedir: eHomedir } = await import('os');
+        const { mkdirSync: eMkdir, writeFileSync: eWrite } = await import('fs');
+        const isToolSurface = surfaceId === 'cowork' || surfaceId === 'code';
+
+        for (const att of attachments) {
+          // Skip images and plain text (already handled by claude-provider)
+          if (att.category === 'image' || att.category === 'text') continue;
+
+          try {
+            await sse.writeEvent({
+              type: 'document_extracting',
+              name: att.name,
+              category: att.category,
+            });
+
+            const result = await extractDocument(
+              att.name,
+              att.content,
+              att.type,
+              att.category,
+              att.filePath,
+            );
+
+            if (isToolSurface && result.text.length > 0) {
+              // Save to scratch dir for agent to Read/Grep
+              const scratchDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'documents');
+              eMkdir(scratchDir, { recursive: true });
+              const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.[^.]+$/, '.md');
+              const extractedPath = ej(scratchDir, safeName);
+              eWrite(extractedPath, result.text, 'utf-8');
+              att.extractedPath = extractedPath;
+              att.content = ''; // Free memory — agent will use Read tool
+              console.log('[EXTRACT] Saved to scratch:', extractedPath, '(' + result.text.length + ' chars)');
+            } else {
+              // Chat surface: inline extracted text (first ~30k chars)
+              att.content = result.text.slice(0, 30000);
+              att.category = 'text' as typeof att.category; // Treat as text for prompt building
+              console.log('[EXTRACT] Inlined:', att.name, '(' + att.content.length + ' chars)');
+            }
+
+            await sse.writeEvent({
+              type: 'document_extracted',
+              name: att.name,
+              extractedPath: att.extractedPath,
+              pageCount: result.pageCount,
+              textLength: result.text.length,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[EXTRACT] Failed for', att.name, ':', msg);
+            att.content = `[Extraction failed for ${att.name}: ${msg}]`;
+          }
+        }
       }
 
       // Stream responses from the provider

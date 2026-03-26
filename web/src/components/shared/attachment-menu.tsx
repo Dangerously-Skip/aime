@@ -20,7 +20,9 @@ export interface AttachmentFile {
   name: string
   content: string
   type: string
-  category: 'image' | 'document' | 'text'
+  category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'
+  /** Set when file was uploaded via /api/upload (large files) */
+  filePath?: string
 }
 
 interface Project {
@@ -41,17 +43,38 @@ interface AttachmentMenuProps {
   hideWebSearch?: boolean
 }
 
-export const FILE_ACCEPT = "image/*,application/pdf,.txt,.md,.csv,.json,.xml,.js,.ts,.py,.go,.rs,.rb,.java,.c,.cpp,.h,.css,.html,.yml,.yaml,.toml,.sql,.sh,.log"
+export const FILE_ACCEPT = [
+  "image/*",
+  "application/pdf",
+  ".docx,.doc",
+  ".xlsx,.xls",
+  ".pptx,.ppt",
+  "audio/mpeg,audio/wav,audio/mp4,audio/ogg,audio/webm,.mp3,.wav,.m4a,.ogg",
+  "video/mp4,video/quicktime,video/webm,video/x-msvideo,.mp4,.mov,.webm,.avi",
+  ".txt,.md,.csv,.json,.xml,.js,.ts,.py,.go,.rs,.rb,.java,.c,.cpp,.h,.css,.html,.yml,.yaml,.toml,.sql,.sh,.log",
+].join(",")
 
-const SIZE_LIMITS = {
-  image: 10 * 1024 * 1024,    // 10MB
-  document: 32 * 1024 * 1024, // 32MB
-  text: 1 * 1024 * 1024,      // 1MB
+const SIZE_LIMITS: Record<string, number> = {
+  image: 20 * 1024 * 1024,         // 20MB
+  document: 50 * 1024 * 1024,      // 50MB
+  text: 5 * 1024 * 1024,           // 5MB
+  spreadsheet: 50 * 1024 * 1024,   // 50MB
+  presentation: 50 * 1024 * 1024,  // 50MB
+  audio: 100 * 1024 * 1024,        // 100MB
+  video: 500 * 1024 * 1024,        // 500MB
 }
 
-function classifyFile(file: File): 'image' | 'document' | 'text' {
+/** Threshold above which files are uploaded via /api/upload instead of base64 in JSON body */
+const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024; // 10MB
+
+function classifyFile(file: File): 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video' {
   if (file.type.startsWith('image/')) return 'image'
   if (file.type === 'application/pdf') return 'document'
+  if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) return 'document'
+  if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) return 'spreadsheet'
+  if (file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || file.name.endsWith('.pptx')) return 'presentation'
+  if (file.type.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|webm)$/i.test(file.name)) return 'audio'
+  if (file.type.startsWith('video/') || /\.(mp4|mov|webm|avi)$/i.test(file.name)) return 'video'
   return 'text'
 }
 
@@ -64,8 +87,19 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary)
 }
 
+/** Upload a large file via /api/upload and return the server path. */
+async function uploadLargeFile(file: File, chatId?: string): Promise<string> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('chatId', chatId || `upload_${Date.now()}`)
+  const res = await fetch('/api/upload', { method: 'POST', body: formData })
+  if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`)
+  const data = await res.json() as { path: string }
+  return data.path
+}
+
 /** Process a FileList into AttachmentFile objects, calling onFile for each. */
-export function processFiles(files: FileList, onFile: (file: AttachmentFile) => void) {
+export function processFiles(files: FileList, onFile: (file: AttachmentFile) => void, chatId?: string) {
   for (let i = 0; i < files.length; i++) {
     const file = files[i]
     const category = classifyFile(file)
@@ -74,6 +108,22 @@ export function processFiles(files: FileList, onFile: (file: AttachmentFile) => 
     if (file.size > sizeLimit) {
       const limitMB = Math.round(sizeLimit / (1024 * 1024))
       alert(`File "${file.name}" exceeds the ${limitMB}MB size limit for ${category} files.`)
+      continue
+    }
+
+    // Large files: upload via /api/upload, attach with filePath instead of content
+    if (file.size > LARGE_FILE_THRESHOLD) {
+      uploadLargeFile(file, chatId).then((filePath) => {
+        onFile({
+          name: file.name,
+          content: '',
+          type: file.type || 'application/octet-stream',
+          category,
+          filePath,
+        })
+      }).catch((err) => {
+        alert(`Failed to upload "${file.name}": ${err.message}`)
+      })
       continue
     }
 
@@ -89,18 +139,7 @@ export function processFiles(files: FileList, onFile: (file: AttachmentFile) => 
         })
       }
       reader.readAsDataURL(file)
-    } else if (category === 'document') {
-      reader.onload = () => {
-        const base64 = arrayBufferToBase64(reader.result as ArrayBuffer)
-        onFile({
-          name: file.name,
-          content: base64,
-          type: file.type || 'application/pdf',
-          category,
-        })
-      }
-      reader.readAsArrayBuffer(file)
-    } else {
+    } else if (category === 'text') {
       reader.onload = () => {
         onFile({
           name: file.name,
@@ -110,6 +149,18 @@ export function processFiles(files: FileList, onFile: (file: AttachmentFile) => 
         })
       }
       reader.readAsText(file)
+    } else {
+      // Binary files (document, spreadsheet, presentation, audio, video): base64 encode
+      reader.onload = () => {
+        const base64 = arrayBufferToBase64(reader.result as ArrayBuffer)
+        onFile({
+          name: file.name,
+          content: base64,
+          type: file.type || 'application/octet-stream',
+          category,
+        })
+      }
+      reader.readAsArrayBuffer(file)
     }
   }
 }

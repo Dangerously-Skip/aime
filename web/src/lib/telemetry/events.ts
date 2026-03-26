@@ -86,3 +86,24 @@ export function sendConversationCompletedEvent(data: ConversationCompletedData):
 export function sendUserFeedbackEvent(data: UserFeedbackData): void {
   postEvents([{ event_type: 'user_feedback', data: data as unknown as Record<string, unknown> }], true);
 }
+
+export interface FeatureAdoptionData {
+  feature: string;
+  surface?: string;
+}
+
+/** Fire when a user first uses a notable feature (connector, extended thinking, etc). */
+export function sendFeatureAdoptionEvent(data: FeatureAdoptionData): void {
+  postEvents([{ event_type: 'feature_adoption', data: data as unknown as Record<string, unknown> }]);
+}
+
+export interface AppLifecycleData {
+  action: 'launch' | 'quit';
+  sessionDurationMs?: number;
+  version?: string;
+}
+
+/** Fire on app launch and quit for app-level lifecycle tracking. */
+export function sendAppLifecycleEvent(data: AppLifecycleData): void {
+  postEvents([{ event_type: 'app_lifecycle', data: data as unknown as Record<string, unknown> }], data.action === 'quit');
+}
