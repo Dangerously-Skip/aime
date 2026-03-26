@@ -170,6 +170,56 @@ export class ClaudeProvider extends BaseProvider {
             };
           }
         ),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'ExcelRead',
+          'Read data from an Excel spreadsheet (.xlsx/.xls). Returns the contents as a markdown table. Use this to inspect spreadsheet data.',
+          {
+            file_path: z.string().describe('Absolute path to the Excel file'),
+            sheet: z.string().optional().describe('Sheet name to read (defaults to first sheet)'),
+            range: z.string().optional().describe('Cell range to read, e.g. "A1:D10" (defaults to entire sheet)'),
+          },
+          async ({ file_path, sheet, range }: { file_path: string; sheet?: string; range?: string }) => {
+            const { readExcel } = await import('../extractors/xlsx');
+            const result = await readExcel(file_path, sheet, range);
+            return { content: [{ type: 'text' as const, text: result }] };
+          }
+        ),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'ExcelWrite',
+          'Create a new Excel spreadsheet (.xlsx) with the given data. Each sheet has a name and a 2D array of cell values (first row is headers).',
+          {
+            file_path: z.string().describe('Absolute path for the new Excel file'),
+            sheets: z.array(z.object({
+              name: z.string().describe('Sheet name'),
+              data: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).describe('2D array of cell values (first row = headers)'),
+            })).describe('Array of sheets to create'),
+          },
+          async ({ file_path, sheets }: { file_path: string; sheets: Array<{ name: string; data: unknown[][] }> }) => {
+            const { writeExcel } = await import('../extractors/xlsx');
+            const result = await writeExcel(file_path, sheets);
+            return { content: [{ type: 'text' as const, text: result }] };
+          }
+        ),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'ExcelEdit',
+          'Edit cells in an existing Excel spreadsheet (.xlsx/.xls). Specify the sheet name and an array of cell edits.',
+          {
+            file_path: z.string().describe('Absolute path to the Excel file to edit'),
+            sheet: z.string().describe('Sheet name to edit'),
+            edits: z.array(z.object({
+              cell: z.string().describe('Cell reference, e.g. "A1", "B5"'),
+              value: z.union([z.string(), z.number(), z.boolean()]).describe('New cell value'),
+            })).describe('Array of cell edits to apply'),
+          },
+          async ({ file_path, sheet, edits }: { file_path: string; sheet: string; edits: Array<{ cell: string; value: string | number | boolean }> }) => {
+            const { editExcel } = await import('../extractors/xlsx');
+            const result = await editExcel(file_path, sheet, edits);
+            return { content: [{ type: 'text' as const, text: result }] };
+          }
+        ),
       ],
     });
 
@@ -383,24 +433,21 @@ export class ClaudeProvider extends BaseProvider {
       for (const att of attachments) {
         if (att.category === 'image') {
           attachmentTexts.push(`[Attached image: ${att.name}]\n(Image content is attached but cannot be displayed in text mode. The user attached an image file.)`);
-        } else if (att.category === 'document') {
-          // PDF: decode base64 to extract readable text via simple heuristic
-          // The Agent SDK cannot process binary content blocks — inline what we can
-          try {
-            const decoded = Buffer.from(att.content, 'base64').toString('utf-8');
-            // Extract readable text (strip binary PDF artifacts)
-            const readable = decoded.replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s{3,}/g, '\n').trim();
-            if (readable.length > 100) {
-              attachmentTexts.push(`[Attached PDF: ${att.name}]\n<document>\n${readable.slice(0, 200000)}\n</document>`);
-            } else {
-              attachmentTexts.push(`[Attached PDF: ${att.name}]\n(PDF content could not be extracted as text. The file may contain only scanned images.)`);
-            }
-          } catch {
-            attachmentTexts.push(`[Attached PDF: ${att.name}]\n(PDF content could not be decoded.)`);
+        } else if ((att as { extractedPath?: string }).extractedPath) {
+          // Document was extracted and saved to scratch — tell agent to use Read/Grep
+          attachmentTexts.push(`[Attached document: ${att.name}]\nThe full extracted text has been saved to: ${(att as { extractedPath: string }).extractedPath}\nUse the Read tool to access the content. Use Grep to search within it.`);
+        } else if (att.category === 'text' || att.category === 'document') {
+          // Text or inline-extracted content: wrap in document tags
+          if (att.content && att.content.length > 0) {
+            attachmentTexts.push(`[File: ${att.name}]\n<document name="${att.name}">\n${att.content}\n</document>`);
+          } else {
+            attachmentTexts.push(`[File: ${att.name}]\n(File content could not be extracted.)`);
           }
         } else {
-          // Text files: inline directly
-          attachmentTexts.push(`[File: ${att.name}]\n\`\`\`\n${att.content}\n\`\`\``);
+          // Other categories with inline content
+          if (att.content) {
+            attachmentTexts.push(`[File: ${att.name}]\n<document name="${att.name}">\n${att.content}\n</document>`);
+          }
         }
       }
 

@@ -51,7 +51,7 @@ interface UseSSEStreamReturn {
     extra?: {
       personalPreferences?: string
       displayName?: string
-      attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>
+      attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string }>
       webSearch?: boolean
       projectInstructions?: string
       projectKnowledge?: string
@@ -134,7 +134,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       extra?: {
         personalPreferences?: string
         displayName?: string
-        attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>
+        attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string }>
         webSearch?: boolean
         projectInstructions?: string
         projectKnowledge?: string
