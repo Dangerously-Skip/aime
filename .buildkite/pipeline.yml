@@ -11,6 +11,7 @@ env:
 steps:
   # Build and push the nginx releases image to ECR
   - label: ':docker: Build releases image'
+    command: echo "Building releases image"
     plugins:
       - ssh://git@github.com/redacted-org/image-pull-buildkite-plugin.git#v1.1.0
       - ssh://git@github.com/redacted-org/image-publish-buildkite-plugin.git#v4.3.0:
