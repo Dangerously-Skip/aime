@@ -13,15 +13,10 @@ env:
 steps:
   # Build and push the nginx releases image to ECR
   - label: ':docker: Build releases image'
-    command: echo "Building releases image"
+    command: 'docker build -t quarry infrastructure/releases/'
     plugins:
       - ssh://git@github.com/redacted-org/image-pull-buildkite-plugin.git#v1.1.0
-      - ssh://git@github.com/redacted-org/image-publish-buildkite-plugin.git#v4.3.0:
-          command: build
-          dockerfile: infrastructure/releases/Dockerfile
-          context: infrastructure/releases
-          image: ${APPLICATION}-releases
-          tag: "1.0.${BUILDKITE_BUILD_NUMBER}-${BUILDKITE_BRANCH}"
+      - ssh://git@github.com/redacted-org/image-publish-buildkite-plugin.git#v4.3.0: {}
     env:
       IMAGE_REGISTRY: ecr
     agents:
