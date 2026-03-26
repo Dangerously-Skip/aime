@@ -1,0 +1,96 @@
+env:
+  AWS_REGION: ap-southeast-2
+  APPLICATION: quarry
+  LINE_OF_BUSINESS: etdp
+  ZONE: secure
+  ITBU: dai
+
+steps:
+  - label: ':mag: Resolve stack outputs'
+    commands:
+      - |
+        # Get the S3 bucket and CloudFront distribution from the deployed stack
+        STACK_NAME="kaos-secure-quarry-master"
+        BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+          --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)
+        CF_DIST=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+          --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text)
+        CF_DOMAIN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+          --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomain'].OutputValue" --output text)
+
+        echo "Bucket: $BUCKET"
+        echo "CloudFront Distribution: $CF_DIST"
+        echo "CloudFront Domain: $CF_DOMAIN"
+
+        buildkite-agent meta-data set "s3_bucket" "$BUCKET"
+        buildkite-agent meta-data set "cf_distribution_id" "$CF_DIST"
+        buildkite-agent meta-data set "cf_domain" "$CF_DOMAIN"
+    agents:
+      queue: elastic
+
+  - wait
+
+  - label: ':github: Download release from GitHub'
+    commands:
+      - |
+        # Install gh CLI if not present
+        if ! command -v gh &> /dev/null; then
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt-get update && sudo apt-get install -y gh
+        fi
+
+        # Get the latest release tag
+        TAG="${BUILDKITE_MESSAGE:-latest}"
+        mkdir -p release-artifacts
+
+        # Download all release assets
+        gh release download "$TAG" \
+          --repo redacted-org/quarry \
+          --dir release-artifacts \
+          --pattern '*.yml' \
+          --pattern '*.zip' \
+          --pattern '*.dmg' \
+          --pattern '*.exe' \
+          --clobber
+
+        ls -la release-artifacts/
+    agents:
+      queue: elastic
+    artifact_paths:
+      - 'release-artifacts/*'
+
+  - wait
+
+  - label: ':s3: Sync to S3'
+    commands:
+      - |
+        BUCKET=$(buildkite-agent meta-data get "s3_bucket")
+        buildkite-agent artifact download "release-artifacts/*" .
+
+        echo "Uploading to s3://$BUCKET/"
+        aws s3 sync release-artifacts/ "s3://$BUCKET/" \
+          --exclude "*.blockmap" \
+          --size-only
+
+        echo "--- Bucket contents:"
+        aws s3 ls "s3://$BUCKET/"
+    agents:
+      queue: elastic
+
+  - wait
+
+  - label: ':cloudfront: Invalidate CDN cache'
+    commands:
+      - |
+        CF_DIST=$(buildkite-agent meta-data get "cf_distribution_id")
+        CF_DOMAIN=$(buildkite-agent meta-data get "cf_domain")
+
+        echo "Invalidating CloudFront distribution: $CF_DIST"
+        aws cloudfront create-invalidation \
+          --distribution-id "$CF_DIST" \
+          --paths "/*"
+
+        echo "--- Release is live at: https://$CF_DOMAIN"
+    agents:
+      queue: elastic

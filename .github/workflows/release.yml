@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASES_URL: ${{ secrets.RELEASES_URL }}
+
 jobs:
   build-mac:
     runs-on: macos-latest
@@ -40,10 +43,9 @@ jobs:
         working-directory: web
         run: find .next/standalone -type l ! -exec test -e {} \; -delete 2>/dev/null; find .next/standalone -name '*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*' -not -path '*/node_modules/.package-lock.json' -delete 2>/dev/null; true
 
-      - name: Build and publish (macOS)
+      - name: Build macOS artifacts
         working-directory: web
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -51,7 +53,17 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           ulimit -n 65536
-          npx electron-builder --mac --publish always
+          npx electron-builder --mac --publish never
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-mac
+          path: |
+            web/dist/*.yml
+            web/dist/*.zip
+            web/dist/*.dmg
+          retention-days: 7
 
   build-win:
     runs-on: windows-latest
@@ -80,10 +92,45 @@ jobs:
         working-directory: web
         run: npx next build
 
-      - name: Build and publish (Windows)
+      - name: Build Windows artifacts
         working-directory: web
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 || '' }}
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD || '' }}
-        run: npx electron-builder --win --publish always
+        run: npx electron-builder --win --publish never
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-win
+          path: |
+            web/dist/*.yml
+            web/dist/*.exe
+          retention-days: 7
+
+  create-release:
+    needs: [build-mac, build-win]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release (changelog + trigger for Buildkite promotion)
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*
+          body: |
+            ## Install
+
+            Download from the internal releases page (nib network):
+            `${{ secrets.RELEASES_URL }}`
+
+            Existing installs will auto-update.
+
+            ## Promote to S3
+
+            Buildkite will automatically sync these artifacts to S3/CloudFront.

@@ -1,19 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: 'AWS::Serverless-2016-10-31'
-Description: Quarry desktop app release hosting - S3 and CloudFront
+Description: Quarry desktop app release hosting - S3 + CloudFront for electron-updater
 
 Resources:
   Website:
     Type: RQP::StaticSite
     Properties:
       Content: file://content.zip
-      CustomErrorResponses:
-        - ErrorCode: 404
-          ResponseCode: 200
-          ResponsePagePath: 'index.html'
-        - ErrorCode: 403
-          ResponseCode: 200
-          ResponsePagePath: 'index.html'
 
 Outputs:
   BucketName:
@@ -21,7 +14,7 @@ Outputs:
     Description: S3 bucket name for release artifacts
   CloudFrontDomain:
     Value: !GetAtt Website.DomainName
-    Description: CloudFront URL for auto-updater
+    Description: CloudFront URL for electron-updater
   CloudFrontDistributionId:
     Value: !GetAtt Website.DistributionId
-    Description: CloudFront distribution ID
+    Description: CloudFront distribution ID for cache invalidation
