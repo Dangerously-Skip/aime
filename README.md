@@ -37,6 +37,29 @@ Connect your work apps via OAuth (one-click setup during onboarding or in Custom
 
 Connected apps are exposed to Claude as MCP tools, allowing it to read issues, post messages, review PRs, and more.
 
+### Document processing
+
+Attach files directly to any conversation. Documents are extracted server-side before reaching the model:
+
+| Format | Extensions | How it works |
+|--------|-----------|--------------|
+| PDF | `.pdf` | Page-by-page text extraction via pdfjs-dist |
+| Word | `.docx` | Text extraction via mammoth |
+| Excel | `.xlsx`, `.xls` | Sheets converted to markdown tables via SheetJS |
+| PowerPoint | `.pptx` | Slide text + notes extracted via jszip |
+| Audio | `.mp3`, `.wav`, `.m4a`, `.ogg` | Whisper transcription (@huggingface/transformers) |
+| Video | `.mp4`, `.mov`, `.webm`, `.avi` | ffmpeg audio extraction then Whisper transcription |
+| Images | `image/*` | Passed through (placeholder in text-only mode) |
+| Text/Code | `.txt`, `.md`, `.csv`, `.json`, etc. | Inlined directly |
+
+**Cowork/Code surfaces**: extracted text is saved to `~/.quarry/scratch/{chatId}/documents/` and the agent uses Read/Grep tools to navigate it. No size truncation.
+
+**Chat surface**: first ~30k characters are inlined into the prompt with `<document>` tags.
+
+**Large files** (>10MB): uploaded via `POST /api/upload` as multipart instead of base64 in the JSON body.
+
+**Excel tools**: the agent can read, create, and edit Excel files using ExcelRead, ExcelWrite, and ExcelEdit MCP tools (available on Cowork and Code surfaces).
+
 ### Other features
 
 - **Model selection** — switch between Claude Opus, Sonnet, and Haiku
