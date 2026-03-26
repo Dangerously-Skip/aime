@@ -10,7 +10,7 @@ Resources:
       Memory: 512
       ContainerDefinitions:
         - Name: web
-          Image: !Sub '441581275790.dkr.ecr.${AWS::Region}.amazonaws.com/${Application}:1.0.${BuildNumber}'
+          Image: !Sub '441581275790.dkr.ecr.${AWS::Region}.amazonaws.com/${Application}:latest'
           PortMappings:
             - ContainerPort: 80
 
