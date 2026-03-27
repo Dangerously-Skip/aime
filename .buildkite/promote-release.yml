@@ -9,17 +9,38 @@ steps:
   - label: ':github: Download release from GitHub'
     commands:
       - |
-        TAG="${BUILDKITE_MESSAGE:-latest}"
+        TAG="$$BUILDKITE_MESSAGE"
+        if [ -z "$$TAG" ] || [ "$$TAG" = "$$BUILDKITE_MESSAGE" ]; then
+          TAG="latest"
+        fi
+        echo "--- Downloading release: $$TAG"
         mkdir -p release-artifacts
 
-        gh release download "$TAG" \
-          --repo redacted-org/quarry \
-          --dir release-artifacts \
-          --pattern '*.yml' \
-          --pattern '*.zip' \
-          --pattern '*.dmg' \
-          --pattern '*.exe' \
-          --clobber
+        # Use GitHub API to download release assets (gh CLI not available on elastic agents)
+        if [ "$$TAG" = "latest" ]; then
+          RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/latest"
+        else
+          RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/tags/$$TAG"
+        fi
+
+        ASSETS=$$(curl -sL "$$RELEASE_URL" | python3 -c "
+        import json, sys
+        data = json.load(sys.stdin)
+        for asset in data.get('assets', []):
+            name = asset['name']
+            if name.endswith(('.yml', '.zip', '.dmg', '.exe')):
+                print(asset['browser_download_url'] + ' ' + name)
+        ")
+
+        if [ -z "$$ASSETS" ]; then
+          echo "No matching assets found for release $$TAG"
+          exit 1
+        fi
+
+        echo "$$ASSETS" | while read url name; do
+          echo "Downloading $$name..."
+          curl -sL -o "release-artifacts/$$name" "$$url"
+        done
 
         echo "--- Downloaded artifacts:"
         ls -la release-artifacts/
