@@ -9,38 +9,46 @@ steps:
   - label: ':github: Download release from GitHub'
     commands:
       - |
-        TAG="$$BUILDKITE_MESSAGE"
-        if [ -z "$$TAG" ] || [ "$$TAG" = "$$BUILDKITE_MESSAGE" ]; then
-          TAG="latest"
-        fi
+        TAG="$${BUILDKITE_MESSAGE:-latest}"
         echo "--- Downloading release: $$TAG"
         mkdir -p release-artifacts
 
-        # Use GitHub API to download release assets (gh CLI not available on elastic agents)
+        # GitHub API for private repo — use GITHUB_TOKEN if available
+        AUTH_HEADER=""
+        if [ -n "$$GITHUB_TOKEN" ]; then
+          AUTH_HEADER="Authorization: token $$GITHUB_TOKEN"
+        fi
+
         if [ "$$TAG" = "latest" ]; then
           RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/latest"
         else
           RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/tags/$$TAG"
         fi
 
-        ASSETS=$$(curl -sL "$$RELEASE_URL" | python3 -c "
+        echo "Fetching release metadata from $$RELEASE_URL"
+        RELEASE_JSON=$$(curl -sL -H "$$AUTH_HEADER" "$$RELEASE_URL")
+
+        # Debug: show if we got a valid response
+        echo "$$RELEASE_JSON" | python3 -c "
         import json, sys
         data = json.load(sys.stdin)
-        for asset in data.get('assets', []):
-            name = asset['name']
-            if name.endswith(('.yml', '.zip', '.dmg', '.exe')):
-                print(asset['browser_download_url'] + ' ' + name)
-        ")
-
-        if [ -z "$$ASSETS" ]; then
-          echo "No matching assets found for release $$TAG"
-          exit 1
-        fi
-
-        echo "$$ASSETS" | while read url name; do
-          echo "Downloading $$name..."
-          curl -sL -o "release-artifacts/$$name" "$$url"
-        done
+        if 'message' in data:
+            print('API error:', data['message'])
+            sys.exit(1)
+        assets = data.get('assets', [])
+        print(f'Found {len(assets)} total assets')
+        matched = [(a['browser_download_url'], a['name']) for a in assets if a['name'].endswith(('.yml', '.zip', '.dmg', '.exe'))]
+        print(f'Matched {len(matched)} downloadable assets')
+        for url, name in matched:
+            print(f'  {name}')
+        if not matched:
+            sys.exit(1)
+        for url, name in matched:
+            with open(f'release-artifacts/{name}', 'wb') as f:
+                import urllib.request
+                print(f'Downloading {name}...')
+                urllib.request.urlretrieve(url, f'release-artifacts/{name}')
+        "
 
         echo "--- Downloaded artifacts:"
         ls -la release-artifacts/
