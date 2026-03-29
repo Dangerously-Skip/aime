@@ -45,6 +45,7 @@ export function getBrowserConfig(overrides: Partial<SurfaceConfig> = {}): Surfac
     model: 'sonnet',
     maxTurns: 25,
     maxBudgetUsd: 2.0,
+    queryTimeoutSecs: 300,
     includePartialMessages: true,
     mcpServers: {},
     ...overrides,

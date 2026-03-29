@@ -247,7 +247,8 @@ export class ClaudeProvider extends BaseProvider {
 
     // Loop detection window for this query
     const loopWindow: Array<{ name: string; inputHash: string }> = [];
-    const loopThreshold = 3; // configurable via settings — hard-coded for now, route can pass via params
+    const LOOP_WARN_THRESHOLD = 3;
+    const LOOP_DENY_THRESHOLD = 5;
 
     // Intercept AskUserQuestion, browser tools, canvas tool, and loop detection via canUseTool.
     queryOptions.canUseTool = async (
@@ -260,21 +261,34 @@ export class ClaudeProvider extends BaseProvider {
       loopWindow.push({ name: toolName, inputHash });
       // Keep last 10 tool calls
       if (loopWindow.length > 10) loopWindow.shift();
-      // Check for consecutive identical calls
-      if (loopWindow.length >= loopThreshold) {
-        const last = loopWindow.slice(-loopThreshold);
-        const isLoop = last.every((t) => t.name === toolName && t.inputHash === inputHash);
-        if (isLoop) {
-          console.warn('[Claude] Loop detected for tool:', toolName, 'id:', toolUseID);
-          return {
-            behavior: 'allow' as const,
-            updatedInput: {
-              ...input,
-              __loopDetected: true,
-              __loopMessage: `Loop detected — you've called ${toolName} ${loopThreshold} times with identical inputs. Try a different approach or call a different tool.`,
-            },
-          };
+      // Count consecutive identical calls
+      let consecutiveCount = 0;
+      for (let i = loopWindow.length - 1; i >= 0; i--) {
+        if (loopWindow[i].name === toolName && loopWindow[i].inputHash === inputHash) {
+          consecutiveCount++;
+        } else {
+          break;
         }
+      }
+      // Hard deny after 5 consecutive identical calls
+      if (consecutiveCount >= LOOP_DENY_THRESHOLD) {
+        console.error('[Claude] Loop DENIED for tool:', toolName, 'id:', toolUseID, `(${consecutiveCount} consecutive identical calls)`);
+        return {
+          behavior: 'deny' as const,
+          message: `Tool call denied — you've called ${toolName} ${consecutiveCount} times with identical inputs. This is a loop. Stop and tell the user what went wrong and suggest an alternative approach.`,
+        };
+      }
+      // Warn after 3 consecutive identical calls
+      if (consecutiveCount >= LOOP_WARN_THRESHOLD) {
+        console.warn('[Claude] Loop warning for tool:', toolName, 'id:', toolUseID, `(${consecutiveCount} consecutive identical calls)`);
+        return {
+          behavior: 'allow' as const,
+          updatedInput: {
+            ...input,
+            __loopDetected: true,
+            __loopMessage: `Loop detected — you've called ${toolName} ${consecutiveCount} times with identical inputs. Try a different approach or call a different tool. After ${LOOP_DENY_THRESHOLD} identical calls the tool will be blocked.`,
+          },
+        };
       }
 
       // ── CronCreate (in-process MCP or direct) ─────────────────────────
@@ -432,7 +446,13 @@ export class ClaudeProvider extends BaseProvider {
 
       for (const att of attachments) {
         if (att.category === 'image') {
-          attachmentTexts.push(`[Attached image: ${att.name}]\n(Image content is attached but cannot be displayed in text mode. The user attached an image file.)`);
+          const extractedPath = (att as { extractedPath?: string }).extractedPath;
+          if (extractedPath) {
+            // Image saved to disk — tell agent to use Read tool (which supports images)
+            attachmentTexts.push(`[Attached image: ${att.name}]\nThe image has been saved to: ${extractedPath}\nUse the Read tool to view it.`);
+          } else {
+            attachmentTexts.push(`[Attached image: ${att.name}]\n(Image content is attached but cannot be displayed in text mode. The user attached an image file.)`);
+          }
         } else if ((att as { extractedPath?: string }).extractedPath) {
           // Document was extracted and saved to scratch — tell agent to use Read/Grep
           attachmentTexts.push(`[Attached document: ${att.name}]\nThe full extracted text has been saved to: ${(att as { extractedPath: string }).extractedPath}\nUse the Read tool to access the content. Use Grep to search within it.`);

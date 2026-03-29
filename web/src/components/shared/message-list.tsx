@@ -123,6 +123,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             key={msg.id}
             content={msg.content}
             timestamp={msg.timestamp}
+            attachments={msg.attachments}
           />
         ) : msg.role === "assistant" ? (
           <AssistantMessage

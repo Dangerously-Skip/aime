@@ -235,6 +235,24 @@ export function ChatSurface() {
           }
           break;
         }
+        case "document_extracted": {
+          // Persist extracted document text in the last user message so follow-up questions
+          // have the document context in conversation history
+          const extractedText = event.extractedText as string | undefined;
+          const docName = event.name as string;
+          if (extractedText && chatId) {
+            const msgs = useChatStore.getState().messages[chatId] || [];
+            // Find last user message (should be the one that had the attachment)
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === 'user') {
+                const docBlock = `\n\n<document name="${docName}">\n${extractedText}\n</document>`;
+                useChatStore.getState().updateMessageContent(chatId, msgs[i].id, msgs[i].content + docBlock);
+                break;
+              }
+            }
+          }
+          break;
+        }
         case "memory_extract":
           handleMemoryExtractEvent(
             event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
@@ -317,6 +335,7 @@ export function ChatSurface() {
         role: "user",
         content: trimmed,
         timestamp: Date.now(),
+        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
       });
 
       updateConversation(id, {

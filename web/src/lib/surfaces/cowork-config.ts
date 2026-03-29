@@ -52,6 +52,7 @@ When the user asks to be reminded about something or to schedule a recurring tas
     model: 'opus',
     maxTurns: 200,
     maxBudgetUsd: 5.0,
+    queryTimeoutSecs: 600,
     includePartialMessages: true,
     mcpServers: {}, // Composio added at runtime if configured
     ...overrides,

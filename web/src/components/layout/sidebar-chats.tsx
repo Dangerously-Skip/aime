@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
+import { useChatStore } from "@/stores/chat-store";
 import { useAppStore } from "@/stores/app-store";
 import { useConversations } from "@/hooks/use-conversations";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -127,12 +128,20 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
                       tabIndex={0}
                       onClick={(e) => {
                         e.stopPropagation();
+                        const wasActive = useConversationStore.getState().activeId === conv.id;
                         removeConversation(conv.id);
+                        if (wasActive) {
+                          useChatStore.getState().setCurrentChat('');
+                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.stopPropagation();
+                          const wasActive = useConversationStore.getState().activeId === conv.id;
                           removeConversation(conv.id);
+                          if (wasActive) {
+                            useChatStore.getState().setCurrentChat('');
+                          }
                         }
                       }}
                       className="hidden group-hover:block shrink-0"
@@ -179,12 +188,20 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
                         tabIndex={0}
                         onClick={(e) => {
                           e.stopPropagation();
+                          const wasActive = useConversationStore.getState().activeId === conv.id;
                           removeConversation(conv.id);
+                          if (wasActive) {
+                            useChatStore.getState().setCurrentChat('');
+                          }
                         }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.stopPropagation();
+                            const wasActive = useConversationStore.getState().activeId === conv.id;
                             removeConversation(conv.id);
+                            if (wasActive) {
+                              useChatStore.getState().setCurrentChat('');
+                            }
                           }
                         }}
                         className="hidden group-hover:block shrink-0"

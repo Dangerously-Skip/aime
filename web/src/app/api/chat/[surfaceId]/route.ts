@@ -519,8 +519,43 @@ export async function POST(
         const isToolSurface = surfaceId === 'cowork' || surfaceId === 'code';
 
         for (const att of attachments) {
-          // Skip images and plain text (already handled by claude-provider)
-          if (att.category === 'image' || att.category === 'text') continue;
+          // Skip plain text (already handled by claude-provider inline)
+          if (att.category === 'text') continue;
+
+          // Images: save to scratch so the model can use Read tool to view them
+          if (att.category === 'image') {
+            if (isToolSurface && att.content) {
+              const imgDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'uploads');
+              eMkdir(imgDir, { recursive: true });
+              const imgName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+              const imgPath = ej(imgDir, imgName);
+              // Images from attachment-menu come as data URLs (data:image/png;base64,...)
+              const base64Data = att.content.includes(',') ? att.content.split(',')[1] : att.content;
+              eWrite(imgPath, Buffer.from(base64Data, 'base64'));
+              att.extractedPath = imgPath;
+              att.content = ''; // Free memory
+              console.log('[EXTRACT] Saved image to:', imgPath);
+            }
+            continue;
+          }
+
+          // Always save the raw file to scratch so the model can read it if extraction fails
+          const scratchDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'uploads');
+          eMkdir(scratchDir, { recursive: true });
+          const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const savedPath = ej(scratchDir, safeName);
+
+          if (!att.filePath && att.content) {
+            // Decode base64 and write to disk
+            const rawBuffer = Buffer.from(att.content, 'base64');
+            eWrite(savedPath, rawBuffer);
+            att.filePath = savedPath;
+            console.log('[EXTRACT] Saved raw file to:', savedPath, '(' + rawBuffer.length + ' bytes)');
+          } else if (att.filePath) {
+            // Already on disk — copy to scratch for consistent path
+            const { copyFileSync } = await import('fs');
+            try { copyFileSync(att.filePath, savedPath); att.filePath = savedPath; } catch { /* keep original path */ }
+          }
 
           try {
             await sse.writeEvent({
@@ -529,13 +564,21 @@ export async function POST(
               category: att.category,
             });
 
-            const result = await extractDocument(
+            console.log('[EXTRACT] Starting extraction:', att.name, 'type:', att.type, 'category:', att.category, 'contentLen:', att.content?.length || 0, 'filePath:', att.filePath || 'none');
+
+            // Wrap extraction in a 30-second timeout
+            const extractionPromise = extractDocument(
               att.name,
               att.content,
               att.type,
               att.category,
               att.filePath,
             );
+            const timeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Extraction timed out after 30 seconds')), 30000)
+            );
+            const result = await Promise.race([extractionPromise, timeoutPromise]);
+            console.log('[EXTRACT] Success:', att.name, 'text length:', result.text.length, 'pages:', result.pageCount || 'n/a');
 
             if (isToolSurface && result.text.length > 0) {
               // Save to scratch dir for agent to Read/Grep
@@ -560,11 +603,20 @@ export async function POST(
               extractedPath: att.extractedPath,
               pageCount: result.pageCount,
               textLength: result.text.length,
+              // Send extracted text to client so it can persist in conversation history
+              ...(surfaceId === 'chat' && result.text.length > 0 ? { extractedText: result.text.slice(0, 30000) } : {}),
             });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             console.error('[EXTRACT] Failed for', att.name, ':', msg);
-            att.content = `[Extraction failed for ${att.name}: ${msg}]`;
+            // Fallback: tell the model the file is saved to disk and it can read it directly
+            if (att.filePath) {
+              att.content = `[Text extraction failed for ${att.name} (${msg}). The raw file has been saved to: ${att.filePath} — use the Read tool to access it.]`;
+              att.extractedPath = att.filePath;
+              console.log('[EXTRACT] Fallback: model can read file at', att.filePath);
+            } else {
+              att.content = `[Extraction failed for ${att.name}: ${msg}]`;
+            }
           }
         }
       }
@@ -575,6 +627,24 @@ export async function POST(
       let outputChars = 0;
       let toolCallCount = 0;
       const streamStartMs = Date.now();
+      let queryTimedOut = false;
+
+      // Auto-abort after surface-specific timeout
+      const timeoutSecs = surfaceConfig.queryTimeoutSecs || 0;
+      let queryTimer: ReturnType<typeof setTimeout> | null = null;
+      if (timeoutSecs > 0) {
+        queryTimer = setTimeout(async () => {
+          queryTimedOut = true;
+          console.warn(`[CHAT] Query timeout after ${timeoutSecs}s — aborting`);
+          try {
+            provider.abort(chatId as string, surfaceId);
+          } catch (e) {
+            console.error('[CHAT] Abort on timeout failed:', e);
+          }
+          await sse.writeEvent({ type: 'error', message: `Query timed out after ${timeoutSecs} seconds. Try a simpler request or break it into steps.` });
+        }, timeoutSecs * 1000);
+      }
+
       try {
         for await (const chunk of provider.query({
           prompt: message as string,
@@ -608,8 +678,12 @@ export async function POST(
         }
       } catch (streamError: unknown) {
         const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
-        console.error('[CHAT] Stream error during iteration:', errMsg);
-        await sse.writeEvent({ type: 'error', message: errMsg });
+        if (!queryTimedOut) {
+          console.error('[CHAT] Stream error during iteration:', errMsg);
+          await sse.writeEvent({ type: 'error', message: errMsg });
+        }
+      } finally {
+        if (queryTimer) clearTimeout(queryTimer);
       }
 
       // Auto-extract memories after stream completes

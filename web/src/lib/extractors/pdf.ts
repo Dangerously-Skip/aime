@@ -67,8 +67,31 @@ export async function extractPdf(buffer: Buffer): Promise<ExtractionResult> {
 
   const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
 
+  // Set worker path — try require.resolve first, fall back to relative path
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+  } catch {
+    // In packaged Electron, require.resolve may fail — try common locations
+    const path = await import('path');
+    const fs = await import('fs');
+    const candidates = [
+      path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+      path.join(__dirname, '..', '..', '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+    ];
+    // If process.resourcesPath is set (Electron), check there too
+    if (process.resourcesPath) {
+      candidates.push(path.join(process.resourcesPath, '.next', 'standalone', 'web', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'));
+      candidates.push(path.join(process.resourcesPath, 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'));
+    }
+    const found = candidates.find(c => { try { fs.accessSync(c); return true; } catch { return false; } });
+    if (found) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = found;
+    }
+    // If none found, pdfjs will try to run without a worker (slower but works)
+  }
+
   const data = new Uint8Array(buffer);
-  const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true }).promise;
+  const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true, isEvalSupported: false }).promise;
   const pageCount = doc.numPages;
   const pages: string[] = [];
 
