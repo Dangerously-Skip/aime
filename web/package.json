@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "0.6.2",
+  "version": "1.0.19",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -30,7 +30,10 @@
       {
         "from": ".next/standalone",
         "to": ".next/standalone",
-        "filter": ["**/*", "!**/.*cache*/**"]
+        "filter": [
+          "**/*",
+          "!**/.*cache*/**"
+        ]
       },
       {
         "from": ".next/static",
