@@ -92,8 +92,8 @@ jobs:
       - name: Build Windows artifacts
         working-directory: web
         env:
-          CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+          CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 || '' }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD || '' }}
         run: npx electron-builder --win --publish never
 
       - name: Upload Windows artifacts
@@ -128,16 +128,6 @@ jobs:
 
             Existing installs will auto-update when connected to VPN.
 
-      - name: Sync to internal S3 releases bucket
-        if: secrets.AWS_PROMOTE_ACCESS_KEY_ID != ''
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_PROMOTE_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_PROMOTE_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ap-southeast-2
-        run: |
-          echo "--- Syncing to internal releases bucket"
-          aws s3 sync artifacts/ s3://nib-kaos-secure-web-ap-southeast-2/quarry-releases/ \
-            --exclude "*.blockmap" \
-            --size-only
-          echo "--- Bucket contents:"
-          aws s3 ls s3://nib-kaos-secure-web-ap-southeast-2/quarry-releases/
+            ## Promote
+
+            Trigger the `promote-release` Buildkite pipeline with this tag as the message to push artifacts to S3.
