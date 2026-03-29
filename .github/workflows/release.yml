@@ -92,8 +92,8 @@ jobs:
       - name: Build Windows artifacts
         working-directory: web
         env:
-          CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 || '' }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD || '' }}
+          CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
         run: npx electron-builder --win --publish never
 
       - name: Upload Windows artifacts
