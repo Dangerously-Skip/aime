@@ -76,6 +76,7 @@ interface ChatActions {
   clearMessages: (chatId: string) => void;
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
+  updateMessageContent: (chatId: string, messageId: string, content: string) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   getSessionControls: (chatId: string) => SessionControls;
   touchActivity: (chatId: string) => void;
@@ -197,6 +198,14 @@ export const useChatStore = create<ChatStore>()(
                 : tc
             ),
           };
+          return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
+      updateMessageContent: (chatId, messageId, content) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          if (!msgs?.length) return state;
+          const updated = msgs.map((m) => m.id === messageId ? { ...m, content } : m);
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 

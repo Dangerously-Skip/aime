@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  serverExternalPackages: ['pdfjs-dist'],
   experimental: {
     serverActions: {
       bodySizeLimit: '100mb',

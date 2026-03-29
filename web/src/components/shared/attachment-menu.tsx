@@ -80,11 +80,13 @@ function classifyFile(file: File): 'image' | 'document' | 'text' | 'spreadsheet'
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i])
+  // Process in 8KB chunks to avoid stack overflow and string concatenation perf issues
+  const chunks: string[] = []
+  for (let i = 0; i < bytes.byteLength; i += 8192) {
+    const chunk = bytes.subarray(i, Math.min(i + 8192, bytes.byteLength))
+    chunks.push(String.fromCharCode(...chunk))
   }
-  return btoa(binary)
+  return btoa(chunks.join(''))
 }
 
 /** Upload a large file via /api/upload and return the server path. */

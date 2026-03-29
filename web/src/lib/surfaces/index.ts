@@ -13,6 +13,8 @@ export interface SurfaceConfig {
   model: string;
   maxTurns: number;
   maxBudgetUsd: number;
+  /** Maximum query duration in seconds before auto-abort. 0 = no limit. */
+  queryTimeoutSecs: number;
   includePartialMessages: boolean;
   mcpServers: Record<string, unknown>;
   settingSources?: string[];
