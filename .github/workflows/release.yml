@@ -134,7 +134,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_PROMOTE_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: ap-southeast-2
         run: |
-          aws s3 sync artifacts/ s3://nib-kaos-secure-web-ap-southeast-2/quarry/master/5/ \
+          aws s3 sync artifacts/ s3://nib-kaos-secure-web-ap-southeast-2/quarry-releases/ \
             --exclude "*.blockmap" \
             --exclude "builder-debug.yml" \
             --size-only
