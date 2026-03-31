@@ -539,6 +539,7 @@ export function BrowserSurface() {
         role: "user",
         content: text,
         timestamp: Date.now(),
+        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
       });
       updateConversation(id, {
         title: text.substring(0, 50),

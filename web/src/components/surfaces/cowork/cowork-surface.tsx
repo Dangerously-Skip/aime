@@ -977,6 +977,7 @@ export function CoworkSurface() {
         role: "user",
         content: trimmed,
         timestamp: Date.now(),
+        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
       });
       updateConversation(id, {
         title: trimmed.substring(0, 50),
@@ -1076,10 +1077,11 @@ export function CoworkSurface() {
       void sendMessage(prompt, bgId, 'cowork', model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
+        apiKey: nibGatewayApiKey || undefined,
         cwd: folder || projectFolder || scratchDir || undefined,
       });
     },
-    [addConversation, addMessage, startStreaming, sendMessage, model, personalPreferences, displayName, folder, projectFolder, scratchDir]
+    [addConversation, addMessage, startStreaming, sendMessage, model, personalPreferences, displayName, nibGatewayApiKey, folder, projectFolder, scratchDir]
   );
 
   // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store
@@ -1090,7 +1092,7 @@ export function CoworkSurface() {
         const resp = await fetch('/api/chat/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model }),
+          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model, apiKey: nibGatewayApiKey || undefined }),
         });
         if (!resp.ok || !resp.body) return;
         const reader = resp.body.getReader();
