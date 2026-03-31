@@ -3,9 +3,12 @@ import Anthropic from '@anthropic-ai/sdk';
 
 export const runtime = 'nodejs';
 
+const NIB_GATEWAY_BASE_URL = 'https://ai-studio.internal.invalid';
+
 /**
  * POST /api/telemetry/estimate-effort
  * Calls Claude Haiku to estimate human effort and classify the task type.
+ * Routes through the nib LiteLLM gateway if configured, otherwise direct API.
  */
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -31,8 +34,21 @@ export async function POST(req: NextRequest) {
     apiKey?: string | null;
   };
 
+  // Use gateway if API key is configured, otherwise direct Anthropic API
+  const useGateway = !!apiKey && apiKey.startsWith('sk-');
+  const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
+
+  if (!effectiveKey) {
+    return Response.json({ estimate: null, skipped: 'No API key configured' });
+  }
+
   try {
-    const client = new Anthropic({ apiKey: (apiKey || process.env.ANTHROPIC_API_KEY) as string });
+    const client = useGateway
+      ? new Anthropic({ apiKey: effectiveKey, baseURL: NIB_GATEWAY_BASE_URL })
+      : new Anthropic({ apiKey: effectiveKey });
+
+    // Gateway uses 'fast' alias for Haiku; direct API uses full model ID
+    const haikuModel = useGateway ? 'fast' : 'claude-haiku-4-5-20251001';
 
     const toolSummary = toolCalls.map(t => `${t.name}: ${t.count}`).join(', ') || 'none';
     const durationMin = Math.round(durationMs / 60000);
@@ -59,7 +75,7 @@ Return a JSON object with these exact fields:
 Return ONLY valid JSON, no markdown fences.`;
 
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: haikuModel,
       max_tokens: 300,
       messages: [{ role: 'user', content: prompt }],
     });

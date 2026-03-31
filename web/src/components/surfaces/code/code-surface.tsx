@@ -576,6 +576,7 @@ function BottomBar({
 export function CodeSurface() {
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const [pendingFolder, setPendingFolder] = useState<string | null>(null);
   const currentChatId = useCodeStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
   const messages = useCodeStore(
@@ -590,7 +591,8 @@ export function CodeSurface() {
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
   const disableBashTool = useSettingsStore((s) => s.disableBashTool);
   const isStreaming = useCodeStore((s) => s.isStreaming);
-  const folder = useCodeStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
+  const storeFolder = useCodeStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
+  const folder = storeFolder || pendingFolder;
   const permissionMode = useCodeStore((s) => s.permissionMode);
   const planContent = useCodeStore((s) => (chatId ? s.planContent[chatId] : undefined));
   const planOpen = useCodeStore((s) => s.planOpen);
@@ -671,6 +673,8 @@ export function CodeSurface() {
     (f: string | null) => {
       if (chatId) {
         setFolder(chatId, f);
+      } else {
+        setPendingFolder(f);
       }
     },
     [setFolder, chatId]
@@ -979,7 +983,11 @@ export function CodeSurface() {
         });
         setActiveConversation(id);
         setCurrentChat(id);
-        // Folder is set per-chat via folderByChat — no auto-project creation
+        // Apply pending folder selection from before conversation was created
+        if (pendingFolder) {
+          setFolder(id, pendingFolder);
+          setPendingFolder(null);
+        }
       }
 
       addMessage(id, {
@@ -1020,11 +1028,15 @@ export function CodeSurface() {
       relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
 
       const currentControls = useCodeStore.getState().sessionControls[id] ?? sessionControls;
+      const currentAttachments = [...attachments];
+      setAttachments([]);
+
       await sendMessage(trimmed, id, "code", model, {
         apiKey: nibGatewayApiKey || undefined,
         cwd: folder || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
+        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
         sessionControls: currentControls,
         securitySettings: {
           blockDangerousCommands,
