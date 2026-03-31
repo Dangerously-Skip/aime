@@ -84,7 +84,7 @@ export function BrowserSurface() {
   const [urlInput, setUrlInput] = useState("");
   const [agentVisible, setAgentVisible] = useState(true);
   const [panelWidth, setPanelWidth] = useState(350);
-  const [attachments, setAttachments] = useState<import("@/stores/chat-store").Attachment[]>([]);
+  const [attachments, setAttachments] = useState<import("@/components/shared/attachment-menu").AttachmentFile[]>([]);
   const [slashSuggestions, setSlashSuggestions] = useState<CommandSuggestion[]>([]);
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
   const [sessionControls, setSessionControls] = useState<SessionControls>(DEFAULT_SESSION_CONTROLS);
@@ -556,9 +556,35 @@ export function BrowserSurface() {
       startStreaming(id);
       setInputValue("");
 
-      // Capture and clear pending context
-      const context = [...useBrowserStore.getState().pendingContext];
+      // Capture and clear pending context + attachments
+      const context: PendingContextItem[] = [...useBrowserStore.getState().pendingContext];
       clearPendingContext();
+
+      // Convert attachments to pending context items
+      const currentAttachments = [...attachments];
+      setAttachments([]);
+      for (const att of currentAttachments) {
+        if (att.category === 'image' && att.content) {
+          context.push({ type: 'screenshot', content: att.content });
+        } else if (att.category === 'text' && att.content) {
+          // Text files: content is already readable
+          context.push({ type: 'document', content: `<document name="${att.name}">\n${att.content}\n</document>` });
+        } else if (att.content) {
+          // Binary files (PDF, DOCX): try decoding as text, otherwise note it's binary
+          try {
+            const decoded = atob(att.content);
+            // Check if it looks like readable text (not binary garbage)
+            const isText = decoded.length > 0 && /^[\x20-\x7E\t\n\r]*$/.test(decoded.substring(0, 200));
+            if (isText) {
+              context.push({ type: 'document', content: `<document name="${att.name}">\n${decoded}\n</document>` });
+            } else {
+              context.push({ type: 'document', content: `[Attached file: ${att.name} (${att.category}). This is a binary file — for full document analysis, use the Cowork or Chat surface which can extract text from PDFs and documents.]` });
+            }
+          } catch {
+            context.push({ type: 'document', content: `[Attached file: ${att.name}]` });
+          }
+        }
+      }
 
       // Check API key is available before making the request
       const currentApiKey = useSettingsStore.getState().nibGatewayApiKey;
@@ -577,7 +603,7 @@ export function BrowserSurface() {
 
       await runAgentLoop(text, model, wv, context.length > 0 ? context : undefined);
     },
-    [model, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext]
+    [model, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext, attachments]
   );
 
   const handleVoiceTranscript = useCallback(
@@ -907,20 +933,6 @@ export function BrowserSurface() {
                 </div>
               )}
 
-              {/* Attachment + project menu */}
-              <div className="flex items-center gap-1 px-3 py-1 border-t border-border/50">
-                <AttachmentMenu
-                  onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                  onWebSearchToggle={() => {}}
-                  webSearchEnabled={false}
-                  hideWebSearch
-                  currentProjectId={currentProjectId}
-                  onAddToProject={(pid) => assignToProject(chatId, pid)}
-                  onNewProject={() => setSidebarMode("projects")}
-                  projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                />
-              </div>
-
               <div>
                 <div className="px-4 pt-3">
                   <div className="max-w-3xl mx-auto">
@@ -955,7 +967,23 @@ export function BrowserSurface() {
                   onAbort={abort}
                   isStreaming={isStreaming}
                   placeholder="Ask about this page..."
-                  extraControls={<VoiceButton onTranscript={handleVoiceTranscript} />}
+                  attachments={attachments}
+                  onRemoveAttachment={(i) => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                  extraControls={
+                    <>
+                      <AttachmentMenu
+                        onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
+                        onWebSearchToggle={() => {}}
+                        webSearchEnabled={false}
+                        hideWebSearch
+                        currentProjectId={currentProjectId}
+                        onAddToProject={(pid) => assignToProject(chatId, pid)}
+                        onNewProject={() => setSidebarMode("projects")}
+                        projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                      />
+                      <VoiceButton onTranscript={handleVoiceTranscript} />
+                    </>
+                  }
                 />
               </div>
             </div>
