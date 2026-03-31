@@ -224,6 +224,15 @@ function TerminalOutput({
         if (msg.role === "user") {
           return (
             <div key={msg.id} className="font-mono text-foreground">
+              {msg.attachments && msg.attachments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-1 ml-4">
+                  {msg.attachments.map((att: { name: string; category: string }, i: number) => (
+                    <span key={i} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground font-sans">
+                      {att.name}
+                    </span>
+                  ))}
+                </div>
+              )}
               <span className="text-muted-foreground select-none">&gt; </span>
               <span>{msg.content}</span>
             </div>
@@ -995,7 +1004,7 @@ export function CodeSurface() {
         role: "user",
         content: trimmed,
         timestamp: Date.now(),
-        attachments: attachments.length > 0 ? [...attachments] : undefined,
+        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
       });
       updateConversation(id, {
         title: trimmed.substring(0, 50),
