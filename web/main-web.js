@@ -511,7 +511,8 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("activate", () => {
+app.on("activate", async () => {
+  await app.whenReady();
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow(parseInt(process.env.PORT || '3000', 10));
   }

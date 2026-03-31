@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
 import { useChatStore } from "@/stores/chat-store";
+import { useCoworkStore } from "@/stores/cowork-store";
+import { useCodeStore } from "@/stores/code-store";
 import { useAppStore } from "@/stores/app-store";
 import { useConversations } from "@/hooks/use-conversations";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -21,6 +23,15 @@ import { RoiBadge } from "@/components/shared/roi-badge";
 
 interface SidebarChatsProps {
   projectId?: string | null;
+}
+
+/** Clear the current chat ID from the surface-specific store when deleting an active conversation */
+function clearSurfaceChat(convId: string) {
+  const conv = useConversationStore.getState().conversations.find(c => c.id === convId);
+  const surface = conv?.surface;
+  if (surface === 'chat') useChatStore.getState().setCurrentChat('');
+  else if (surface === 'cowork') useCoworkStore.getState().setCurrentChat('');
+  else if (surface === 'code') useCodeStore.getState().setCurrentChat('');
 }
 
 export function SidebarChats({ projectId }: SidebarChatsProps) {
@@ -128,11 +139,10 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
                       tabIndex={0}
                       onClick={(e) => {
                         e.stopPropagation();
-                        const wasActive = useConversationStore.getState().activeId === conv.id;
-                        removeConversation(conv.id);
-                        if (wasActive) {
-                          useChatStore.getState().setCurrentChat('');
+                        if (useConversationStore.getState().activeId === conv.id) {
+                          clearSurfaceChat(conv.id);
                         }
+                        removeConversation(conv.id);
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {

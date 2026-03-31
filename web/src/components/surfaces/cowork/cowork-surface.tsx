@@ -425,6 +425,7 @@ function SidebarPanel({
 export function CoworkSurface() {
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const [pendingFolder, setPendingFolder] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
@@ -458,7 +459,8 @@ export function CoworkSurface() {
   );
   const model = useCoworkStore((s) => s.model);
   const isStreaming = useCoworkStore((s) => s.isStreaming);
-  const folder = useCoworkStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
+  const storeFolder = useCoworkStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
+  const folder = storeFolder || pendingFolder;
   const contextFiles = useCoworkStore((s) => (chatId ? s.contextFiles[chatId] : undefined) ?? EMPTY_FILES);
   const artifactFiles = useCoworkStore((s) => (chatId ? s.artifactFiles[chatId] : undefined) ?? EMPTY_FILES);
   const setModel = useCoworkStore((s) => s.setModel);
@@ -513,6 +515,8 @@ export function CoworkSurface() {
     (f: string | null) => {
       if (chatId) {
         setFolder(chatId, f);
+      } else {
+        setPendingFolder(f);
       }
     },
     [setFolder, chatId]
@@ -961,7 +965,11 @@ export function CoworkSurface() {
         });
         setActiveConversation(id);
         setCurrentChat(id);
-        // Folder is set per-chat via folderByChat — no auto-project creation
+        // Apply pending folder selection from before conversation was created
+        if (pendingFolder) {
+          setFolder(id, pendingFolder);
+          setPendingFolder(null);
+        }
       }
 
       addMessage(id, {

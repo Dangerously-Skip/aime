@@ -294,14 +294,15 @@ export async function POST(
       // Get the provider instance.
       // Chat surface: use lightweight GatewayProvider (OpenAI SDK, no tools needed).
       // Cowork/Code surfaces: use ClaudeProvider with gateway env (needs agentic tool execution).
-      // When attachments are present, bypass gateway — Claude API handles PDFs/images natively.
-      const hasAttachments = attachments && attachments.length > 0;
-      const useGateway = isGatewayConfigured(apiKey as string | null) && surfaceId === 'chat' && !hasAttachments;
+      // Only bypass gateway for image attachments (need multimodal API). Document attachments
+      // are extracted to text server-side and can go through the gateway.
+      const hasImageAttachments = attachments?.some(a => a.category === 'image') ?? false;
+      const useGateway = isGatewayConfigured(apiKey as string | null) && surfaceId === 'chat' && !hasImageAttachments;
       const provider = useGateway
         ? getGatewayInstance()
         : getProvider(providerName as string);
       if (useGateway) console.log('[CHAT] Using nib AI Studio gateway provider (chat-only)');
-      if (hasAttachments && surfaceId === 'chat') console.log('[CHAT] Bypassing gateway — attachments require Claude API');
+      if (hasImageAttachments && surfaceId === 'chat') console.log('[CHAT] Bypassing gateway — image attachments require Claude API');
 
       // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
       const mcpServers = await loadProvisionedMcpServers();
@@ -621,9 +622,25 @@ export async function POST(
         }
       }
 
+      // For gateway provider: inline extracted attachment text into the message
+      // (gateway doesn't support an attachments parameter)
+      let finalMessage = message as string;
+      if (useGateway && attachments && attachments.length > 0) {
+        const inlineParts: string[] = [];
+        for (const att of attachments) {
+          if (att.content && att.content.length > 0 && att.category !== 'image') {
+            inlineParts.push(`<document name="${att.name}">\n${att.content}\n</document>`);
+          }
+        }
+        if (inlineParts.length > 0) {
+          finalMessage = `${inlineParts.join('\n\n')}\n\n${finalMessage}`;
+          console.log('[CHAT] Inlined', inlineParts.length, 'attachment(s) into message for gateway');
+        }
+      }
+
       // Stream responses from the provider
       let collectedResponse = '';
-      let inputChars = (message as string).length;
+      let inputChars = finalMessage.length;
       let outputChars = 0;
       let toolCallCount = 0;
       const streamStartMs = Date.now();
@@ -647,7 +664,7 @@ export async function POST(
 
       try {
         for await (const chunk of provider.query({
-          prompt: message as string,
+          prompt: finalMessage,
           chatId: chatId as string,
           userId: userId as string,
           mcpServers,
