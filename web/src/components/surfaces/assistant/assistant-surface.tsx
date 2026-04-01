@@ -327,6 +327,35 @@ export function AssistantSurface() {
               useAssistantStore.setState((s) => ({
                 cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: fullText } : c),
               }));
+            } else if (event.type === 'standing_order_create' && event.input) {
+              const input = event.input as {
+                instruction: string; trigger_type: string; expression?: string;
+                condition?: string; completionCondition?: string; agentName?: string;
+                notifyVia?: string; maxExecutions?: number; expiresInHours?: number;
+              };
+              useAssistantStore.getState().addOrder({
+                instruction: input.instruction,
+                agentName: input.agentName,
+                trigger: {
+                  type: (input.trigger_type as 'cron' | 'interval') || 'interval',
+                  expression: input.expression,
+                },
+                condition: input.condition,
+                completionCondition: input.completionCondition,
+                notifyVia: input.notifyVia || 'assistant',
+                maxExecutions: input.maxExecutions,
+                expiresAt: input.expiresInHours ? Date.now() + input.expiresInHours * 3600000 : undefined,
+              });
+            } else if (event.type === 'cron_create' && event.input) {
+              // Also handle cron_create events — migrate to standing orders
+              const input = event.input as { expression: string; prompt: string };
+              if (input.expression && input.prompt) {
+                useAssistantStore.getState().addOrder({
+                  instruction: input.prompt,
+                  trigger: { type: 'cron', expression: input.expression },
+                  notifyVia: 'assistant',
+                });
+              }
             }
           } catch { /* ignore parse errors */ }
         }

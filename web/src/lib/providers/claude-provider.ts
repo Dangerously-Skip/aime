@@ -145,6 +145,19 @@ export class ClaudeProvider extends BaseProvider {
     // Per-request array to collect cron jobs created via the CronCreate MCP tool
     const pendingCronJobs: Array<{ expression: string; prompt: string; surfaceId: string }> = [];
 
+    // Per-request array to collect standing orders created via StandingOrderCreate
+    const pendingStandingOrders: Array<{
+      instruction: string;
+      trigger_type: string;
+      expression?: string;
+      condition?: string;
+      completionCondition?: string;
+      agentName?: string;
+      notifyVia?: string;
+      maxExecutions?: number;
+      expiresInHours?: number;
+    }> = [];
+
     // In-process MCP server exposing CronCreate so the model can schedule reminders
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const z = (await import('zod/v3') as any).z ?? (await import('zod/v3') as any).default ?? await import('zod/v3');
@@ -167,6 +180,29 @@ export class ClaudeProvider extends BaseProvider {
             }
             return {
               content: [{ type: 'text' as const, text: `Reminder scheduled: "${prompt}" (${expression}). It will appear in Customize → Automation → Cron Jobs.` }],
+            };
+          }
+        ),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'StandingOrderCreate',
+          'Create a standing order — a persistent, stateful instruction that runs on a schedule or interval. Use this for reminders, monitoring, recurring tasks, and any "watch for X and do Y" requests. Preferred over CronCreate for new orders.',
+          {
+            instruction: z.string().describe('What to do when this order fires — the task or prompt to execute'),
+            trigger_type: z.enum(['cron', 'interval']).describe('When to trigger: "cron" for specific times (cron expression), "interval" for recurring delays like "5m" or "1h"'),
+            expression: z.string().describe('Trigger expression: 5-field cron (e.g. "0 9 * * 1-5") or interval (e.g. "5m", "2h", "1d")'),
+            condition: z.string().optional().describe('Only act when this condition is true (natural language)'),
+            completionCondition: z.string().optional().describe('Auto-complete the order when this condition is met'),
+            agentName: z.string().optional().describe('Agent from AGENTS.md to execute the order'),
+            notifyVia: z.enum(['assistant', 'toast']).optional().describe('How to notify: "assistant" shows in card feed (default), "toast" shows desktop notification'),
+            maxExecutions: z.number().optional().describe('Maximum number of times to run before auto-completing'),
+            expiresInHours: z.number().optional().describe('Auto-expire after this many hours'),
+          },
+          async (input: { instruction: string; trigger_type: string; expression: string; condition?: string; completionCondition?: string; agentName?: string; notifyVia?: string; maxExecutions?: number; expiresInHours?: number }) => {
+            pendingStandingOrders.push(input);
+            const triggerDesc = input.trigger_type === 'cron' ? `cron: ${input.expression}` : `every ${input.expression}`;
+            return {
+              content: [{ type: 'text' as const, text: `Standing order created: "${input.instruction}" (${triggerDesc}). It will appear in the Assistant surface sidebar and fire automatically.` }],
             };
           }
         ),
@@ -629,6 +665,16 @@ export class ClaudeProvider extends BaseProvider {
           type: 'cron_create',
           input: job,
           id: `cron_${Date.now()}`,
+          provider: this.name,
+        };
+      }
+
+      // Emit standing_order_create events for orders created via StandingOrderCreate MCP tool
+      for (const order of pendingStandingOrders) {
+        yield {
+          type: 'standing_order_create',
+          input: order,
+          id: `so_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           provider: this.name,
         };
       }
