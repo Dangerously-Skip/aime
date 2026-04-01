@@ -6,6 +6,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useAppStore } from "@/stores/app-store";
 import { useHydrated } from "@/components/store-hydration";
+import { useStandingOrders } from "@/hooks/use-standing-orders";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -265,6 +266,9 @@ export function AssistantSurface() {
       useAssistantStore.persist.rehydrate();
     }
   }, [hydrated]);
+
+  // Standing order trigger engine
+  useStandingOrders();
 
   const handleSubmit = useCallback(async () => {
     if (!inputValue.trim() || isStreaming) return;
