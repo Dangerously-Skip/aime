@@ -249,11 +249,15 @@ function StatusBar({ orders }: { orders: StandingOrder[] }) {
 export function AssistantSurface() {
   const hydrated = useHydrated();
   const [inputValue, setInputValue] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const orders = useAssistantStore((s) => s.orders);
   const cards = useAssistantStore((s) => s.cards);
+  const addCard = useAssistantStore((s) => s.addCard);
+  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
 
   // Hydrate store on mount
   useEffect(() => {
@@ -263,25 +267,107 @@ export function AssistantSurface() {
   }, [hydrated]);
 
   const handleSubmit = useCallback(async () => {
-    if (!inputValue.trim()) return;
-    // TODO: Phase 2 Task 2.6 — connect to SSE stream for NL input handling
-    // For now, just clear the input
+    if (!inputValue.trim() || isStreaming) return;
+    const prompt = inputValue.trim();
     setInputValue("");
-  }, [inputValue]);
+    setIsStreaming(true);
+
+    // Add a "thinking" card
+    const thinkingId = crypto.randomUUID();
+    addCard({ title: prompt, summary: 'Thinking...' });
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const chatId = `assistant-${Date.now()}`;
+      const response = await fetch('/api/chat/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: prompt,
+          chatId,
+          model: 'sonnet',
+          apiKey: nibGatewayApiKey || undefined,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        // Update the thinking card with error
+        useAssistantStore.setState((s) => ({
+          cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: `Error: ${response.statusText}` } : c),
+        }));
+        setIsStreaming(false);
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'text' && typeof event.content === 'string') {
+              fullText += event.content;
+              // Update the first card with streamed text
+              useAssistantStore.setState((s) => ({
+                cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: fullText } : c),
+              }));
+            }
+          } catch { /* ignore parse errors */ }
+        }
+      }
+
+      // Final update — replace summary with completed text
+      if (fullText) {
+        useAssistantStore.setState((s) => ({
+          cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: fullText, unread: true } : c),
+        }));
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      useAssistantStore.setState((s) => ({
+        cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: `Error: ${err instanceof Error ? err.message : String(err)}` } : c),
+      }));
+    } finally {
+      setIsStreaming(false);
+      abortRef.current = null;
+    }
+  }, [inputValue, isStreaming, nibGatewayApiKey, addCard]);
+
+  const handleAbort = useCallback(() => {
+    abortRef.current?.abort();
+    setIsStreaming(false);
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        handleSubmit();
+        if (isStreaming) handleAbort();
+        else handleSubmit();
       }
     },
-    [handleSubmit]
+    [handleSubmit, handleAbort, isStreaming]
   );
 
   const handleCardAction = useCallback((action: A2UIAction) => {
-    // TODO: Phase 2 Task 2.6 — route interactions
     console.log('[Assistant] Card action:', action);
+    // Route state mutations directly, agent actions as new prompts
+    if (action.type === 'button-click') {
+      // Could trigger a new assistant query with the action context
+      setInputValue(`Perform action: ${action.actionId}`);
+    }
   }, []);
 
   return (
@@ -312,11 +398,11 @@ export function AssistantSurface() {
               <div className="flex items-center justify-end px-4 py-2">
                 <Button
                   size="icon"
-                  className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/80"
-                  onClick={handleSubmit}
-                  disabled={!inputValue.trim()}
+                  className={`h-8 w-8 rounded-lg ${isStreaming ? 'bg-destructive hover:bg-destructive/80' : 'bg-primary hover:bg-primary/80'}`}
+                  onClick={isStreaming ? handleAbort : handleSubmit}
+                  disabled={!isStreaming && !inputValue.trim()}
                 >
-                  <ArrowUp className="h-4 w-4" />
+                  {isStreaming ? <Square className="h-3.5 w-3.5" /> : <ArrowUp className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
