@@ -28,6 +28,7 @@ export interface StandingOrder {
   lastRun?: number;
   runCount: number;
   errorCount: number;
+  totalCost?: number;
   createdAt: number;
   updatedAt: number;
 }

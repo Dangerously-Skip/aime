@@ -71,9 +71,16 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
   // Build prompt with accumulated state context
   let prompt = order.instruction;
   if (Object.keys(order.state).length > 0) {
-    prompt += `\n\nPrevious context from this standing order:\n${JSON.stringify(order.state, null, 2)}`;
+    const stateJson = JSON.stringify(order.state, null, 2);
+    // If state is getting large, ask for compaction
+    if (stateJson.length > 40000) {
+      prompt += `\n\nPrevious context (LARGE — please consolidate and keep only what's still relevant):\n${stateJson}`;
+    } else {
+      prompt += `\n\nPrevious context from this standing order:\n${stateJson}`;
+    }
   }
   prompt += `\n\nThis is execution #${order.runCount + 1}.`;
+  prompt += `\n\nAfter your response, output a line starting with STATE: followed by a JSON object containing any facts worth remembering for the next execution (e.g., topics covered, values seen, items completed). Keep it under 1KB. Example: STATE: {"lastPrice": 198.50, "topicsCovered": ["transformers", "RLHF"]}`;
 
   const chatId = `standing-order-${order.id}-${Date.now()}`;
 
@@ -97,6 +104,7 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
   const decoder = new TextDecoder();
   let buffer = '';
   let fullText = '';
+  let executionCost = 0;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -110,6 +118,8 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
         const event = JSON.parse(line.slice(6));
         if (event.type === 'text' && typeof event.content === 'string') {
           fullText += event.content;
+        } else if (event.type === 'done' && event.usage) {
+          executionCost = (event.usage as { cost?: number }).cost || 0;
         }
       } catch { /* ignore */ }
     }
@@ -132,11 +142,37 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
     return;
   }
 
+  // Extract state from output (STATE: {...} line)
+  const stateMatch = fullText.match(/STATE:\s*(\{[\s\S]*?\})\s*$/m);
+  let extractedState: Record<string, unknown> = {};
+  let displayText = fullText;
+  if (stateMatch) {
+    try {
+      extractedState = JSON.parse(stateMatch[1]);
+      // Remove STATE: line from display text
+      displayText = fullText.replace(/STATE:\s*\{[\s\S]*?\}\s*$/m, '').trim();
+    } catch { /* ignore parse errors */ }
+  }
+
+  // Try to parse A2UI document from output
+  let a2uiDoc: import('@/lib/a2ui/types').A2UIDocument | undefined;
+  const a2uiMatch = displayText.match(/```(?:a2ui|json)\s*\n([\s\S]*?)\n```/);
+  if (a2uiMatch) {
+    try {
+      const parsed = JSON.parse(a2uiMatch[1]);
+      if (parsed.version && parsed.components) {
+        a2uiDoc = parsed;
+        displayText = displayText.replace(/```(?:a2ui|json)\s*\n[\s\S]*?\n```/, '').trim();
+      }
+    } catch { /* not valid A2UI */ }
+  }
+
   // Create card with the result
   useAssistantStore.getState().addCard({
     orderId: order.id,
     title: order.instruction.slice(0, 60),
-    summary: fullText.slice(0, 2000),
+    summary: displayText.slice(0, 2000),
+    ...(a2uiDoc ? { doc: a2uiDoc } : {}),
   });
 
   // Publish to context bus for cross-surface communication
@@ -161,13 +197,18 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
     }
   }
 
-  // Update order state
+  // Update order state (merge extracted state + cost)
+  const mergedState = Object.keys(extractedState).length > 0
+    ? { ...order.state, ...extractedState }
+    : order.state;
   useAssistantStore.getState().updateOrder(order.id, {
     lastRun: Date.now(),
     runCount: order.runCount + 1,
-    lastResult: fullText.slice(0, 1000),
+    lastResult: displayText.slice(0, 1000),
     lastSnapshotHash: newHash,
     errorCount: 0,
+    state: mergedState,
+    totalCost: (order.totalCost || 0) + executionCost,
   });
 
   // Activity log
