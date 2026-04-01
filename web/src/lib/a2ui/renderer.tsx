@@ -1,9 +1,9 @@
 'use client';
 
 /**
- * A2UI React renderer.
- * Renders A2UIDocument components using shadcn/ui primitives.
- * No eval, no arbitrary JSX — only pre-approved component types.
+ * A2UI React renderer — Premium edition.
+ * Renders A2UIDocument components with polished card styling.
+ * Supports light, dark, and emma themes via CSS variables.
  */
 
 import React from 'react';
@@ -26,19 +26,66 @@ import type {
 } from './types';
 import { Badge } from '@/components/ui/badge';
 
-// Inline primitive replacements for missing shadcn components
-function Progress({ value, className }: { value: number; className?: string }) {
+// ── Shared primitives ────────────────────────────────────────────────────────
+
+function CardShell({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={`w-full bg-muted rounded-full overflow-hidden ${className ?? ''}`}>
-      <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
+    <div className={`rounded-xl border border-border/60 bg-card shadow-sm hover:shadow-md transition-shadow ${className ?? ''}`}>
+      {children}
     </div>
   );
 }
-function Card({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={`rounded-lg border border-border bg-card ${className ?? ''}`}>{children}</div>;
+
+function CardHeader({ title, subtitle, icon, trailing }: { title?: string; subtitle?: string; icon?: string; trailing?: React.ReactNode }) {
+  if (!title && !subtitle) return null;
+  return (
+    <div className="flex items-start justify-between px-5 pt-4 pb-2">
+      <div className="flex items-start gap-2.5 min-w-0">
+        {icon && <span className="text-lg mt-0.5">{icon}</span>}
+        <div className="min-w-0">
+          {title && <h3 className="text-[15px] font-semibold leading-tight text-foreground">{title}</h3>}
+          {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
+        </div>
+      </div>
+      {trailing && <div className="shrink-0 ml-3">{trailing}</div>}
+    </div>
+  );
 }
-function CardContent({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={`p-4 ${className ?? ''}`}>{children}</div>;
+
+function CardBody({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={`px-5 pb-4 ${className ?? ''}`}>{children}</div>;
+}
+
+function PillBadge({ children, variant }: { children: React.ReactNode; variant?: 'default' | 'success' | 'warning' | 'error' | 'info' }) {
+  const colors = {
+    default: 'bg-muted text-muted-foreground',
+    success: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+    warning: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
+    error: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+    info: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium ${colors[variant || 'default']}`}>
+      {children}
+    </span>
+  );
+}
+
+function ActionButton({ label, variant, onClick }: { label: string; variant?: 'primary' | 'secondary' | 'destructive'; onClick?: () => void }) {
+  const styles = {
+    primary: 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm',
+    secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border',
+    destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-colors ${styles[variant || 'secondary']}`}
+    >
+      {label}
+    </button>
+  );
 }
 
 // ── Table ─────────────────────────────────────────────────────────────────────
@@ -46,43 +93,45 @@ function CardContent({ children, className }: { children: React.ReactNode; class
 function TableRenderer({ component }: { component: TableComponent }) {
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="border-b border-border">
-              {component.columns.map((col) => (
-                <th key={col.key} className="text-left py-2 px-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">
-                  {col.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {component.rows.map((row, i) => (
-              <tr key={i} className="border-b border-border/50 hover:bg-muted/30">
-                {component.columns.map((col) => {
-                  const val = row[col.key];
-                  return (
-                    <td key={col.key} className="py-2 px-3">
-                      {col.type === 'badge' ? (
-                        <Badge variant="secondary">{String(val ?? '')}</Badge>
-                      ) : (
-                        <span>{String(val ?? '')}</span>
-                      )}
-                    </td>
-                  );
-                })}
+      <CardHeader title={component.title} />
+      <div className="px-1 pb-3">
+        <div className="overflow-x-auto rounded-lg border border-border/40">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-muted/40">
+                {component.columns.map((col) => (
+                  <th key={col.key} className="text-left py-2.5 px-4 font-medium text-xs uppercase tracking-wider text-muted-foreground border-b border-border/40">
+                    {col.label}
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {component.rows.map((row, i) => (
+                <tr key={i} className="border-b border-border/20 last:border-0 hover:bg-muted/20 transition-colors">
+                  {component.columns.map((col) => {
+                    const val = row[col.key];
+                    return (
+                      <td key={col.key} className="py-2.5 px-4 text-foreground">
+                        {col.type === 'badge' ? (
+                          <PillBadge>{String(val ?? '')}</PillBadge>
+                        ) : (
+                          <span>{String(val ?? '')}</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
 }
 
-// ── Chart (simple text-based fallback when recharts is unavailable) ───────────
+// ── Chart ─────────────────────────────────────────────────────────────────────
 
 function ChartRenderer({ component }: { component: ChartComponent }) {
   const allData = component.series.flatMap((s) => s.data);
@@ -90,41 +139,44 @@ function ChartRenderer({ component }: { component: ChartComponent }) {
 
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
-      {component.chartType === 'pie' ? (
-        // Simple legend-style pie fallback
-        <div className="space-y-2">
-          {component.series[0]?.data.map((d) => {
-            const pct = Math.round((d.value / allData.reduce((s, x) => s + x.value, 0)) * 100);
-            return (
-              <div key={d.label} className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: d.color || 'var(--primary)' }} />
-                <span className="text-sm flex-1">{d.label}</span>
-                <span className="text-sm text-muted-foreground">{pct}%</span>
+      <CardHeader title={component.title} />
+      <CardBody>
+        {component.chartType === 'pie' ? (
+          <div className="space-y-2.5">
+            {component.series[0]?.data.map((d) => {
+              const total = allData.reduce((s, x) => s + x.value, 0);
+              const pct = Math.round((d.value / total) * 100);
+              return (
+                <div key={d.label} className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full flex-shrink-0 shadow-sm" style={{ background: d.color || 'var(--primary)' }} />
+                  <span className="text-sm flex-1 text-foreground">{d.label}</span>
+                  <span className="text-sm font-semibold tabular-nums text-foreground">{pct}%</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {component.series[0]?.data.map((d) => (
+              <div key={d.label}>
+                <div className="flex justify-between text-xs mb-1.5">
+                  <span className="text-muted-foreground">{d.label}</span>
+                  <span className="font-semibold tabular-nums text-foreground">{d.value}</span>
+                </div>
+                <div className="w-full bg-muted/60 rounded-full h-2.5 overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${(d.value / maxVal) * 100}%`,
+                      background: d.color || 'var(--primary)',
+                    }}
+                  />
+                </div>
               </div>
-            );
-          })}
-        </div>
-      ) : (
-        // Bar/line — horizontal bar chart fallback
-        <div className="space-y-2">
-          {component.series[0]?.data.map((d) => (
-            <div key={d.label} className="flex items-center gap-2">
-              <span className="text-xs w-24 shrink-0 truncate text-muted-foreground">{d.label}</span>
-              <div className="flex-1 bg-muted rounded-full h-4 overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{
-                    width: `${(d.value / maxVal) * 100}%`,
-                    background: d.color || 'var(--primary)',
-                  }}
-                />
-              </div>
-              <span className="text-xs w-12 text-right text-muted-foreground">{d.value}</span>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </CardBody>
     </div>
   );
 }
@@ -132,40 +184,40 @@ function ChartRenderer({ component }: { component: ChartComponent }) {
 // ── Kanban ────────────────────────────────────────────────────────────────────
 
 const PRIORITY_COLORS: Record<string, string> = {
-  high: 'bg-destructive/10 text-destructive',
-  medium: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
-  low: 'bg-muted text-muted-foreground',
+  high: 'border-l-destructive bg-destructive/5',
+  medium: 'border-l-yellow-500 bg-yellow-500/5',
+  low: 'border-l-muted-foreground',
 };
 
 function KanbanRenderer({ component }: { component: KanbanComponent }) {
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
-      <div className="flex gap-3 overflow-x-auto pb-2">
-        {component.columns.map((col) => (
-          <div key={col.id} className="flex-shrink-0 w-48">
-            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">{col.title}</div>
-            <div className="space-y-2">
-              {col.cards.map((card) => (
-                <div key={card.id} className="rounded-md border border-border bg-card p-2 text-xs shadow-sm">
-                  <div className="font-medium">{card.title}</div>
-                  {card.description && <div className="mt-1 text-muted-foreground">{card.description}</div>}
-                  {card.priority && (
-                    <span className={`mt-1 inline-block px-1.5 py-0.5 rounded text-xs ${PRIORITY_COLORS[card.priority] || ''}`}>
-                      {card.priority}
-                    </span>
-                  )}
-                  {card.labels && card.labels.length > 0 && (
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {card.labels.map((l) => <Badge key={l} variant="outline" className="text-xs px-1">{l}</Badge>)}
-                    </div>
-                  )}
-                </div>
-              ))}
+      <CardHeader title={component.title} />
+      <CardBody>
+        <div className="flex gap-4 overflow-x-auto pb-2">
+          {component.columns.map((col) => (
+            <div key={col.id} className="flex-shrink-0 w-52">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{col.title}</span>
+                <span className="text-[10px] bg-muted rounded-full px-1.5 py-0.5 text-muted-foreground">{col.cards.length}</span>
+              </div>
+              <div className="space-y-2">
+                {col.cards.map((card) => (
+                  <div key={card.id} className={`rounded-lg border border-border/50 bg-card p-3 shadow-sm border-l-2 ${PRIORITY_COLORS[card.priority || ''] || 'border-l-transparent'}`}>
+                    <div className="text-sm font-medium text-foreground">{card.title}</div>
+                    {card.description && <div className="mt-1 text-xs text-muted-foreground leading-relaxed">{card.description}</div>}
+                    {card.labels && card.labels.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {card.labels.map((l) => <PillBadge key={l}>{l}</PillBadge>)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      </CardBody>
     </div>
   );
 }
@@ -175,22 +227,27 @@ function KanbanRenderer({ component }: { component: KanbanComponent }) {
 function StatRenderer({ component }: { component: StatComponent }) {
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
-      <div className="grid grid-cols-2 gap-3">
-        {component.stats.map((stat, i) => (
-          <Card key={i} className="p-3">
-            <CardContent className="p-0">
-              <div className="text-xs text-muted-foreground">{stat.label}</div>
-              <div className="text-xl font-bold mt-1">{String(stat.value)}</div>
+      <CardHeader title={component.title} />
+      <CardBody>
+        <div className="grid grid-cols-2 gap-3">
+          {component.stats.map((stat, i) => (
+            <div key={i} className="rounded-lg bg-muted/30 border border-border/30 p-3.5">
+              <div className="text-xs text-muted-foreground font-medium">{stat.label}</div>
+              <div className="text-2xl font-bold mt-1 tabular-nums text-foreground">{String(stat.value)}</div>
               {stat.trend && (
-                <div className={`text-xs mt-0.5 ${stat.trend === 'up' ? 'text-green-600' : stat.trend === 'down' ? 'text-destructive' : 'text-muted-foreground'}`}>
-                  {stat.trend === 'up' ? '↑' : stat.trend === 'down' ? '↓' : '→'} {stat.trendValue}
+                <div className={`flex items-center gap-1 text-xs mt-1 font-medium ${
+                  stat.trend === 'up' ? 'text-green-600 dark:text-green-400' :
+                  stat.trend === 'down' ? 'text-red-600 dark:text-red-400' :
+                  'text-muted-foreground'
+                }`}>
+                  <span>{stat.trend === 'up' ? '↑' : stat.trend === 'down' ? '↓' : '→'}</span>
+                  <span>{stat.trendValue}</span>
                 </div>
               )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            </div>
+          ))}
+        </div>
+      </CardBody>
     </div>
   );
 }
@@ -206,60 +263,60 @@ function FormRenderer({ component, onAction }: { component: FormComponent; onAct
     return defaults;
   });
 
-  const handleSubmit = () => {
-    onAction?.({ type: 'form-submit', componentId: component.id, values });
-  };
-
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-3">{component.title}</h3>}
-      <div className="space-y-3">
-        {component.fields.map((field) => (
-          <div key={field.name}>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">
-              {field.label}{field.required && <span className="text-destructive ml-0.5">*</span>}
-            </label>
-            {field.type === 'textarea' ? (
-              <textarea
-                className="w-full text-sm rounded border border-border bg-background px-2 py-1 h-20 resize-none focus:outline-none focus:ring-1 focus:ring-primary"
-                placeholder={field.placeholder}
-                value={String(values[field.name] ?? '')}
-                onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.value }))}
-              />
-            ) : field.type === 'select' ? (
-              <select
-                className="w-full text-sm rounded border border-border bg-background px-2 py-1 focus:outline-none"
-                value={String(values[field.name] ?? '')}
-                onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.value }))}
-              >
-                <option value="">Select...</option>
-                {field.options?.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-              </select>
-            ) : field.type === 'checkbox' ? (
-              <input
-                type="checkbox"
-                checked={Boolean(values[field.name])}
-                onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.checked }))}
-              />
-            ) : (
-              <input
-                type={field.type}
-                className="w-full text-sm rounded border border-border bg-background px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
-                placeholder={field.placeholder}
-                value={String(values[field.name] ?? '')}
-                onChange={(e) => setValues(v => ({ ...v, [field.name]: field.type === 'number' ? Number(e.target.value) : e.target.value }))}
-              />
-            )}
-          </div>
-        ))}
-        <button
-          type="button"
-          className="mt-1 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:bg-primary/90"
-          onClick={handleSubmit}
-        >
-          {component.submitLabel || 'Submit'}
-        </button>
-      </div>
+      <CardHeader title={component.title} />
+      <CardBody>
+        <div className="space-y-4">
+          {component.fields.map((field) => (
+            <div key={field.name}>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1.5">
+                {field.label}{field.required && <span className="text-destructive ml-0.5">*</span>}
+              </label>
+              {field.type === 'textarea' ? (
+                <textarea
+                  className="w-full text-sm rounded-lg border border-border bg-background px-3 py-2.5 h-24 resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                  placeholder={field.placeholder}
+                  value={String(values[field.name] ?? '')}
+                  onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.value }))}
+                />
+              ) : field.type === 'select' ? (
+                <select
+                  className="w-full text-sm rounded-lg border border-border bg-background px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                  value={String(values[field.name] ?? '')}
+                  onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.value }))}
+                >
+                  <option value="">Select...</option>
+                  {field.options?.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              ) : field.type === 'checkbox' ? (
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(values[field.name])}
+                    onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.checked }))}
+                    className="rounded border-border"
+                  />
+                  <span className="text-sm text-foreground">{field.placeholder || field.label}</span>
+                </label>
+              ) : (
+                <input
+                  type={field.type}
+                  className="w-full text-sm rounded-lg border border-border bg-background px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                  placeholder={field.placeholder}
+                  value={String(values[field.name] ?? '')}
+                  onChange={(e) => setValues(v => ({ ...v, [field.name]: field.type === 'number' ? Number(e.target.value) : e.target.value }))}
+                />
+              )}
+            </div>
+          ))}
+          <ActionButton
+            label={component.submitLabel || 'Submit'}
+            variant="primary"
+            onClick={() => onAction?.({ type: 'form-submit', componentId: component.id, values })}
+          />
+        </div>
+      </CardBody>
     </div>
   );
 }
@@ -269,10 +326,12 @@ function FormRenderer({ component, onAction }: { component: FormComponent; onAct
 function MarkdownRenderer({ component }: { component: MarkdownComponent }) {
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
-      <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed whitespace-pre-wrap">
-        {component.content}
-      </div>
+      <CardHeader title={component.title} />
+      <CardBody>
+        <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed whitespace-pre-wrap text-foreground">
+          {component.content}
+        </div>
+      </CardBody>
     </div>
   );
 }
@@ -282,27 +341,30 @@ function MarkdownRenderer({ component }: { component: MarkdownComponent }) {
 function ListRenderer({ component, onAction }: { component: ListComponent; onAction?: (action: A2UIAction) => void }) {
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
-      <ul className="space-y-1">
-        {component.items.map((item) => (
-          <li key={item.id} className="flex items-start gap-2 text-sm">
-            {typeof item.checked === 'boolean' ? (
-              <input
-                type="checkbox"
-                checked={item.checked}
-                onChange={(e) => onAction?.({ type: 'list-toggle', componentId: component.id, itemId: item.id, checked: e.target.checked })}
-                className="mt-0.5 flex-shrink-0"
-              />
-            ) : (
-              <span className="mt-0.5 flex-shrink-0 text-muted-foreground">{component.ordered ? '•' : '–'}</span>
-            )}
-            <div>
-              <span className={item.checked ? 'line-through text-muted-foreground' : ''}>{item.text}</span>
-              {item.subtext && <div className="text-xs text-muted-foreground">{item.subtext}</div>}
+      <CardHeader title={component.title} />
+      <CardBody>
+        <div className="divide-y divide-border/30">
+          {component.items.map((item) => (
+            <div key={item.id} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
+              {typeof item.checked === 'boolean' ? (
+                <input
+                  type="checkbox"
+                  checked={item.checked}
+                  onChange={(e) => onAction?.({ type: 'list-toggle', componentId: component.id, itemId: item.id, checked: e.target.checked })}
+                  className="mt-0.5 flex-shrink-0 rounded border-border"
+                />
+              ) : (
+                <span className="mt-1 flex-shrink-0 w-1.5 h-1.5 rounded-full bg-primary/60" />
+              )}
+              <div className="flex-1 min-w-0">
+                <span className={`text-sm ${item.checked ? 'line-through text-muted-foreground' : 'text-foreground'}`}>{item.text}</span>
+                {item.subtext && <div className="text-xs text-muted-foreground mt-0.5">{item.subtext}</div>}
+              </div>
+              {item.icon && <span className="text-sm shrink-0">{item.icon}</span>}
             </div>
-          </li>
-        ))}
-      </ul>
+          ))}
+        </div>
+      </CardBody>
     </div>
   );
 }
@@ -312,18 +374,28 @@ function ListRenderer({ component, onAction }: { component: ListComponent; onAct
 function ProgressRenderer({ component }: { component: ProgressComponent }) {
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
-      <div className="space-y-3">
-        {component.items.map((item, i) => (
-          <div key={i}>
-            <div className="flex justify-between text-xs mb-1">
-              <span>{item.label}</span>
-              <span className="text-muted-foreground">{item.value}%</span>
+      <CardHeader title={component.title} />
+      <CardBody>
+        <div className="space-y-4">
+          {component.items.map((item, i) => (
+            <div key={i}>
+              <div className="flex justify-between text-xs mb-2">
+                <span className="font-medium text-foreground">{item.label}</span>
+                <span className="font-semibold tabular-nums text-foreground">{item.value}%</span>
+              </div>
+              <div className="w-full bg-muted/60 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{
+                    width: `${Math.min(100, Math.max(0, item.value))}%`,
+                    background: item.color || 'var(--primary)',
+                  }}
+                />
+              </div>
             </div>
-            <Progress value={item.value} className="h-2" />
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      </CardBody>
     </div>
   );
 }
@@ -333,103 +405,120 @@ function ProgressRenderer({ component }: { component: ProgressComponent }) {
 function ActionCardRenderer({ component, onAction }: { component: ActionCardComponent; onAction?: (action: A2UIAction) => void }) {
   return (
     <div>
-      {component.icon && <span className="text-lg mr-2">{component.icon}</span>}
-      {component.title && <h3 className="text-sm font-semibold mb-1">{component.title}</h3>}
-      {component.subtitle && <div className="text-xs text-muted-foreground mb-1">{component.subtitle}</div>}
-      {component.description && <p className="text-sm mb-3">{component.description}</p>}
-      {component.actions.length > 0 && (
-        <div className="flex flex-wrap gap-2 mt-2">
-          {component.actions.map((action) => (
-            <button
-              key={action.actionId}
-              type="button"
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                action.variant === 'primary' ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                : action.variant === 'destructive' ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                : 'border border-border bg-background hover:bg-muted'
-              }`}
-              onClick={() => onAction?.({ type: 'button-click', componentId: component.id, actionId: action.actionId })}
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      )}
+      <CardHeader
+        title={component.title}
+        subtitle={component.subtitle}
+        icon={component.icon}
+        trailing={component.source ? <PillBadge>{component.source}</PillBadge> : undefined}
+      />
+      <CardBody>
+        {component.description && (
+          <p className="text-sm text-muted-foreground leading-relaxed mb-4">{component.description}</p>
+        )}
+        {component.actions.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {component.actions.map((action) => (
+              <ActionButton
+                key={action.actionId}
+                label={action.label}
+                variant={action.variant || 'secondary'}
+                onClick={() => onAction?.({ type: 'button-click', componentId: component.id, actionId: action.actionId })}
+              />
+            ))}
+          </div>
+        )}
+      </CardBody>
     </div>
   );
 }
 
 // ── Todo ─────────────────────────────────────────────────────────────────────
 
+const TODO_PRIORITY_DOT: Record<string, string> = {
+  high: 'bg-red-500',
+  medium: 'bg-yellow-500',
+  low: 'bg-blue-400',
+};
+
 function TodoRenderer({ component, onAction }: { component: TodoComponent; onAction?: (action: A2UIAction) => void }) {
   const [newItemText, setNewItemText] = React.useState('');
+  const doneCount = component.items.filter((i) => i.done).length;
 
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-1">{component.title}</h3>}
-      {component.date && <div className="text-xs text-muted-foreground mb-2">{component.date}</div>}
-      <ul className="space-y-1">
-        {component.items.map((item, idx) => (
-          <li key={item.id} className="flex items-center gap-2 text-sm group">
-            <input
-              type="checkbox"
-              checked={item.done}
-              onChange={(e) => onAction?.({ type: 'todo-toggle', componentId: component.id, itemId: item.id, done: e.target.checked })}
-              className="flex-shrink-0"
-            />
-            <span className={`flex-1 ${item.done ? 'line-through text-muted-foreground' : ''}`}>
-              {item.time && <span className="text-xs text-muted-foreground mr-1.5">{item.time}</span>}
-              {item.text}
-            </span>
-            {item.priority && (
-              <span className={`text-xs px-1 rounded ${
-                item.priority === 'high' ? 'text-destructive' : item.priority === 'medium' ? 'text-yellow-600' : 'text-muted-foreground'
-              }`}>{item.priority}</span>
-            )}
-            <div className="hidden group-hover:flex gap-0.5">
-              {idx > 0 && (
-                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => {
-                  const ids = component.items.map(i => i.id);
-                  [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
-                  onAction?.({ type: 'todo-reorder', componentId: component.id, itemIds: ids });
-                }}>↑</button>
-              )}
-              {idx < component.items.length - 1 && (
-                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => {
-                  const ids = component.items.map(i => i.id);
-                  [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
-                  onAction?.({ type: 'todo-reorder', componentId: component.id, itemIds: ids });
-                }}>↓</button>
-              )}
+      <CardHeader
+        title={component.title}
+        subtitle={component.date}
+        trailing={<span className="text-xs text-muted-foreground tabular-nums">{doneCount}/{component.items.length}</span>}
+      />
+      <CardBody>
+        <div className="divide-y divide-border/20">
+          {component.items.map((item, idx) => (
+            <div key={item.id} className="flex items-center gap-3 py-2.5 group first:pt-0">
+              <input
+                type="checkbox"
+                checked={item.done}
+                onChange={(e) => onAction?.({ type: 'todo-toggle', componentId: component.id, itemId: item.id, done: e.target.checked })}
+                className="flex-shrink-0 rounded border-border h-4 w-4"
+              />
+              <div className="flex-1 min-w-0 flex items-center gap-2">
+                {item.priority && (
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TODO_PRIORITY_DOT[item.priority] || ''}`} />
+                )}
+                <span className={`text-sm ${item.done ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
+                  {item.text}
+                </span>
+              </div>
+              {item.time && <span className="text-xs text-muted-foreground tabular-nums shrink-0">{item.time}</span>}
+              <div className="hidden group-hover:flex gap-1 shrink-0">
+                {idx > 0 && (
+                  <button type="button" className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors" onClick={() => {
+                    const ids = component.items.map(i => i.id);
+                    [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
+                    onAction?.({ type: 'todo-reorder', componentId: component.id, itemIds: ids });
+                  }}>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
+                  </button>
+                )}
+                {idx < component.items.length - 1 && (
+                  <button type="button" className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors" onClick={() => {
+                    const ids = component.items.map(i => i.id);
+                    [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
+                    onAction?.({ type: 'todo-reorder', componentId: component.id, itemIds: ids });
+                  }}>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                  </button>
+                )}
+              </div>
             </div>
-          </li>
-        ))}
-      </ul>
-      <div className="flex gap-1.5 mt-2">
-        <input
-          type="text"
-          value={newItemText}
-          onChange={(e) => setNewItemText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && newItemText.trim()) {
-              onAction?.({ type: 'todo-add', componentId: component.id, text: newItemText.trim() });
-              setNewItemText('');
-            }
-          }}
-          placeholder="Add item..."
-          className="flex-1 text-sm rounded border border-border bg-background px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
-        />
-        <button
-          type="button"
-          className="text-xs px-2 py-1 rounded border border-border hover:bg-muted"
-          onClick={() => {
-            if (newItemText.trim()) {
-              onAction?.({ type: 'todo-add', componentId: component.id, text: newItemText.trim() });
-              setNewItemText('');
-            }
-          }}
-        >+ Add</button>
-      </div>
+          ))}
+        </div>
+        <div className="flex gap-2 mt-3 pt-3 border-t border-border/30">
+          <input
+            type="text"
+            value={newItemText}
+            onChange={(e) => setNewItemText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newItemText.trim()) {
+                onAction?.({ type: 'todo-add', componentId: component.id, text: newItemText.trim() });
+                setNewItemText('');
+              }
+            }}
+            placeholder="Add item..."
+            className="flex-1 text-sm rounded-lg border border-border bg-background px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+          />
+          <ActionButton
+            label="Add"
+            variant="secondary"
+            onClick={() => {
+              if (newItemText.trim()) {
+                onAction?.({ type: 'todo-add', componentId: component.id, text: newItemText.trim() });
+                setNewItemText('');
+              }
+            }}
+          />
+        </div>
+      </CardBody>
     </div>
   );
 }
@@ -442,74 +531,92 @@ function ApprovalCardRenderer({ component, onAction }: { component: ApprovalCard
 
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-1">{component.title}</h3>}
-      <p className="text-sm mb-2">{component.description}</p>
-      {component.metadata && Object.keys(component.metadata).length > 0 && (
-        <div className="text-xs space-y-0.5 mb-3 p-2 rounded bg-muted/50">
-          {Object.entries(component.metadata).map(([k, v]) => (
-            <div key={k}><span className="font-medium">{k}:</span> {v}</div>
-          ))}
-        </div>
-      )}
-      {decided ? (
-        <Badge variant={component.status === 'approved' ? 'default' : 'destructive'}>
-          {component.status === 'approved' ? 'Approved' : 'Rejected'}
-        </Badge>
-      ) : (
-        <>
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="Optional comment..."
-            className="w-full text-sm rounded border border-border bg-background px-2 py-1 h-12 resize-none focus:outline-none focus:ring-1 focus:ring-primary mb-2"
-          />
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="px-3 py-1.5 rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90"
-              onClick={() => onAction?.({ type: 'approval', componentId: component.id, decision: 'approve', comment: comment || undefined })}
-            >Approve</button>
-            <button
-              type="button"
-              className="px-3 py-1.5 rounded-md text-sm font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => onAction?.({ type: 'approval', componentId: component.id, decision: 'reject', comment: comment || undefined })}
-            >Reject</button>
+      <CardHeader
+        title={component.title}
+        icon={decided ? (component.status === 'approved' ? '✓' : '✗') : '⚠️'}
+        trailing={
+          decided ? (
+            <PillBadge variant={component.status === 'approved' ? 'success' : 'error'}>
+              {component.status === 'approved' ? 'Approved' : 'Rejected'}
+            </PillBadge>
+          ) : (
+            <PillBadge variant="warning">Pending</PillBadge>
+          )
+        }
+      />
+      <CardBody>
+        <p className="text-sm text-muted-foreground leading-relaxed mb-3">{component.description}</p>
+        {component.metadata && Object.keys(component.metadata).length > 0 && (
+          <div className="rounded-lg bg-muted/30 border border-border/30 p-3 mb-3 space-y-1">
+            {Object.entries(component.metadata).map(([k, v]) => (
+              <div key={k} className="flex justify-between text-xs">
+                <span className="text-muted-foreground">{k}</span>
+                <span className="font-medium text-foreground">{v}</span>
+              </div>
+            ))}
           </div>
-        </>
-      )}
+        )}
+        {!decided && (
+          <>
+            <textarea
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Optional comment..."
+              className="w-full text-sm rounded-lg border border-border bg-background px-3 py-2.5 h-16 resize-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors mb-3"
+            />
+            <div className="flex gap-2">
+              <ActionButton
+                label="Approve"
+                variant="primary"
+                onClick={() => onAction?.({ type: 'approval', componentId: component.id, decision: 'approve', comment: comment || undefined })}
+              />
+              <ActionButton
+                label="Reject"
+                variant="destructive"
+                onClick={() => onAction?.({ type: 'approval', componentId: component.id, decision: 'reject', comment: comment || undefined })}
+              />
+            </div>
+          </>
+        )}
+      </CardBody>
     </div>
   );
 }
 
 // ── Timeline ─────────────────────────────────────────────────────────────────
 
-const STATUS_COLORS: Record<string, string> = {
-  success: 'bg-green-500',
-  error: 'bg-destructive',
-  warning: 'bg-yellow-500',
-  info: 'bg-blue-500',
+const TIMELINE_STATUS_COLORS: Record<string, { dot: string; bg: string }> = {
+  success: { dot: 'bg-green-500', bg: 'bg-green-500/10' },
+  error: { dot: 'bg-red-500', bg: 'bg-red-500/10' },
+  warning: { dot: 'bg-yellow-500', bg: 'bg-yellow-500/10' },
+  info: { dot: 'bg-blue-500', bg: 'bg-blue-500/10' },
 };
 
 function TimelineRenderer({ component }: { component: TimelineComponent }) {
   return (
     <div>
-      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
-      <div className="relative pl-5">
-        <div className="absolute left-[7px] top-1 bottom-1 w-px bg-border" />
-        {component.entries.map((entry) => (
-          <div key={entry.id} className="relative flex items-start gap-3 pb-3">
-            <div className={`absolute left-[-13px] top-1.5 w-[9px] h-[9px] rounded-full border-2 border-background ${STATUS_COLORS[entry.status || 'info'] || STATUS_COLORS.info}`} />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">{entry.timestamp}</span>
-                {entry.icon && <span className="text-xs">{entry.icon}</span>}
+      <CardHeader title={component.title} />
+      <CardBody>
+        <div className="relative pl-6">
+          <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border/60" />
+          {component.entries.map((entry, i) => {
+            const colors = TIMELINE_STATUS_COLORS[entry.status || 'info'] || TIMELINE_STATUS_COLORS.info;
+            return (
+              <div key={entry.id} className="relative flex items-start gap-3 pb-4 last:pb-0">
+                <div className={`absolute left-[-17px] top-1.5 w-[11px] h-[11px] rounded-full border-2 border-card ${colors.dot} ring-2 ring-card`} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-[11px] text-muted-foreground tabular-nums">{entry.timestamp}</span>
+                    {entry.icon && <span className="text-xs">{entry.icon}</span>}
+                  </div>
+                  <div className="text-sm text-foreground font-medium">{entry.label}</div>
+                  {entry.detail && <div className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{entry.detail}</div>}
+                </div>
               </div>
-              <div className="text-sm">{entry.label}</div>
-              {entry.detail && <div className="text-xs text-muted-foreground mt-0.5">{entry.detail}</div>}
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      </CardBody>
     </div>
   );
 }
@@ -531,7 +638,7 @@ function A2UIComponentRenderer({ component, onAction }: { component: A2UICompone
     case 'approval-card': return <ApprovalCardRenderer component={component} onAction={onAction} />;
     case 'timeline': return <TimelineRenderer component={component} />;
     default:
-      return <div className="text-xs text-muted-foreground">Unknown component type</div>;
+      return <div className="text-xs text-muted-foreground px-5 py-3">Unknown component type</div>;
   }
 }
 
@@ -539,16 +646,14 @@ function A2UIComponentRenderer({ component, onAction }: { component: A2UICompone
 
 export function A2UIDocumentRenderer({ doc, onAction }: { doc: A2UIDocument; onAction?: (action: A2UIAction) => void }) {
   return (
-    <div className="space-y-6 p-4">
+    <div className="space-y-4 p-4">
       {doc.title && (
-        <h2 className="text-base font-semibold">{doc.title}</h2>
+        <h2 className="text-lg font-semibold text-foreground px-1">{doc.title}</h2>
       )}
       {doc.components.map((component) => (
-        <Card key={component.id}>
-          <CardContent className="pt-4">
-            <A2UIComponentRenderer component={component} onAction={onAction} />
-          </CardContent>
-        </Card>
+        <CardShell key={component.id}>
+          <A2UIComponentRenderer component={component} onAction={onAction} />
+        </CardShell>
       ))}
     </div>
   );
