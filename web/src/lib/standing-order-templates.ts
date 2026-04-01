@@ -5,50 +5,80 @@
 
 import type { StandingOrder } from '@/stores/assistant-store';
 
+export interface TemplateParameter {
+  key: string;
+  label: string;
+  type: 'text' | 'time' | 'number' | 'select';
+  defaultValue: string;
+  options?: string[];
+}
+
 export interface StandingOrderTemplate {
   id: string;
   label: string;
   description: string;
   icon: string;
   category: 'productivity' | 'monitoring' | 'research' | 'learning';
-  buildOrder: () => Omit<StandingOrder, 'id' | 'createdAt' | 'updatedAt' | 'runCount' | 'errorCount' | 'state' | 'status'>;
+  parameters?: TemplateParameter[];
+  buildOrder: (params?: Record<string, string>) => Omit<StandingOrder, 'id' | 'createdAt' | 'updatedAt' | 'runCount' | 'errorCount' | 'state' | 'status'>;
 }
 
 export const STANDING_ORDER_TEMPLATES: StandingOrderTemplate[] = [
   {
     id: 'morning-briefing',
     label: 'Morning Briefing',
-    description: 'Daily summary at 9am — emails, calendar, tasks',
+    description: 'Daily summary — emails, calendar, tasks',
     icon: '☀️',
     category: 'productivity',
-    buildOrder: () => ({
-      instruction: 'Give me a morning briefing. Summarize what\'s on my calendar today, any important emails, open pull requests, and outstanding Jira tickets. Keep it concise — bullet points, not paragraphs.',
-      trigger: { type: 'cron', expression: '0 9 * * 1-5' },
-      notifyVia: 'assistant',
-    }),
+    parameters: [
+      { key: 'time', label: 'Time', type: 'time', defaultValue: '09:00' },
+      { key: 'days', label: 'Days', type: 'select', defaultValue: 'weekdays', options: ['weekdays', 'every day', 'mon-sat'] },
+    ],
+    buildOrder: (params) => {
+      const time = params?.time || '09:00';
+      const [h, m] = time.split(':');
+      const days = params?.days || 'weekdays';
+      const dow = days === 'weekdays' ? '1-5' : days === 'mon-sat' ? '1-6' : '*';
+      return {
+        instruction: 'Give me a morning briefing. Summarize what\'s on my calendar today, any important emails, open pull requests, and outstanding Jira tickets. Keep it concise — bullet points, not paragraphs.',
+        trigger: { type: 'cron', expression: `${parseInt(m)} ${parseInt(h)} * * ${dow}` },
+        notifyVia: 'assistant',
+      };
+    },
   },
   {
     id: 'evening-wrapup',
     label: 'Evening Wrap-up',
-    description: 'End-of-day summary at 5:30pm',
+    description: 'End-of-day summary',
     icon: '🌙',
     category: 'productivity',
-    buildOrder: () => ({
-      instruction: 'Give me an evening wrap-up. What did I accomplish today? What\'s still outstanding? Any PRs waiting for review? Keep it brief.',
-      trigger: { type: 'cron', expression: '30 17 * * 1-5' },
-      notifyVia: 'assistant',
-    }),
+    parameters: [
+      { key: 'time', label: 'Time', type: 'time', defaultValue: '17:30' },
+    ],
+    buildOrder: (params) => {
+      const time = params?.time || '17:30';
+      const [h, m] = time.split(':');
+      return {
+        instruction: 'Give me an evening wrap-up. What did I accomplish today? What\'s still outstanding? Any PRs waiting for review? Keep it brief.',
+        trigger: { type: 'cron', expression: `${parseInt(m)} ${parseInt(h)} * * 1-5` },
+        notifyVia: 'assistant',
+      };
+    },
   },
   {
     id: 'stretch-reminder',
     label: 'Stretch Reminder',
-    description: 'Reminder every 2 hours to take a break',
+    description: 'Reminder to take a break',
     icon: '🧘',
     category: 'productivity',
-    buildOrder: () => ({
+    parameters: [
+      { key: 'interval', label: 'Every', type: 'select', defaultValue: '2h', options: ['1h', '2h', '3h', '4h'] },
+      { key: 'notify', label: 'Notify via', type: 'select', defaultValue: 'toast', options: ['toast', 'assistant'] },
+    ],
+    buildOrder: (params) => ({
       instruction: 'Remind me to stretch and take a short break. Give me a quick stretch suggestion.',
-      trigger: { type: 'interval', expression: '2h' },
-      notifyVia: 'toast',
+      trigger: { type: 'interval', expression: params?.interval || '2h' },
+      notifyVia: params?.notify || 'toast',
     }),
   },
   {

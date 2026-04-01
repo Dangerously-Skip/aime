@@ -32,7 +32,8 @@ import {
   Bot,
   Plus,
 } from "lucide-react";
-import { STANDING_ORDER_TEMPLATES } from "@/lib/standing-order-templates";
+import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/standing-order-templates";
+import { TemplateDialog } from "./template-dialog";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -42,12 +43,14 @@ function OrdersSidebar({
   selectedOrderId,
   collapsed,
   onToggleCollapsed,
+  onActivateTemplate,
 }: {
   orders: StandingOrder[];
   onSelectOrder: (id: string | null) => void;
   selectedOrderId: string | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  onActivateTemplate: (tpl: StandingOrderTemplate) => void;
 }) {
   const pauseOrder = useAssistantStore((s) => s.pauseOrder);
   const resumeOrder = useAssistantStore((s) => s.resumeOrder);
@@ -155,10 +158,7 @@ function OrdersSidebar({
               <button
                 key={tpl.id}
                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors flex items-center gap-2"
-                onClick={() => {
-                  const order = tpl.buildOrder();
-                  addOrder(order);
-                }}
+                onClick={() => onActivateTemplate(tpl)}
               >
                 <span>{tpl.icon}</span>
                 <div className="min-w-0">
@@ -275,6 +275,7 @@ export function AssistantSurface() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [activeTemplate, setActiveTemplate] = useState<StandingOrderTemplate | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const orders = useAssistantStore((s) => s.orders);
@@ -456,6 +457,13 @@ export function AssistantSurface() {
         selectedOrderId={selectedOrderId}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)}
+        onActivateTemplate={(tpl) => {
+          if (tpl.parameters && tpl.parameters.length > 0) {
+            setActiveTemplate(tpl);
+          } else {
+            addOrder(tpl.buildOrder());
+          }
+        }}
       />
 
       {/* Main area */}
@@ -541,6 +549,14 @@ export function AssistantSurface() {
         {/* Status bar */}
         <StatusBar orders={orders} />
       </div>
+
+      {/* Template customization dialog */}
+      {activeTemplate && (
+        <TemplateDialog
+          template={activeTemplate}
+          onClose={() => setActiveTemplate(null)}
+        />
+      )}
     </div>
   );
 }
