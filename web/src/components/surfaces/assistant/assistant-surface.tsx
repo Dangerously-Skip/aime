@@ -188,18 +188,163 @@ function OrdersSidebar({
   );
 }
 
-// ── Card Feed ────────────────────────────────────────────────────────────────
+// ── Auto-wrap text into A2UI markdown doc ────────────────────────────────────
 
-function CardFeed({
-  cards,
+function textToA2UIDoc(title: string, text: string): import('@/lib/a2ui/types').A2UIDocument {
+  // Check if text contains a question (needs reply)
+  const hasQuestion = /\?[\s]*$/.test(text.trim()) || /would you|could you|do you|what|when|how|which/i.test(text);
+
+  const components: import('@/lib/a2ui/types').A2UIComponent[] = [
+    { type: 'markdown', id: `md-${Date.now()}`, content: text },
+  ];
+
+  if (hasQuestion) {
+    components.push({
+      type: 'action-card',
+      id: `reply-${Date.now()}`,
+      actions: [
+        { actionId: 'reply', label: 'Reply', variant: 'primary' },
+        { actionId: 'dismiss', label: 'Dismiss', variant: 'secondary' },
+      ],
+    });
+  }
+
+  return { version: '1', title, components };
+}
+
+// ── Single Card Widget ───────────────────────────────────────────────────────
+
+function CardWidget({
+  card,
   onAction,
+  onReply,
+  expanded,
+  onToggleExpand,
 }: {
-  cards: AssistantCard[];
+  card: AssistantCard;
   onAction?: (action: A2UIAction) => void;
+  onReply: (cardId: string, text: string) => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
   const dismissCard = useAssistantStore((s) => s.dismissCard);
   const pinCard = useAssistantStore((s) => s.pinCard);
   const unpinCard = useAssistantStore((s) => s.unpinCard);
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState('');
+
+  const doc = card.doc || (card.summary ? textToA2UIDoc(card.title, card.summary) : null);
+  const isLong = (card.summary?.length || 0) > 200;
+
+  const handleAction = (action: A2UIAction) => {
+    if (action.type === 'button-click' && action.actionId === 'reply') {
+      setReplyOpen(true);
+      return;
+    }
+    if (action.type === 'button-click' && action.actionId === 'dismiss') {
+      dismissCard(card.id);
+      return;
+    }
+    onAction?.(action);
+  };
+
+  return (
+    <div className={`rounded-xl border bg-card shadow-sm hover:shadow-md transition-all overflow-hidden ${
+      card.unread ? 'border-l-2 border-l-primary' : 'border-border/60'
+    }`}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2.5">
+        <div className="flex items-center gap-2 min-w-0 cursor-pointer" onClick={onToggleExpand}>
+          <span className="text-[13px] font-semibold truncate text-foreground">{card.title}</span>
+          {card.pinned && <Pin className="h-3 w-3 text-primary shrink-0" />}
+        </div>
+        <div className="flex items-center gap-0.5 shrink-0">
+          <span className="text-[11px] text-muted-foreground tabular-nums mr-1">
+            {new Date(card.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <Button variant="ghost" size="icon-sm" onClick={() => setReplyOpen(!replyOpen)} title="Reply">
+            <ArrowUp className="h-3 w-3 rotate-180" />
+          </Button>
+          <Button variant="ghost" size="icon-sm" onClick={() => card.pinned ? unpinCard(card.id) : pinCard(card.id)} title={card.pinned ? "Unpin" : "Pin"}>
+            {card.pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
+          </Button>
+          <Button variant="ghost" size="icon-sm" onClick={() => dismissCard(card.id)} title="Dismiss">
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Body — collapsible for long content */}
+      <div className={`${!expanded && isLong ? 'max-h-[150px] overflow-hidden relative' : ''}`}>
+        {doc ? (
+          <A2UIDocumentRenderer doc={doc} onAction={handleAction} />
+        ) : null}
+        {!expanded && isLong && (
+          <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-card to-transparent" />
+        )}
+      </div>
+
+      {/* Expand toggle for long content */}
+      {isLong && (
+        <button
+          className="w-full text-xs text-muted-foreground hover:text-foreground py-1.5 border-t border-border/30 transition-colors"
+          onClick={onToggleExpand}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+
+      {/* Inline reply */}
+      {replyOpen && (
+        <div className="px-4 py-3 border-t border-border/30 bg-muted/20">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={replyText}
+              onChange={(e) => setReplyText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && replyText.trim()) {
+                  onReply(card.id, replyText.trim());
+                  setReplyText('');
+                  setReplyOpen(false);
+                }
+              }}
+              placeholder="Type a reply..."
+              className="flex-1 text-sm rounded-lg border border-border bg-background px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+              autoFocus
+            />
+            <Button
+              size="sm"
+              onClick={() => {
+                if (replyText.trim()) {
+                  onReply(card.id, replyText.trim());
+                  setReplyText('');
+                  setReplyOpen(false);
+                }
+              }}
+              disabled={!replyText.trim()}
+            >
+              Send
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Card Feed (Bento Layout) ─────────────────────────────────────────────────
+
+function CardFeed({
+  cards,
+  onAction,
+  onReply,
+}: {
+  cards: AssistantCard[];
+  onAction?: (action: A2UIAction) => void;
+  onReply: (cardId: string, text: string) => void;
+}) {
+  const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
 
   const pinnedCards = cards.filter((c) => c.pinned);
   const unpinnedCards = cards.filter((c) => !c.pinned);
@@ -215,51 +360,46 @@ function CardFeed({
     );
   }
 
+  const toggleExpand = (id: string) => {
+    setExpandedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // Bento layout: if 2+ short cards, arrange in grid; long cards get full width
+  const shortCards = sortedCards.filter((c) => (c.summary?.length || 0) <= 200 && !c.doc);
+  const longCards = sortedCards.filter((c) => (c.summary?.length || 0) > 200 || !!c.doc);
+
   return (
     <div className="space-y-4">
-      {sortedCards.map((card) => (
-        <div
-          key={card.id}
-          className={`rounded-lg border bg-card shadow-sm overflow-hidden ${
-            card.unread ? 'border-l-2 border-l-primary border-r border-t border-b border-border' : 'border-border'
-          }`}
-        >
-          {/* Card header */}
-          <div className="flex items-center justify-between px-4 py-2 border-b border-border/50">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-medium truncate">{card.title}</span>
-              {card.pinned && <Pin className="h-3 w-3 text-primary shrink-0" />}
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <span className="text-xs text-muted-foreground">
-                {new Date(card.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => card.pinned ? unpinCard(card.id) : pinCard(card.id)}
-                title={card.pinned ? "Unpin" : "Pin"}
-              >
-                {card.pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => dismissCard(card.id)}
-                title="Dismiss"
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </div>
-          </div>
-
-          {/* Card body */}
-          {card.doc ? (
-            <A2UIDocumentRenderer doc={card.doc} onAction={onAction} />
-          ) : card.summary ? (
-            <div className="px-4 py-3 text-sm">{card.summary}</div>
-          ) : null}
+      {/* Short cards in bento grid */}
+      {shortCards.length > 0 && (
+        <div className={`grid gap-3 ${shortCards.length === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
+          {shortCards.map((card) => (
+            <CardWidget
+              key={card.id}
+              card={card}
+              onAction={onAction}
+              onReply={onReply}
+              expanded={expandedCards.has(card.id)}
+              onToggleExpand={() => toggleExpand(card.id)}
+            />
+          ))}
         </div>
+      )}
+
+      {/* Long cards full width */}
+      {longCards.map((card) => (
+        <CardWidget
+          key={card.id}
+          card={card}
+          onAction={onAction}
+          onReply={onReply}
+          expanded={expandedCards.has(card.id)}
+          onToggleExpand={() => toggleExpand(card.id)}
+        />
       ))}
     </div>
   );
@@ -455,11 +595,21 @@ export function AssistantSurface() {
 
   const handleCardAction = useCallback((action: A2UIAction) => {
     console.log('[Assistant] Card action:', action);
-    // Route state mutations directly, agent actions as new prompts
-    if (action.type === 'button-click') {
-      // Could trigger a new assistant query with the action context
+    if (action.type === 'button-click' && action.actionId !== 'reply' && action.actionId !== 'dismiss') {
       setInputValue(`Perform action: ${action.actionId}`);
     }
+  }, []);
+
+  const handleCardReply = useCallback((cardId: string, text: string) => {
+    // Find the card to get context
+    const card = useAssistantStore.getState().cards.find((c) => c.id === cardId);
+    const context = card ? `Regarding "${card.title}": ` : '';
+    setInputValue(context + text);
+    // Auto-submit
+    setTimeout(() => {
+      const btn = document.querySelector('[data-assistant-submit]') as HTMLButtonElement;
+      btn?.click();
+    }, 50);
   }, []);
 
   return (
@@ -497,6 +647,7 @@ export function AssistantSurface() {
               <div className="flex items-center justify-end px-4 py-2">
                 <Button
                   size="icon"
+                  data-assistant-submit
                   className={`h-8 w-8 rounded-lg ${isStreaming ? 'bg-destructive hover:bg-destructive/80' : 'bg-primary hover:bg-primary/80'}`}
                   onClick={isStreaming ? handleAbort : handleSubmit}
                   disabled={!isStreaming && !inputValue.trim()}
@@ -555,7 +706,7 @@ export function AssistantSurface() {
                 </div>
               </div>
             ) : (
-              <CardFeed cards={cards} onAction={handleCardAction} />
+              <CardFeed cards={cards} onAction={handleCardAction} onReply={handleCardReply} />
             )}
           </div>
         </ScrollArea>
