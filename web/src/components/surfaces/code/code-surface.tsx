@@ -1040,12 +1040,22 @@ export function CodeSurface() {
       const currentAttachments = [...attachments];
       setAttachments([]);
 
+      // Drain context bus events for this surface
+      const { useContextBusStore } = await import('@/stores/context-bus-store');
+      const busEvents = useContextBusStore.getState().getUnconsumed('code')
+        .filter(e => e.priority === 'p0' || e.priority === 'p1')
+        .map(e => ({ summary: e.summary, source: e.source, priority: e.priority }));
+      if (busEvents.length > 0) {
+        useContextBusStore.getState().consumeAll('code');
+      }
+
       await sendMessage(trimmed, id, "code", model, {
         apiKey: nibGatewayApiKey || undefined,
         cwd: folder || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
+        contextBusEvents: busEvents.length > 0 ? busEvents : undefined,
         sessionControls: currentControls,
         securitySettings: {
           blockDangerousCommands,

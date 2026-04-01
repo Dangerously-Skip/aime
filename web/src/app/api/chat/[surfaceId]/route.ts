@@ -192,6 +192,7 @@ export async function POST(
     history = null,
     memories = null,
     crossSurfaceContext = null,
+    contextBusEvents = null,
     autoExtractMemories = true,
     securitySettings = null,
     sessionControls = null,
@@ -214,6 +215,7 @@ export async function POST(
     history?: Array<{ role: 'user' | 'assistant'; content: string }> | null;
     memories?: string | null;
     crossSurfaceContext?: string | null;
+    contextBusEvents?: Array<{ summary: string; source: string; priority: string }> | null;
     autoExtractMemories?: boolean;
     securitySettings?: {
       blockDangerousCommands?: boolean;
@@ -451,6 +453,15 @@ export async function POST(
 
       if (crossSurfaceContext) {
         systemPrompt = appendToSystemPrompt(systemPrompt, crossSurfaceContext);
+      }
+
+      // Inject context bus events (background alerts from standing orders)
+      if (contextBusEvents && contextBusEvents.length > 0) {
+        const alertsBlock = contextBusEvents.map((e) =>
+          `[${e.priority.toUpperCase()} — ${e.source}] ${e.summary}`
+        ).join('\n');
+        systemPrompt = appendToSystemPrompt(systemPrompt, `<background-alerts>\nThe following background events occurred while you were idle. Acknowledge them if relevant to the user's current request.\n${alertsBlock}\n</background-alerts>`);
+        console.log('[CHAT] Injected', contextBusEvents.length, 'context bus events');
       }
 
       // Inject global memory file and daily log after cross-surface context
