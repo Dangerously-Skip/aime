@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { useAssistantStore } from '@/stores/assistant-store';
 import { useSettingsStore } from '@/stores/settings-store';
+import { useContextBusStore } from '@/stores/context-bus-store';
 import { evaluateStandingOrders, hashSnapshot } from '@/lib/standing-order-engine';
 
 /**
@@ -137,6 +138,28 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
     title: order.instruction.slice(0, 60),
     summary: fullText.slice(0, 2000),
   });
+
+  // Publish to context bus for cross-surface communication
+  const notifyVia = order.notifyVia || 'assistant';
+  const targetSurface = notifyVia.startsWith('inject:') ? notifyVia.slice(7) : undefined;
+  const priority = targetSurface ? 'p0' : 'p2';
+
+  useContextBusStore.getState().publish({
+    source: `standing-order:${order.id}`,
+    priority: priority as 'p0' | 'p1' | 'p2',
+    targetSurface,
+    summary: `[${order.instruction.slice(0, 40)}] ${fullText.slice(0, 500)}`,
+    payload: { orderId: order.id, fullText: fullText.slice(0, 2000) },
+  });
+
+  // Desktop notification for P0 events
+  if (priority === 'p0') {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      new Notification(`Standing Order: ${order.instruction.slice(0, 40)}`, {
+        body: fullText.slice(0, 100),
+      });
+    }
+  }
 
   // Update order state
   useAssistantStore.getState().updateOrder(order.id, {

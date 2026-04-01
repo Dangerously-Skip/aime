@@ -1013,6 +1013,15 @@ export function CoworkSurface() {
       const memoriesStr = formatMemoriesForPrompt(relevantMemories);
       relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
 
+      // Drain context bus events for this surface
+      const { useContextBusStore } = await import('@/stores/context-bus-store');
+      const busEvents = useContextBusStore.getState().getUnconsumed('cowork')
+        .filter(e => e.priority === 'p0' || e.priority === 'p1')
+        .map(e => ({ summary: e.summary, source: e.source, priority: e.priority }));
+      if (busEvents.length > 0) {
+        useContextBusStore.getState().consumeAll('cowork');
+      }
+
       const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
       await sendMessage(trimmed, id, "cowork", model, {
         personalPreferences: personalPreferences || undefined,
@@ -1025,6 +1034,7 @@ export function CoworkSurface() {
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
         crossSurfaceContext: crossSurfaceContext || undefined,
+        contextBusEvents: busEvents.length > 0 ? busEvents : undefined,
         sessionControls: currentControls,
         securitySettings: {
           blockDangerousCommands,

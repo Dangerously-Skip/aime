@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useAppStore, type Surface } from "@/stores/app-store";
+import { useContextBusStore } from "@/stores/context-bus-store";
 import {
   PanelLeftClose,
   PanelLeft,
@@ -76,6 +77,9 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
       >
         {SURFACES.map((surface) => {
           const isActive = activeSurface === surface.id;
+          const unreadCount = useContextBusStore((s) =>
+            s.events.filter(e => !e.consumed && (e.priority === 'p0' || e.priority === 'p1') && (!e.targetSurface || e.targetSurface === surface.id)).length
+          );
           return (
             <button
               key={surface.id}
@@ -87,6 +91,9 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
               }`}
             >
               {surface.label}
+              {unreadCount > 0 && !isActive && (
+                <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-destructive" />
+              )}
             </button>
           );
         })}

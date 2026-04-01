@@ -143,6 +143,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         history?: Array<{ role: 'user' | 'assistant'; content: string }>
         memories?: string
         crossSurfaceContext?: string
+        contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
         securitySettings?: {
           blockDangerousCommands?: boolean
           blockNetworkCommands?: boolean
@@ -190,6 +191,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.history?.length ? { history: extra.history } : {}),
             ...(extra?.memories ? { memories: extra.memories } : {}),
             ...(extra?.crossSurfaceContext ? { crossSurfaceContext: extra.crossSurfaceContext } : {}),
+            ...(extra?.contextBusEvents?.length ? { contextBusEvents: extra.contextBusEvents } : {}),
             ...(extra?.securitySettings ? { securitySettings: extra.securitySettings } : {}),
             ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
             ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
