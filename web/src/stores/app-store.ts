@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 
-export type Surface = 'chat' | 'cowork' | 'code' | 'browser';
+export type Surface = 'chat' | 'cowork' | 'code' | 'browser' | 'assistant';
 export type Theme = 'light' | 'dark' | 'system' | 'emma';
 
 export type SidebarMode = 'history' | 'projects' | 'customize';

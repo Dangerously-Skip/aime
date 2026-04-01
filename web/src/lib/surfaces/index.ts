@@ -2,6 +2,7 @@ import { getChatConfig } from './chat-config';
 import { getCoworkConfig } from './cowork-config';
 import { getCodeConfig } from './code-config';
 import { getBrowserConfig } from './browser-config';
+import { getAssistantConfig } from './assistant-config';
 
 /**
  * Configuration for a surface (chat, cowork, code, browser).
@@ -28,6 +29,7 @@ const surfaceConfigs: Record<string, SurfaceConfigGetter> = {
   cowork: getCoworkConfig,
   code: getCodeConfig,
   browser: getBrowserConfig,
+  assistant: getAssistantConfig,
 };
 
 /**
@@ -48,4 +50,4 @@ export function getAvailableSurfaces(): string[] {
   return Object.keys(surfaceConfigs);
 }
 
-export { getChatConfig, getCoworkConfig, getCodeConfig, getBrowserConfig };
+export { getChatConfig, getCoworkConfig, getCodeConfig, getBrowserConfig, getAssistantConfig };
