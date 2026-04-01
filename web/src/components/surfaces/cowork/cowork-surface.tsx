@@ -1133,13 +1133,9 @@ export function CoworkSurface() {
     [model]
   );
 
-  const { resetIdleTimer } = useHeartbeat(runSilentHeartbeat);
-  resetIdleTimerRef.current = resetIdleTimer;
-  useCron((job) => {
-    playDing();
-    showReminder(job.id, job.prompt);
-    fireBackgroundRun(job.prompt);
-  });
+  // Cron and heartbeat hooks removed — standing order engine in the Assistant
+  // surface now handles all scheduled/recurring tasks.
+  // fireBackgroundRun is kept for potential future use by the standing order engine.
 
   // Compute merged suggestions: slash takes priority over @
   const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
