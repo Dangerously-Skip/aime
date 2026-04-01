@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Trash2, X, LayoutDashboard } from "lucide-re
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
-import type { A2UIDocument } from "@/lib/a2ui/types";
+import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
 
 interface CanvasPanelProps {
   open: boolean;
@@ -15,6 +15,7 @@ interface CanvasPanelProps {
   onClear: () => void;
   canGoBack: boolean;
   canGoForward: boolean;
+  onAction?: (action: A2UIAction) => void;
 }
 
 export function CanvasPanel({
@@ -26,6 +27,7 @@ export function CanvasPanel({
   onClear,
   canGoBack,
   canGoForward,
+  onAction,
 }: CanvasPanelProps) {
   if (!open) return null;
 
@@ -82,7 +84,7 @@ export function CanvasPanel({
       {/* Body */}
       <ScrollArea className="flex-1">
         {doc ? (
-          <A2UIDocumentRenderer doc={doc} />
+          <A2UIDocumentRenderer doc={doc} onAction={onAction} />
         ) : (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <LayoutDashboard className="h-8 w-8 mb-2 opacity-40" />

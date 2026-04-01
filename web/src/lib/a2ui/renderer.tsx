@@ -10,6 +10,7 @@ import React from 'react';
 import type {
   A2UIComponent,
   A2UIDocument,
+  A2UIAction,
   TableComponent,
   ChartComponent,
   KanbanComponent,
@@ -18,6 +19,10 @@ import type {
   MarkdownComponent,
   ListComponent,
   ProgressComponent,
+  ActionCardComponent,
+  TodoComponent,
+  ApprovalCardComponent,
+  TimelineComponent,
 } from './types';
 import { Badge } from '@/components/ui/badge';
 
@@ -192,7 +197,19 @@ function StatRenderer({ component }: { component: StatComponent }) {
 
 // ── Form ──────────────────────────────────────────────────────────────────────
 
-function FormRenderer({ component }: { component: FormComponent }) {
+function FormRenderer({ component, onAction }: { component: FormComponent; onAction?: (action: A2UIAction) => void }) {
+  const [values, setValues] = React.useState<Record<string, unknown>>(() => {
+    const defaults: Record<string, unknown> = {};
+    for (const field of component.fields) {
+      if (field.defaultValue !== undefined) defaults[field.name] = field.defaultValue;
+    }
+    return defaults;
+  });
+
+  const handleSubmit = () => {
+    onAction?.({ type: 'form-submit', componentId: component.id, values });
+  };
+
   return (
     <div>
       {component.title && <h3 className="text-sm font-semibold mb-3">{component.title}</h3>}
@@ -206,27 +223,40 @@ function FormRenderer({ component }: { component: FormComponent }) {
               <textarea
                 className="w-full text-sm rounded border border-border bg-background px-2 py-1 h-20 resize-none focus:outline-none focus:ring-1 focus:ring-primary"
                 placeholder={field.placeholder}
-                defaultValue={String(field.defaultValue ?? '')}
-                readOnly
+                value={String(values[field.name] ?? '')}
+                onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.value }))}
               />
             ) : field.type === 'select' ? (
-              <select className="w-full text-sm rounded border border-border bg-background px-2 py-1 focus:outline-none" disabled>
-                {field.options?.map((opt) => <option key={opt}>{opt}</option>)}
+              <select
+                className="w-full text-sm rounded border border-border bg-background px-2 py-1 focus:outline-none"
+                value={String(values[field.name] ?? '')}
+                onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.value }))}
+              >
+                <option value="">Select...</option>
+                {field.options?.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
               </select>
             ) : field.type === 'checkbox' ? (
-              <input type="checkbox" defaultChecked={Boolean(field.defaultValue)} disabled />
+              <input
+                type="checkbox"
+                checked={Boolean(values[field.name])}
+                onChange={(e) => setValues(v => ({ ...v, [field.name]: e.target.checked }))}
+              />
             ) : (
               <input
                 type={field.type}
                 className="w-full text-sm rounded border border-border bg-background px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
                 placeholder={field.placeholder}
-                defaultValue={String(field.defaultValue ?? '')}
-                readOnly
+                value={String(values[field.name] ?? '')}
+                onChange={(e) => setValues(v => ({ ...v, [field.name]: field.type === 'number' ? Number(e.target.value) : e.target.value }))}
               />
             )}
           </div>
         ))}
-        <button type="button" className="mt-1 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium" disabled>
+        <button
+          type="button"
+          className="mt-1 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-sm font-medium hover:bg-primary/90"
+          onClick={handleSubmit}
+        >
           {component.submitLabel || 'Submit'}
         </button>
       </div>
@@ -249,7 +279,7 @@ function MarkdownRenderer({ component }: { component: MarkdownComponent }) {
 
 // ── List ──────────────────────────────────────────────────────────────────────
 
-function ListRenderer({ component }: { component: ListComponent }) {
+function ListRenderer({ component, onAction }: { component: ListComponent; onAction?: (action: A2UIAction) => void }) {
   return (
     <div>
       {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
@@ -257,7 +287,12 @@ function ListRenderer({ component }: { component: ListComponent }) {
         {component.items.map((item) => (
           <li key={item.id} className="flex items-start gap-2 text-sm">
             {typeof item.checked === 'boolean' ? (
-              <input type="checkbox" checked={item.checked} readOnly className="mt-0.5 flex-shrink-0" />
+              <input
+                type="checkbox"
+                checked={item.checked}
+                onChange={(e) => onAction?.({ type: 'list-toggle', componentId: component.id, itemId: item.id, checked: e.target.checked })}
+                className="mt-0.5 flex-shrink-0"
+              />
             ) : (
               <span className="mt-0.5 flex-shrink-0 text-muted-foreground">{component.ordered ? '•' : '–'}</span>
             )}
@@ -293,18 +328,208 @@ function ProgressRenderer({ component }: { component: ProgressComponent }) {
   );
 }
 
+// ── Action Card ──────────────────────────────────────────────────────────────
+
+function ActionCardRenderer({ component, onAction }: { component: ActionCardComponent; onAction?: (action: A2UIAction) => void }) {
+  return (
+    <div>
+      {component.icon && <span className="text-lg mr-2">{component.icon}</span>}
+      {component.title && <h3 className="text-sm font-semibold mb-1">{component.title}</h3>}
+      {component.subtitle && <div className="text-xs text-muted-foreground mb-1">{component.subtitle}</div>}
+      {component.description && <p className="text-sm mb-3">{component.description}</p>}
+      {component.actions.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-2">
+          {component.actions.map((action) => (
+            <button
+              key={action.actionId}
+              type="button"
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                action.variant === 'primary' ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                : action.variant === 'destructive' ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                : 'border border-border bg-background hover:bg-muted'
+              }`}
+              onClick={() => onAction?.({ type: 'button-click', componentId: component.id, actionId: action.actionId })}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Todo ─────────────────────────────────────────────────────────────────────
+
+function TodoRenderer({ component, onAction }: { component: TodoComponent; onAction?: (action: A2UIAction) => void }) {
+  const [newItemText, setNewItemText] = React.useState('');
+
+  return (
+    <div>
+      {component.title && <h3 className="text-sm font-semibold mb-1">{component.title}</h3>}
+      {component.date && <div className="text-xs text-muted-foreground mb-2">{component.date}</div>}
+      <ul className="space-y-1">
+        {component.items.map((item, idx) => (
+          <li key={item.id} className="flex items-center gap-2 text-sm group">
+            <input
+              type="checkbox"
+              checked={item.done}
+              onChange={(e) => onAction?.({ type: 'todo-toggle', componentId: component.id, itemId: item.id, done: e.target.checked })}
+              className="flex-shrink-0"
+            />
+            <span className={`flex-1 ${item.done ? 'line-through text-muted-foreground' : ''}`}>
+              {item.time && <span className="text-xs text-muted-foreground mr-1.5">{item.time}</span>}
+              {item.text}
+            </span>
+            {item.priority && (
+              <span className={`text-xs px-1 rounded ${
+                item.priority === 'high' ? 'text-destructive' : item.priority === 'medium' ? 'text-yellow-600' : 'text-muted-foreground'
+              }`}>{item.priority}</span>
+            )}
+            <div className="hidden group-hover:flex gap-0.5">
+              {idx > 0 && (
+                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => {
+                  const ids = component.items.map(i => i.id);
+                  [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
+                  onAction?.({ type: 'todo-reorder', componentId: component.id, itemIds: ids });
+                }}>↑</button>
+              )}
+              {idx < component.items.length - 1 && (
+                <button type="button" className="text-xs text-muted-foreground hover:text-foreground" onClick={() => {
+                  const ids = component.items.map(i => i.id);
+                  [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
+                  onAction?.({ type: 'todo-reorder', componentId: component.id, itemIds: ids });
+                }}>↓</button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div className="flex gap-1.5 mt-2">
+        <input
+          type="text"
+          value={newItemText}
+          onChange={(e) => setNewItemText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && newItemText.trim()) {
+              onAction?.({ type: 'todo-add', componentId: component.id, text: newItemText.trim() });
+              setNewItemText('');
+            }
+          }}
+          placeholder="Add item..."
+          className="flex-1 text-sm rounded border border-border bg-background px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+        <button
+          type="button"
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-muted"
+          onClick={() => {
+            if (newItemText.trim()) {
+              onAction?.({ type: 'todo-add', componentId: component.id, text: newItemText.trim() });
+              setNewItemText('');
+            }
+          }}
+        >+ Add</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Approval Card ────────────────────────────────────────────────────────────
+
+function ApprovalCardRenderer({ component, onAction }: { component: ApprovalCardComponent; onAction?: (action: A2UIAction) => void }) {
+  const [comment, setComment] = React.useState('');
+  const decided = component.status !== 'pending';
+
+  return (
+    <div>
+      {component.title && <h3 className="text-sm font-semibold mb-1">{component.title}</h3>}
+      <p className="text-sm mb-2">{component.description}</p>
+      {component.metadata && Object.keys(component.metadata).length > 0 && (
+        <div className="text-xs space-y-0.5 mb-3 p-2 rounded bg-muted/50">
+          {Object.entries(component.metadata).map(([k, v]) => (
+            <div key={k}><span className="font-medium">{k}:</span> {v}</div>
+          ))}
+        </div>
+      )}
+      {decided ? (
+        <Badge variant={component.status === 'approved' ? 'default' : 'destructive'}>
+          {component.status === 'approved' ? 'Approved' : 'Rejected'}
+        </Badge>
+      ) : (
+        <>
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Optional comment..."
+            className="w-full text-sm rounded border border-border bg-background px-2 py-1 h-12 resize-none focus:outline-none focus:ring-1 focus:ring-primary mb-2"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90"
+              onClick={() => onAction?.({ type: 'approval', componentId: component.id, decision: 'approve', comment: comment || undefined })}
+            >Approve</button>
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded-md text-sm font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => onAction?.({ type: 'approval', componentId: component.id, decision: 'reject', comment: comment || undefined })}
+            >Reject</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Timeline ─────────────────────────────────────────────────────────────────
+
+const STATUS_COLORS: Record<string, string> = {
+  success: 'bg-green-500',
+  error: 'bg-destructive',
+  warning: 'bg-yellow-500',
+  info: 'bg-blue-500',
+};
+
+function TimelineRenderer({ component }: { component: TimelineComponent }) {
+  return (
+    <div>
+      {component.title && <h3 className="text-sm font-semibold mb-2">{component.title}</h3>}
+      <div className="relative pl-5">
+        <div className="absolute left-[7px] top-1 bottom-1 w-px bg-border" />
+        {component.entries.map((entry) => (
+          <div key={entry.id} className="relative flex items-start gap-3 pb-3">
+            <div className={`absolute left-[-13px] top-1.5 w-[9px] h-[9px] rounded-full border-2 border-background ${STATUS_COLORS[entry.status || 'info'] || STATUS_COLORS.info}`} />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">{entry.timestamp}</span>
+                {entry.icon && <span className="text-xs">{entry.icon}</span>}
+              </div>
+              <div className="text-sm">{entry.label}</div>
+              {entry.detail && <div className="text-xs text-muted-foreground mt-0.5">{entry.detail}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Component dispatcher ──────────────────────────────────────────────────────
 
-function A2UIComponentRenderer({ component }: { component: A2UIComponent }) {
+function A2UIComponentRenderer({ component, onAction }: { component: A2UIComponent; onAction?: (action: A2UIAction) => void }) {
   switch (component.type) {
     case 'table': return <TableRenderer component={component} />;
     case 'chart': return <ChartRenderer component={component} />;
     case 'kanban': return <KanbanRenderer component={component} />;
     case 'stat': return <StatRenderer component={component} />;
-    case 'form': return <FormRenderer component={component} />;
+    case 'form': return <FormRenderer component={component} onAction={onAction} />;
     case 'markdown': return <MarkdownRenderer component={component} />;
-    case 'list': return <ListRenderer component={component} />;
+    case 'list': return <ListRenderer component={component} onAction={onAction} />;
     case 'progress': return <ProgressRenderer component={component} />;
+    case 'action-card': return <ActionCardRenderer component={component} onAction={onAction} />;
+    case 'todo': return <TodoRenderer component={component} onAction={onAction} />;
+    case 'approval-card': return <ApprovalCardRenderer component={component} onAction={onAction} />;
+    case 'timeline': return <TimelineRenderer component={component} />;
     default:
       return <div className="text-xs text-muted-foreground">Unknown component type</div>;
   }
@@ -312,7 +537,7 @@ function A2UIComponentRenderer({ component }: { component: A2UIComponent }) {
 
 // ── Document renderer ─────────────────────────────────────────────────────────
 
-export function A2UIDocumentRenderer({ doc }: { doc: A2UIDocument }) {
+export function A2UIDocumentRenderer({ doc, onAction }: { doc: A2UIDocument; onAction?: (action: A2UIAction) => void }) {
   return (
     <div className="space-y-6 p-4">
       {doc.title && (
@@ -321,7 +546,7 @@ export function A2UIDocumentRenderer({ doc }: { doc: A2UIDocument }) {
       {doc.components.map((component) => (
         <Card key={component.id}>
           <CardContent className="pt-4">
-            <A2UIComponentRenderer component={component} />
+            <A2UIComponentRenderer component={component} onAction={onAction} />
           </CardContent>
         </Card>
       ))}
