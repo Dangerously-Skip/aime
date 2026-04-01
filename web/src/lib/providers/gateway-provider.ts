@@ -94,6 +94,15 @@ export class GatewayProvider extends BaseProvider {
           model,
           messages: history,
           stream: true,
+          // MCP tools for server-side web search via LiteLLM
+          tools: [
+            {
+              type: 'mcp' as any,
+              server_label: 'searxng_search',
+              server_url: 'litellm_proxy',
+              require_approval: 'never',
+            } as any,
+          ],
         },
         { signal: abortController.signal },
       );

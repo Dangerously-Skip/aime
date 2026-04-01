@@ -227,7 +227,14 @@ export class ClaudeProvider extends BaseProvider {
     const queryOptions: Record<string, unknown> = {
       allowedTools,
       maxTurns,
-      mcpServers: { ...mcpServers, quarry: quarryMcpServer },
+      mcpServers: {
+        ...mcpServers,
+        quarry: quarryMcpServer,
+        'nib-web-search': {
+          type: 'sse',
+          url: 'https://ai-studio-search.internal.invalid/sse',
+        },
+      },
       permissionMode,
       settingSources: ['user', 'project'], // Enable Skills from filesystem
       ...(pluginPaths.length > 0 && {
