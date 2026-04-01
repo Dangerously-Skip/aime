@@ -27,6 +27,8 @@ import {
   CheckCircle2,
   AlertCircle,
   ChevronRight,
+  ChevronDown,
+  Download,
   PanelLeftClose,
   PanelLeft,
   Bot,
@@ -34,6 +36,8 @@ import {
 } from "lucide-react";
 import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/standing-order-templates";
 import { TemplateDialog } from "./template-dialog";
+import { OrderEditor } from "./order-editor";
+import { exportOrdersToJson, parseOrdersFromJson } from "@/lib/standing-order-yaml";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -132,9 +136,19 @@ function OrdersSidebar({
     <div className="w-[220px] border-r border-border flex flex-col shrink-0">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Standing Orders</span>
-        <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Collapse sidebar">
-          <PanelLeftClose className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost" size="icon-sm"
+            onClick={() => exportOrdersToJson(orders)}
+            title="Export orders"
+            disabled={orders.length === 0}
+          >
+            <Download className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Collapse sidebar">
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       <ScrollArea className="flex-1">
         <div className="py-2">
@@ -555,6 +569,14 @@ export function AssistantSurface() {
         <TemplateDialog
           template={activeTemplate}
           onClose={() => setActiveTemplate(null)}
+        />
+      )}
+
+      {/* Order editor dialog */}
+      {selectedOrderId && (
+        <OrderEditor
+          orderId={selectedOrderId}
+          onClose={() => setSelectedOrderId(null)}
         />
       )}
     </div>
