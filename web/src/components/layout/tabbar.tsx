@@ -13,6 +13,7 @@ const SURFACES: { id: Surface; label: string; shortcut: string }[] = [
   { id: "cowork", label: "Cowork", shortcut: "2" },
   { id: "code", label: "Code", shortcut: "3" },
   { id: "browser", label: "Browser", shortcut: "4" },
+  { id: "assistant", label: "Assistant", shortcut: "5" },
 ];
 
 interface TabbarProps {

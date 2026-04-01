@@ -5,12 +5,14 @@ import { ChatSurface } from "@/components/surfaces/chat/chat-surface";
 import { CoworkSurface } from "@/components/surfaces/cowork/cowork-surface";
 import { CodeSurface } from "@/components/surfaces/code/code-surface";
 import { BrowserSurface } from "@/components/surfaces/browser/browser-surface";
+import { AssistantSurface } from "@/components/surfaces/assistant/assistant-surface";
 
 const SURFACE_COMPONENTS: Record<Surface, React.ComponentType> = {
   chat: ChatSurface,
   cowork: CoworkSurface,
   code: CodeSurface,
   browser: BrowserSurface,
+  assistant: AssistantSurface,
 };
 
 /**
