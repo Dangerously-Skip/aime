@@ -11,7 +11,11 @@ export type A2UIComponentType =
   | 'form'
   | 'markdown'
   | 'list'
-  | 'progress';
+  | 'progress'
+  | 'action-card'
+  | 'todo'
+  | 'approval-card'
+  | 'timeline';
 
 // ── Column/Row types ──────────────────────────────────────────────────────────
 
@@ -154,6 +158,75 @@ export interface ProgressComponent {
   }>;
 }
 
+// ── Action Card types ────────────────────────────────────────────────────────
+
+export interface ActionCardAction {
+  actionId: string;
+  label: string;
+  variant?: 'primary' | 'secondary' | 'destructive';
+}
+
+export interface ActionCardComponent {
+  type: 'action-card';
+  id: string;
+  title?: string;
+  subtitle?: string;
+  description?: string;
+  icon?: string;
+  source?: string;
+  timestamp?: number;
+  actions: ActionCardAction[];
+}
+
+// ── Todo types ───────────────────────────────────────────────────────────────
+
+export interface TodoItem {
+  id: string;
+  text: string;
+  done: boolean;
+  priority?: 'low' | 'medium' | 'high';
+  time?: string;
+}
+
+export interface TodoComponent {
+  type: 'todo';
+  id: string;
+  title?: string;
+  date?: string;
+  items: TodoItem[];
+}
+
+// ── Approval Card types ──────────────────────────────────────────────────────
+
+export interface ApprovalCardComponent {
+  type: 'approval-card';
+  id: string;
+  title?: string;
+  description: string;
+  status: 'pending' | 'approved' | 'rejected';
+  metadata?: Record<string, string>;
+}
+
+// ── Timeline types ───────────────────────────────────────────────────────────
+
+export interface TimelineEntry {
+  id: string;
+  timestamp: string;
+  label: string;
+  detail?: string;
+  icon?: string;
+  status?: 'success' | 'error' | 'info' | 'warning';
+}
+
+export interface TimelineComponent {
+  type: 'timeline';
+  id: string;
+  title?: string;
+  entries: TimelineEntry[];
+}
+
+// ── Component union ──────────────────────────────────────────────────────────
+
 export type A2UIComponent =
   | TableComponent
   | ChartComponent
@@ -162,7 +235,11 @@ export type A2UIComponent =
   | FormComponent
   | MarkdownComponent
   | ListComponent
-  | ProgressComponent;
+  | ProgressComponent
+  | ActionCardComponent
+  | TodoComponent
+  | ApprovalCardComponent
+  | TimelineComponent;
 
 // ── Canvas document ───────────────────────────────────────────────────────────
 
@@ -171,3 +248,14 @@ export interface A2UIDocument {
   title?: string;
   components: A2UIComponent[];
 }
+
+// ── Interaction types ─────────────────────────────────────────────────────────
+
+export type A2UIAction =
+  | { type: 'list-toggle'; componentId: string; itemId: string; checked: boolean }
+  | { type: 'form-submit'; componentId: string; values: Record<string, unknown> }
+  | { type: 'button-click'; componentId: string; actionId: string; payload?: Record<string, unknown> }
+  | { type: 'todo-toggle'; componentId: string; itemId: string; done: boolean }
+  | { type: 'todo-add'; componentId: string; text: string }
+  | { type: 'todo-reorder'; componentId: string; itemIds: string[] }
+  | { type: 'approval'; componentId: string; decision: 'approve' | 'reject'; comment?: string };

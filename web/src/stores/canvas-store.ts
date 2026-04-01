@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { A2UIDocument } from '@/lib/a2ui/types';
+import type { A2UIDocument, A2UIComponent } from '@/lib/a2ui/types';
 
 interface CanvasState {
   canvasDoc: A2UIDocument | null;
@@ -17,6 +17,7 @@ interface CanvasActions {
   goForward: () => void;
   setOpen: (surfaceId: string, open: boolean) => void;
   isOpen: (surfaceId: string) => boolean;
+  updateComponent: (componentId: string, updater: (comp: A2UIComponent) => A2UIComponent) => void;
 }
 
 export type CanvasStore = CanvasState & CanvasActions;
@@ -66,4 +67,19 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
     })),
 
   isOpen: (surfaceId) => !!get().openSurfaces[surfaceId],
+
+  updateComponent: (componentId, updater) =>
+    set((state) => {
+      if (!state.canvasDoc) return state;
+      const updatedComponents = state.canvasDoc.components.map((c) =>
+        c.id === componentId ? updater(c) : c
+      );
+      const updatedDoc = { ...state.canvasDoc, components: updatedComponents };
+      // Also update in history
+      const updatedHistory = [...state.history];
+      if (state.historyIndex >= 0) {
+        updatedHistory[state.historyIndex] = updatedDoc;
+      }
+      return { canvasDoc: updatedDoc, history: updatedHistory };
+    }),
 }));
