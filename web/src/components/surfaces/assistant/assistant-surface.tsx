@@ -30,7 +30,9 @@ import {
   PanelLeftClose,
   PanelLeft,
   Bot,
+  Plus,
 } from "lucide-react";
+import { STANDING_ORDER_TEMPLATES } from "@/lib/standing-order-templates";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -49,6 +51,7 @@ function OrdersSidebar({
 }) {
   const pauseOrder = useAssistantStore((s) => s.pauseOrder);
   const resumeOrder = useAssistantStore((s) => s.resumeOrder);
+  const addOrder = useAssistantStore((s) => s.addOrder);
 
   const activeOrders = orders.filter((o) => o.status === 'active');
   const pausedOrders = orders.filter((o) => o.status === 'paused');
@@ -133,11 +136,9 @@ function OrdersSidebar({
       <ScrollArea className="flex-1">
         <div className="py-2">
           {orders.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-              <Clock className="h-6 w-6 mx-auto mb-2 opacity-40" />
-              No standing orders yet.
-              <br />
-              Try: "Remind me every day at 9am to check my emails"
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              <Clock className="h-5 w-5 mx-auto mb-1.5 opacity-40" />
+              No standing orders yet
             </div>
           ) : (
             <>
@@ -146,6 +147,27 @@ function OrdersSidebar({
               {renderOrderGroup('Completed', completedOrders)}
             </>
           )}
+
+          {/* Templates */}
+          <div className="border-t border-border mt-2 pt-2">
+            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-3 mb-1">Quick Start</div>
+            {STANDING_ORDER_TEMPLATES.slice(0, 4).map((tpl) => (
+              <button
+                key={tpl.id}
+                className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors flex items-center gap-2"
+                onClick={() => {
+                  const order = tpl.buildOrder();
+                  addOrder(order);
+                }}
+              >
+                <span>{tpl.icon}</span>
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{tpl.label}</div>
+                  <div className="text-muted-foreground truncate">{tpl.description}</div>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
       </ScrollArea>
     </div>
@@ -269,6 +291,28 @@ export function AssistantSurface() {
 
   // Standing order trigger engine
   useStandingOrders();
+
+  // One-time migration of existing cron jobs to standing orders
+  useEffect(() => {
+    if (!hydrated) return;
+    const migrationKey = 'nibcowork:cron-migrated';
+    if (typeof localStorage !== 'undefined' && !localStorage.getItem(migrationKey)) {
+      try {
+        const cronRaw = localStorage.getItem('nibcowork:cron');
+        if (cronRaw) {
+          const cronData = JSON.parse(cronRaw);
+          const jobs = cronData?.state?.jobs;
+          if (Array.isArray(jobs) && jobs.length > 0) {
+            useAssistantStore.getState().migrateCronJobs(jobs);
+            console.log('[Assistant] Migrated', jobs.length, 'cron jobs to standing orders');
+          }
+        }
+        localStorage.setItem(migrationKey, '1');
+      } catch (e) {
+        console.error('[Assistant] Cron migration error:', e);
+      }
+    }
+  }, [hydrated]);
 
   const handleSubmit = useCallback(async () => {
     if (!inputValue.trim() || isStreaming) return;
