@@ -71,7 +71,7 @@ export function ChatSurface() {
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
   const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
     useAtSuggestions();
-  const addCronJob = useCronStore((s) => s.addJob);
+  // Cron jobs now route to standing orders via useAssistantStore (see cron_create handler)
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const clearCanvas = useCanvasStore((s) => s.clearCanvas);
   const goBackCanvas = useCanvasStore((s) => s.goBack);
