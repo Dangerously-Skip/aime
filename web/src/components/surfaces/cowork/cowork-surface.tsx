@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useAssistantStore } from "@/stores/assistant-store";
 import { MessageList } from "@/components/shared/message-list";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { FolderPicker } from "@/components/shared/folder-picker";
@@ -800,15 +801,18 @@ export function CoworkSurface() {
           break;
         }
         case "cron_create": {
-          // Agent created a cron job — add to cron-store so UI reflects it
+          // Route cron jobs to the standing order engine in the Assistant surface
           try {
             const input = event.input as Record<string, unknown>;
             const expression = (input.cron || input.expression) as string;
             const prompt = (input.prompt || input.message || input.task) as string;
-            const surfaceId = (input.surfaceId || input.surface || 'cowork') as string;
             if (expression && prompt) {
-              useCronStore.getState().addJob({ expression, prompt, surfaceId, enabled: true });
-              console.log('[Cowork] Cron job added:', expression, prompt);
+              useAssistantStore.getState().addOrder({
+                instruction: prompt,
+                trigger: { type: 'cron', expression },
+                notifyVia: 'toast',
+              });
+              console.log('[Cowork] Standing order created from CronCreate:', expression, prompt);
             }
           } catch (e) {
             console.error('[Cowork] CronCreate parse error:', e);

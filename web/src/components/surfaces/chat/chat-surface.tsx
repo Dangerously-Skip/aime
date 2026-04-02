@@ -35,7 +35,7 @@ import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-sugg
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasPanel } from "@/components/shared/canvas-panel";
 import type { A2UIDocument } from "@/lib/a2ui/types";
-import { useCronStore } from "@/stores/cron-store";
+import { useAssistantStore } from "@/stores/assistant-store";
 
 function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
   switch (category) {
@@ -226,9 +226,12 @@ export function ChatSurface() {
             const input = event.input as Record<string, unknown>;
             const expression = (input.cron || input.expression) as string;
             const prompt = (input.prompt || input.message || input.task) as string;
-            const surfaceId = (input.surfaceId || input.surface || 'cowork') as string;
             if (expression && prompt) {
-              addCronJob({ expression, prompt, surfaceId, enabled: true });
+              useAssistantStore.getState().addOrder({
+                instruction: prompt,
+                trigger: { type: 'cron', expression },
+                notifyVia: 'toast',
+              });
             }
           } catch (e) {
             console.error('[Chat] CronCreate parse error:', e);
