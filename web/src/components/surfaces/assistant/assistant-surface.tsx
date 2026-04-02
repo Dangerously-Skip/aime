@@ -190,26 +190,12 @@ function OrdersSidebar({
 
 // ── Auto-wrap text into A2UI markdown doc ────────────────────────────────────
 
-function textToA2UIDoc(title: string, text: string): import('@/lib/a2ui/types').A2UIDocument {
-  // Check if text contains a question (needs reply)
-  const hasQuestion = /\?[\s]*$/.test(text.trim()) || /would you|could you|do you|what|when|how|which/i.test(text);
-
+function textToA2UIDoc(text: string): import('@/lib/a2ui/types').A2UIDocument {
   const components: import('@/lib/a2ui/types').A2UIComponent[] = [
     { type: 'markdown', id: `md-${Date.now()}`, content: text },
   ];
 
-  if (hasQuestion) {
-    components.push({
-      type: 'action-card',
-      id: `reply-${Date.now()}`,
-      actions: [
-        { actionId: 'reply', label: 'Reply', variant: 'primary' },
-        { actionId: 'dismiss', label: 'Dismiss', variant: 'secondary' },
-      ],
-    });
-  }
-
-  return { version: '1', title, components };
+  return { version: '1', components };
 }
 
 // ── Single Card Widget ───────────────────────────────────────────────────────
@@ -233,70 +219,78 @@ function CardWidget({
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState('');
 
-  const doc = card.doc || (card.summary ? textToA2UIDoc(card.title, card.summary) : null);
-  const isLong = (card.summary?.length || 0) > 200;
-
-  const handleAction = (action: A2UIAction) => {
-    if (action.type === 'button-click' && action.actionId === 'reply') {
-      setReplyOpen(true);
-      return;
-    }
-    if (action.type === 'button-click' && action.actionId === 'dismiss') {
-      dismissCard(card.id);
-      return;
-    }
-    onAction?.(action);
-  };
+  const doc = card.doc || (card.summary ? textToA2UIDoc(card.summary) : null);
+  const isLong = (card.summary?.length || 0) > 300;
+  const hasQuestion = card.summary && (/\?[\s]*$/.test(card.summary.trim()) || /would you|could you|do you|what|when|how|which/i.test(card.summary));
 
   return (
-    <div className={`rounded-xl border bg-card shadow-sm hover:shadow-md transition-all overflow-hidden ${
-      card.unread ? 'border-l-2 border-l-primary' : 'border-border/60'
-    }`}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2.5">
-        <div className="flex items-center gap-2 min-w-0 cursor-pointer" onClick={onToggleExpand}>
-          <span className="text-[13px] font-semibold truncate text-foreground">{card.title}</span>
-          {card.pinned && <Pin className="h-3 w-3 text-primary shrink-0" />}
-        </div>
-        <div className="flex items-center gap-0.5 shrink-0">
-          <span className="text-[11px] text-muted-foreground tabular-nums mr-1">
+    <div className="rounded-xl border border-border/50 bg-card shadow-sm hover:shadow-md transition-all overflow-hidden">
+      {/* Header — clean, no colored strips */}
+      <div className="flex items-start justify-between px-5 pt-4 pb-1">
+        <div className="flex-1 min-w-0 pr-2">
+          <p className="text-sm font-semibold text-foreground leading-snug">{card.title}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
             {new Date(card.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </span>
-          <Button variant="ghost" size="icon-sm" onClick={() => setReplyOpen(!replyOpen)} title="Reply">
-            <ArrowUp className="h-3 w-3 rotate-180" />
-          </Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => card.pinned ? unpinCard(card.id) : pinCard(card.id)} title={card.pinned ? "Unpin" : "Pin"}>
-            {card.pinned ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
-          </Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => dismissCard(card.id)} title="Dismiss">
-            <X className="h-3 w-3" />
-          </Button>
+            {card.pinned && ' · Pinned'}
+            {card.unread && <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary ml-1.5 align-middle" />}
+          </p>
         </div>
+        <Button variant="ghost" size="icon-sm" onClick={() => dismissCard(card.id)} className="shrink-0 -mt-1 -mr-2 opacity-0 group-hover:opacity-100 hover:opacity-100" title="Dismiss">
+          <X className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
-      {/* Body — collapsible for long content */}
-      <div className={`${!expanded && isLong ? 'max-h-[150px] overflow-hidden relative' : ''}`}>
+      {/* Body — collapsible */}
+      <div className={`${!expanded && isLong ? 'max-h-[180px] overflow-hidden relative' : ''}`}>
         {doc ? (
-          <A2UIDocumentRenderer doc={doc} onAction={handleAction} />
+          <A2UIDocumentRenderer doc={doc} onAction={onAction} />
         ) : null}
         {!expanded && isLong && (
-          <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-card to-transparent" />
+          <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-card to-transparent" />
         )}
       </div>
 
-      {/* Expand toggle for long content */}
-      {isLong && (
-        <button
-          className="w-full text-xs text-muted-foreground hover:text-foreground py-1.5 border-t border-border/30 transition-colors"
-          onClick={onToggleExpand}
-        >
-          {expanded ? 'Show less' : 'Show more'}
-        </button>
-      )}
+      {/* Footer actions */}
+      <div className="flex items-center justify-between px-5 pb-3 pt-1">
+        <div className="flex gap-1.5">
+          {hasQuestion && (
+            <button
+              onClick={() => setReplyOpen(!replyOpen)}
+              className="text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+            >
+              Reply
+            </button>
+          )}
+          {isLong && (
+            <button
+              onClick={onToggleExpand}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {expanded ? 'Show less' : 'Show more'}
+            </button>
+          )}
+        </div>
+        <div className="flex gap-1">
+          <button
+            onClick={() => card.pinned ? unpinCard(card.id) : pinCard(card.id)}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            title={card.pinned ? "Unpin" : "Pin"}
+          >
+            {card.pinned ? 'Unpin' : 'Pin'}
+          </button>
+          <span className="text-muted-foreground/30">·</span>
+          <button
+            onClick={() => dismissCard(card.id)}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
 
       {/* Inline reply */}
       {replyOpen && (
-        <div className="px-4 py-3 border-t border-border/30 bg-muted/20">
+        <div className="px-5 py-3 border-t border-border/30 bg-muted/10">
           <div className="flex gap-2">
             <input
               type="text"
@@ -368,30 +362,9 @@ function CardFeed({
     });
   };
 
-  // Bento layout: if 2+ short cards, arrange in grid; long cards get full width
-  const shortCards = sortedCards.filter((c) => (c.summary?.length || 0) <= 200 && !c.doc);
-  const longCards = sortedCards.filter((c) => (c.summary?.length || 0) > 200 || !!c.doc);
-
   return (
-    <div className="space-y-4">
-      {/* Short cards in bento grid */}
-      {shortCards.length > 0 && (
-        <div className={`grid gap-3 ${shortCards.length === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
-          {shortCards.map((card) => (
-            <CardWidget
-              key={card.id}
-              card={card}
-              onAction={onAction}
-              onReply={onReply}
-              expanded={expandedCards.has(card.id)}
-              onToggleExpand={() => toggleExpand(card.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Long cards full width */}
-      {longCards.map((card) => (
+    <div className="space-y-3">
+      {sortedCards.map((card) => (
         <CardWidget
           key={card.id}
           card={card}
