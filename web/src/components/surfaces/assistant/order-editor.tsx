@@ -23,7 +23,7 @@ export function OrderEditor({ orderId, onClose }: OrderEditorProps) {
   const resumeOrder = useAssistantStore((s) => s.resumeOrder);
   const completeOrder = useAssistantStore((s) => s.completeOrder);
   const removeOrder = useAssistantStore((s) => s.removeOrder);
-  const activity = useAssistantStore((s) => s.getActivityForOrder(orderId));
+  const activity = useAssistantStore((s) => s.activity.filter((a) => a.orderId === orderId));
 
   const [tier, setTier] = useState<Tier>('summary');
   const [jsonText, setJsonText] = useState('');
