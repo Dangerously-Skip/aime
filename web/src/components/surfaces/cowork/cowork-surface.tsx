@@ -670,7 +670,7 @@ export function CoworkSurface() {
                 if (expression && cronPrompt) {
                   const existing = useCronStore.getState().jobs;
                   if (!existing.some((j) => j.expression === expression && j.prompt === cronPrompt)) {
-                    useCronStore.getState().addJob({ expression, prompt: cronPrompt, surfaceId: "cowork", enabled: true });
+                    useAssistantStore.getState().addOrder({ instruction: cronPrompt, trigger: { type: 'cron', expression }, notifyVia: 'toast' });
                     console.log("[Cowork] Cron job scheduled from Bash command:", expression, cronPrompt);
                   }
                 }
@@ -743,7 +743,7 @@ export function CoworkSurface() {
                   if (expression && cronPrompt) {
                     const existing = useCronStore.getState().jobs;
                     if (!existing.some((j) => j.expression === expression && j.prompt === cronPrompt)) {
-                      useCronStore.getState().addJob({ expression, prompt: cronPrompt, surfaceId: "cowork", enabled: true });
+                      useAssistantStore.getState().addOrder({ instruction: cronPrompt, trigger: { type: 'cron', expression }, notifyVia: 'toast' });
                       console.log("[Cowork] Cron job scheduled from Bash output:", expression, cronPrompt);
                     }
                   }
