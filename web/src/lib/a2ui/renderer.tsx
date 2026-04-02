@@ -25,6 +25,8 @@ import type {
   TimelineComponent,
 } from './types';
 import { Badge } from '@/components/ui/badge';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // ── Shared primitives ────────────────────────────────────────────────────────
 
@@ -328,8 +330,8 @@ function MarkdownRenderer({ component }: { component: MarkdownComponent }) {
     <div>
       <CardHeader title={component.title} />
       <CardBody>
-        <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed whitespace-pre-wrap text-foreground">
-          {component.content}
+        <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{component.content}</ReactMarkdown>
         </div>
       </CardBody>
     </div>
