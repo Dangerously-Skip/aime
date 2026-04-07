@@ -394,7 +394,7 @@ export class ClaudeProvider extends BaseProvider {
           const res = await fetch('http://localhost:3000/api/subagent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ parentChatId: chatId, task, surfaceId: subSurfaceId, model: subModel, cwd }),
+            body: JSON.stringify({ parentChatId: chatId, task, surfaceId: subSurfaceId, model: subModel, cwd, apiKey: apiKey || undefined }),
           });
           const data = await res.json() as { ok?: boolean; output?: string; error?: string };
           const subOutput = data.ok ? (data.output ?? '') : `Sub-agent error: ${data.error}`;

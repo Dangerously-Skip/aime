@@ -50,6 +50,7 @@ export async function POST(
       message,
       chatId,
       userId: 'webhook',
+      apiKey: process.env.ANTHROPIC_API_KEY || undefined,
       ...(config.systemPrompt ? { projectInstructions: config.systemPrompt } : {}),
     }),
   }).catch((err) => console.error('[Webhook] Agent run failed:', err));

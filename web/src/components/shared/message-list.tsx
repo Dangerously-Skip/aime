@@ -37,6 +37,7 @@ interface Message {
   questionData?: unknown;
   questionToolUseId?: string;
   questionAnswered?: boolean;
+  isAutoContinue?: boolean;
 }
 
 interface MessageListProps {
@@ -124,6 +125,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             content={msg.content}
             timestamp={msg.timestamp}
             attachments={msg.attachments}
+            isAutoContinue={msg.isAutoContinue}
           />
         ) : msg.role === "assistant" ? (
           <AssistantMessage
