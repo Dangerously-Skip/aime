@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAssistantStore, type StandingOrder } from "@/stores/assistant-store";
@@ -23,14 +23,15 @@ export function OrderEditor({ orderId, onClose }: OrderEditorProps) {
   const resumeOrder = useAssistantStore((s) => s.resumeOrder);
   const completeOrder = useAssistantStore((s) => s.completeOrder);
   const removeOrder = useAssistantStore((s) => s.removeOrder);
-  const activity = useAssistantStore((s) => s.activity.filter((a) => a.orderId === orderId));
+  const allActivity = useAssistantStore((s) => s.activity);
+  const activity = useMemo(() => allActivity.filter((a) => a.orderId === orderId), [allActivity, orderId]);
 
   const [tier, setTier] = useState<Tier>('summary');
   const [jsonText, setJsonText] = useState('');
 
   // Form state (Tier 2)
   const [instruction, setInstruction] = useState(order?.instruction || '');
-  const [triggerType, setTriggerType] = useState(order?.trigger.type || 'interval');
+  const [triggerType, setTriggerType] = useState<'cron' | 'interval' | 'event'>(order?.trigger.type || 'interval');
   const [expression, setExpression] = useState(order?.trigger.expression || '');
   const [condition, setCondition] = useState(order?.condition || '');
   const [completionCondition, setCompletionCondition] = useState(order?.completionCondition || '');
@@ -184,7 +185,7 @@ export function OrderEditor({ orderId, onClose }: OrderEditorProps) {
                   <label className="text-xs font-medium text-muted-foreground block mb-1">Trigger type</label>
                   <select
                     value={triggerType}
-                    onChange={(e) => setTriggerType(e.target.value)}
+                    onChange={(e) => setTriggerType(e.target.value as 'cron' | 'interval' | 'event')}
                     className="w-full text-sm rounded-md border border-border bg-background px-3 py-2 focus:outline-none"
                   >
                     <option value="cron">Cron</option>
