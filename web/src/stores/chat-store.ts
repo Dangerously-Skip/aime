@@ -36,6 +36,8 @@ export interface Message {
   questionToolUseId?: string;
   /** Whether the user has already answered this question */
   questionAnswered?: boolean;
+  /** Auto-continue message injected by the system, not typed by the user */
+  isAutoContinue?: boolean;
 }
 
 /** Clean stale streaming/loading flags from persisted messages (no active stream on rehydration). */

@@ -901,6 +901,7 @@ export function CoworkSurface() {
               cwd: folder || projectFolder || scratchDir || undefined,
               history: hist.length > 0 ? hist : undefined,
               sessionControls: currentControls,
+              apiKey: nibGatewayApiKey || undefined,
             });
           }, 1500);
           return; // skip "task complete" notification
