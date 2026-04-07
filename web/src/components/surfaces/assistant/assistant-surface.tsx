@@ -13,6 +13,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
 import type { A2UIAction } from "@/lib/a2ui/types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
   Square,
@@ -58,6 +60,7 @@ function OrdersSidebar({
 }) {
   const pauseOrder = useAssistantStore((s) => s.pauseOrder);
   const resumeOrder = useAssistantStore((s) => s.resumeOrder);
+  const removeOrder = useAssistantStore((s) => s.removeOrder);
   const addOrder = useAssistantStore((s) => s.addOrder);
 
   const activeOrders = orders.filter((o) => o.status === 'active');
@@ -108,24 +111,30 @@ function OrdersSidebar({
               <div className="truncate text-xs">{order.instruction.slice(0, 50)}</div>
               <div className="text-xs text-muted-foreground truncate">{triggerLabel(order)}</div>
             </div>
-            {order.status === 'active' && (
+            <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+              {order.status === 'active' && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); pauseOrder(order.id); }}
+                  title="Pause"
+                >
+                  <Pause className="h-3 w-3 text-muted-foreground hover:text-yellow-500" />
+                </button>
+              )}
+              {order.status === 'paused' && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); resumeOrder(order.id); }}
+                  title="Resume"
+                >
+                  <Play className="h-3 w-3 text-muted-foreground hover:text-green-500" />
+                </button>
+              )}
               <button
-                className="hidden group-hover:block shrink-0"
-                onClick={(e) => { e.stopPropagation(); pauseOrder(order.id); }}
-                title="Pause"
+                onClick={(e) => { e.stopPropagation(); removeOrder(order.id); }}
+                title="Delete"
               >
-                <Pause className="h-3 w-3 text-muted-foreground hover:text-yellow-500" />
+                <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
               </button>
-            )}
-            {order.status === 'paused' && (
-              <button
-                className="hidden group-hover:block shrink-0"
-                onClick={(e) => { e.stopPropagation(); resumeOrder(order.id); }}
-                title="Resume"
-              >
-                <Play className="h-3 w-3 text-muted-foreground hover:text-green-500" />
-              </button>
-            )}
+            </div>
           </button>
         ))}
       </div>
@@ -188,16 +197,6 @@ function OrdersSidebar({
   );
 }
 
-// ── Auto-wrap text into A2UI markdown doc ────────────────────────────────────
-
-function textToA2UIDoc(text: string): import('@/lib/a2ui/types').A2UIDocument {
-  const components: import('@/lib/a2ui/types').A2UIComponent[] = [
-    { type: 'markdown', id: `md-${Date.now()}`, content: text },
-  ];
-
-  return { version: '1', components };
-}
-
 // ── Single Card Widget ───────────────────────────────────────────────────────
 
 function CardWidget({
@@ -219,7 +218,7 @@ function CardWidget({
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState('');
 
-  const doc = card.doc || (card.summary ? textToA2UIDoc(card.summary) : null);
+  const hasA2UIDoc = !!card.doc;
   const isLong = (card.summary?.length || 0) > 300;
   const hasQuestion = card.summary && (/\?[\s]*$/.test(card.summary.trim()) || /would you|could you|do you|what|when|how|which/i.test(card.summary));
 
@@ -242,8 +241,12 @@ function CardWidget({
 
       {/* Body — collapsible */}
       <div className={`${!expanded && isLong ? 'max-h-[180px] overflow-hidden relative' : ''}`}>
-        {doc ? (
-          <A2UIDocumentRenderer doc={doc} onAction={onAction} />
+        {hasA2UIDoc ? (
+          <A2UIDocumentRenderer doc={card.doc!} onAction={onAction} />
+        ) : card.summary ? (
+          <div className="px-5 pb-3 prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{card.summary}</ReactMarkdown>
+          </div>
         ) : null}
         {!expanded && isLong && (
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-card to-transparent" />
@@ -362,18 +365,28 @@ function CardFeed({
     });
   };
 
+  // Split into two columns for bento layout
+  const col1: AssistantCard[] = [];
+  const col2: AssistantCard[] = [];
+  sortedCards.forEach((card, i) => {
+    if (i % 2 === 0) col1.push(card); else col2.push(card);
+  });
+
+  const renderCard = (card: AssistantCard) => (
+    <CardWidget
+      key={card.id}
+      card={card}
+      onAction={onAction}
+      onReply={onReply}
+      expanded={expandedCards.has(card.id)}
+      onToggleExpand={() => toggleExpand(card.id)}
+    />
+  );
+
   return (
-    <div className="space-y-3">
-      {sortedCards.map((card) => (
-        <CardWidget
-          key={card.id}
-          card={card}
-          onAction={onAction}
-          onReply={onReply}
-          expanded={expandedCards.has(card.id)}
-          onToggleExpand={() => toggleExpand(card.id)}
-        />
-      ))}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="space-y-3">{col1.map(renderCard)}</div>
+      <div className="space-y-3">{col2.map(renderCard)}</div>
     </div>
   );
 }
@@ -408,6 +421,7 @@ export function AssistantSurface() {
   const orders = useAssistantStore((s) => s.orders);
   const cards = useAssistantStore((s) => s.cards);
   const addCard = useAssistantStore((s) => s.addCard);
+  const addOrder = useAssistantStore((s) => s.addOrder);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
 
   // Hydrate store on mount
@@ -604,7 +618,7 @@ export function AssistantSurface() {
       />
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Input area */}
         <div className="px-4 py-3 border-b border-border">
           <div className="max-w-3xl mx-auto">
@@ -633,8 +647,8 @@ export function AssistantSurface() {
         </div>
 
         {/* Card feed */}
-        <ScrollArea className="flex-1">
-          <div className="max-w-3xl mx-auto px-4 py-4">
+        <ScrollArea className="flex-1 h-0">
+          <div className="max-w-5xl mx-auto px-4 py-4">
             {cards.length === 0 && orders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Bot className="h-12 w-12 mb-4 opacity-30" />
