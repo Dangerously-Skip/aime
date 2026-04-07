@@ -1,19 +1,26 @@
 env:
   AWS_REGION: ap-southeast-2
   APPLICATION: quarry
+  RQP_APPLICATION: quarry
+  RQP_APPLICATION_VERSION: "1.0.${BUILDKITE_BUILD_NUMBER}-${BUILDKITE_BRANCH}"
+  SLICE: $BUILDKITE_BRANCH
   LINE_OF_BUSINESS: etdp
+  VERSION: "1.0.${BUILDKITE_BUILD_NUMBER}"
+  SAMOA_IMAGE: 441581275790.dkr.ecr.ap-southeast-2.amazonaws.com/samoa:2
   ZONE: secure
   ITBU: dai
 
 steps:
-  - label: ':github: Download release from GitHub'
+  - label: ':github: Download release + bundle'
     commands:
       - |
         TAG="$${BUILDKITE_MESSAGE:-latest}"
         echo "--- Downloading release: $$TAG"
-        mkdir -p release-artifacts
+        mkdir -p content
 
-        # GitHub API for private repo — use GITHUB_TOKEN if available
+        # Copy landing page
+        cp infrastructure/releases/html/index.html content/
+
         AUTH_HEADER=""
         if [ -n "$$GITHUB_TOKEN" ]; then
           AUTH_HEADER="Authorization: token $$GITHUB_TOKEN"
@@ -28,52 +35,57 @@ steps:
         echo "Fetching release metadata from $$RELEASE_URL"
         RELEASE_JSON=$$(curl -sL -H "$$AUTH_HEADER" "$$RELEASE_URL")
 
-        # Debug: show if we got a valid response
         echo "$$RELEASE_JSON" | python3 -c "
-        import json, sys
+        import json, sys, urllib.request
         data = json.load(sys.stdin)
         if 'message' in data:
             print('API error:', data['message'])
             sys.exit(1)
         assets = data.get('assets', [])
-        print(f'Found {len(assets)} total assets')
-        matched = [(a['browser_download_url'], a['name']) for a in assets if a['name'].endswith(('.yml', '.zip', '.dmg', '.exe'))]
-        print(f'Matched {len(matched)} downloadable assets')
+        matched = [(a['browser_download_url'], a['name']) for a in assets
+                   if a['name'].endswith(('.yml', '.zip', '.dmg', '.exe'))]
+        print(f'Found {len(matched)} release assets')
         for url, name in matched:
-            print(f'  {name}')
-        if not matched:
-            sys.exit(1)
-        for url, name in matched:
-            with open(f'release-artifacts/{name}', 'wb') as f:
-                import urllib.request
-                print(f'Downloading {name}...')
-                urllib.request.urlretrieve(url, f'release-artifacts/{name}')
+            print(f'  Downloading {name}...')
+            urllib.request.urlretrieve(url, f'content/{name}')
         "
 
-        echo "--- Downloaded artifacts:"
-        ls -la release-artifacts/
+        echo "--- Content directory:"
+        ls -la content/
+
+        cd content && zip -r ../content.zip . && cd ..
+        echo "--- content.zip created ($(du -h content.zip | cut -f1))"
     agents:
       queue: elastic
     artifact_paths:
-      - 'release-artifacts/*'
+      - 'content.zip'
+
+  - label: ':hammer: Run samoa'
+    commands:
+      - 'docker pull "$$SAMOA_IMAGE"'
+      - 'docker run --rm --tty --volume "$$PWD":/app --volume "$$HOME":/root "$$SAMOA_IMAGE"'
+    plugins:
+      - ssh://git@github.com/redacted-org/image-pull-buildkite-plugin.git#v1.1.0
+    env:
+      IMAGE_REGISTRY: ecr
+    agents:
+      queue: elastic
+    artifact_paths:
+      - samoa_deploy.sh
+      - samoa_template.yaml
 
   - wait
 
-  - label: ':s3: Upload to nib-shared-artifacts'
+  - label: ':shipit: Deploy to KAOS'
     commands:
-      - |
-        buildkite-agent artifact download "release-artifacts/*" .
-
-        echo "Uploading to s3://nib-kaos-secure-web-ap-southeast-2/quarry-releases/"
-        aws s3 sync release-artifacts/ s3://nib-kaos-secure-web-ap-southeast-2/quarry-releases/ \
-          --exclude "*.blockmap" \
-          --size-only
-
-        echo "--- Bucket contents:"
-        aws s3 ls s3://nib-kaos-secure-web-ap-southeast-2/quarry-releases/
-    plugins:
-      - ssh://git@github.com/redacted-org/assume-deployer-role-buildkite-plugin.git#v1.0.0:
-          stage: kaos
-          zone: secure
+      - 'buildkite-agent artifact download "samoa_*" .'
+      - 'chmod a+x samoa_deploy.sh'
+      - 'buildkite-agent artifact download "content.zip" .'
+      - './samoa_deploy.sh samoa_template.yaml'
     agents:
       queue: elastic
+    env:
+      STAGE: kaos
+      PublicRootDomain: internal.invalid
+    concurrency: 1
+    concurrency_group: ${BUILDKITE_PIPELINE_SLUG}/deploy/${BUILDKITE_BRANCH}/kaos-secure

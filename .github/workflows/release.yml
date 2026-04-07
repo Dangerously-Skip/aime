@@ -128,14 +128,16 @@ jobs:
 
             Existing installs will auto-update when connected to VPN.
 
-      - name: Sync to internal S3 releases bucket
+      - name: Trigger Buildkite promote-release
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_PROMOTE_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_PROMOTE_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ap-southeast-2
+          BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
         run: |
-          aws s3 sync artifacts/ s3://nib-kaos-secure-web-ap-southeast-2/quarry-releases/ \
-            --exclude "*.blockmap" \
-            --exclude "builder-debug.yml" \
-            --size-only
-        continue-on-error: true
+          curl -s -X POST "https://api.buildkite.com/v2/organizations/nib-health-funds-ltd/pipelines/quarry-promote-release/builds" \
+            -H "Authorization: Bearer ${BUILDKITE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "commit": "HEAD",
+              "branch": "master",
+              "message": "Promote release ${{ github.ref_name }}"
+            }'
+          echo "Buildkite promote-release triggered for ${{ github.ref_name }}"

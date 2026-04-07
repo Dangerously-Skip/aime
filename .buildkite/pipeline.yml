@@ -11,18 +11,57 @@ env:
   ITBU: dai
 
 steps:
-  # Build and push the nginx releases image to ECR
-  - label: ':docker: Build releases image'
-    command: 'docker build -t quarry infrastructure/releases/'
-    plugins:
-      - ssh://git@github.com/redacted-org/image-pull-buildkite-plugin.git#v1.1.0
-      - ssh://git@github.com/redacted-org/image-publish-buildkite-plugin.git#v4.3.0: {}
-    env:
-      IMAGE_REGISTRY: ecr
+  # Download release artifacts from GitHub and bundle with landing page
+  - label: ':package: Bundle release content'
+    commands:
+      - |
+        TAG="$${BUILDKITE_TAG:-latest}"
+        echo "--- Fetching release: $$TAG"
+        mkdir -p content
+
+        # Copy landing page
+        cp infrastructure/releases/html/index.html content/
+
+        # Download release artifacts from GitHub
+        AUTH_HEADER=""
+        if [ -n "$$GITHUB_TOKEN" ]; then
+          AUTH_HEADER="Authorization: token $$GITHUB_TOKEN"
+        fi
+
+        if [ "$$TAG" = "latest" ]; then
+          RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/latest"
+        else
+          RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/tags/$$TAG"
+        fi
+
+        echo "Fetching release metadata from $$RELEASE_URL"
+        RELEASE_JSON=$$(curl -sL -H "$$AUTH_HEADER" "$$RELEASE_URL")
+
+        echo "$$RELEASE_JSON" | python3 -c "
+        import json, sys, urllib.request
+        data = json.load(sys.stdin)
+        if 'message' in data:
+            print('API error:', data['message'])
+            sys.exit(1)
+        assets = data.get('assets', [])
+        matched = [(a['browser_download_url'], a['name']) for a in assets
+                   if a['name'].endswith(('.yml', '.zip', '.dmg', '.exe'))]
+        print(f'Found {len(matched)} release assets')
+        for url, name in matched:
+            print(f'  Downloading {name}...')
+            urllib.request.urlretrieve(url, f'content/{name}')
+        "
+
+        echo "--- Content directory:"
+        ls -la content/
+
+        # Create content.zip for SAMOA
+        cd content && zip -r ../content.zip . && cd ..
+        echo "--- content.zip created ($(du -h content.zip | cut -f1))"
     agents:
       queue: elastic
-
-  - wait
+    artifact_paths:
+      - 'content.zip'
 
   # Run SAMOA to generate deployment scripts
   - label: ':hammer: Run samoa'
@@ -41,16 +80,18 @@ steps:
 
   - wait
 
-  # Deploy Fargate service to KAOS
-  - label: ':shipit: Deploy releases service to KAOS'
+  # Deploy static site to KAOS
+  - label: ':shipit: Deploy to KAOS'
     commands:
       - 'buildkite-agent artifact download "samoa_*" .'
-      - 'chmod +x samoa_deploy.sh'
+      - 'chmod a+x samoa_deploy.sh'
+      - 'buildkite-agent artifact download "content.zip" .'
       - './samoa_deploy.sh samoa_template.yaml'
     agents:
       queue: elastic
     env:
       STAGE: kaos
+      PublicRootDomain: internal.invalid
     concurrency: 1
     concurrency_group: ${BUILDKITE_PIPELINE_SLUG}/deploy/${BUILDKITE_BRANCH}/kaos-secure
 
