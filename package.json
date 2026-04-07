@@ -1,6 +1,6 @@
 {
   "name": "open-claude-cowork",
-  "version": "1.0.0",
+  "version": "1.0.21",
   "main": "main-new.js",
   "scripts": {
     "dev": "NODE_ENV=development electron .",
