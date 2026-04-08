@@ -14,7 +14,7 @@ steps:
   - label: ':github: Download release + bundle'
     commands:
       - |
-        TAG="$${BUILDKITE_MESSAGE:-latest}"
+        TAG="$${RELEASE_TAG:-$${BUILDKITE_TAG:-latest}}"
         echo "--- Downloading release: $$TAG"
         mkdir -p content
 

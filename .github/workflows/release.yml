@@ -138,6 +138,7 @@ jobs:
             -d '{
               "commit": "HEAD",
               "branch": "master",
-              "message": "Promote release ${{ github.ref_name }}"
+              "message": "Promote release ${{ github.ref_name }}",
+              "env": {"RELEASE_TAG": "${{ github.ref_name }}"}
             }'
           echo "Buildkite promote-release triggered for ${{ github.ref_name }}"
