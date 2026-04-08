@@ -11,19 +11,58 @@ env:
   ITBU: dai
 
 steps:
-  - label: ':s3: Bundle release from S3 staging'
+  - label: ':github: Download release + bundle'
     commands:
       - |
-        echo "--- Downloading release artifacts from S3 staging"
+        TAG="$${RELEASE_TAG:-$${BUILDKITE_TAG:-latest}}"
+        echo "--- Downloading release: $$TAG"
         mkdir -p content
 
         # Copy landing page from repo
         cp infrastructure/releases/html/index.html content/
 
-        # Download release artifacts staged by GitHub Actions
-        aws s3 sync s3://nib-kaos-secure-web-ap-southeast-2/quarry-staging/ content/ \
-          --exclude "*.blockmap" \
-          --exclude "builder-debug.yml"
+        # Download release artifacts from GitHub
+        # GITHUB_TOKEN is set as a pipeline environment variable in Buildkite
+        AUTH_HEADER=""
+        if [ -n "$$GITHUB_TOKEN" ]; then
+          AUTH_HEADER="Authorization: token $$GITHUB_TOKEN"
+        fi
+
+        if [ "$$TAG" = "latest" ]; then
+          RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/latest"
+        else
+          RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/tags/$$TAG"
+        fi
+
+        echo "Fetching release metadata from $$RELEASE_URL"
+        RELEASE_JSON=$$(curl -sL -H "$$AUTH_HEADER" "$$RELEASE_URL")
+
+        echo "$$RELEASE_JSON" | python3 -c "
+        import json, sys, urllib.request
+        data = json.load(sys.stdin)
+        if 'message' in data:
+            print('API error:', data['message'])
+            sys.exit(1)
+        assets = data.get('assets', [])
+        matched = [(a['url'], a['name']) for a in assets
+                   if a['name'].endswith(('.yml', '.zip', '.dmg', '.exe'))
+                   and a['name'] != 'builder-debug.yml']
+        print(f'Found {len(matched)} release assets')
+        import os
+        token = os.environ.get('GITHUB_TOKEN', '')
+        for url, name in matched:
+            print(f'  Downloading {name}...')
+            req = urllib.request.Request(url)
+            req.add_header('Accept', 'application/octet-stream')
+            if token:
+                req.add_header('Authorization', f'token {token}')
+            with urllib.request.urlopen(req) as resp, open(f'content/{name}', 'wb') as f:
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        "
 
         echo "--- Content directory:"
         ls -la content/
@@ -31,10 +70,6 @@ steps:
         # Create content.zip for SAMOA
         cd content && zip -r ../content.zip . && cd ..
         echo "--- content.zip created ($$(du -h content.zip | cut -f1))"
-    plugins:
-      - ssh://git@github.com/redacted-org/assume-deployer-role-buildkite-plugin.git#v1.0.0:
-          stage: kaos
-          zone: secure
     agents:
       queue: elastic
     artifact_paths:

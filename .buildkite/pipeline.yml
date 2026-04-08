@@ -11,36 +11,6 @@ env:
   ITBU: dai
 
 steps:
-  # Bundle release artifacts from S3 staging with landing page
-  - label: ':package: Bundle release content'
-    commands:
-      - |
-        echo "--- Downloading release artifacts from S3 staging"
-        mkdir -p content
-
-        # Copy landing page from repo
-        cp infrastructure/releases/html/index.html content/
-
-        # Download release artifacts staged by GitHub Actions
-        aws s3 sync s3://nib-kaos-secure-web-ap-southeast-2/quarry-staging/ content/ \
-          --exclude "*.blockmap" \
-          --exclude "builder-debug.yml"
-
-        echo "--- Content directory:"
-        ls -la content/
-
-        # Create content.zip for SAMOA
-        cd content && zip -r ../content.zip . && cd ..
-        echo "--- content.zip created ($$(du -h content.zip | cut -f1))"
-    plugins:
-      - ssh://git@github.com/redacted-org/assume-deployer-role-buildkite-plugin.git#v1.0.0:
-          stage: kaos
-          zone: secure
-    agents:
-      queue: elastic
-    artifact_paths:
-      - 'content.zip'
-
   # Run SAMOA to generate deployment scripts
   - label: ':hammer: Run samoa'
     commands:
@@ -58,12 +28,11 @@ steps:
 
   - wait
 
-  # Deploy static site to KAOS
+  # Deploy static site to KAOS (uses promote-release pipeline for full deploys)
   - label: ':shipit: Deploy to KAOS'
     commands:
       - 'buildkite-agent artifact download "samoa_*" .'
       - 'chmod a+x samoa_deploy.sh'
-      - 'buildkite-agent artifact download "content.zip" .'
       - './samoa_deploy.sh samoa_template.yaml'
     agents:
       queue: elastic
