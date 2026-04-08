@@ -11,50 +11,30 @@ env:
   ITBU: dai
 
 steps:
-  - label: ':github: Download release + bundle'
+  - label: ':s3: Bundle release from S3 staging'
     commands:
       - |
-        TAG="$${RELEASE_TAG:-$${BUILDKITE_TAG:-latest}}"
-        echo "--- Downloading release: $$TAG"
+        echo "--- Downloading release artifacts from S3 staging"
         mkdir -p content
 
-        # Copy landing page
+        # Copy landing page from repo
         cp infrastructure/releases/html/index.html content/
 
-        AUTH_HEADER=""
-        if [ -n "$$GITHUB_TOKEN" ]; then
-          AUTH_HEADER="Authorization: token $$GITHUB_TOKEN"
-        fi
-
-        if [ "$$TAG" = "latest" ]; then
-          RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/latest"
-        else
-          RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/tags/$$TAG"
-        fi
-
-        echo "Fetching release metadata from $$RELEASE_URL"
-        RELEASE_JSON=$$(curl -sL -H "$$AUTH_HEADER" "$$RELEASE_URL")
-
-        echo "$$RELEASE_JSON" | python3 -c "
-        import json, sys, urllib.request
-        data = json.load(sys.stdin)
-        if 'message' in data:
-            print('API error:', data['message'])
-            sys.exit(1)
-        assets = data.get('assets', [])
-        matched = [(a['browser_download_url'], a['name']) for a in assets
-                   if a['name'].endswith(('.yml', '.zip', '.dmg', '.exe'))]
-        print(f'Found {len(matched)} release assets')
-        for url, name in matched:
-            print(f'  Downloading {name}...')
-            urllib.request.urlretrieve(url, f'content/{name}')
-        "
+        # Download release artifacts staged by GitHub Actions
+        aws s3 sync s3://nib-kaos-secure-web-ap-southeast-2/quarry-staging/ content/ \
+          --exclude "*.blockmap" \
+          --exclude "builder-debug.yml"
 
         echo "--- Content directory:"
         ls -la content/
 
+        # Create content.zip for SAMOA
         cd content && zip -r ../content.zip . && cd ..
-        echo "--- content.zip created ($(du -h content.zip | cut -f1))"
+        echo "--- content.zip created ($$(du -h content.zip | cut -f1))"
+    plugins:
+      - ssh://git@github.com/redacted-org/assume-deployer-role-buildkite-plugin.git#v1.0.0:
+          stage: kaos
+          zone: secure
     agents:
       queue: elastic
     artifact_paths:
