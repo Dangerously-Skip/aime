@@ -48,10 +48,6 @@
         "to": ".next/standalone/web/node_modules/@anthropic-ai/claude-agent-sdk"
       },
       {
-        "from": "node_modules/@anthropic-ai/claude-agent-sdk/cli.js",
-        "to": ".next/standalone/web/node_modules/@anthropic-ai/l/cli.js"
-      },
-      {
         "from": "node_modules/pdfjs-dist",
         "to": ".next/standalone/web/node_modules/pdfjs-dist"
       },
