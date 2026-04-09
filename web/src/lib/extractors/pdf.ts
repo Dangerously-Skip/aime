@@ -65,29 +65,32 @@ function installPolyfills() {
 export async function extractPdf(buffer: Buffer): Promise<ExtractionResult> {
   installPolyfills();
 
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const path = await import('path');
+  const fs = await import('fs');
 
-  // Set worker path — try require.resolve first, fall back to relative path
-  try {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-  } catch {
-    // In packaged Electron, require.resolve may fail — try common locations
-    const path = await import('path');
-    const fs = await import('fs');
-    const candidates = [
-      path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-      path.join(__dirname, '..', '..', '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
-    ];
-    // If process.resourcesPath is set (Electron), check there too
-    if (process.resourcesPath) {
-      candidates.push(path.join(process.resourcesPath, '.next', 'standalone', 'web', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'));
-      candidates.push(path.join(process.resourcesPath, 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'));
-    }
-    const found = candidates.find(c => { try { fs.accessSync(c); return true; } catch { return false; } });
-    if (found) {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = found;
-    }
-    // If none found, pdfjs will try to run without a worker (slower but works)
+  // In packaged Electron builds, dynamic import('pdfjs-dist/...') fails because
+  // Next.js standalone prunes node_modules and doesn't trace dynamic imports.
+  // We copy pdfjs-dist via extraResources, so resolve the absolute path first.
+  let pdfjsLib: typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+  const resourcesPdfjsPath = process.env['QUARRY_RESOURCES_PATH']
+    ? path.join(process.env['QUARRY_RESOURCES_PATH'], '.next', 'standalone', 'web', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.mjs')
+    : null;
+
+  if (resourcesPdfjsPath && fs.existsSync(resourcesPdfjsPath)) {
+    pdfjsLib = await import(/* webpackIgnore: true */ resourcesPdfjsPath);
+  } else {
+    pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  }
+
+  // Set worker path
+  const workerCandidates = [
+    resourcesPdfjsPath ? resourcesPdfjsPath.replace('pdf.mjs', 'pdf.worker.mjs') : null,
+    (() => { try { return require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'); } catch { return null; } })(),
+    path.join(process.cwd(), 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs'),
+  ].filter(Boolean) as string[];
+  const workerPath = workerCandidates.find(c => { try { fs.accessSync(c); return true; } catch { return false; } });
+  if (workerPath) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerPath;
   }
 
   const data = new Uint8Array(buffer);
