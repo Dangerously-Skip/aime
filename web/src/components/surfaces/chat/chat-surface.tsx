@@ -653,7 +653,7 @@ export function ChatSurface() {
               ].map((pill) => (
                 <button
                   key={pill.label}
-                  onClick={() => setInputValue(pill.prompt)}
+                  onClick={() => { setInputValue(pill.prompt); setTimeout(() => document.querySelector<HTMLTextAreaElement>('[placeholder="How can I help you today?"]')?.focus(), 50); }}
                   className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-card hover:border-border transition-colors"
                 >
                   <span>{pill.icon}</span>

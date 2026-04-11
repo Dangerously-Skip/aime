@@ -262,13 +262,18 @@ export class ClaudeProvider extends BaseProvider {
     // Build query options
     const queryOptions: Record<string, unknown> = {
       allowedTools,
+      disallowedTools: ['WebSearch'],
       maxTurns,
       mcpServers: {
         ...mcpServers,
         quarry: quarryMcpServer,
         'nib-web-search': {
-          type: 'sse',
-          url: 'https://ai-studio-search.internal.invalid/sse',
+          type: 'stdio',
+          command: 'npx',
+          args: ['-y', '@jharding_npm/mcp-server-searxng'],
+          env: {
+            SEARXNG_INSTANCES: process.env.SEARXNG_INSTANCES || 'https://ai-studio-searxng.internal.invalid',
+          },
         },
       },
       permissionMode,
