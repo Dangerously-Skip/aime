@@ -94,6 +94,50 @@ const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|s
 // Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools)
 const BASH_ARTIFACT_EXT = /\b([\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
 
+// Filter out HTML tag fragments and garbage from artifact/context names
+function isValidSidebarEntry(path: string): boolean {
+  if (!path || path.length < 2) return false;
+  // HTML tag fragments: ]+>, a>, script>, etc.
+  if (/^[a-z]+>/.test(path) || path.includes('<') || path.includes('>')) return false;
+  // Pure punctuation / symbols
+  if (/^[^a-zA-Z0-9/~.]+$/.test(path)) return false;
+  return true;
+}
+
+// Parse search results from MCP searxng output
+interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+function parseSearchResults(output: string): SearchResult[] {
+  try {
+    const data = JSON.parse(output);
+    if (Array.isArray(data)) {
+      return data.slice(0, 10).map((r: Record<string, unknown>) => ({
+        title: String(r.title || ''),
+        url: String(r.url || r.link || ''),
+        snippet: String(r.content || r.snippet || r.description || '').slice(0, 200),
+      })).filter((r: SearchResult) => r.title && r.url);
+    }
+    if (data.results && Array.isArray(data.results)) {
+      return data.results.slice(0, 10).map((r: Record<string, unknown>) => ({
+        title: String(r.title || ''),
+        url: String(r.url || r.link || ''),
+        snippet: String(r.content || r.snippet || r.description || '').slice(0, 200),
+      })).filter((r: SearchResult) => r.title && r.url);
+    }
+  } catch {
+    // Not JSON — try to extract URLs from text
+    const urls = output.match(/https?:\/\/[^\s)>"]+/g);
+    if (urls) {
+      return urls.slice(0, 10).map(url => ({ title: new URL(url).hostname, url, snippet: '' }));
+    }
+  }
+  return [];
+}
+
 function categorizeToolCall(
   toolName: string,
   toolInput: Record<string, unknown>,
@@ -117,9 +161,15 @@ function categorizeToolCall(
     return typeof raw === "string" ? { category: "artifact", path: raw } : null;
   }
 
+  // MCP search tools — categorize as context with the query
+  if (toolName.includes("web_search") || toolName.includes("searxng") || toolName === "WebSearch") {
+    const raw = toolInput.query || toolInput.q;
+    return typeof raw === "string" ? { category: "context", path: `🔍 ${raw}` } : null;
+  }
+
   // Explicit context tools
   if (toolName === "Read" || toolName === "Glob" || toolName === "Grep" ||
-      toolName === "WebSearch" || toolName === "WebFetch" ||
+      toolName === "WebFetch" ||
       toolName === "ExcelRead" || toolName.endsWith("__ExcelRead") || toolName.endsWith(":ExcelRead")) {
     const raw = toolInput.file_path || toolInput.path || toolInput.pattern || toolInput.url || toolInput.query;
     return typeof raw === "string" ? { category: "context", path: raw } : null;
@@ -235,6 +285,42 @@ function SidebarCard({
   );
 }
 
+function SearchResultsCard({ results, onClear }: { results: SearchResult[]; onClear: () => void }) {
+  const [open, setOpen] = useState(true);
+  if (results.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-border/50 bg-card/50">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-sm font-semibold hover:bg-muted/30 transition-colors rounded-t-xl"
+      >
+        <Globe className="h-4 w-4 text-muted-foreground" />
+        <span className="flex-1 text-left">Web Search</span>
+        <span className="text-[10px] text-muted-foreground">{results.length} results</span>
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-1.5">
+          {results.map((r, i) => (
+            <a
+              key={i}
+              href={r.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-lg bg-muted/40 px-3 py-2 hover:bg-muted/70 transition-colors group"
+            >
+              <div className="text-xs font-medium text-foreground truncate group-hover:text-primary transition-colors">{r.title}</div>
+              <div className="text-[10px] text-muted-foreground/70 truncate">{r.url}</div>
+              {r.snippet && <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">{r.snippet}</div>}
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TaskMetricsCard({ metrics }: {
   metrics: {
     cost?: number;
@@ -317,6 +403,8 @@ function SidebarPanel({
   onArtifactClick,
   onContextRemove,
   onArtifactRemove,
+  searchResults,
+  onClearSearch,
   previewUrl,
   onPreviewClick,
   taskMetrics,
@@ -330,6 +418,8 @@ function SidebarPanel({
   onArtifactClick?: (path: string) => void;
   onContextRemove?: (path: string) => void;
   onArtifactRemove?: (path: string) => void;
+  searchResults?: SearchResult[];
+  onClearSearch?: () => void;
   previewUrl?: string | null;
   onPreviewClick?: () => void;
   taskMetrics?: {
@@ -388,6 +478,10 @@ function SidebarPanel({
               onItemRemove={onContextRemove}
             />
 
+            {searchResults && searchResults.length > 0 && (
+              <SearchResultsCard results={searchResults} onClear={onClearSearch || (() => {})} />
+            )}
+
             <SidebarCard
               label="Artifacts"
               icon={FilePen}
@@ -434,6 +528,7 @@ export function CoworkSurface() {
     useAtSuggestions();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const clearCanvas = useCanvasStore((s) => s.clearCanvas);
@@ -679,7 +774,7 @@ export function CoworkSurface() {
           }
           // Categorize into sidebar panels
           const categorized = categorizeToolCall(toolName, toolInput);
-          if (categorized && chatId) {
+          if (categorized && chatId && isValidSidebarEntry(categorized.path)) {
             if (categorized.category === "context") {
               // Don't add to Context if this path is already in Artifacts
               const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
@@ -726,6 +821,16 @@ export function CoworkSurface() {
             const detected = detectServerUrl(result);
             if (detected) setPreviewUrl(detected.url);
           }
+          // Parse search results from MCP search tools
+          if (result && !event.is_error && chatId) {
+            const allMsgs2 = useCoworkStore.getState().messages[chatId];
+            const lastMsg2 = allMsgs2?.at(-1);
+            const searchTc = lastMsg2?.toolCalls?.find((tc) => tc.id === id);
+            if (searchTc && (searchTc.name.includes("web_search") || searchTc.name.includes("searxng"))) {
+              const parsed = parseSearchResults(result);
+              if (parsed.length > 0) setSearchResults(parsed);
+            }
+          }
           // Detect binary files mentioned in Bash output (e.g. python-pptx writing a .pptx)
           if (result && !event.is_error && chatId) {
             const allMsgs = useCoworkStore.getState().messages[chatId];
@@ -759,6 +864,7 @@ export function CoworkSurface() {
                 // Skip false positives: bare extensions, /dev/null, numeric-heavy fragments
                 if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") continue;
                 if (/^[0-9.:]+$/.test(filePath.replace(/\.(?:pdf|csv|png|jpe?g)$/i, ""))) continue;
+                if (!isValidSidebarEntry(filePath)) continue;
                 if (!filePath.startsWith("/") && coworkFolder) {
                   const cwdBasename = coworkFolder.split("/").pop() || "";
                   if (cwdBasename && filePath.startsWith(`${cwdBasename}/`)) {
@@ -1493,6 +1599,8 @@ export function CoworkSurface() {
               }
               removeArtifactFile(chatId, path);
             }}
+            searchResults={searchResults}
+            onClearSearch={() => setSearchResults([])}
             previewUrl={previewUrl}
             onPreviewClick={() => setPreviewOpen(true)}
             taskMetrics={(() => {
