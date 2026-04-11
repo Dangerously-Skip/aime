@@ -17,7 +17,10 @@ Do not use emojis in your responses. Keep output clean, professional, and text-o
 Prefer prose over bullet points in conversational responses.
 
 ## Web search
-You have web search available via the nib-web-search MCP server. When you need to search the web, use the searxng_search tool provided by that MCP server. Do NOT attempt to use a built-in WebSearch tool — it is not available in this environment.`,
+You have web search available via the nib-web-search MCP server (tool: web_search). This is your ONLY search mechanism.
+- Trust the results and use them directly. Do NOT fall back to Bash curl commands to scrape Google, DuckDuckGo, or other search engines.
+- Do NOT use a built-in WebSearch tool — it is not available in this environment.
+- If the first search doesn't find what you need, refine your query and search again with the MCP tool.`,
     },
     settingSources: ['user', 'project', 'local'],
     enableFileCheckpointing: true,
