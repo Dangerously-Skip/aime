@@ -46,10 +46,11 @@ interface MessageListProps {
   onQuestionAnswered?: (toolUseId: string, answers: Record<string, string>) => void;
   onArtifactClick?: (pathOrArtifact: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
+  onRetry?: () => void;
   conversationId?: string;
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, conversationId }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, onRetry, conversationId }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -138,6 +139,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             isLastAssistantMessage={isLastAssistant}
             onArtifactClick={onArtifactClick}
             onPreviewUrl={onPreviewUrl}
+            onRetry={isLastAssistant ? onRetry : undefined}
             conversationId={conversationId}
           />
         ) : null;

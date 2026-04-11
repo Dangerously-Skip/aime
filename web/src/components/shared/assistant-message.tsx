@@ -7,7 +7,7 @@ import { ToolCallsSummaryBar } from "./tool-calls-summary-bar";
 import { StreamingCursor } from "./streaming-cursor";
 import { ArtifactCard } from "./artifact-card";
 import { Button } from "@/components/ui/button";
-import { Copy, Check, ThumbsUp, ThumbsDown } from "lucide-react";
+import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw } from "lucide-react";
 import { MemoryButton } from "./memory-button";
 import { useConversationStore } from "@/stores/conversation-store";
 import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
@@ -48,6 +48,7 @@ interface AssistantMessageProps {
   isLastAssistantMessage?: boolean;
   onArtifactClick?: (path: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
+  onRetry?: () => void;
   conversationId?: string;
 }
 
@@ -60,6 +61,7 @@ export function AssistantMessage({
   isLastAssistantMessage = false,
   onArtifactClick,
   onPreviewUrl,
+  onRetry,
   conversationId,
 }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false);
@@ -183,6 +185,17 @@ export function AssistantMessage({
                 <Copy className="h-3.5 w-3.5" />
               )}
             </Button>
+            {isLastAssistantMessage && onRetry && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                onClick={onRetry}
+                title="Retry"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <MemoryButton content={content} conversationId={conversationId} />
             {/* Rating buttons — only on last assistant message */}
             {isLastAssistantMessage && conversationId && (

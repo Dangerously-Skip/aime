@@ -2,10 +2,13 @@
 
 import { useEffect } from "react";
 import { useAppStore, type Surface } from "@/stores/app-store";
+import { useConversationStore } from "@/stores/conversation-store";
 import { useContextBusStore } from "@/stores/context-bus-store";
 import {
   PanelLeftClose,
   PanelLeft,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -26,6 +29,10 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
   const setActiveSurface = useAppStore((s) => s.setActiveSurface);
   const sidebarVisible = useAppStore((s) => s.sidebarVisible);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const goBack = useConversationStore((s) => s.goBack);
+  const goForward = useConversationStore((s) => s.goForward);
+  const canGoBack = useConversationStore((s) => s.canGoBack());
+  const canGoForward = useConversationStore((s) => s.canGoForward());
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -64,6 +71,30 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
           ) : (
             <PanelLeft className="h-4 w-4" />
           )}
+        </Button>
+      </div>
+
+      {/* Back/forward navigation */}
+      <div className="flex items-center" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+          onClick={goBack}
+          disabled={!canGoBack}
+          title="Go back"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none"
+          onClick={goForward}
+          disabled={!canGoForward}
+          title="Go forward"
+        >
+          <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
 

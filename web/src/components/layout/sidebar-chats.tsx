@@ -41,6 +41,7 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
   const addConversation = useConversationStore((s) => s.addConversation);
   const removeConversation = useConversationStore((s) => s.removeConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+  const navigateTo = useConversationStore((s) => s.navigateTo);
   const activeId = useConversationStore((s) => s.activeId);
   const { groups, backgroundConversations } = useConversations(activeSurface, projectId);
 
@@ -101,23 +102,23 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
 
       {/* Conversation list */}
       <ScrollArea className="flex-1 min-h-0">
-        <div className="p-2 space-y-3">
+        <div className="p-2 space-y-1">
           {filteredGroups.length === 0 && backgroundConversations.length === 0 && (
             <div className="px-3 py-8 text-center text-xs text-muted-foreground">
               No conversations yet
             </div>
           )}
 
-          {filteredGroups.map((group) => (
+          {filteredGroups.map((group, i) => (
             <div key={group.label}>
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className={`px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground/50 ${i > 0 ? "mt-2" : ""}`}>
                 {group.label}
               </div>
               <div className="space-y-0.5">
                 {group.conversations.map((conv) => (
                   <button
                     key={conv.id}
-                    onClick={() => setActiveConversation(conv.id)}
+                    onClick={() => navigateTo(conv.id)}
                     className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
                       activeId === conv.id
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -184,7 +185,7 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
                   {backgroundConversations.map((conv) => (
                     <button
                       key={conv.id}
-                      onClick={() => setActiveConversation(conv.id)}
+                      onClick={() => navigateTo(conv.id)}
                       className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
                         activeId === conv.id
                           ? "bg-sidebar-accent text-sidebar-accent-foreground"

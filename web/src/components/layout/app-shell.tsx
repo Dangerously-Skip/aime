@@ -20,13 +20,16 @@ import { HeartbeatPanel } from "./heartbeat-panel";
 
 export function AppShell() {
   const sidebarVisible = useAppStore((s) => s.sidebarVisible);
+  const setSidebarVisible = useAppStore((s) => s.setSidebarVisible);
   const sidebarMode = useAppStore((s) => s.sidebarMode);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
   const viewingProjectId = useAppStore((s) => s.viewingProjectId);
   const setViewingProjectId = useAppStore((s) => s.setViewingProjectId);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const activeSurface = useAppStore((s) => s.activeSurface);
   const setActiveSurface = useAppStore((s) => s.setActiveSurface);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+  const addConversation = useConversationStore((s) => s.addConversation);
   const conversations = useConversationStore((s) => s.conversations);
   const addProject = useProjectStore((s) => s.addProject);
   const { isElectron } = useElectron();
@@ -34,17 +37,36 @@ export function AppShell() {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [creatingProject, setCreatingProject] = useState(false);
 
-  // Cmd+, keyboard shortcut to open settings
+  // Global keyboard shortcuts: Cmd+, (settings), Cmd+N (new chat), Cmd+K (search)
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === ",") {
         e.preventDefault();
         setSettingsOpen(true);
+      } else if (e.key === "n" && !e.shiftKey) {
+        e.preventDefault();
+        const conv = {
+          id: crypto.randomUUID(),
+          title: "New Chat",
+          surface: activeSurface,
+          lastMessage: "",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        addConversation(conv);
+        setActiveConversation(conv.id);
+        setSidebarMode("history");
+      } else if (e.key === "k") {
+        e.preventDefault();
+        if (!sidebarVisible) setSidebarVisible(true);
+        setSidebarMode("history");
+        setTimeout(() => document.querySelector<HTMLInputElement>('[placeholder="Search..."]')?.focus(), 50);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [setSettingsOpen]);
+  }, [setSettingsOpen, activeSurface, addConversation, setActiveConversation, setSidebarMode, sidebarVisible, setSidebarVisible]);
 
   // Listen for "open-settings" from Electron menu (Settings… menu item)
   useEffect(() => {

@@ -4,7 +4,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebSearch', 'WebFetch', 'Agent', 'NotebookEdit',
+      'WebFetch', 'Agent', 'NotebookEdit',
       'TodoWrite', 'AskUserQuestion', 'EnterWorktree',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
     ],
