@@ -62,6 +62,8 @@ export interface Conversation {
 interface ConversationState {
   conversations: Conversation[];
   activeId: string | null;
+  navigationHistory: string[];
+  navigationIndex: number;
 }
 
 export type ConversationMetrics = {
@@ -80,6 +82,11 @@ interface ConversationActions {
   updateConversationMetrics: (id: string, metrics: ConversationMetrics) => void;
   getConversationsForSurface: (surface: string) => Conversation[];
   assignToProject: (conversationId: string, projectId: string | null) => void;
+  navigateTo: (id: string) => void;
+  goBack: () => void;
+  goForward: () => void;
+  canGoBack: () => boolean;
+  canGoForward: () => boolean;
 }
 
 export type ConversationStore = ConversationState & ConversationActions;
@@ -90,6 +97,8 @@ export const useConversationStore = create<ConversationStore>()(
       // State
       conversations: [],
       activeId: null,
+      navigationHistory: [],
+      navigationIndex: -1,
 
       // Actions
       addConversation: (conversation) =>
@@ -137,6 +146,35 @@ export const useConversationStore = create<ConversationStore>()(
             c.id === conversationId ? { ...c, projectId, updatedAt: Date.now() } : c
           ),
         })),
+
+      navigateTo: (id) =>
+        set((state) => {
+          const current = state.navigationHistory[state.navigationIndex];
+          if (current === id) return { activeId: id };
+          const truncated = state.navigationHistory.slice(0, state.navigationIndex + 1);
+          return {
+            activeId: id,
+            navigationHistory: [...truncated, id].slice(-50),
+            navigationIndex: truncated.length,
+          };
+        }),
+
+      goBack: () =>
+        set((state) => {
+          if (state.navigationIndex <= 0) return {};
+          const newIndex = state.navigationIndex - 1;
+          return { activeId: state.navigationHistory[newIndex], navigationIndex: newIndex };
+        }),
+
+      goForward: () =>
+        set((state) => {
+          if (state.navigationIndex >= state.navigationHistory.length - 1) return {};
+          const newIndex = state.navigationIndex + 1;
+          return { activeId: state.navigationHistory[newIndex], navigationIndex: newIndex };
+        }),
+
+      canGoBack: () => get().navigationIndex > 0,
+      canGoForward: () => get().navigationIndex < get().navigationHistory.length - 1,
     }),
     {
       name: 'nibcowork:conversations',

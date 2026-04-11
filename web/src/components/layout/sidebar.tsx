@@ -90,7 +90,7 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
   }, [displayName, fullName]);
   const activeSurface = useAppStore((s) => s.activeSurface);
   const addConversation = useConversationStore((s) => s.addConversation);
-  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+  const navigateTo = useConversationStore((s) => s.navigateTo);
 
   function handleNewChat() {
     const conv: Conversation = {
@@ -102,7 +102,7 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
       updatedAt: Date.now(),
     };
     addConversation(conv);
-    setActiveConversation(conv.id);
+    navigateTo(conv.id);
     if (sidebarMode !== "history") {
       setSidebarMode("history");
     }
@@ -125,16 +125,19 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <Plus className="h-3.5 w-3.5" />
-          <span>New chat</span>
+          <span className="flex-1 text-left">New chat</span>
+          <kbd className="text-[10px] text-muted-foreground/60 font-normal">⌘N</kbd>
         </button>
 
-        {/* Search (placeholder — could open a command palette) */}
+        {/* Search */}
         <button
+          onClick={() => { setSidebarMode("history"); setTimeout(() => document.querySelector<HTMLInputElement>('[placeholder="Search..."]')?.focus(), 50); }}
           className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <Search className="h-3.5 w-3.5" />
-          <span>Search</span>
+          <span className="flex-1 text-left">Search</span>
+          <kbd className="text-[10px] text-muted-foreground/60 font-normal">⌘K</kbd>
         </button>
       </div>
 

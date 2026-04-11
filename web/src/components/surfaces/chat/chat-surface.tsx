@@ -642,6 +642,25 @@ export function ChatSurface() {
                 </div>
               </div>
             </div>
+
+            {/* Quick-start suggestion pills */}
+            <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+              {[
+                { label: "Write", icon: "✏️", prompt: "Help me write " },
+                { label: "Learn", icon: "✨", prompt: "Explain to me " },
+                { label: "Code", icon: "</>", prompt: "Write code that " },
+                { label: "Brainstorm", icon: "💡", prompt: "Brainstorm ideas for " },
+              ].map((pill) => (
+                <button
+                  key={pill.label}
+                  onClick={() => setInputValue(pill.prompt)}
+                  className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-card hover:border-border transition-colors"
+                >
+                  <span>{pill.icon}</span>
+                  <span>{pill.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       ) : (

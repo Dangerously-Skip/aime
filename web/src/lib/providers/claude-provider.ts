@@ -42,7 +42,7 @@ export class ClaudeProvider extends BaseProvider {
     super(config);
     this.defaultAllowedTools = config.allowedTools || [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebSearch', 'WebFetch', 'TodoWrite', 'Skill',
+      'WebFetch', 'TodoWrite', 'Skill',
     ];
     this.defaultMaxTurns = config.maxTurns || 20;
     this.permissionMode = config.permissionMode || 'bypassPermissions';
