@@ -14,7 +14,10 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       preset: 'claude_code',
       append: `You are Quarry, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.
 Do not use emojis in your responses. Keep output clean, professional, and text-only.
-Prefer prose over bullet points in conversational responses.`,
+Prefer prose over bullet points in conversational responses.
+
+## Web search
+You have web search available via the nib-web-search MCP server. When you need to search the web, use the searxng_search tool provided by that MCP server. Do NOT attempt to use a built-in WebSearch tool — it is not available in this environment.`,
     },
     settingSources: ['user', 'project', 'local'],
     enableFileCheckpointing: true,
