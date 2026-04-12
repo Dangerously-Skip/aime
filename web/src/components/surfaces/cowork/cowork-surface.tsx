@@ -432,42 +432,52 @@ function TaskMetricsCard({ metrics }: {
           className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "" : "-rotate-90"}`}
         />
       </button>
+      {/* Always-visible key metrics */}
+      <div className="px-4 pb-2 space-y-1">
+        {metrics.cost !== undefined && (
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Agent cost</span>
+            <span className="font-mono">${metrics.cost.toFixed(4)}</span>
+          </div>
+        )}
+        {metrics.humanHours !== undefined && (
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Human estimate</span>
+            <span className="font-mono">~{metrics.humanHours < 1 ? `${Math.round(metrics.humanHours * 60)}min` : `${metrics.humanHours}h`}</span>
+          </div>
+        )}
+        {metrics.multiplier !== undefined && (
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Speed</span>
+            <span className="font-mono font-semibold text-green-600 dark:text-green-400">{metrics.multiplier.toFixed(0)}× faster</span>
+          </div>
+        )}
+        {metrics.ttftMs !== undefined && (
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">TTFT</span>
+            <span className="font-mono">{(metrics.ttftMs / 1000).toFixed(1)}s</span>
+          </div>
+        )}
+      </div>
+      {/* Expanded details */}
       {open && (
-        <div className="px-4 pb-3 space-y-1">
-          {metrics.cost !== undefined && (
-            <div className="flex justify-between text-xs">
-              <span className="text-muted-foreground">Agent cost</span>
-              <span className="font-mono">${metrics.cost.toFixed(4)}</span>
-            </div>
-          )}
-          {metrics.humanHours !== undefined && (
-            <div className="flex justify-between text-xs">
-              <span className="text-muted-foreground">Human est.</span>
-              <span className="font-mono">~{metrics.humanHours}h {metrics.complexity ? `(${metrics.complexity})` : ""}</span>
-            </div>
-          )}
-          {metrics.multiplier !== undefined && (
-            <div className="flex justify-between text-xs">
-              <span className="text-muted-foreground">ROI</span>
-              <span className="font-mono font-semibold text-green-600 dark:text-green-400">{metrics.multiplier.toFixed(1)}× faster</span>
-            </div>
-          )}
+        <div className="px-4 pb-3 space-y-1 border-t border-border/30 pt-2">
           {metrics.dollarsSaved !== undefined && (
             <div className="flex justify-between text-xs">
               <span className="text-muted-foreground">$ saved</span>
               <span className="font-mono">${metrics.dollarsSaved.toFixed(0)}</span>
             </div>
           )}
+          {metrics.complexity && (
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Complexity</span>
+              <span className="font-mono">{metrics.complexity}</span>
+            </div>
+          )}
           {metrics.taskType && (
             <div className="flex justify-between text-xs">
               <span className="text-muted-foreground">Task type</span>
               <span className="font-mono">{metrics.taskType}{metrics.language ? ` / ${metrics.language}` : ""}</span>
-            </div>
-          )}
-          {metrics.ttftMs !== undefined && (
-            <div className="flex justify-between text-xs">
-              <span className="text-muted-foreground">TTFT</span>
-              <span className="font-mono">{(metrics.ttftMs / 1000).toFixed(1)}s</span>
             </div>
           )}
         </div>
