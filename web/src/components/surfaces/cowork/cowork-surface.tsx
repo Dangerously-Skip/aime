@@ -846,6 +846,23 @@ export function CoworkSurface() {
               }
             }
           }
+          // Parallel search result fetch — the SDK doesn't expose tool results in the stream,
+          // so we call searxng directly when we see a web_search tool_use event.
+          if ((toolName.includes("web_search") || toolName.includes("searxng")) && toolInput.query) {
+            const searchQuery = String(toolInput.query);
+            fetch("/api/search-proxy", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ query: searchQuery, max_results: toolInput.max_results || 10 }),
+            })
+              .then((r) => r.json())
+              .then(({ results }) => {
+                if (results && results.length > 0) {
+                  setSearchGroups((prev) => [...prev, { query: searchQuery, results }]);
+                }
+              })
+              .catch(() => {});
+          }
           // Categorize into sidebar panels
           const categorized = categorizeToolCall(toolName, toolInput);
           if (categorized && chatId && isValidSidebarEntry(categorized.path)) {
@@ -898,19 +915,8 @@ export function CoworkSurface() {
             const detected = detectServerUrl(result);
             if (detected) setPreviewUrl(detected.url);
           }
-          // Parse search results from MCP search tools
-          if (result && !event.is_error && chatId) {
-            const allMsgs2 = useCoworkStore.getState().messages[chatId];
-            const lastMsg2 = allMsgs2?.at(-1);
-            const searchTc = lastMsg2?.toolCalls?.find((tc) => tc.id === id);
-            if (searchTc && (searchTc.name.includes("web_search") || searchTc.name.includes("searxng"))) {
-              const parsed = parseSearchResults(result);
-              if (parsed.length > 0) {
-                const query = (searchTc.input as Record<string, unknown>)?.query as string || "web search";
-                setSearchGroups((prev) => [...prev, { query, results: parsed }]);
-              }
-            }
-          }
+          // (Search results are extracted in onDone after the stream completes,
+          // since the Claude Agent SDK doesn't emit tool_result events in the stream.)
           // Detect binary files mentioned in Bash output (e.g. python-pptx writing a .pptx)
           if (result && !event.is_error && chatId) {
             const allMsgs = useCoworkStore.getState().messages[chatId];
@@ -1038,6 +1044,8 @@ export function CoworkSurface() {
       stopStreaming(chatId);
       const allMsgs = useCoworkStore.getState().messages[chatId];
       const lastMsg = allMsgs?.at(-1);
+      // (Search results are fetched in parallel via /api/search-proxy when
+      // web_search tool_use events arrive in the stream.)
       // Inline plan detection: check last assistant message for plan heading
       if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
         setPlanContent(chatId, lastMsg.content);
