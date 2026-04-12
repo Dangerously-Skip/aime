@@ -170,6 +170,22 @@ export function AssistantMessage({
           </div>
         )}
 
+        {/* Between-turn loading — shows starburst when streaming but no tools running and cursor idle */}
+        {isStreaming && !isLoading && content && toolCalls.length > 0 && toolCalls.every((tc) => tc.status !== "running") && !content.endsWith("▊") && (
+          <div className="flex items-center gap-2 py-2">
+            <img
+              src="/starburst-logo.png"
+              alt="Working"
+              width={18}
+              height={18}
+              className="loading-pulse"
+            />
+            <span className="text-xs text-muted-foreground thinking-word-fade">
+              {THINKING_WORDS[thinkingWordIndex]}...
+            </span>
+          </div>
+        )}
+
         {/* Actions — visible on hover */}
         {!isStreaming && !isLoading && content && (
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
