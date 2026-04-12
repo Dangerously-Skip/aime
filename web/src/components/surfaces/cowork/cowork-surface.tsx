@@ -1052,11 +1052,34 @@ export function CoworkSurface() {
       if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
         setPlanContent(chatId, lastMsg.content);
       }
-      // Detect binary artifacts mentioned in Bash tool OUTPUT (not assistant text).
-      // Only confirmed tool results are scanned — assistant text mentions like
-      // "I'll create report.pdf" are ignored to avoid phantom artifacts.
-      // (Bash tool_result detection already happens in the tool_result SSE handler above.
-      //  This block verifies existing artifacts still exist on disk and removes phantoms.)
+      // Detect binary artifacts from Bash tool calls (e.g. python-pptx, generate_presentation.sh).
+      // The SDK doesn't emit tool_result events, so we scan Bash command inputs for output file paths.
+      if (chatId) {
+        const coworkFolder = useCoworkStore.getState().folder;
+        const msgs = useCoworkStore.getState().messages[chatId] ?? [];
+        for (const msg of msgs) {
+          for (const tc of msg.toolCalls ?? []) {
+            if (tc.name === "Bash" && tc.input?.command) {
+              const cmd = String(tc.input.command);
+              BASH_ARTIFACT_EXT.lastIndex = 0;
+              let match;
+              while ((match = BASH_ARTIFACT_EXT.exec(cmd)) !== null) {
+                let filePath = match[1];
+                if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") continue;
+                if (!isValidSidebarEntry(filePath)) continue;
+                if (!filePath.startsWith("/") && coworkFolder) {
+                  filePath = `${coworkFolder}/${filePath}`;
+                }
+                const existing = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+                if (!existing.includes(filePath)) {
+                  addArtifactFile(chatId, filePath);
+                }
+              }
+            }
+          }
+        }
+      }
+      // Verify artifacts still exist on disk and remove phantoms.
       if (chatId) {
         const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
         if (currentArtifacts.length > 0 && window.electronAPI?.fileExists) {
