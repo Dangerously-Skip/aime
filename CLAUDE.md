@@ -67,6 +67,12 @@ No test suite or linter is configured.
 
 **Files:** `/api/files/read`, `/api/files/delete`, `/api/files/search`, `POST /api/upload`
 
+**Auth:** `GET /api/auth/github`, `GET /api/auth/github/callback`
+
+**Search:** `GET /api/search-proxy`
+
+**GitHub:** `GET /api/github/repos`
+
 ### Providers (`web/src/lib/providers/`)
 
 - `claude-provider.ts` — Main provider. Injects MCP servers (connectors + `nib-web-search` searxng + `quarry`), handles tool interception (canvas, spawn_agent, loop detection), session controls
@@ -80,7 +86,7 @@ No test suite or linter is configured.
 - `a2ui/` — Anthropic A2UI canvas type system (`types.ts`) + renderer (`renderer.tsx`)
 - `telemetry/` — `roi.ts`, `analytics-client.ts` (SigV4), `event-buffer.ts` (JSONL)
 - `memory/` — `extractor.ts`, `retriever.ts`, `summarizer.ts`
-- `connectors/` — OAuth flow, credential storage, provisioner, registry (GitHub, Slack, Jira, Confluence, Figma, Google Drive, SharePoint, Outlook, Miro, Zoom, Buildkite, SumoLogic)
+- `connectors/` — OAuth flow, credential storage, provisioner, registry (GitHub, Slack, Jira, Confluence, Figma, Google Drive, SharePoint, Outlook, Miro, Zoom, Buildkite, SumoLogic, AWS)
 - `extractors/` — PDF, DOCX, XLSX, PPTX, audio, video content extraction
 - `surfaces/` — Per-surface config (allowed tools, system prompts). Cowork config has web search prompt directing to `nib-web-search` MCP
 - `standing-order-engine.ts` / `standing-order-templates.ts` — Automation execution
@@ -100,6 +106,10 @@ No test suite or linter is configured.
 - `use-browser-agent.ts` — Browser automation coordination
 - `use-file-drop.ts` — Drag-and-drop file handling
 - `use-standing-orders.ts` — Automation template execution
+- `use-auto-project.ts` — Auto-associate conversations with projects
+- `use-conversations.ts` — Conversation list management
+- `use-project-context.ts` — Project-scoped context injection
+- `use-scratch-dir.ts` — Scratch directory lifecycle management
 
 ## External Integrations
 
@@ -141,3 +151,41 @@ cd web && npm run dist:linux    # Linux
 ```
 
 Output goes to `web/dist/`. The `outputFileTracingExcludes` in `next.config.ts` excludes `dist/`, `release/`, `temp/`, and `.next/cache/` from the standalone bundle to keep app size reasonable (~500MB).
+
+## Releasing
+
+Releases are triggered by pushing a version tag to origin:
+
+```bash
+# 1. Bump version in web/package.json
+# 2. Commit the change
+# 3. Tag and push
+git tag v1.0.X && git push origin v1.0.X
+```
+
+The pipeline (`.github/workflows/release.yml`):
+1. **GitHub Actions** builds macOS (DMG + ZIP, signed + notarized) and Windows (NSIS installer) artifacts
+2. Creates a **GitHub Release** with the artifacts attached
+3. Triggers **Buildkite `promote-release`** pipeline via API — downloads artifacts, bundles with landing page, deploys to internal site via SAMOA (`RQP::StaticSite`)
+
+Internal download page: `quarry.internal.invalid` (VPN required). Existing installs auto-update.
+
+### Release infrastructure
+
+| File | Purpose |
+|------|---------|
+| `.github/workflows/release.yml` | GitHub Actions: build + notarize + release + trigger Buildkite |
+| `.buildkite/pipeline.yml` | Buildkite: SAMOA deploy |
+| `.buildkite/promote-release.yml` | Buildkite: download from GitHub Release, bundle, deploy |
+| `infrastructure/releases/sam_template.yaml` | SAM template (`RQP::StaticSite`) |
+| `infrastructure/releases/nginx.conf` | Nginx config for release site |
+| `infrastructure/releases/html/` | Landing page for internal download site |
+
+### Required GitHub secrets
+
+`MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `DOT_ENV`, `TEAMS_JSON`, `BUILDKITE_API_TOKEN`
+
+## Config Files
+
+- `web/src/config/teams.json` — Team definitions (injected from `TEAMS_JSON` secret in CI, use `teams.example.json` locally)
+- `web/src/config/teams.ts` — TypeScript interface for team config

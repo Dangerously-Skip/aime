@@ -141,3 +141,7 @@ vite.config.ts.timestamp-*
 .vite/
 
 .DS_Store
+
+# Build artifacts
+release/
+temp/
