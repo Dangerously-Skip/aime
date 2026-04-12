@@ -423,6 +423,16 @@ export function ChatSurface() {
     [chatId, updateMessage]
   );
 
+  const handleRetry = useCallback(() => {
+    if (!chatId || isStreaming) return;
+    const msgs = useChatStore.getState().messages[chatId];
+    if (!msgs || msgs.length < 2) return;
+    // Find last user message
+    const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
+    if (!lastUserMsg) return;
+    handleSubmit(lastUserMsg.content);
+  }, [chatId, isStreaming, handleSubmit]);
+
   const handleVoiceTranscript = useCallback(
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
     []
@@ -689,7 +699,7 @@ export function ChatSurface() {
           )}
 
           {/* Messages */}
-          <MessageList messages={messages} conversationId={chatId} onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} />
+          <MessageList messages={messages} conversationId={chatId} onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onRetry={handleRetry} />
 
           {/* Bottom input card */}
           <div className="px-6 pb-4 pt-2">

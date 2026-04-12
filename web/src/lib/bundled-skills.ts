@@ -33,6 +33,12 @@ export const BUNDLED_SKILLS: BundledSkill[] = [
     description: 'Generate professional PowerPoint presentations from natural language',
     files: ['SKILL.md'],
   },
+  {
+    id: 'nib-pdf',
+    name: 'nib-pdf',
+    description: 'Generate professional PDF documents using Python fpdf2',
+    files: ['SKILL.md'],
+  },
 ];
 
 /**

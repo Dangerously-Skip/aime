@@ -73,6 +73,7 @@ interface AssistantActions {
   pauseOrder: (id: string) => void;
   resumeOrder: (id: string) => void;
   completeOrder: (id: string) => void;
+  resumeAllPaused: () => void;
   getOrder: (id: string) => StandingOrder | undefined;
 
   // Card feed
@@ -160,6 +161,13 @@ export const useAssistantStore = create<AssistantStore>()(
         }));
         get().addActivity({ type: 'order-completed', label: 'Order completed', orderId: id });
       },
+
+      resumeAllPaused: () =>
+        set((state) => ({
+          orders: state.orders.map((o) =>
+            o.status === 'paused' ? { ...o, status: 'active' as const, errorCount: 0, updatedAt: Date.now() } : o
+          ),
+        })),
 
       getOrder: (id) => get().orders.find((o) => o.id === id),
 

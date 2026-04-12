@@ -922,10 +922,11 @@ export function CodeSurface() {
     onDone: () => {
       // Mark any remaining running tools as complete
       completeRunningTools(chatId);
-      // Set preview URL for any HTML files written in the last turn
+      // Set preview URL for any HTML files written in the last turn and auto-open preview
       if (pendingHtmlFiles.current.length > 0) {
         const lastHtml = pendingHtmlFiles.current[pendingHtmlFiles.current.length - 1];
         setPreviewUrl(`file://${lastHtml}`);
+        setPreviewOpen(true);
         pendingHtmlFiles.current = [];
         pendingWebAssets.current = [];
       } else if (pendingWebAssets.current.length > 0) {
@@ -1173,7 +1174,7 @@ export function CodeSurface() {
               <button
                 type="button"
                 onClick={() => setPreviewOpen((prev) => !prev)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs text-primary hover:bg-primary/10 transition-colors"
+                className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs text-primary hover:bg-primary/10 transition-colors animate-in fade-in slide-in-from-left-2 duration-300"
               >
                 <Globe className="h-3 w-3" />
                 <span>Preview</span>

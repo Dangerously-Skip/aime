@@ -13,8 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
 import type { A2UIAction } from "@/lib/a2ui/types";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
 import {
   ArrowUp,
   Square,
@@ -60,6 +59,7 @@ function OrdersSidebar({
 }) {
   const pauseOrder = useAssistantStore((s) => s.pauseOrder);
   const resumeOrder = useAssistantStore((s) => s.resumeOrder);
+  const resumeAllPaused = useAssistantStore((s) => s.resumeAllPaused);
   const removeOrder = useAssistantStore((s) => s.removeOrder);
   const addOrder = useAssistantStore((s) => s.addOrder);
 
@@ -108,7 +108,7 @@ function OrdersSidebar({
           >
             {statusIcon(order.status)}
             <div className="flex-1 min-w-0">
-              <div className="truncate text-xs">{order.instruction.slice(0, 50)}</div>
+              <div className="truncate text-xs" title={order.instruction}>{order.instruction}</div>
               <div className="text-xs text-muted-foreground truncate">{triggerLabel(order)}</div>
             </div>
             <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
@@ -169,6 +169,16 @@ function OrdersSidebar({
           ) : (
             <>
               {renderOrderGroup('Active', activeOrders)}
+              {pausedOrders.length > 1 && (
+                <div className="px-3 mb-1">
+                  <button
+                    className="text-xs text-primary hover:underline"
+                    onClick={() => resumeAllPaused()}
+                  >
+                    Resume all ({pausedOrders.length})
+                  </button>
+                </div>
+              )}
               {renderOrderGroup('Paused', pausedOrders)}
               {renderOrderGroup('Completed', completedOrders)}
             </>
@@ -244,8 +254,8 @@ function CardWidget({
         {hasA2UIDoc ? (
           <A2UIDocumentRenderer doc={card.doc!} onAction={onAction} />
         ) : card.summary ? (
-          <div className="px-5 pb-3 prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{card.summary}</ReactMarkdown>
+          <div className="px-5 pb-3">
+            <MarkdownRenderer content={card.summary} className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0" />
           </div>
         ) : null}
         {!expanded && isLong && (
@@ -384,7 +394,7 @@ function CardFeed({
   );
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       <div className="space-y-3">{col1.map(renderCard)}</div>
       <div className="space-y-3">{col2.map(renderCard)}</div>
     </div>
@@ -433,6 +443,13 @@ export function AssistantSurface() {
 
   // Standing order trigger engine
   useStandingOrders();
+
+  // Clear selection when the selected order is deleted
+  useEffect(() => {
+    if (selectedOrderId && !orders.find((o) => o.id === selectedOrderId)) {
+      setSelectedOrderId(null);
+    }
+  }, [orders, selectedOrderId]);
 
   // One-time migration of existing cron jobs to standing orders
   useEffect(() => {
@@ -647,7 +664,7 @@ export function AssistantSurface() {
         </div>
 
         {/* Card feed */}
-        <ScrollArea className="flex-1 h-0">
+        <ScrollArea className="flex-1 overflow-hidden">
           <div className="max-w-5xl mx-auto px-4 py-4">
             {cards.length === 0 && orders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">

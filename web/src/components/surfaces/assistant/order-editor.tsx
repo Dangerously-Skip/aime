@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useCallback } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAssistantStore, type StandingOrder } from "@/stores/assistant-store";
@@ -17,14 +18,21 @@ interface OrderEditorProps {
 }
 
 export function OrderEditor({ orderId, onClose }: OrderEditorProps) {
-  const order = useAssistantStore((s) => s.orders.find((o) => o.id === orderId));
-  const updateOrder = useAssistantStore((s) => s.updateOrder);
-  const pauseOrder = useAssistantStore((s) => s.pauseOrder);
-  const resumeOrder = useAssistantStore((s) => s.resumeOrder);
-  const completeOrder = useAssistantStore((s) => s.completeOrder);
-  const removeOrder = useAssistantStore((s) => s.removeOrder);
-  const allActivity = useAssistantStore((s) => s.activity);
-  const activity = useMemo(() => allActivity.filter((a) => a.orderId === orderId), [allActivity, orderId]);
+  const order = useAssistantStore(
+    useCallback((s) => s.orders.find((o) => o.id === orderId), [orderId]),
+  );
+  const { updateOrder, pauseOrder, resumeOrder, completeOrder, removeOrder } = useAssistantStore(
+    useShallow((s) => ({
+      updateOrder: s.updateOrder,
+      pauseOrder: s.pauseOrder,
+      resumeOrder: s.resumeOrder,
+      completeOrder: s.completeOrder,
+      removeOrder: s.removeOrder,
+    })),
+  );
+  const activity = useAssistantStore(useShallow(
+    (s) => s.activity.filter((a) => a.orderId === orderId),
+  ));
 
   const [tier, setTier] = useState<Tier>('summary');
   const [jsonText, setJsonText] = useState('');
@@ -78,7 +86,7 @@ export function OrderEditor({ orderId, onClose }: OrderEditorProps) {
                order.status === 'completed' ? <CheckCircle2 className="h-4 w-4" /> :
                <AlertCircle className="h-4 w-4" />}
             </span>
-            <h2 className="text-sm font-semibold truncate max-w-[300px]">{order.instruction.slice(0, 50)}</h2>
+            <h2 className="text-sm font-semibold truncate max-w-[300px]" title={order.instruction}>{order.instruction}</h2>
           </div>
           <Button variant="ghost" size="icon-sm" onClick={onClose}>
             <X className="h-4 w-4" />
