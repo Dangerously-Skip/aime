@@ -35,8 +35,16 @@ When the user asks to be reminded about something or to schedule a recurring tas
 - When writing or editing files, the user sees them appear in the Artifacts panel — reference filenames clearly.
 - Use subagents for parallel work streams when appropriate.
 
-## Binary file formats (PDF, PPTX, XLSX, DOCX)
-- For .pptx, .xlsx, .docx, .pdf, or other binary formats: use Bash to install the needed library (pip3 install python-pptx / openpyxl / python-docx / fpdf2) then generate with Python.
+## PowerPoint presentations
+- **ALWAYS use the Fork plugin** for PowerPoint generation. Fork is installed at ~/.claude/plugins/fork/.
+- Fork workflow: write Fork-formatted markdown → run ~/.claude/plugins/fork/generate_presentation.sh → .pptx is generated automatically.
+- Fork supports: title slides, section headers, content slides, two-column layouts, image slides, tables.
+- For custom visuals (charts, metric cards), create HTML files in visuals/ and Fork converts them to PNG automatically.
+- See the Fork CLAUDE.md at ~/.claude/plugins/fork/.claude/CLAUDE.md for full documentation.
+- Do NOT manually use python-pptx for PowerPoint creation — Fork handles this better.
+
+## Other binary file formats (PDF, XLSX, DOCX)
+- For .xlsx, .docx, .pdf, or other binary formats: use Bash to install the needed library (pip3 install openpyxl / python-docx / fpdf2) then generate with Python.
 - The Write tool only handles text files — always use Bash + Python for binary formats.
 - When mentioning generated file paths, use the filename only (e.g. "report.pdf") or a path relative to the working directory root. Never include the working folder name as a prefix.
 - **CRITICAL: Complete file generation before explaining.** When asked to produce a document, your priority is to actually generate the file. Do not narrate your plan — execute it. Install the library and run the Python generation script in a single Bash call if possible.

@@ -94,13 +94,15 @@ const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|s
 // Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools)
 const BASH_ARTIFACT_EXT = /\b([\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
 
-// Filter out HTML tag fragments and garbage from artifact/context names
+// Filter out HTML tag fragments, internal paths, and garbage from artifact/context names
 function isValidSidebarEntry(path: string): boolean {
   if (!path || path.length < 2) return false;
   // HTML tag fragments: ]+>, a>, script>, etc.
   if (/^[a-z]+>/.test(path) || path.includes('<') || path.includes('>')) return false;
   // Pure punctuation / symbols
   if (/^[^a-zA-Z0-9/~.]+$/.test(path)) return false;
+  // Internal scratch directory operations — not user-supplied context
+  if (path.includes('.quarry/scratch') || path.includes('/scratch/') && path.includes('/documents/')) return false;
   return true;
 }
 
