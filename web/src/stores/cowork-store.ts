@@ -22,6 +22,7 @@ interface CoworkState {
   planOpen: boolean;
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
+  searchGroups: Record<string, { query: string; results: { title: string; url: string; snippet: string }[] }[]>;
 }
 
 interface CoworkActions {
@@ -48,6 +49,8 @@ interface CoworkActions {
   touchActivity: (chatId: string) => void;
   setIsStreaming: (v: boolean) => void;
   setStreamError: (e: string | null) => void;
+  addSearchGroup: (chatId: string, group: { query: string; results: { title: string; url: string; snippet: string }[] }) => void;
+  clearSearchGroups: (chatId: string) => void;
 }
 
 export type CoworkStore = CoworkState & CoworkActions;
@@ -67,6 +70,7 @@ export const useCoworkStore = create<CoworkStore>()(
       planOpen: false,
       sessionControls: {},
       lastActivityAt: {},
+      searchGroups: {},
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -248,6 +252,17 @@ export const useCoworkStore = create<CoworkStore>()(
 
       setIsStreaming: (v) => set({ isStreaming: v }),
       setStreamError: (e) => set({ streamError: e }),
+      addSearchGroup: (chatId, group) =>
+        set((state) => ({
+          searchGroups: {
+            ...state.searchGroups,
+            [chatId]: [...(state.searchGroups[chatId] ?? []), group],
+          },
+        })),
+      clearSearchGroups: (chatId) =>
+        set((state) => ({
+          searchGroups: { ...state.searchGroups, [chatId]: [] },
+        })),
     }),
     {
       name: 'nibcowork:cowork',
@@ -261,6 +276,7 @@ export const useCoworkStore = create<CoworkStore>()(
         artifactFiles: state.artifactFiles,
         planContent: state.planContent,
         sessionControls: state.sessionControls,
+        searchGroups: state.searchGroups,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
