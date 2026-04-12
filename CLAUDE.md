@@ -4,56 +4,140 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Nib Cowork is an Electron desktop chat application powered by the Claude Agent SDK. Built with Next.js, React, and shadcn/ui in the `web/` directory. Supports multiple AI providers (Claude, Opencode) with real-time streaming responses via SSE. OAuth connectors (GitHub, Slack, Jira, etc.) are provisioned via `~/.claude/.mcp.json` and injected into the Claude Agent SDK at request time.
+Quarry is an Electron desktop AI workspace powered by the Claude Agent SDK. Built with Next.js 16, React 19, and shadcn/ui in the `web/` directory. Five surfaces (Chat, Cowork, Code, Browser, Assistant) with real-time streaming via SSE, OAuth connectors exposed as MCP tools, agent routing, standing orders/automation, memory extraction, ROI telemetry, and document processing (PDF, DOCX, XLSX, PPTX, audio, video).
 
 ## Development Commands
 
 ```bash
-# Start the Next.js dev server + Electron
-cd web && npm run electron:dev
+cd web && npm run electron:dev   # Start Next.js dev server + Electron
+cd web && npm run dist           # Build macOS app (next build + electron-builder)
 ```
 
 No test suite or linter is configured.
 
 ## Architecture
 
-**Next.js + Electron architecture** (all code in `web/`):
+**Next.js + Electron** (all code in `web/`):
 
-1. **Electron Main** (`web/electron/main.mjs`) — Window lifecycle, context isolation
-2. **Electron Preload** (`web/electron/preload.mjs`) — IPC bridge via `contextBridge`
-3. **Next.js App** (`web/src/`) — React UI with shadcn/ui components, Zustand stores
-4. **API Routes** (`web/src/app/api/`) — Next.js route handlers for chat SSE, providers, settings
+1. **Electron Main** (`web/main-web.js`) — Window lifecycle, IPC handlers, auto-updater, minute-tick heartbeat, GitHub OAuth
+2. **Electron Preload** (`web/preload-web.js`) — IPC bridge via `contextBridge` (file dialogs, auth windows, notifications, updates, `onMinuteTick`)
+3. **Next.js App** (`web/src/`) — React UI with shadcn/ui, Zustand stores
+4. **API Routes** (`web/src/app/api/`) — SSE streaming, connectors, telemetry, identity, memory, webhooks, cron, subagents
 
-**Surfaces** (`web/src/components/surfaces/`):
-- `chat/` — Conversational chat with attachments, web search
-- `cowork/` — Agent workspace with folder picker, Context + Artifacts sidebar panels
-- `code/` — Code-focused surface
-- `browser/` — Browser surface
+### Surfaces (`web/src/components/surfaces/`)
 
-**Stores** (`web/src/stores/`):
-- `chat-store.ts` — Chat surface state (messages, model, streaming)
-- `cowork-store.ts` — Cowork surface state (messages, model, contextFiles, artifactFiles)
-- `conversation-store.ts` — Conversation list management
-- `settings-store.ts` — User preferences
-- `project-store.ts` — Project management
-- `app-store.ts` — Global app state (active surface, navigation)
+- `chat/` — Conversational chat with attachments, web search, model selection
+- `cowork/` — Agent workspace with folder picker, Context + Artifacts + SearchResults sidebar, plan sheet, canvas panel
+- `code/` — Code-focused surface with artifact management
+- `browser/` — Built-in browser for research and testing with DOM tools
+- `assistant/` — Standing orders, automation templates, order editor
 
-**API Endpoints:** `POST /api/chat/[surfaceId]` (SSE streaming), `POST /api/abort`, `GET /api/providers`, `GET /api/health`, `GET /api/models`
+### Stores (`web/src/stores/`)
 
-**External integrations:**
-- OAuth connectors (GitHub, Slack, Jira, Confluence, Figma, etc.) provisioned to `~/.claude/.mcp.json` and loaded at request time via `loadProvisionedMcpServers()`
-- Connector registry: `web/src/lib/connectors/registry.ts` — maps connector IDs to MCP transport configs
-- OAuth flow: `web/src/lib/connectors/oauth.ts` → `/api/connectors/oauth/token` → `provisioner.ts` → `.mcp.json`
+- `app-store.ts` — Active surface, sidebar, theme
+- `chat-store.ts` — Chat messages, streaming, tool calls, session controls
+- `cowork-store.ts` — Cowork messages, contextFiles, artifactFiles, folders (per-conversation)
+- `code-store.ts` — Code artifacts, execution, editor state
+- `browser-store.ts` — Browser DOM state, navigation, tool results
+- `assistant-store.ts` — Standing orders, automation templates
+- `conversation-store.ts` — Conversation list, metadata, tokenUsage, effortEstimate, ROI, ratings
+- `settings-store.ts` — User preferences (v6, persisted)
+- `project-store.ts` — Projects, artifacts, per-project settings
+- `connector-store.ts` — Connected service status
+- `canvas-store.ts` — A2UI canvas panel state
+- `cron-store.ts` — Cron jobs + `matchesCron()`
+- `heartbeat-store.ts` — Connection health
+- `memory-store.ts` — Memory extraction/retrieval
+- `context-bus-store.ts` — Inter-component event bus
+- `reminder-store.ts` — Task reminders
+
+### API Routes (`web/src/app/api/`)
+
+**Core:** `POST /api/chat/[surfaceId]` (SSE streaming with agent routing), `POST /api/abort`, `GET /api/providers`, `GET /api/models`, `GET /api/health`, `GET /api/doctor`, `GET /api/surfaces`
+
+**Identity & Memory:** `GET|POST /api/identity/user-md`, `GET|POST /api/identity/soul-md`, `POST /api/memory/daily`
+
+**Telemetry:** `POST /api/telemetry/events`, `POST /api/telemetry/estimate-effort`, `GET /api/settings/costs`
+
+**Connectors:** `/api/connectors/oauth/*`, `/api/connectors/provision`, `/api/connectors/status`, `/api/nango/*`
+
+**Customization:** `/api/customize/connectors/*`, `/api/customize/plugins`, `/api/customize/skills/*`, `/api/marketplace`
+
+**Automation:** `GET|POST|DELETE /api/cron`, `GET|POST|DELETE /api/webhooks`, `POST /api/webhooks/[token]`, `POST /api/subagent`, `POST /api/subagent/batch`, `POST /api/session/reset`, `GET /api/agents`
+
+**Files:** `/api/files/read`, `/api/files/delete`, `/api/files/search`, `POST /api/upload`
+
+### Providers (`web/src/lib/providers/`)
+
+- `claude-provider.ts` — Main provider. Injects MCP servers (connectors + `nib-web-search` searxng + `quarry`), handles tool interception (canvas, spawn_agent, loop detection), session controls
+- `gateway-provider.ts` — API gateway routing
+- `opencode-provider.ts` — OpenCode SDK integration
+
+### Key Libraries (`web/src/lib/`)
+
+- `slash-commands.ts` — `/think`, `/verbose`, `/reasoning`, `/model`, `/agent`, `/help` — parses into `SessionControls`
+- `agents-parser.ts` — Loads `AGENTS.md` from `~/.claude/` + cwd, matches on triggers or `sessionControls.agentName`
+- `a2ui/` — Anthropic A2UI canvas type system (`types.ts`) + renderer (`renderer.tsx`)
+- `telemetry/` — `roi.ts`, `analytics-client.ts` (SigV4), `event-buffer.ts` (JSONL)
+- `memory/` — `extractor.ts`, `retriever.ts`, `summarizer.ts`
+- `connectors/` — OAuth flow, credential storage, provisioner, registry (GitHub, Slack, Jira, Confluence, Figma, Google Drive, SharePoint, Outlook, Miro, Zoom, Buildkite, SumoLogic)
+- `extractors/` — PDF, DOCX, XLSX, PPTX, audio, video content extraction
+- `surfaces/` — Per-surface config (allowed tools, system prompts). Cowork config has web search prompt directing to `nib-web-search` MCP
+- `standing-order-engine.ts` / `standing-order-templates.ts` — Automation execution
+- `browser-tools.ts` — DOM interaction, element inspection, navigation
+- `artifacts/` — Parser, persistence, server-detector
+- `hooks/` — Server-side audit logger, cost tracker, file watcher, tool monitor
+
+### Hooks (`web/src/hooks/`)
+
+- `use-sse-stream.ts` — SSE streaming with TTFT tracking, `onUsage` callback
+- `use-heartbeat.ts` — Subscribes to `minute:tick` IPC
+- `use-cron.ts` — Cron evaluation on heartbeat
+- `use-session-reset.ts` — Idle/daily session reset
+- `use-electron.ts` — Electron IPC (file dialogs, auth)
+- `use-voice-input.ts` — Local Whisper speech-to-text
+- `use-at-suggestions.ts` — @-mention autocomplete
+- `use-browser-agent.ts` — Browser automation coordination
+- `use-file-drop.ts` — Drag-and-drop file handling
+- `use-standing-orders.ts` — Automation template execution
+
+## External Integrations
+
+- **OAuth connectors** provisioned to `~/.claude/.mcp.json` via `loadProvisionedMcpServers()` at request time
+- **Web search** via `nib-web-search` MCP (searxng at `SEARXNG_INSTANCES` env var)
+- **Telemetry** via SigV4-signed analytics API (`ANALYTICS_API_URL`)
+- **Auto-update** from generic provider URL in electron-builder config
+- **Nango** (optional) for 700+ OAuth connector hub
 
 ## Environment Variables
 
 Defined in `.env` (copy from `.env.example`):
-- `ANTHROPIC_API_KEY` — Required for Claude provider (starts with `sk-ant-`)
-- OAuth connector credentials (GitHub, Slack, Atlassian, MS365, Google, Figma, Miro, Zoom) — see `.env.example`
+
+- `CLAUDE_CODE_USE_BEDROCK=1` + AWS credentials — Required for Claude inference via Bedrock
+- `ANTHROPIC_API_KEY` — Alternative to Bedrock (direct API)
+- `NIB_COWORK_DEFAULT_MODEL` — Default model (`sonnet`)
+- `ANALYTICS_API_URL` / `ANALYTICS_AWS_REGION` — ROI telemetry pipeline
+- `SEARXNG_INSTANCES` — Custom searxng URL (defaults to internal nib instance)
+- OAuth credentials (GitHub, Slack, Atlassian, MS365, Google, Figma, Miro, Zoom) — see `.env.example`
+- `NANGO_*` — Optional Nango connector hub
 
 ## Key Patterns
 
-- **SSE streaming**: API routes yield chunks; client reads via `response.body.getReader()`
-- **Session management**: Per-provider session tracking for conversation continuity
-- **Centered input pattern**: Empty state shows centered greeting + inline input card; active state shows header + messages + bottom input
-- **Cowork sidebar**: Tool calls categorized into Context (Read/Glob/Grep/WebSearch/WebFetch/Bash) and Artifacts (Write/Edit/NotebookEdit) panels by tool name
+- **SSE streaming**: API routes yield chunks via `createSSEStream()`; client reads via `response.body.getReader()` in `use-sse-stream.ts`
+- **Session controls**: Slash commands parsed into `SessionControls` (thinkLevel, verboseMode, modelOverride, agentName) passed to provider
+- **Agent routing**: `route.ts` loads AGENTS.md, matches on triggers or `/agent` command, injects agent system prompt
+- **Tool interception**: `canvas` tool → SSE event → canvas-store; `spawn_agent` → HTTP to `/api/subagent`; loop detection via sliding window
+- **Cowork sidebar**: Tool calls categorized into Context (Read/Glob/Grep/Bash) and Artifacts (Write/Edit/NotebookEdit) by `categorizeToolCall()`. Search results from MCP searxng aggregated into `SearchResultsCard`. WebFetch URLs from search follow-ups are suppressed from Context.
+- **Minute tick**: Electron main sends `minute:tick` IPC → preload exposes `onMinuteTick` → hooks subscribe for cron, heartbeat, session reset
+- **Identity files**: `SOUL.md` (personality) + `USER.md` (user context) injected into system prompt
+- **ROI tracking**: `done` SSE event with token/cost/duration → effort estimation via Haiku → conversation metrics
+
+## Building
+
+```bash
+cd web && npm run dist          # macOS (DMG + ZIP, x64 + arm64)
+cd web && npm run dist:win      # Windows (NSIS installer)
+cd web && npm run dist:linux    # Linux
+```
+
+Output goes to `web/dist/`. The `outputFileTracingExcludes` in `next.config.ts` excludes `dist/`, `release/`, `temp/`, and `.next/cache/` from the standalone bundle to keep app size reasonable (~500MB).

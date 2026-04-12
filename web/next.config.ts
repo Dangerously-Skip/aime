@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   serverExternalPackages: ['pdfjs-dist'],
+  outputFileTracingExcludes: {
+    '*': ['./dist/**', './release/**', './temp/**', './.next/cache/**'],
+  },
   experimental: {
     serverActions: {
       bodySizeLimit: '100mb',

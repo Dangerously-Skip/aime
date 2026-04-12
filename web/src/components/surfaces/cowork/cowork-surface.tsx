@@ -112,8 +112,9 @@ interface SearchResult {
 }
 
 function parseSearchResults(output: string): SearchResult[] {
-  try {
-    const data = JSON.parse(output);
+  // Helper to extract results from a parsed object
+  const extract = (data: Record<string, unknown>): SearchResult[] => {
+    // Direct array of results
     if (Array.isArray(data)) {
       return data.slice(0, 10).map((r: Record<string, unknown>) => ({
         title: String(r.title || ''),
@@ -121,6 +122,7 @@ function parseSearchResults(output: string): SearchResult[] {
         snippet: String(r.content || r.snippet || r.description || '').slice(0, 200),
       })).filter((r: SearchResult) => r.title && r.url);
     }
+    // { results: [...] } wrapper (searxng structured response)
     if (data.results && Array.isArray(data.results)) {
       return data.results.slice(0, 10).map((r: Record<string, unknown>) => ({
         title: String(r.title || ''),
@@ -128,6 +130,24 @@ function parseSearchResults(output: string): SearchResult[] {
         snippet: String(r.content || r.snippet || r.description || '').slice(0, 200),
       })).filter((r: SearchResult) => r.title && r.url);
     }
+    return [];
+  };
+
+  try {
+    const data = JSON.parse(output);
+
+    // MCP content blocks: [{type:"text", text:"..."}] — unwrap the text payload
+    if (Array.isArray(data) && data.length > 0 && data[0]?.type === 'text' && typeof data[0]?.text === 'string') {
+      try {
+        const inner = JSON.parse(data[0].text);
+        const results = extract(inner);
+        if (results.length > 0) return results;
+      } catch { /* inner text wasn't JSON, fall through */ }
+    }
+
+    // Direct JSON (already-unwrapped by SDK)
+    const results = extract(data);
+    if (results.length > 0) return results;
   } catch {
     // Not JSON — try to extract URLs from text
     const urls = output.match(/https?:\/\/[^\s)>"]+/g);
@@ -167,9 +187,13 @@ function categorizeToolCall(
     return typeof raw === "string" ? { category: "context", path: `🔍 ${raw}` } : null;
   }
 
+  // WebFetch — never add to sidebar (URLs aren't files; search results go to SearchResultsCard)
+  if (toolName === "WebFetch") {
+    return null;
+  }
+
   // Explicit context tools
   if (toolName === "Read" || toolName === "Glob" || toolName === "Grep" ||
-      toolName === "WebFetch" ||
       toolName === "ExcelRead" || toolName.endsWith("__ExcelRead") || toolName.endsWith(":ExcelRead")) {
     const raw = toolInput.file_path || toolInput.path || toolInput.pattern || toolInput.url || toolInput.query;
     return typeof raw === "string" ? { category: "context", path: raw } : null;
@@ -775,7 +799,10 @@ export function CoworkSurface() {
           // Categorize into sidebar panels
           const categorized = categorizeToolCall(toolName, toolInput);
           if (categorized && chatId && isValidSidebarEntry(categorized.path)) {
-            if (categorized.category === "context") {
+            // Skip 🔍 search query entries — redundant with SearchResultsCard
+            if (categorized.path.startsWith("🔍 ")) {
+              // Don't add search queries to either panel
+            } else if (categorized.category === "context") {
               // Don't add to Context if this path is already in Artifacts
               const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
               if (!currentArtifacts.includes(categorized.path)) {
@@ -1566,7 +1593,9 @@ export function CoworkSurface() {
             open={sidebarOpen}
             onToggle={() => setSidebarOpen((prev) => !prev)}
             onContextClick={(path) => {
-              // URLs open in browser; file paths open in the preview sheet
+              // Non-file entries: search queries, bash commands, agent labels — no-op
+              if (path.startsWith("🔍 ") || path.startsWith("bash: ") || path.startsWith("⚡ ")) return;
+              // URLs open in browser
               if (path.startsWith("http")) {
                 window.open(path, "_blank");
               } else {
