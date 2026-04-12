@@ -111,6 +111,11 @@ interface SearchResult {
   snippet: string;
 }
 
+interface SearchQueryGroup {
+  query: string;
+  results: SearchResult[];
+}
+
 function parseSearchResults(output: string): SearchResult[] {
   // Helper to extract results from a parsed object
   const extract = (data: Record<string, unknown>): SearchResult[] => {
@@ -309,38 +314,83 @@ function SidebarCard({
   );
 }
 
-function SearchResultsCard({ results, onClear }: { results: SearchResult[]; onClear: () => void }) {
+/** Deterministic color from a domain string (for favicon dot). */
+function domainColor(domain: string): string {
+  const colors = [
+    "bg-red-500", "bg-orange-500", "bg-amber-500", "bg-yellow-500",
+    "bg-lime-500", "bg-green-500", "bg-emerald-500", "bg-teal-500",
+    "bg-cyan-500", "bg-sky-500", "bg-blue-500", "bg-indigo-500",
+    "bg-violet-500", "bg-purple-500", "bg-fuchsia-500", "bg-pink-500",
+  ];
+  let hash = 0;
+  for (let i = 0; i < domain.length; i++) hash = ((hash << 5) - hash + domain.charCodeAt(i)) | 0;
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function extractDomain(url: string): string {
+  try { return new URL(url).hostname; } catch { return url; }
+}
+
+function SearchQueryCard({ group }: { group: SearchQueryGroup }) {
   const [open, setOpen] = useState(true);
-  if (results.length === 0) return null;
   return (
-    <div className="rounded-xl border border-border/50 bg-card/50">
+    <div className="rounded-lg border border-border/40 bg-muted/20 overflow-hidden">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 px-4 py-3 text-sm font-semibold hover:bg-muted/30 transition-colors rounded-t-xl"
+        className="flex w-full items-center gap-2 px-3 py-2 text-xs hover:bg-muted/40 transition-colors"
       >
-        <Globe className="h-4 w-4 text-muted-foreground" />
-        <span className="flex-1 text-left">Web Search</span>
-        <span className="text-[10px] text-muted-foreground">{results.length} results</span>
-        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
+        <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="flex-1 text-left truncate text-muted-foreground">{group.query}</span>
+        <span className="text-[10px] text-muted-foreground/60 shrink-0">{group.results.length} results</span>
+        <ChevronDown className={`h-3 w-3 text-muted-foreground/60 transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
       </button>
       {open && (
-        <div className="px-3 pb-3 space-y-1.5">
-          {results.map((r, i) => (
-            <a
-              key={i}
-              href={r.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block rounded-lg bg-muted/40 px-3 py-2 hover:bg-muted/70 transition-colors group"
-            >
-              <div className="text-xs font-medium text-foreground truncate group-hover:text-primary transition-colors">{r.title}</div>
-              <div className="text-[10px] text-muted-foreground/70 truncate">{r.url}</div>
-              {r.snippet && <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">{r.snippet}</div>}
-            </a>
-          ))}
+        <div className="px-2 pb-2 space-y-0.5">
+          {group.results.map((r, i) => {
+            const domain = extractDomain(r.url);
+            return (
+              <a
+                key={i}
+                href={r.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors group"
+              >
+                <span className={`h-2.5 w-2.5 rounded-sm shrink-0 ${domainColor(domain)}`} />
+                <span className="text-[11px] font-medium text-foreground truncate group-hover:text-primary transition-colors">{r.title}</span>
+                <span className="text-[10px] text-muted-foreground/50 shrink-0 ml-auto">{domain}</span>
+              </a>
+            );
+          })}
         </div>
       )}
+    </div>
+  );
+}
+
+function SearchResultsCard({ groups, onClear }: { groups: SearchQueryGroup[]; onClear: () => void }) {
+  if (groups.length === 0) return null;
+  const totalSearches = groups.length;
+  return (
+    <div className="rounded-xl border border-border/50 bg-card/50">
+      <div className="flex items-center gap-2 px-4 py-3">
+        <Globe className="h-4 w-4 text-muted-foreground" />
+        <span className="flex-1 text-sm font-semibold">Web Search</span>
+        <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{totalSearches} {totalSearches === 1 ? "search" : "searches"}</span>
+        <button
+          type="button"
+          onClick={onClear}
+          className="h-4 w-4 flex items-center justify-center rounded text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      <div className="px-3 pb-3 space-y-2">
+        {groups.map((g, i) => (
+          <SearchQueryCard key={i} group={g} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -427,7 +477,7 @@ function SidebarPanel({
   onArtifactClick,
   onContextRemove,
   onArtifactRemove,
-  searchResults,
+  searchGroups,
   onClearSearch,
   previewUrl,
   onPreviewClick,
@@ -442,7 +492,7 @@ function SidebarPanel({
   onArtifactClick?: (path: string) => void;
   onContextRemove?: (path: string) => void;
   onArtifactRemove?: (path: string) => void;
-  searchResults?: SearchResult[];
+  searchGroups?: SearchQueryGroup[];
   onClearSearch?: () => void;
   previewUrl?: string | null;
   onPreviewClick?: () => void;
@@ -502,8 +552,8 @@ function SidebarPanel({
               onItemRemove={onContextRemove}
             />
 
-            {searchResults && searchResults.length > 0 && (
-              <SearchResultsCard results={searchResults} onClear={onClearSearch || (() => {})} />
+            {searchGroups && searchGroups.length > 0 && (
+              <SearchResultsCard groups={searchGroups} onClear={onClearSearch || (() => {})} />
             )}
 
             <SidebarCard
@@ -552,7 +602,7 @@ export function CoworkSurface() {
     useAtSuggestions();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchGroups, setSearchGroups] = useState<SearchQueryGroup[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const clearCanvas = useCanvasStore((s) => s.clearCanvas);
@@ -855,7 +905,10 @@ export function CoworkSurface() {
             const searchTc = lastMsg2?.toolCalls?.find((tc) => tc.id === id);
             if (searchTc && (searchTc.name.includes("web_search") || searchTc.name.includes("searxng"))) {
               const parsed = parseSearchResults(result);
-              if (parsed.length > 0) setSearchResults(parsed);
+              if (parsed.length > 0) {
+                const query = (searchTc.input as Record<string, unknown>)?.query as string || "web search";
+                setSearchGroups((prev) => [...prev, { query, results: parsed }]);
+              }
             }
           }
           // Detect binary files mentioned in Bash output (e.g. python-pptx writing a .pptx)
@@ -1628,8 +1681,8 @@ export function CoworkSurface() {
               }
               removeArtifactFile(chatId, path);
             }}
-            searchResults={searchResults}
-            onClearSearch={() => setSearchResults([])}
+            searchGroups={searchGroups}
+            onClearSearch={() => setSearchGroups([])}
             previewUrl={previewUrl}
             onPreviewClick={() => setPreviewOpen(true)}
             taskMetrics={(() => {
