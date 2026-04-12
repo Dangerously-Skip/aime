@@ -273,6 +273,8 @@ export class ClaudeProvider extends BaseProvider {
           args: ['-y', '@jharding_npm/mcp-server-searxng'],
           env: {
             SEARXNG_INSTANCES: process.env.SEARXNG_INSTANCES || 'https://ai-studio-searxng.internal.invalid',
+            NODE_TLS_REJECT_UNAUTHORIZED: '0',
+            MCP_SEARXNG_DEBUG: process.env.MCP_SEARXNG_DEBUG || 'false',
           },
         },
       },

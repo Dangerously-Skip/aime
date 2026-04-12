@@ -7,6 +7,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       'WebFetch', 'Agent', 'NotebookEdit',
       'TodoWrite', 'AskUserQuestion', 'EnterWorktree',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
+      'mcp__nib-web-search__web_search',
     ],
     permissionMode: 'acceptEdits',
     systemPrompt: {
