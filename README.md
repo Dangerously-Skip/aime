@@ -154,9 +154,10 @@ web/
     stores/                       # 16 Zustand stores (app, chat, cowork, code, browser, assistant,
                                   #   conversation, settings, project, connector, canvas, cron,
                                   #   heartbeat, memory, context-bus, reminder)
-    hooks/                        # React hooks (SSE stream, electron, voice, heartbeat, cron,
+    hooks/                        # 14 React hooks (SSE stream, electron, voice, heartbeat, cron,
                                   #   session-reset, browser-agent, file-drop, standing-orders,
-                                  #   at-suggestions, project-context)
+                                  #   at-suggestions, project-context, auto-project, conversations,
+                                  #   scratch-dir)
     lib/
       providers/                  # AI providers (Claude, Gateway, OpenCode)
       connectors/                 # OAuth registry + provisioner (13 services)
@@ -182,13 +183,51 @@ npm run dist:win       # Windows (NSIS installer)
 npm run dist:linux     # Linux
 ```
 
-Output goes to `web/dist/`. Releases are built via GitHub Actions on tag push:
+Output goes to `web/dist/`.
+
+### Releasing
+
+Releases are triggered by pushing a version tag to the `origin` remote:
 
 ```bash
-git tag v1.0.28 && git push origin v1.0.28
+# 1. Bump version in web/package.json
+# 2. Commit the change
+git add web/package.json && git commit -m "chore: bump version to 1.0.X"
+
+# 3. Tag and push
+git tag v1.0.X
+git push origin master
+git push origin v1.0.X
 ```
 
-The build pipeline is defined in `.github/workflows/release.yml`.
+**What happens next:**
+1. GitHub Actions (`.github/workflows/release.yml`) builds macOS (DMG + ZIP, x64 + arm64, signed + notarized) and Windows (NSIS installer) artifacts
+2. A GitHub Release is created with all artifacts attached
+3. Buildkite `promote-release` pipeline is triggered automatically — it downloads the artifacts, bundles them with the landing page, and deploys to the internal download site via SAMOA
+
+**Internal download page:** [quarry.internal.invalid](https://quarry.internal.invalid) (VPN required)
+
+Existing installs auto-update when connected to VPN. The electron auto-updater checks the internal site for new versions.
+
+### Release infrastructure
+
+| File | Purpose |
+|------|---------|
+| `.github/workflows/release.yml` | Build, notarize, create GitHub Release, trigger Buildkite |
+| `.buildkite/pipeline.yml` | SAMOA deploy pipeline |
+| `.buildkite/promote-release.yml` | Download from GitHub Release, bundle with landing page, deploy |
+| `infrastructure/releases/sam_template.yaml` | SAM template (`RQP::StaticSite` — S3 + CloudFront + Route53) |
+| `infrastructure/releases/nginx.conf` | Nginx config for release site |
+| `infrastructure/releases/html/` | Landing page HTML for internal download site |
+
+See `docs/release-pipeline-investigation.md` for the full investigation into the pipeline architecture and roadblocks encountered during setup.
+
+### Git remotes
+
+| Remote | Repository | Purpose |
+|--------|-----------|---------|
+| `origin` | `redacted-org/quarry` | Work — release tags trigger CI/CD |
+| `personal` | `thewitanowski/redactedQuarry` | Personal backup / open-source mirror |
 
 ## Tech stack
 
@@ -196,7 +235,7 @@ The build pipeline is defined in `.github/workflows/release.yml`.
 |-------|------------|
 | Desktop | Electron 41 |
 | UI | Next.js 16 + React 19 + shadcn/ui |
-| AI | Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) |
+| AI | Claude Agent SDK (`@anthropic-ai/claude-agent-sdk` ^0.2.74) + Anthropic SDK (`@anthropic-ai/sdk` ^0.78.0) |
 | Connectors | MCP (Model Context Protocol) via OAuth + Nango |
 | Web Search | SearXNG via MCP (`@jharding_npm/mcp-server-searxng`) |
 | Streaming | Server-Sent Events |
