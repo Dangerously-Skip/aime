@@ -221,6 +221,7 @@ function createWindow(port) {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
+      partition: "persist:quarry",
     },
   });
 
@@ -450,8 +451,10 @@ app.whenReady().then(async () => {
   browserSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(true));
   browserSession.setPermissionCheckHandler(() => true);
 
-  // Also configure the default session
+  // Also configure the default session and the main window partition
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(true));
+  const mainSession = session.fromPartition("persist:quarry");
+  mainSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(true));
 
   // Configure webview contents on creation
   app.on("web-contents-created", (_event, contents) => {
