@@ -7,12 +7,55 @@ import { ToolCallsSummaryBar } from "./tool-calls-summary-bar";
 import { StreamingCursor } from "./streaming-cursor";
 import { ArtifactCard } from "./artifact-card";
 import { Button } from "@/components/ui/button";
-import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw } from "lucide-react";
+import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw, FileText, FileCode2, FileSpreadsheet, FileImage, File, ExternalLink, FolderOpen } from "lucide-react";
 import { MemoryButton } from "./memory-button";
 import { useConversationStore } from "@/stores/conversation-store";
 import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
 import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
+import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
+import { useCanvasStore } from "@/stores/canvas-store";
+import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
+
+const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "ExcelWrite", "ExcelEdit"]);
+
+function getFileIcon(path: string) {
+  const ext = path.split('.').pop()?.toLowerCase() || '';
+  if (['ts', 'tsx', 'js', 'jsx', 'py', 'rs', 'go', 'java', 'rb', 'sh', 'yml', 'yaml', 'json'].includes(ext))
+    return <FileCode2 className="h-4 w-4 text-blue-500" />;
+  if (['md', 'txt', 'doc', 'docx', 'pdf'].includes(ext))
+    return <FileText className="h-4 w-4 text-orange-500" />;
+  if (['xlsx', 'xls', 'csv'].includes(ext))
+    return <FileSpreadsheet className="h-4 w-4 text-green-500" />;
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext))
+    return <FileImage className="h-4 w-4 text-purple-500" />;
+  return <File className="h-4 w-4 text-muted-foreground" />;
+}
+
+function getExtBadge(path: string) {
+  return path.split('.').pop()?.toUpperCase() || 'FILE';
+}
+
+function DocumentArtifactCard({ filePath, onClick }: { filePath: string; onClick?: (path: string) => void }) {
+  const fileName = filePath.split('/').pop() || filePath;
+  const canOpen = typeof window !== 'undefined' && 'electronAPI' in window;
+  return (
+    <button
+      className="flex items-center gap-2.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-left hover:bg-muted/50 transition-colors group/doc"
+      onClick={() => {
+        if (onClick) onClick(filePath);
+        else if (canOpen) (window as unknown as { electronAPI: { openPath: (p: string) => void } }).electronAPI.openPath(filePath);
+      }}
+    >
+      {getFileIcon(filePath)}
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-medium truncate" title={filePath}>{fileName}</div>
+      </div>
+      <span className="text-[10px] font-mono text-muted-foreground bg-muted rounded px-1.5 py-0.5">{getExtBadge(filePath)}</span>
+      <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover/doc:opacity-100 transition-opacity" />
+    </button>
+  );
+}
 
 const THINKING_WORDS = [
   "Pondering",
@@ -50,6 +93,8 @@ interface AssistantMessageProps {
   onPreviewUrl?: (url: string) => void;
   onRetry?: () => void;
   conversationId?: string;
+  canvasDoc?: A2UIDocument | null;
+  onCanvasAction?: (action: A2UIAction) => void;
 }
 
 export function AssistantMessage({
@@ -63,12 +108,22 @@ export function AssistantMessage({
   onPreviewUrl,
   onRetry,
   conversationId,
+  canvasDoc,
+  onCanvasAction,
 }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false);
   const updateConversationMetrics = useConversationStore((s) => s.updateConversationMetrics);
   const currentRating = useConversationStore((s) =>
     conversationId ? s.conversations.find((c) => c.id === conversationId)?.userRating : undefined
   );
+  // Show inline canvas on last assistant message when canvas panel is not open
+  const inlineCanvasDoc = useCanvasStore((s) => {
+    if (!isLastAssistantMessage || isStreaming || canvasDoc !== undefined) return canvasDoc || null;
+    // Only show inline if canvas panel is closed for this surface
+    const anyOpen = Object.values(s.openSurfaces).some(Boolean);
+    return anyOpen ? null : s.canvasDoc;
+  });
+
   const [thinkingWordIndex, setThinkingWordIndex] = useState(() =>
     Math.floor(Math.random() * THINKING_WORDS.length)
   );
@@ -92,6 +147,19 @@ export function AssistantMessage({
   }, [content, isStreaming]);
 
   const hasArtifacts = parsed?.segments.some((s) => s.type === "artifact") ?? false;
+
+  // Extract file paths from completed Write/Edit tool calls
+  const writtenFiles = useMemo(() => {
+    if (isStreaming) return [];
+    const paths: string[] = [];
+    for (const tc of toolCalls) {
+      if (tc.status === "complete" && WRITE_TOOLS.has(tc.name)) {
+        const p = (tc.input.file_path || tc.input.path || tc.input.notebook_path) as string | undefined;
+        if (p && !paths.includes(p)) paths.push(p);
+      }
+    }
+    return paths;
+  }, [toolCalls, isStreaming]);
 
   function handleCopy() {
     navigator.clipboard.writeText(content).then(() => {
@@ -144,6 +212,37 @@ export function AssistantMessage({
             onArtifactClick={onArtifactClick}
             onPreviewUrl={onPreviewUrl}
           />
+        )}
+
+        {/* Document artifact cards for written files */}
+        {writtenFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 items-center">
+            {writtenFiles.map((fp) => (
+              <DocumentArtifactCard key={fp} filePath={fp} onClick={onArtifactClick ? (p) => onArtifactClick(p) : undefined} />
+            ))}
+            {writtenFiles.length >= 2 && typeof window !== 'undefined' && 'electronAPI' in window && (
+              <button
+                className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+                onClick={() => {
+                  const api = (window as unknown as { electronAPI: { openPath: (p: string) => void } }).electronAPI;
+                  // Open the containing folder of the first file
+                  const dir = writtenFiles[0].split('/').slice(0, -1).join('/');
+                  if (dir) api.openPath(dir);
+                }}
+                title="Open containing folder"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                Open folder
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Inline A2UI canvas */}
+        {inlineCanvasDoc && (
+          <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
+            <A2UIDocumentRenderer doc={inlineCanvasDoc} onAction={onCanvasAction} />
+          </div>
         )}
 
         {/* Content — render as segments if artifacts detected, else plain markdown */}

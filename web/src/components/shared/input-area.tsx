@@ -93,22 +93,41 @@ export function InputArea({
           {attachments && attachments.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-3 pt-2">
               {attachments.map((att, i) => (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                >
-                  <AttachmentIcon category={att.category} />
-                  {att.name}
-                  {onRemoveAttachment && (
-                    <button
-                      type="button"
-                      onClick={() => onRemoveAttachment(i)}
-                      className="hover:text-foreground"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  )}
-                </span>
+                att.category === 'image' && att.content?.startsWith('data:image/') ? (
+                  <div key={i} className="relative group/thumb">
+                    <img
+                      src={att.content}
+                      alt={att.name}
+                      className="h-12 w-12 rounded-md object-cover border border-border"
+                    />
+                    {onRemoveAttachment && (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveAttachment(i)}
+                        className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-muted border border-border flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                  >
+                    <AttachmentIcon category={att.category} />
+                    {att.name}
+                    {onRemoveAttachment && (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveAttachment(i)}
+                        className="hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </span>
+                )
               ))}
             </div>
           )}
