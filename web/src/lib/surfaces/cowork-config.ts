@@ -36,12 +36,12 @@ When the user asks to be reminded about something or to schedule a recurring tas
 - Use subagents for parallel work streams when appropriate.
 
 ## PowerPoint presentations
-- **ALWAYS use the Fork plugin** for PowerPoint generation. Fork is installed at ~/.claude/plugins/fork/.
-- Fork workflow: write Fork-formatted markdown → run ~/.claude/plugins/fork/generate_presentation.sh → .pptx is generated automatically.
-- Fork supports: title slides, section headers, content slides, two-column layouts, image slides, tables.
-- For custom visuals (charts, metric cards), create HTML files in visuals/ and Fork converts them to PNG automatically.
-- See the Fork CLAUDE.md at ~/.claude/plugins/fork/.claude/CLAUDE.md for full documentation.
-- Do NOT manually use python-pptx for PowerPoint creation — Fork handles this better.
+- **ALWAYS use the nib-ppt plugin** for PowerPoint generation. Fork is installed at ~/.claude/plugins/nib-ppt/.
+- nib-ppt workflow: write Fork-formatted markdown → run ~/.claude/plugins/nib-ppt/generate_presentation.sh → .pptx is generated automatically.
+- nib-ppt supports: title slides, section headers, content slides, two-column layouts, image slides, tables.
+- For custom visuals (charts, metric cards), create HTML files in visuals/ and nib-ppt converts them to PNG automatically.
+- See the nib-ppt CLAUDE.md at ~/.claude/plugins/nib-ppt/.claude/CLAUDE.md for full documentation.
+- Do NOT manually use python-pptx for PowerPoint creation — nib-ppt handles this better.
 
 ## Other binary file formats (PDF, XLSX, DOCX)
 - For .xlsx, .docx, .pdf, or other binary formats: use Bash to install the needed library (pip3 install openpyxl / python-docx / fpdf2) then generate with Python.
