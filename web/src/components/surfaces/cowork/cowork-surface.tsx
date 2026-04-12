@@ -199,11 +199,18 @@ function categorizeToolCall(
     return null;
   }
 
-  // Explicit context tools
+  // Explicit context tools — only show files from the user's working folder
   if (toolName === "Read" || toolName === "Glob" || toolName === "Grep" ||
       toolName === "ExcelRead" || toolName.endsWith("__ExcelRead") || toolName.endsWith(":ExcelRead")) {
     const raw = toolInput.file_path || toolInput.path || toolInput.pattern || toolInput.url || toolInput.query;
-    return typeof raw === "string" ? { category: "context", path: raw } : null;
+    if (typeof raw !== "string") return null;
+    // Filter out agent-internal files that aren't user context
+    if (raw.includes('.claude/') || raw.includes('CLAUDE.md') || raw.includes('/plugins/') ||
+        raw.includes('.quarry/') || raw.includes('/scratch/') ||
+        raw.endsWith('.sh') || raw.endsWith('.py') || raw.includes('node_modules/')) return null;
+    // Glob patterns aren't meaningful context entries
+    if (toolName === "Glob" || toolName === "Grep") return null;
+    return { category: "context", path: raw };
   }
 
   // Bash — inspect command to decide
@@ -604,7 +611,9 @@ export function CoworkSurface() {
     useAtSuggestions();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [searchGroups, setSearchGroups] = useState<SearchQueryGroup[]>([]);
+  const searchGroups = useCoworkStore((s) => s.searchGroups[chatId] ?? []);
+  const addSearchGroup = useCoworkStore((s) => s.addSearchGroup);
+  const clearSearchGroups = useCoworkStore((s) => s.clearSearchGroups);
   const [previewOpen, setPreviewOpen] = useState(false);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const clearCanvas = useCanvasStore((s) => s.clearCanvas);
@@ -860,7 +869,7 @@ export function CoworkSurface() {
               .then((r) => r.json())
               .then(({ results }) => {
                 if (results && results.length > 0) {
-                  setSearchGroups((prev) => [...prev, { query: searchQuery, results }]);
+                  if (chatId) addSearchGroup(chatId, { query: searchQuery, results });
                 }
               })
               .catch(() => {});
@@ -1715,7 +1724,7 @@ export function CoworkSurface() {
               removeArtifactFile(chatId, path);
             }}
             searchGroups={searchGroups}
-            onClearSearch={() => setSearchGroups([])}
+            onClearSearch={() => { if (chatId) clearSearchGroups(chatId); }}
             previewUrl={previewUrl}
             onPreviewClick={() => setPreviewOpen(true)}
             taskMetrics={(() => {
