@@ -7,7 +7,6 @@ import { AssistantMessage } from "./assistant-message";
 import { QuestionCard } from "./question-card";
 import { ArrowDown } from "lucide-react";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
-import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
 
 const FONT_CLASS_MAP: Record<string, string> = {
   default: "chat-font-default",
@@ -49,11 +48,9 @@ interface MessageListProps {
   onPreviewUrl?: (url: string) => void;
   onRetry?: () => void;
   conversationId?: string;
-  canvasDoc?: A2UIDocument | null;
-  onCanvasAction?: (action: A2UIAction) => void;
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, onRetry, conversationId, canvasDoc, onCanvasAction }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, onRetry, conversationId }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -144,8 +141,6 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             onPreviewUrl={onPreviewUrl}
             onRetry={isLastAssistant ? onRetry : undefined}
             conversationId={conversationId}
-            canvasDoc={isLastAssistant ? canvasDoc : undefined}
-            onCanvasAction={isLastAssistant ? onCanvasAction : undefined}
           />
         ) : null;
       })}

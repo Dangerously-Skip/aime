@@ -89,29 +89,20 @@ const BASH_WRITE_PATTERNS = [
 ];
 
 // Bash commands that are noisy / not worth tracking in sidebar
-const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|show)|cat\s|head\s|tail\s|wc\s|which\s|type\s|env|printenv|date|whoami|uname|curl\s|wget\s)/;
+const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|show)|cat\s|head\s|tail\s|wc\s|which\s|type\s|env|printenv|date|whoami|uname)/;
 
 // Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools)
 const BASH_ARTIFACT_EXT = /\b([\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
-
-// Additional patterns for script output that names a file path (e.g. python-pptx "Saved to /tmp/foo.pptx")
-const BASH_OUTPUT_PATH_PATTERNS = [
-  /(?:saved?|writ(?:ten|e|ing)|created?|generated?|exported?|output)\s+(?:to\s+|file\s+|as\s+)?['"]?([/~][\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|zip))/gi,
-];
 
 // Filter out HTML tag fragments, internal paths, and garbage from artifact/context names
 function isValidSidebarEntry(path: string): boolean {
   if (!path || path.length < 2) return false;
   // HTML tag fragments: ]+>, a>, script>, etc.
   if (/^[a-z]+>/.test(path) || path.includes('<') || path.includes('>')) return false;
-  // Pure punctuation / symbols / pipe fragments
-  if (/^[^a-zA-Z0-9/~.]+$/.test(path) || /^[|&;]+/.test(path)) return false;
-  // URLs / query strings — not file paths
-  if (path.includes('?') || path.includes('://') || path.startsWith('http')) return false;
-  // Bare web asset names from HTML output (e.g. "style.css", "bundle.js") — not real artifacts
-  if (!path.includes('/') && /^[\w.-]+\.(?:css|js|jsx|ts|tsx|html?|woff2?|ttf|eot|ico|map)$/i.test(path)) return false;
+  // Pure punctuation / symbols
+  if (/^[^a-zA-Z0-9/~.]+$/.test(path)) return false;
   // Internal scratch directory operations — not user-supplied context
-  if (path.includes('.quarry/scratch') || path.includes('.quarry/') || (path.includes('/scratch/') && path.includes('/documents/'))) return false;
+  if (path.includes('.quarry/scratch') || path.includes('/scratch/') && path.includes('/documents/')) return false;
   return true;
 }
 
@@ -972,15 +963,15 @@ export function CoworkSurface() {
               }
             }
             if (matchingTc?.name === "Bash") {
-              // Skip scanning curl/wget HTML output — too many false positives from embedded asset URLs
-              const bashCmd = typeof matchingTc.input?.command === "string" ? matchingTc.input.command : "";
-              const isCurlWget = /\bcurl\b|\bwget\b/.test(bashCmd);
               const coworkFolder = useCoworkStore.getState().folder;
-              const addBashArtifact = (raw: string) => {
-                let filePath = raw;
-                if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") return;
-                if (/^[0-9.:]+$/.test(filePath.replace(/\.(?:pdf|csv|png|jpe?g)$/i, ""))) return;
-                if (!isValidSidebarEntry(filePath)) return;
+              BASH_ARTIFACT_EXT.lastIndex = 0;
+              let m;
+              while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) {
+                let filePath = m[1];
+                // Skip false positives: bare extensions, /dev/null, numeric-heavy fragments
+                if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") continue;
+                if (/^[0-9.:]+$/.test(filePath.replace(/\.(?:pdf|csv|png|jpe?g)$/i, ""))) continue;
+                if (!isValidSidebarEntry(filePath)) continue;
                 if (!filePath.startsWith("/") && coworkFolder) {
                   const cwdBasename = coworkFolder.split("/").pop() || "";
                   if (cwdBasename && filePath.startsWith(`${cwdBasename}/`)) {
@@ -989,18 +980,6 @@ export function CoworkSurface() {
                   filePath = `${coworkFolder}/${filePath}`;
                 }
                 addArtifactFile(chatId, filePath);
-              };
-              if (!isCurlWget) {
-                // Scan for file extensions in output (skip curl/wget — HTML has too many false positives)
-                BASH_ARTIFACT_EXT.lastIndex = 0;
-                let m;
-                while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) addBashArtifact(m[1]);
-                // Scan for script output patterns ("Saved to /path/file.pptx")
-                for (const pattern of BASH_OUTPUT_PATH_PATTERNS) {
-                  pattern.lastIndex = 0;
-                  let pm;
-                  while ((pm = pattern.exec(result)) !== null) addBashArtifact(pm[1]);
-                }
               }
             }
           }
@@ -1059,16 +1038,9 @@ export function CoworkSurface() {
           break;
         }
         case "document_extracted": {
-          // Add extracted document to context sidebar, removing the original attachment entry to avoid duplicates
+          // Add extracted document to context sidebar
           const extractedPath = event.extractedPath as string | undefined;
-          const originalName = event.name as string | undefined;
           if (extractedPath && chatId) {
-            // Remove original attachment entry if it exists (e.g. "screenshot.png" replaced by extracted text)
-            if (originalName) {
-              const existing = useCoworkStore.getState().contextFiles[chatId] ?? [];
-              const duplicate = existing.find((p) => p === originalName || p.endsWith(`/${originalName}`));
-              if (duplicate) removeContextFile(chatId, duplicate);
-            }
             addContextFile(chatId, extractedPath);
           }
           console.log('[Cowork] Document extracted:', event.name, 'path:', extractedPath, 'length:', event.textLength);
@@ -1191,17 +1163,6 @@ export function CoworkSurface() {
     },
     [chatId, updateMessage]
   );
-
-  const handleSubmitRef = useRef<((text: string) => void) | null>(null);
-
-  const handleRetry = useCallback(() => {
-    if (!chatId || isStreaming) return;
-    const msgs = useCoworkStore.getState().messages[chatId];
-    if (!msgs || msgs.length < 2) return;
-    const lastUserMsg = [...msgs].reverse().find((m: { role: string }) => m.role === 'user');
-    if (!lastUserMsg) return;
-    handleSubmitRef.current?.(lastUserMsg.content);
-  }, [chatId, isStreaming]);
 
   // Ref to break circular dependency: handleSubmit uses resetIdleTimer, but
   // useHeartbeat (which provides resetIdleTimer) is called after handleSubmit.
@@ -1344,9 +1305,6 @@ export function CoworkSurface() {
       attachments,
     ]
   );
-
-  // Keep handleSubmitRef in sync for retry handler
-  handleSubmitRef.current = handleSubmit;
 
   const handleVoiceTranscript = useCallback(
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
@@ -1653,7 +1611,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} conversationId={chatId} canvasDoc={!canvasOpen ? canvasDoc : null} />
+            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">
