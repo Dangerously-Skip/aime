@@ -1645,7 +1645,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} conversationId={chatId} />
+            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} conversationId={chatId} canvasDoc={!canvasOpen ? canvasDoc : null} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">

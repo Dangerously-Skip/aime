@@ -14,7 +14,6 @@ import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
 import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
-import { useCanvasStore } from "@/stores/canvas-store";
 import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "ExcelWrite", "ExcelEdit"]);
@@ -116,14 +115,6 @@ export function AssistantMessage({
   const currentRating = useConversationStore((s) =>
     conversationId ? s.conversations.find((c) => c.id === conversationId)?.userRating : undefined
   );
-  // Show inline canvas on last assistant message when canvas panel is not open
-  const inlineCanvasDoc = useCanvasStore((s) => {
-    if (!isLastAssistantMessage || isStreaming || canvasDoc !== undefined) return canvasDoc || null;
-    // Only show inline if canvas panel is closed for this surface
-    const anyOpen = Object.values(s.openSurfaces).some(Boolean);
-    return anyOpen ? null : s.canvasDoc;
-  });
-
   const [thinkingWordIndex, setThinkingWordIndex] = useState(() =>
     Math.floor(Math.random() * THINKING_WORDS.length)
   );
@@ -239,9 +230,9 @@ export function AssistantMessage({
         )}
 
         {/* Inline A2UI canvas */}
-        {inlineCanvasDoc && (
+        {canvasDoc && !isStreaming && (
           <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
-            <A2UIDocumentRenderer doc={inlineCanvasDoc} onAction={onCanvasAction} />
+            <A2UIDocumentRenderer doc={canvasDoc} onAction={onCanvasAction} />
           </div>
         )}
 
