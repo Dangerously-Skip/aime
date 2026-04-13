@@ -13,8 +13,13 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
 import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
-import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
+import dynamic from "next/dynamic";
 import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
+
+const A2UIDocumentRenderer = dynamic(
+  () => import("@/lib/a2ui/renderer").then((m) => m.A2UIDocumentRenderer),
+  { ssr: false },
+);
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "ExcelWrite", "ExcelEdit"]);
 
