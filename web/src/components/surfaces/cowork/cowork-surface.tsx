@@ -1192,17 +1192,16 @@ export function CoworkSurface() {
     [chatId, updateMessage]
   );
 
+  const handleSubmitRef = useRef<((text: string) => void) | null>(null);
+
   const handleRetry = useCallback(() => {
     if (!chatId || isStreaming) return;
     const msgs = useCoworkStore.getState().messages[chatId];
     if (!msgs || msgs.length < 2) return;
     const lastUserMsg = [...msgs].reverse().find((m: { role: string }) => m.role === 'user');
     if (!lastUserMsg) return;
-    // handleSubmit is defined below but will be stable by the time this is called
     handleSubmitRef.current?.(lastUserMsg.content);
   }, [chatId, isStreaming]);
-
-  const handleSubmitRef = useRef<((text: string) => void) | null>(null);
 
   // Ref to break circular dependency: handleSubmit uses resetIdleTimer, but
   // useHeartbeat (which provides resetIdleTimer) is called after handleSubmit.
