@@ -89,7 +89,7 @@ const BASH_WRITE_PATTERNS = [
 ];
 
 // Bash commands that are noisy / not worth tracking in sidebar
-const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|show)|cat\s|head\s|tail\s|wc\s|which\s|type\s|env|printenv|date|whoami|uname)/;
+const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|show)|cat\s|head\s|tail\s|wc\s|which\s|type\s|env|printenv|date|whoami|uname|curl\s|wget\s)/;
 
 // Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools)
 const BASH_ARTIFACT_EXT = /\b([\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
@@ -104,8 +104,12 @@ function isValidSidebarEntry(path: string): boolean {
   if (!path || path.length < 2) return false;
   // HTML tag fragments: ]+>, a>, script>, etc.
   if (/^[a-z]+>/.test(path) || path.includes('<') || path.includes('>')) return false;
-  // Pure punctuation / symbols
-  if (/^[^a-zA-Z0-9/~.]+$/.test(path)) return false;
+  // Pure punctuation / symbols / pipe fragments
+  if (/^[^a-zA-Z0-9/~.]+$/.test(path) || /^[|&;]+/.test(path)) return false;
+  // URLs / query strings — not file paths
+  if (path.includes('?') || path.includes('://') || path.startsWith('http')) return false;
+  // Bare web asset names from HTML output (e.g. "style.css", "bundle.js") — not real artifacts
+  if (!path.includes('/') && /^[\w.-]+\.(?:css|js|jsx|ts|tsx|html?|woff2?|ttf|eot|ico|map)$/i.test(path)) return false;
   // Internal scratch directory operations — not user-supplied context
   if (path.includes('.quarry/scratch') || path.includes('.quarry/') || (path.includes('/scratch/') && path.includes('/documents/'))) return false;
   return true;
@@ -968,6 +972,9 @@ export function CoworkSurface() {
               }
             }
             if (matchingTc?.name === "Bash") {
+              // Skip scanning curl/wget HTML output — too many false positives from embedded asset URLs
+              const bashCmd = typeof matchingTc.input?.command === "string" ? matchingTc.input.command : "";
+              const isCurlWget = /\bcurl\b|\bwget\b/.test(bashCmd);
               const coworkFolder = useCoworkStore.getState().folder;
               const addBashArtifact = (raw: string) => {
                 let filePath = raw;
@@ -983,15 +990,17 @@ export function CoworkSurface() {
                 }
                 addArtifactFile(chatId, filePath);
               };
-              // Scan for file extensions in output
-              BASH_ARTIFACT_EXT.lastIndex = 0;
-              let m;
-              while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) addBashArtifact(m[1]);
-              // Scan for script output patterns ("Saved to /path/file.pptx")
-              for (const pattern of BASH_OUTPUT_PATH_PATTERNS) {
-                pattern.lastIndex = 0;
-                let pm;
-                while ((pm = pattern.exec(result)) !== null) addBashArtifact(pm[1]);
+              if (!isCurlWget) {
+                // Scan for file extensions in output (skip curl/wget — HTML has too many false positives)
+                BASH_ARTIFACT_EXT.lastIndex = 0;
+                let m;
+                while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) addBashArtifact(m[1]);
+                // Scan for script output patterns ("Saved to /path/file.pptx")
+                for (const pattern of BASH_OUTPUT_PATH_PATTERNS) {
+                  pattern.lastIndex = 0;
+                  let pm;
+                  while ((pm = pattern.exec(result)) !== null) addBashArtifact(pm[1]);
+                }
               }
             }
           }
