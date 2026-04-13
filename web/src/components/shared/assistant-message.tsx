@@ -13,13 +13,6 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
 import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
-import dynamic from "next/dynamic";
-import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
-
-const A2UIDocumentRenderer = dynamic(
-  () => import("@/lib/a2ui/renderer").then((m) => m.A2UIDocumentRenderer),
-  { ssr: false },
-);
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "ExcelWrite", "ExcelEdit"]);
 
@@ -97,8 +90,6 @@ interface AssistantMessageProps {
   onPreviewUrl?: (url: string) => void;
   onRetry?: () => void;
   conversationId?: string;
-  canvasDoc?: A2UIDocument | null;
-  onCanvasAction?: (action: A2UIAction) => void;
 }
 
 export function AssistantMessage({
@@ -112,8 +103,6 @@ export function AssistantMessage({
   onPreviewUrl,
   onRetry,
   conversationId,
-  canvasDoc,
-  onCanvasAction,
 }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false);
   const updateConversationMetrics = useConversationStore((s) => s.updateConversationMetrics);
@@ -231,13 +220,6 @@ export function AssistantMessage({
                 Open folder
               </button>
             )}
-          </div>
-        )}
-
-        {/* Inline A2UI canvas */}
-        {canvasDoc && !isStreaming && (
-          <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
-            <A2UIDocumentRenderer doc={canvasDoc} onAction={onCanvasAction} />
           </div>
         )}
 
