@@ -95,6 +95,11 @@ const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|s
 // Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools)
 const BASH_ARTIFACT_EXT = /\b([\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
 
+// Additional patterns for script output that names a file path (e.g. python-pptx "Saved to /tmp/foo.pptx")
+const BASH_OUTPUT_PATH_PATTERNS = [
+  /(?:saved?|writ(?:ten|e|ing)|created?|generated?|exported?|output)\s+(?:to\s+|file\s+|as\s+)?['"]?([/~][\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|zip))/gi,
+];
+
 // Filter out HTML tag fragments, internal paths, and garbage from artifact/context names
 function isValidSidebarEntry(path: string): boolean {
   if (!path || path.length < 2) return false;
@@ -968,15 +973,15 @@ export function CoworkSurface() {
               }
             }
             if (matchingTc?.name === "Bash") {
+              // Skip scanning curl/wget HTML output — too many false positives from embedded asset URLs
+              const bashCmd = typeof matchingTc.input?.command === "string" ? matchingTc.input.command : "";
+              const isCurlWget = /\bcurl\b|\bwget\b/.test(bashCmd);
               const coworkFolder = useCoworkStore.getState().folder;
-              BASH_ARTIFACT_EXT.lastIndex = 0;
-              let m;
-              while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) {
-                let filePath = m[1];
-                // Skip false positives: bare extensions, /dev/null, numeric-heavy fragments
-                if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") continue;
-                if (/^[0-9.:]+$/.test(filePath.replace(/\.(?:pdf|csv|png|jpe?g)$/i, ""))) continue;
-                if (!isValidSidebarEntry(filePath)) continue;
+              const addBashArtifact = (raw: string) => {
+                let filePath = raw;
+                if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") return;
+                if (/^[0-9.:]+$/.test(filePath.replace(/\.(?:pdf|csv|png|jpe?g)$/i, ""))) return;
+                if (!isValidSidebarEntry(filePath)) return;
                 if (!filePath.startsWith("/") && coworkFolder) {
                   const cwdBasename = coworkFolder.split("/").pop() || "";
                   if (cwdBasename && filePath.startsWith(`${cwdBasename}/`)) {
@@ -985,6 +990,16 @@ export function CoworkSurface() {
                   filePath = `${coworkFolder}/${filePath}`;
                 }
                 addArtifactFile(chatId, filePath);
+              };
+              if (!isCurlWget) {
+                BASH_ARTIFACT_EXT.lastIndex = 0;
+                let m;
+                while ((m = BASH_ARTIFACT_EXT.exec(result)) !== null) addBashArtifact(m[1]);
+                for (const pattern of BASH_OUTPUT_PATH_PATTERNS) {
+                  pattern.lastIndex = 0;
+                  let pm;
+                  while ((pm = pattern.exec(result)) !== null) addBashArtifact(pm[1]);
+                }
               }
             }
           }
