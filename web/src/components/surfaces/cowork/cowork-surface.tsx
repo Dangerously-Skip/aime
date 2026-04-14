@@ -11,6 +11,7 @@ import { useCoworkStore } from "@/stores/cowork-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { streamRegistry } from "@/lib/stream-registry";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
@@ -729,12 +730,14 @@ export function CoworkSurface() {
     if (conv?.surface === "cowork") setCurrentChat(activeConvId);
   }, [activeConvId, conversations, setCurrentChat]);
 
-  // Episodic memory: summarize previous conversation when switching
+  // Episodic memory: summarize previous conversation when switching.
+  // Also abort any running stream for the old conversation to prevent spillover.
   const prevChatIdRef = useRef<string | null>(null);
   useEffect(() => {
     const prevId = prevChatIdRef.current;
     prevChatIdRef.current = chatId || null;
     if (prevId && prevId !== chatId) {
+      streamRegistry.abort(prevId);
       const prevMessages = useCoworkStore.getState().messages[prevId];
       if (prevMessages && prevMessages.length > 0) {
         summarizeConversation(prevId, prevMessages);
@@ -778,6 +781,7 @@ export function CoworkSurface() {
           messageCount: allMsgs.length,
           durationMs: usage.durationMs,
           model: usage.model,
+          apiKey: nibGatewayApiKey || undefined,
         }),
       }).then((r) => r.json()).then(({ estimate }) => {
         if (!estimate) return;
@@ -850,6 +854,11 @@ export function CoworkSurface() {
           const toolId = (event.id as string) || `tool_${Date.now()}`;
           const toolName = (event.name as string) || "Unknown";
           const toolInput = (event.input as Record<string, unknown>) || {};
+          // Resolve relative file_path in Write/Edit tools so artifact Open button works
+          const cwd = folder || projectFolder || scratchDir;
+          if (cwd && typeof toolInput.file_path === 'string' && !toolInput.file_path.startsWith('/')) {
+            toolInput.file_path = `${cwd.replace(/\/$/, '')}/${toolInput.file_path}`;
+          }
           addToolCall(chatId, {
             id: toolId,
             name: toolName,

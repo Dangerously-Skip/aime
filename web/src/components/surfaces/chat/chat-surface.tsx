@@ -8,6 +8,7 @@ import { useChatStore } from "@/stores/chat-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File } from "lucide-react";
@@ -148,12 +149,15 @@ export function ChatSurface() {
     if (conv?.surface === "chat") setCurrentChat(activeConvId);
   }, [activeConvId, allConversations, setCurrentChat]);
 
-  // Episodic memory: summarize previous conversation when switching
+  // Episodic memory: summarize previous conversation when switching.
+  // Also abort any running stream for the old conversation to prevent spillover.
   const prevChatIdRef = useRef<string | null>(null);
   useEffect(() => {
     const prevId = prevChatIdRef.current;
     prevChatIdRef.current = chatId || null;
     if (prevId && prevId !== chatId) {
+      // Abort the old stream so its chunks don't land in the new conversation
+      streamRegistry.abort(prevId);
       const prevMessages = useChatStore.getState().messages[prevId];
       if (prevMessages && prevMessages.length > 0) {
         summarizeConversation(prevId, prevMessages);

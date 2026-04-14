@@ -6,9 +6,45 @@ export const runtime = 'nodejs';
 const NIB_GATEWAY_BASE_URL = 'https://ai-studio.internal.invalid';
 
 /**
+ * Heuristic effort estimation when no LLM is available.
+ * Uses tool call patterns and artifact counts to approximate complexity.
+ */
+function estimateLocally(
+  toolCalls: Array<{ name: string; count: number }>,
+  artifactCount: number,
+  messageCount: number,
+  durationMs: number,
+): Record<string, unknown> {
+  const totalTools = toolCalls.reduce((sum, t) => sum + t.count, 0);
+  const hasCode = toolCalls.some(t => ['Write', 'Edit', 'Bash'].includes(t.name));
+  const hasResearch = toolCalls.some(t => ['Grep', 'Glob', 'Read', 'WebSearch', 'WebFetch'].includes(t.name));
+
+  // Base hours from artifact count and tool usage
+  let hours = 0.25; // minimum
+  hours += artifactCount * 0.5;
+  hours += totalTools * 0.02;
+  hours += messageCount * 0.1;
+
+  const complexity = hours > 4 ? 'high' : hours > 1.5 ? 'medium' : 'low';
+  const taskType = hasCode
+    ? (artifactCount > 3 ? 'feature-development' : 'bug-fix')
+    : hasResearch ? 'research' : 'writing';
+
+  return {
+    estimatedHours: Math.round(hours * 10) / 10,
+    complexity,
+    reasoning: `Heuristic estimate based on ${totalTools} tool calls and ${artifactCount} artifacts (${Math.round(durationMs / 60000)}min agent time).`,
+    taskType,
+    domain: hasCode ? 'fullstack' : 'other',
+    language: 'unknown',
+  };
+}
+
+/**
  * POST /api/telemetry/estimate-effort
  * Calls Claude Haiku to estimate human effort and classify the task type.
- * Routes through the nib LiteLLM gateway if configured, otherwise direct API.
+ * Routes through nib gateway if apiKey provided, direct API if ANTHROPIC_API_KEY set,
+ * otherwise falls back to a local heuristic.
  */
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -34,12 +70,14 @@ export async function POST(req: NextRequest) {
     apiKey?: string | null;
   };
 
-  // Use gateway if API key is configured, otherwise direct Anthropic API
+  // Determine which backend to use: gateway > direct API > local heuristic
   const useGateway = !!apiKey && apiKey.startsWith('sk-');
   const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
 
+  // No LLM available — use local heuristic
   if (!effectiveKey) {
-    return Response.json({ estimate: null, skipped: 'No API key configured' });
+    const estimate = estimateLocally(toolCalls as Array<{ name: string; count: number }>, artifactCount, messageCount, durationMs);
+    return Response.json({ estimate, method: 'heuristic' });
   }
 
   try {
@@ -50,7 +88,7 @@ export async function POST(req: NextRequest) {
     // Gateway uses 'fast' alias for Haiku; direct API uses full model ID
     const haikuModel = useGateway ? 'fast' : 'claude-haiku-4-5-20251001';
 
-    const toolSummary = toolCalls.map(t => `${t.name}: ${t.count}`).join(', ') || 'none';
+    const toolSummary = (toolCalls as Array<{ name: string; count: number }>).map(t => `${t.name}: ${t.count}`).join(', ') || 'none';
     const durationMin = Math.round(durationMs / 60000);
 
     const prompt = `You are a software engineering effort estimator. Analyze this AI agent session and estimate how long a skilled developer would take to do the equivalent work manually.
@@ -83,10 +121,12 @@ Return ONLY valid JSON, no markdown fences.`;
     const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '{}';
     const estimate = JSON.parse(text);
 
-    return Response.json({ estimate });
+    return Response.json({ estimate, method: 'llm' });
   } catch (error: unknown) {
+    // LLM call failed — fall back to heuristic
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.error('[TELEMETRY] Effort estimation error:', errMsg);
-    return Response.json({ error: errMsg }, { status: 500 });
+    console.error('[TELEMETRY] Effort estimation LLM error, using heuristic:', errMsg);
+    const estimate = estimateLocally(toolCalls as Array<{ name: string; count: number }>, artifactCount, messageCount, durationMs);
+    return Response.json({ estimate, method: 'heuristic' });
   }
 }

@@ -39,9 +39,18 @@ function DocumentArtifactCard({ filePath, onClick }: { filePath: string; onClick
   return (
     <button
       className="flex items-center gap-2.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-left hover:bg-muted/50 transition-colors group/doc"
-      onClick={() => {
-        if (onClick) onClick(filePath);
-        else if (canOpen) (window as unknown as { electronAPI: { openPath: (p: string) => void } }).electronAPI.openPath(filePath);
+      onClick={async () => {
+        if (onClick) { onClick(filePath); return; }
+        if (!canOpen) return;
+        const api = window as unknown as { electronAPI: { openPath: (p: string) => Promise<string>; fileExists: (p: string) => Promise<boolean> } };
+        // If the exact file exists, open it; otherwise open the containing folder
+        const exists = await api.electronAPI.fileExists(filePath).catch(() => false);
+        if (exists) {
+          api.electronAPI.openPath(filePath);
+        } else {
+          const dir = filePath.split('/').slice(0, -1).join('/');
+          if (dir) api.electronAPI.openPath(dir);
+        }
       }}
     >
       {getFileIcon(filePath)}
