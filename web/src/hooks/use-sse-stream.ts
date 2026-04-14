@@ -120,8 +120,14 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
+  // Keep a ref to the chatId that the current stream was started for,
+  // so we can abort the correct stream even after conversation switches.
+  const activeChatIdRef = useRef<string | null>(null);
+
   const abort = useCallback(() => {
-    streamRegistry.abort(optionsRef.current.chatId);
+    const id = activeChatIdRef.current ?? optionsRef.current.chatId;
+    streamRegistry.abort(id);
+    activeChatIdRef.current = null;
     optionsRef.current.setIsStreaming(false);
   }, []);
 
@@ -166,8 +172,19 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
       const controller = new AbortController();
       streamRegistry.set(chatId, controller);
-      optionsRef.current.setIsStreaming(true);
-      optionsRef.current.setStreamError(null);
+      activeChatIdRef.current = chatId;
+
+      // Snapshot the callbacks at send time so a conversation switch
+      // mid-stream doesn't redirect chunks to the wrong chatId.
+      const pinnedOnChunk = optionsRef.current.onChunk;
+      const pinnedOnDone = optionsRef.current.onDone;
+      const pinnedOnError = optionsRef.current.onError;
+      const pinnedOnUsage = optionsRef.current.onUsage;
+      const pinnedSetIsStreaming = optionsRef.current.setIsStreaming;
+      const pinnedSetStreamError = optionsRef.current.setStreamError;
+
+      pinnedSetIsStreaming(true);
+      pinnedSetStreamError(null);
 
       let firstTokenAt: number | null = null;
       let clarificationCount = 0;
@@ -217,7 +234,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           const result = await reader.read();
           if (result.done) {
             if (buffer.trim()) {
-              parseSSELines(buffer + '\n', optionsRef.current.onChunk, () => {});
+              parseSSELines(buffer + '\n', pinnedOnChunk, () => {});
             }
             done = true;
             break;
@@ -236,16 +253,16 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
                 clarificationCount++;
               }
               // Intercept done event to extract usage metrics
-              if (event.type === 'done' && event.usage && optionsRef.current.onUsage) {
+              if (event.type === 'done' && event.usage && pinnedOnUsage) {
                 const ttftMs = firstTokenAt ? firstTokenAt - (Date.now() - (event.usage as Record<string,number>).durationMs) : undefined;
-                optionsRef.current.onUsage({
+                pinnedOnUsage({
                   ...(event.usage as StreamUsage),
                   ttftMs,
                   clarificationCount,
                 });
                 return; // don't pass done event to onChunk
               }
-              optionsRef.current.onChunk(event);
+              pinnedOnChunk(event);
             },
             () => { done = true; }
           );
@@ -256,15 +273,16 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           }
         }
 
-        optionsRef.current.onDone();
+        pinnedOnDone();
       } catch (error: unknown) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         const err = error instanceof Error ? error : new Error(String(error));
-        optionsRef.current.setStreamError(err.message);
-        optionsRef.current.onError(err);
+        pinnedSetStreamError(err.message);
+        pinnedOnError(err);
       } finally {
         streamRegistry.clear(chatId);
-        optionsRef.current.setIsStreaming(false);
+        activeChatIdRef.current = null;
+        pinnedSetIsStreaming(false);
       }
     },
     []

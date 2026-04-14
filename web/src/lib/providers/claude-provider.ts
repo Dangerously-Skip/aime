@@ -432,8 +432,10 @@ export class ClaudeProvider extends BaseProvider {
       return { behavior: 'allow' as const };
     };
 
-    // Set working directory — use selected folder, or fall back to a safe temp
-    // directory so the agent never defaults to the app's own source tree.
+    // Set working directory — use selected folder, or fall back to a per-chat
+    // scratch dir so the agent never defaults to the app's own source tree.
+    // Using a per-chat path (not a shared temp) ensures session resumption
+    // works even if the client-side scratchDir hook hasn't resolved yet.
     if (cwd) {
       queryOptions.cwd = cwd;
       console.log('[Claude] Working directory set to:', cwd);
@@ -441,10 +443,12 @@ export class ClaudeProvider extends BaseProvider {
       const os = await import('os');
       const path = await import('path');
       const fs = await import('fs');
-      const safeCwd = path.join(os.tmpdir(), 'quarry-sandbox');
+      const safeCwd = chatId
+        ? path.join(os.homedir(), '.quarry', 'scratch', chatId)
+        : path.join(os.tmpdir(), 'quarry-sandbox');
       fs.mkdirSync(safeCwd, { recursive: true });
       queryOptions.cwd = safeCwd;
-      console.log('[Claude] No folder selected — using safe temp directory:', safeCwd);
+      console.log('[Claude] No folder selected — using scratch directory:', safeCwd);
     }
 
     // Apply system prompt if available
