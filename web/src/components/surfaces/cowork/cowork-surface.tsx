@@ -621,7 +621,7 @@ export function CoworkSurface() {
     useAtSuggestions();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const searchGroups = useCoworkStore((s) => s.searchGroups[chatId] ?? []);
+  const searchGroups = useCoworkStore((s) => s.searchGroups[s.currentChatId ?? ""] ?? []);
   const addSearchGroup = useCoworkStore((s) => s.addSearchGroup);
   const clearSearchGroups = useCoworkStore((s) => s.clearSearchGroups);
   const [previewOpen, setPreviewOpen] = useState(false);
