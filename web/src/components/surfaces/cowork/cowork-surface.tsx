@@ -69,6 +69,7 @@ import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-sugg
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_FILES: string[] = [];
+const EMPTY_SEARCH_GROUPS: SearchQueryGroup[] = [];
 
 /** Truncate text at the nearest word boundary before maxLen. */
 function truncateAtWordBoundary(text: string, maxLen: number): string {
@@ -621,7 +622,7 @@ export function CoworkSurface() {
     useAtSuggestions();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const searchGroups = useCoworkStore((s) => s.searchGroups[s.currentChatId ?? ""] ?? []);
+  const searchGroups = useCoworkStore((s) => s.searchGroups[s.currentChatId ?? ""] ?? EMPTY_SEARCH_GROUPS);
   const addSearchGroup = useCoworkStore((s) => s.addSearchGroup);
   const clearSearchGroups = useCoworkStore((s) => s.clearSearchGroups);
   const [previewOpen, setPreviewOpen] = useState(false);
