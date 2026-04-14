@@ -1,6 +1,7 @@
-import { useMemoryStore } from '@/stores/memory-store';
-import { useConversationStore } from '@/stores/conversation-store';
-import { useSettingsStore } from '@/stores/settings-store';
+// Lazy imports to avoid circular dependencies with Turbopack's module evaluation
+const getMemoryStore = () => require('@/stores/memory-store').useMemoryStore;
+const getConversationStore = () => require('@/stores/conversation-store').useConversationStore;
+const getSettingsStore = () => require('@/stores/settings-store').useSettingsStore;
 import type { MemoryCategory } from './types';
 
 interface ExtractedMemoryEvent {
@@ -20,16 +21,16 @@ export function handleMemoryExtractEvent(
 ): void {
   if (!Array.isArray(extracted) || extracted.length === 0) return;
 
-  const autoExtractEnabled = useSettingsStore.getState().autoExtractMemories;
+  const autoExtractEnabled = getSettingsStore().getState().autoExtractMemories;
   if (autoExtractEnabled === false) return;
 
-  const conv = useConversationStore.getState().conversations.find(
+  const conv = getConversationStore().getState().conversations.find(
     (c) => c.id === conversationId
   );
   const projectId = conv?.projectId || null;
 
   for (const mem of extracted) {
-    useMemoryStore.getState().addMemoryWithDedup({
+    getMemoryStore().getState().addMemoryWithDedup({
       id: crypto.randomUUID(),
       content: mem.content,
       category: mem.category as MemoryCategory,
