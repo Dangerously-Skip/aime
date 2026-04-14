@@ -1058,9 +1058,15 @@ export function CoworkSurface() {
           break;
         }
         case "document_extracted": {
-          // Add extracted document to context sidebar
+          // Add extracted document to context sidebar, removing the original attachment entry to avoid duplicates
           const extractedPath = event.extractedPath as string | undefined;
+          const originalName = event.name as string | undefined;
           if (extractedPath && chatId) {
+            if (originalName) {
+              const existing = useCoworkStore.getState().contextFiles[chatId] ?? [];
+              const duplicate = existing.find((p) => p === originalName || p.endsWith(`/${originalName}`));
+              if (duplicate) removeContextFile(chatId, duplicate);
+            }
             addContextFile(chatId, extractedPath);
           }
           console.log('[Cowork] Document extracted:', event.name, 'path:', extractedPath, 'length:', event.textLength);
