@@ -1190,6 +1190,17 @@ export function CoworkSurface() {
     [chatId, updateMessage]
   );
 
+  // Retry: ref holds handleSubmit so the retry callback can call it without circular deps
+  const handleSubmitRef = useRef<((text: string) => void) | null>(null);
+  const handleRetry = useCallback(() => {
+    if (!chatId || isStreaming) return;
+    const msgs = useCoworkStore.getState().messages[chatId];
+    if (!msgs || msgs.length < 2) return;
+    const lastUserMsg = [...msgs].reverse().find((m: { role: string }) => m.role === 'user');
+    if (!lastUserMsg) return;
+    handleSubmitRef.current?.(lastUserMsg.content);
+  }, [chatId, isStreaming]);
+
   // Ref to break circular dependency: handleSubmit uses resetIdleTimer, but
   // useHeartbeat (which provides resetIdleTimer) is called after handleSubmit.
   const resetIdleTimerRef = useRef<(() => void) | null>(null);
@@ -1331,6 +1342,8 @@ export function CoworkSurface() {
       attachments,
     ]
   );
+
+  handleSubmitRef.current = handleSubmit;
 
   const handleVoiceTranscript = useCallback(
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
@@ -1637,7 +1650,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} conversationId={chatId} />
+            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">
