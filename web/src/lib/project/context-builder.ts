@@ -1,23 +1,28 @@
 import { type Project, type ProjectArtifact } from '@/stores/project-store';
-import { useConversationStore } from '@/stores/conversation-store';
-import { useChatStore } from '@/stores/chat-store';
-import { useCoworkStore } from '@/stores/cowork-store';
-import { useCodeStore } from '@/stores/code-store';
-import { useBrowserStore } from '@/stores/browser-store';
 
 /**
  * Get a surface-specific store for reading messages.
+ * Uses lazy imports to avoid circular dependencies — this module is imported
+ * by hooks/components that also import from these stores.
  */
 function getMessagesForConversation(conversationId: string, surface: string): Array<{ role: string; content: string }> {
   switch (surface) {
-    case 'chat':
+    case 'chat': {
+      const { useChatStore } = require('@/stores/chat-store');
       return useChatStore.getState().messages[conversationId] ?? [];
-    case 'cowork':
+    }
+    case 'cowork': {
+      const { useCoworkStore } = require('@/stores/cowork-store');
       return useCoworkStore.getState().messages[conversationId] ?? [];
-    case 'code':
+    }
+    case 'code': {
+      const { useCodeStore } = require('@/stores/code-store');
       return useCodeStore.getState().messages[conversationId] ?? [];
-    case 'browser':
+    }
+    case 'browser': {
+      const { useBrowserStore } = require('@/stores/browser-store');
       return useBrowserStore.getState().messages[conversationId] ?? [];
+    }
     default:
       return [];
   }
@@ -87,6 +92,7 @@ export function buildProjectContext(
 
   // Cross-surface conversation summaries
   // Primary: find conversations linked via conversation.projectId
+  const { useConversationStore } = require('@/stores/conversation-store');
   const allConversations = useConversationStore.getState().conversations;
   const projectConversations = allConversations.filter(
     (c) => c.projectId === project.id && c.id !== currentConversationId

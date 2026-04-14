@@ -1,5 +1,6 @@
-import { useMemoryStore } from '@/stores/memory-store';
-import { useConversationStore } from '@/stores/conversation-store';
+// Lazy imports to avoid circular dependencies with Turbopack's module evaluation
+const getMemoryStore = () => require('@/stores/memory-store').useMemoryStore;
+const getConversationStore = () => require('@/stores/conversation-store').useConversationStore;
 import type { Message } from '@/stores/chat-store';
 import type { Memory } from './types';
 
@@ -64,7 +65,7 @@ export function summarizeConversation(
   if (messages.length < MIN_MESSAGES_FOR_SUMMARY) return;
 
   // Don't re-summarize if we already have an episodic memory for this conversation
-  const existingMemories = useMemoryStore.getState().memories;
+  const existingMemories = getMemoryStore().getState().memories;
   const alreadySummarized = existingMemories.some(
     (m) =>
       m.category === 'episodic' &&
@@ -77,7 +78,7 @@ export function summarizeConversation(
   if (!summary) return;
 
   // Determine project scope
-  const conv = useConversationStore.getState().conversations.find(
+  const conv = getConversationStore().getState().conversations.find(
     (c) => c.id === conversationId
   );
   const projectId = conv?.projectId || null;
@@ -99,5 +100,5 @@ export function summarizeConversation(
     updatedCount: 0,
   };
 
-  useMemoryStore.getState().addMemory(memory);
+  getMemoryStore().getState().addMemory(memory);
 }
