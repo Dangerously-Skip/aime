@@ -1,28 +1,22 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: 'AWS::Serverless-2016-10-31'
-Description: Quarry releases - nginx proxy to S3 on internal domain
+Description: Quarry releases — static site serving download page + auto-update artifacts
+
+Parameters:
+  PublicRootDomain:
+    Type: String
+    Description: Public root domain for DNS (e.g. internal.invalid)
 
 Resources:
-  Task:
-    Type: RQP::FargateTask
+  Website:
+    Type: RQP::StaticSite
     Properties:
-      Cpu: 256
-      Memory: 512
-      ContainerDefinitions:
-        - Name: web
-          Image: !Sub '441581275790.dkr.ecr.${AWS::Region}.amazonaws.com/${Application}:latest'
-          PortMappings:
-            - ContainerPort: 80
-
-  Service:
-    Type: RQP::FargateService
-    Properties:
-      TaskDefinition: !Ref Task
-      DesiredCount: 1
-      RQP::SimpleLoadBalancer:
-        Container:
-          Name: web
-          Port: 80
-          Protocol: HTTP
-          HealthCheckPath: /health
-          HealthCheckInterval: 30
+      Content: buildkite://content.zip
+      PublicDomainRoot: !Ref PublicRootDomain
+      Subdomain: !Sub "quarry${DNSFriendlySliceSuffix}"
+      CustomErrorResponses:
+        - ErrorCode: 404
+          ResponseCode: 404
+          ResponsePagePath: /index.html
+      DefaultCacheBehavior:
+        CachePolicyId: CachingDisabled
