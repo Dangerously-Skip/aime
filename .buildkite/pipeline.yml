@@ -11,47 +11,18 @@ env:
   ITBU: dai
 
 steps:
-  # Run SAMOA to generate deployment scripts
-  - label: ':hammer: Run samoa'
-    commands:
-      - 'docker pull "$$SAMOA_IMAGE"'
-      - 'docker run --rm --tty --volume "$$PWD":/app --volume "$$HOME":/root "$$SAMOA_IMAGE"'
-    plugins:
-      - ssh://git@github.com/redacted-org/image-pull-buildkite-plugin.git#v1.1.0
-    env:
-      IMAGE_REGISTRY: ecr
-    agents:
-      queue: elastic
-    artifact_paths:
-      - samoa_deploy.sh
-      - samoa_template.yaml
-
-  - wait
-
-  # Deploy static site to KAOS (uses promote-release pipeline for full deploys)
-  - label: ':shipit: Deploy to KAOS'
-    commands:
-      - 'buildkite-agent artifact download "samoa_*" .'
-      - 'chmod a+x samoa_deploy.sh'
-      - './samoa_deploy.sh samoa_template.yaml'
-    agents:
-      queue: elastic
-    env:
-      STAGE: kaos
-      PublicRootDomain: internal.invalid
-    concurrency: 1
-    concurrency_group: ${BUILDKITE_PIPELINE_SLUG}/deploy/${BUILDKITE_BRANCH}/kaos-secure
-
-  - wait
+  # The release site is deployed by the promote-release pipeline
+  # (triggered by GitHub Actions after a release build).
+  # This pipeline is kept for branch cleanup only.
 
   - block: ':warning: Delete stack (feature branches only)'
     branches: '!master'
 
   - label: ':gun: Delete from KAOS'
     commands:
-      - 'buildkite-agent artifact download "samoa_*" .'
-      - 'chmod +x samoa_deploy.sh'
-      - './samoa_deploy.sh --delete-stack'
+      - 'buildkite-agent artifact download "samoa_*" . || true'
+      - 'chmod +x samoa_deploy.sh || true'
+      - './samoa_deploy.sh --delete-stack || echo "No stack to delete"'
     agents:
       queue: elastic
     env:
