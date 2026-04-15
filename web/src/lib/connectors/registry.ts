@@ -62,12 +62,14 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
       type: 'oauth2',
       authUrl: 'https://slack.com/oauth/v2/authorize',
       tokenUrl: 'https://slack.com/api/oauth.v2.access',
+      redirectScheme: 'https',
       scopes: [
         'channels:read', 'channels:history', 'channels:join',
         'groups:read', 'groups:history',
         'users:read', 'users:read.email',
         'chat:write', 'files:read', 'reactions:read',
-        'search:read',
+        'search:read.files', 'search:read.im', 'search:read.mpim',
+        'search:read.private', 'search:read.public', 'search:read.users',
       ],
     },
     mcp: {
