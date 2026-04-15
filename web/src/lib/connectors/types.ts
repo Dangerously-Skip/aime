@@ -14,6 +14,7 @@ export interface ConnectorDefinition {
     scopes?: string[];
     clientId?: string;
     pkce?: boolean;
+    redirectScheme?: 'http' | 'https'; // Default: http. Slack requires https.
     envVarName?: string; // For api_key type
     hint?: string;       // Instruction text shown in the Connect dialog
   };

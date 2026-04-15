@@ -60,21 +60,28 @@ export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OA
   // In Electron, the auth window intercepts the redirect before it hits the server,
   // so the URL doesn't need to be reachable — it just needs to match what's
   // registered with the provider dashboard.
-  // Always use localhost:3000 as the registered callback origin since that's what's
-  // configured in each OAuth provider. Electron intercepts the redirect by URL path
-  // matching regardless of port.
+  // Slack requires https; most others have http registered. Use the connector's
+  // redirectScheme if set, otherwise default to http for backwards compatibility.
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.openConnectorAuthWindow;
-  const callbackOrigin = isElectron ? 'http://localhost:3000' : (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+  const scheme = connector.auth.redirectScheme || 'http';
+  const callbackOrigin = isElectron ? `${scheme}://localhost:3000` : (typeof window !== 'undefined' ? window.location.origin : `${scheme}://localhost:3000`);
   const redirectUri = `${callbackOrigin}${CALLBACK_PATH}`;
 
   // Build authorization URL
+  // Slack v2 OAuth uses comma-separated scopes; all other providers use space-separated.
+  const isSlackV2 = connector.auth.authUrl.includes('slack.com/oauth/v2');
+  const scopeSep = isSlackV2 ? ',' : ' ';
   const params = new URLSearchParams({
-    response_type: 'code',
     client_id: clientId,
     redirect_uri: redirectUri,
     state: `${connector.id}:${state}`,
-    ...(connector.auth.scopes?.length && { scope: connector.auth.scopes.join(' ') }),
+    ...(connector.auth.scopes?.length && { scope: connector.auth.scopes.join(scopeSep) }),
   });
+
+  // Most OAuth2 providers expect response_type=code, but Slack v2 doesn't use it
+  if (!isSlackV2) {
+    params.set('response_type', 'code');
+  }
 
   if (codeChallenge) {
     params.set('code_challenge', codeChallenge);
@@ -88,6 +95,7 @@ export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OA
   }
 
   const authUrl = `${connector.auth.authUrl}?${params.toString()}`;
+  console.log('[OAuth] Auth URL:', authUrl);
 
   // Get the auth code — Electron intercepts the redirect, browser uses popup
   const { code, error } = await getAuthCode(authUrl, state, connector.id);
