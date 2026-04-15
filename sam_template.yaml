@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: 'AWS::Serverless-2016-10-31'
-Description: Quarry releases — static site serving download page + auto-update artifacts
+Description: Quarry releases - static site serving download page and auto-update artifacts
 
 Parameters:
   PublicRootDomain:
