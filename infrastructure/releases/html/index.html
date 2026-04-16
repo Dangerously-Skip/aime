@@ -9,8 +9,11 @@
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a0a; color: #e5e5e5; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
     .container { max-width: 480px; text-align: center; padding: 2rem; }
     h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
-    .subtitle { color: #888; margin-bottom: 2rem; }
-    .version { font-size: 0.85rem; color: #666; margin-bottom: 2rem; display: block; }
+    .subtitle { color: #888; margin-bottom: 1rem; }
+    .version { font-size: 0.85rem; color: #666; margin-bottom: 0.5rem; display: block; }
+    .stats { font-size: 0.8rem; color: #555; margin-bottom: 2rem; display: flex; justify-content: center; gap: 1.5rem; }
+    .stat { display: flex; align-items: center; gap: 0.35rem; }
+    .stat-num { color: #888; font-weight: 600; }
     .downloads { display: flex; flex-direction: column; gap: 0.75rem; }
     a.btn { display: block; padding: 0.875rem 1.5rem; border-radius: 8px; text-decoration: none; font-weight: 500; font-size: 0.95rem; transition: background 0.15s; }
     .btn-primary { background: #2563eb; color: #fff; }
@@ -26,6 +29,10 @@
     <h1>Quarry</h1>
     <p class="subtitle">AI-powered desktop assistant for nib</p>
     <span class="version" id="version">Loading version...</span>
+    <div class="stats" id="stats" style="display:none">
+      <span class="stat"><span class="stat-num" id="stat-downloads">-</span> downloads</span>
+      <span class="stat"><span class="stat-num" id="stat-active">-</span> active installs</span>
+    </div>
     <div class="downloads">
       <a class="btn btn-primary" id="dl-mac-arm" href="#">Download for macOS (Apple Silicon)</a>
       <a class="btn btn-secondary" id="dl-mac-intel" href="#">Download for macOS (Intel)</a>
@@ -67,7 +74,21 @@
         document.getElementById('version').textContent = '';
       }
     }
+
+    async function loadStats() {
+      try {
+        const res = await fetch('stats.json').then(r => r.ok ? r.json() : null).catch(() => null);
+        if (res) {
+          const el = document.getElementById('stats');
+          el.style.display = 'flex';
+          document.getElementById('stat-downloads').textContent = res.downloads || '0';
+          document.getElementById('stat-active').textContent = res.activeInstalls || '0';
+        }
+      } catch {}
+    }
+
     loadVersions();
+    loadStats();
   </script>
 </body>
 </html>

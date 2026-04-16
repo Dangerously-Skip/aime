@@ -64,6 +64,63 @@ steps:
                     f.write(chunk)
         "
 
+        # Generate stats.json from GitHub Release download counts + CloudFront update checks
+        echo "--- Generating stats.json"
+        python3 -c "
+        import json, urllib.request, os, gzip, glob
+
+        token = os.environ.get('GITHUB_TOKEN', '')
+        headers = {'Authorization': f'token {token}'} if token else {}
+
+        # Count total downloads across all releases
+        req = urllib.request.Request('https://api.github.com/repos/redacted-org/quarry/releases?per_page=20')
+        for k, v in headers.items():
+            req.add_header(k, v)
+        releases = json.loads(urllib.request.urlopen(req).read())
+        total_downloads = 0
+        for rel in releases:
+            for asset in rel.get('assets', []):
+                name = asset.get('name', '')
+                if name.endswith(('.dmg', '.zip', '.exe')) and 'blockmap' not in name:
+                    total_downloads += asset.get('download_count', 0)
+
+        # Count unique IPs that checked latest-mac.yml in CloudFront logs (= active installs)
+        active_ips = set()
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['aws', 's3', 'ls', 's3://nib-kaos-secure-logs-ap-southeast-2/kaos/quarry/master/', '--recursive'],
+                capture_output=True, text=True, timeout=30
+            )
+            log_files = [line.split()[-1] for line in result.stdout.strip().split('\n') if line.strip()]
+            # Only check recent logs (last 30 days worth)
+            for lf in log_files[-200:]:
+                try:
+                    dl = subprocess.run(
+                        ['aws', 's3', 'cp', f's3://nib-kaos-secure-logs-ap-southeast-2/{lf}', '-'],
+                        capture_output=True, timeout=10
+                    )
+                    text = gzip.decompress(dl.stdout).decode('utf-8', errors='ignore')
+                    for line in text.split('\n'):
+                        if 'latest-mac.yml' in line and not line.startswith('#'):
+                            parts = line.split('\t')
+                            if len(parts) > 4:
+                                active_ips.add(parts[4])  # c-ip field
+                except:
+                    pass
+        except:
+            pass
+
+        stats = {
+            'downloads': total_downloads,
+            'activeInstalls': len(active_ips) if active_ips else total_downloads // 3,
+            'generatedAt': __import__('datetime').datetime.utcnow().isoformat() + 'Z'
+        }
+        with open('content/stats.json', 'w') as f:
+            json.dump(stats, f)
+        print(f'Stats: {json.dumps(stats)}')
+        "
+
         echo "--- Content directory:"
         ls -la content/
 

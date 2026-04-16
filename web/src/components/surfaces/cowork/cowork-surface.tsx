@@ -36,6 +36,7 @@ import { PlanSheet } from "@/components/shared/plan-sheet";
 import {
   Briefcase,
   ChevronDown,
+  ChevronRight,
   FileText,
   FilePen,
   ArrowUp,
@@ -390,14 +391,22 @@ function SearchQueryCard({ group }: { group: SearchQueryGroup }) {
 }
 
 function SearchResultsCard({ groups, onClear }: { groups: SearchQueryGroup[]; onClear: () => void }) {
+  const [open, setOpen] = useState(false);
   if (groups.length === 0) return null;
   const totalSearches = groups.length;
   return (
     <div className="rounded-xl border border-border/50 bg-card/50">
       <div className="flex items-center gap-2 px-4 py-3">
-        <Globe className="h-4 w-4 text-muted-foreground" />
-        <span className="flex-1 text-sm font-semibold">Web Search</span>
-        <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{totalSearches} {totalSearches === 1 ? "search" : "searches"}</span>
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-2 flex-1 text-left"
+        >
+          <Globe className="h-4 w-4 text-muted-foreground" />
+          <span className="flex-1 text-sm font-semibold">Web Search</span>
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{totalSearches} {totalSearches === 1 ? "search" : "searches"}</span>
+          <ChevronRight className={`h-3 w-3 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
+        </button>
         <button
           type="button"
           onClick={onClear}
@@ -406,11 +415,13 @@ function SearchResultsCard({ groups, onClear }: { groups: SearchQueryGroup[]; on
           <X className="h-3 w-3" />
         </button>
       </div>
-      <div className="px-3 pb-3 space-y-2">
-        {groups.map((g, i) => (
-          <SearchQueryCard key={i} group={g} />
-        ))}
-      </div>
+      {open && (
+        <div className="px-3 pb-3 space-y-2">
+          {groups.map((g, i) => (
+            <SearchQueryCard key={i} group={g} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -845,12 +856,18 @@ export function CoworkSurface() {
           completeRunningTools(chatId);
           break;
         case "text":
+          // If text arrives while tools are still "running", mark them complete.
+          // The Agent SDK doesn't emit tool_result events, so text after tools
+          // means the tools finished.
+          completeRunningTools(chatId);
           appendToLastAssistant(chatId, (event.content as string) || "");
           break;
         case "thinking":
           appendToLastAssistant(chatId, "", (event.content as string) || "");
           break;
         case "tool_use": {
+          // Complete any previously running tools before starting a new one
+          completeRunningTools(chatId);
           const toolId = (event.id as string) || `tool_${Date.now()}`;
           const toolName = (event.name as string) || "Unknown";
           const toolInput = (event.input as Record<string, unknown>) || {};
@@ -865,6 +882,27 @@ export function CoworkSurface() {
             input: toolInput,
             status: "running",
             startTime: Date.now(),
+          });
+          // Auto-abort if a single tool runs longer than 120s — the Agent SDK
+          // can hang on certain operations (e.g. large PDF reads).
+          const toolAbortTimer = setTimeout(() => {
+            const msgs = useCoworkStore.getState().messages[chatId];
+            const lastMsg = msgs?.at(-1);
+            const tc = lastMsg?.toolCalls?.find((t) => t.id === toolId);
+            if (tc?.status === "running") {
+              console.warn(`[Cowork] Tool ${toolName} (${toolId}) timed out after 120s — aborting stream`);
+              streamRegistry.abort(chatId);
+            }
+          }, 120_000);
+          // Clear timer if tool completes normally (via text/turn_start/onDone)
+          const unsubToolTimer = useCoworkStore.subscribe((state) => {
+            const msgs = state.messages[chatId];
+            const lastMsg = msgs?.at(-1);
+            const tc = lastMsg?.toolCalls?.find((t) => t.id === toolId);
+            if (!tc || tc.status !== "running") {
+              clearTimeout(toolAbortTimer);
+              unsubToolTimer();
+            }
           });
           // Detect QUARRY_CRON pattern in Bash commands — model echoes this to schedule reminders
           if (toolName === "Bash") {
