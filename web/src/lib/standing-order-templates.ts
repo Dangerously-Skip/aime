@@ -17,7 +17,7 @@ export interface StandingOrderTemplate {
   id: string;
   label: string;
   description: string;
-  icon: string;
+  icon: string; // lucide icon name
   category: 'productivity' | 'monitoring' | 'research' | 'learning';
   parameters?: TemplateParameter[];
   buildOrder: (params?: Record<string, string>) => Omit<StandingOrder, 'id' | 'createdAt' | 'updatedAt' | 'runCount' | 'errorCount' | 'state' | 'status'>;
@@ -28,7 +28,7 @@ export const STANDING_ORDER_TEMPLATES: StandingOrderTemplate[] = [
     id: 'morning-briefing',
     label: 'Morning Briefing',
     description: 'Daily summary — emails, calendar, tasks',
-    icon: '☀️',
+    icon: 'sun',
     category: 'productivity',
     parameters: [
       { key: 'time', label: 'Time', type: 'time', defaultValue: '09:00' },
@@ -50,7 +50,7 @@ export const STANDING_ORDER_TEMPLATES: StandingOrderTemplate[] = [
     id: 'evening-wrapup',
     label: 'Evening Wrap-up',
     description: 'End-of-day summary',
-    icon: '🌙',
+    icon: 'moon',
     category: 'productivity',
     parameters: [
       { key: 'time', label: 'Time', type: 'time', defaultValue: '17:30' },
@@ -69,7 +69,7 @@ export const STANDING_ORDER_TEMPLATES: StandingOrderTemplate[] = [
     id: 'stretch-reminder',
     label: 'Stretch Reminder',
     description: 'Reminder to take a break',
-    icon: '🧘',
+    icon: 'timer',
     category: 'productivity',
     parameters: [
       { key: 'interval', label: 'Every', type: 'select', defaultValue: '2h', options: ['1h', '2h', '3h', '4h'] },
@@ -85,7 +85,7 @@ export const STANDING_ORDER_TEMPLATES: StandingOrderTemplate[] = [
     id: 'build-monitor',
     label: 'Build Monitor',
     description: 'Watch your latest build, alert on failure',
-    icon: '🔨',
+    icon: 'hammer',
     category: 'monitoring',
     buildOrder: () => ({
       instruction: 'Check the status of my latest Buildkite build. If it failed, summarize the error and suggest a fix. If it passed, just confirm.',
@@ -101,7 +101,7 @@ export const STANDING_ORDER_TEMPLATES: StandingOrderTemplate[] = [
     id: 'daily-lesson',
     label: 'Daily AI Lesson',
     description: 'Learn something new about AI every day',
-    icon: '📚',
+    icon: 'book-open',
     category: 'learning',
     buildOrder: () => ({
       instruction: 'Teach me something new about AI, machine learning, or LLMs that I might not know. Keep it to 2-3 paragraphs. Track what topics you\'ve already covered so you don\'t repeat.',
@@ -113,7 +113,7 @@ export const STANDING_ORDER_TEMPLATES: StandingOrderTemplate[] = [
     id: 'pr-watcher',
     label: 'PR Watcher',
     description: 'Monitor a PR for reviews and CI status',
-    icon: '👀',
+    icon: 'git-pull-request',
     category: 'monitoring',
     buildOrder: () => ({
       instruction: 'Check the status of my open pull requests. Report any new reviews, comments, or CI status changes.',

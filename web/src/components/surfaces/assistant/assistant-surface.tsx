@@ -34,7 +34,20 @@ import {
   PanelLeft,
   Bot,
   Plus,
+  Sun,
+  Moon,
+  Timer,
+  Hammer,
+  BookOpen,
+  GitPullRequest,
+  ListChecks,
+  type LucideIcon,
 } from "lucide-react";
+
+const TEMPLATE_ICONS: Record<string, LucideIcon> = {
+  sun: Sun, moon: Moon, timer: Timer, hammer: Hammer,
+  'book-open': BookOpen, 'git-pull-request': GitPullRequest,
+};
 import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/standing-order-templates";
 import { TemplateDialog } from "./template-dialog";
 import { OrderEditor } from "./order-editor";
@@ -193,7 +206,7 @@ function OrdersSidebar({
                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors flex items-center gap-2"
                 onClick={() => onActivateTemplate(tpl)}
               >
-                <span>{tpl.icon}</span>
+                {(() => { const Icon = TEMPLATE_ICONS[tpl.icon]; return Icon ? <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" /> : null; })()}
                 <div className="min-w-0">
                   <div className="truncate font-medium">{tpl.label}</div>
                   <div className="text-muted-foreground truncate">{tpl.description}</div>
@@ -676,36 +689,48 @@ export function AssistantSurface() {
                 </p>
                 <div className="grid grid-cols-2 gap-3 text-xs max-w-md">
                   <button
-                    className="text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
+                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
                     onClick={() => setInputValue("Give me a morning briefing every weekday at 9am")}
                   >
-                    <span className="font-medium">Morning briefing</span>
-                    <br />
-                    <span className="text-muted-foreground">Daily summary at 9am</span>
+                    <Sun className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-medium">Morning briefing</span>
+                      <br />
+                      <span className="text-muted-foreground">Daily summary at 9am</span>
+                    </div>
                   </button>
                   <button
-                    className="text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
+                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
                     onClick={() => setInputValue("Remind me to stretch every 2 hours")}
                   >
-                    <span className="font-medium">Stretch reminder</span>
-                    <br />
-                    <span className="text-muted-foreground">Every 2 hours</span>
+                    <Timer className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-medium">Stretch reminder</span>
+                      <br />
+                      <span className="text-muted-foreground">Every 2 hours</span>
+                    </div>
                   </button>
                   <button
-                    className="text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
+                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
                     onClick={() => setInputValue("Watch my latest Buildkite build and alert me if it fails")}
                   >
-                    <span className="font-medium">Build monitor</span>
-                    <br />
-                    <span className="text-muted-foreground">Alert on failure</span>
+                    <Hammer className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-medium">Build monitor</span>
+                      <br />
+                      <span className="text-muted-foreground">Alert on failure</span>
+                    </div>
                   </button>
                   <button
-                    className="text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
+                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
                     onClick={() => setInputValue("Make me a to-do list for today")}
                   >
-                    <span className="font-medium">Daily to-do</span>
-                    <br />
-                    <span className="text-muted-foreground">Interactive checklist</span>
+                    <ListChecks className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-medium">Daily to-do</span>
+                      <br />
+                      <span className="text-muted-foreground">Interactive checklist</span>
+                    </div>
                   </button>
                 </div>
               </div>

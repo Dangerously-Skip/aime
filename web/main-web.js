@@ -443,13 +443,20 @@ app.whenReady().then(async () => {
   // Configure webview sessions
   const { session } = require("electron");
   const CHROME_UA =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 
   // Create a persistent partition for the browser webview so it behaves like a real browser
   const browserSession = session.fromPartition("persist:browser");
   browserSession.setUserAgent(CHROME_UA);
   browserSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(true));
   browserSession.setPermissionCheckHandler(() => true);
+  // Spoof client hints so Google OAuth doesn't reject us as an embedded browser
+  browserSession.webRequest.onBeforeSendHeaders({ urls: ["*://*.google.com/*", "*://*.googleapis.com/*", "*://*.gstatic.com/*"] }, (details, callback) => {
+    details.requestHeaders["sec-ch-ua"] = '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"';
+    details.requestHeaders["sec-ch-ua-mobile"] = "?0";
+    details.requestHeaders["sec-ch-ua-platform"] = '"macOS"';
+    callback({ requestHeaders: details.requestHeaders });
+  });
 
   // Also configure the default session and the main window partition
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(true));
@@ -467,9 +474,23 @@ app.whenReady().then(async () => {
         // -2 = ERR_FAILED (generic, often from blocked resources)
         if (errorCode === -3 || errorCode === -2) return;
       });
-      // Allow new-window requests (target=_blank links) to load in the same webview
+      // Handle new-window requests (target=_blank, window.open, OAuth popups).
+      // Open in a real BrowserWindow so multi-window flows (training modules,
+      // OAuth) work properly. Use the same persistent session for cookie sharing.
       contents.setWindowOpenHandler(({ url }) => {
-        contents.loadURL(url);
+        const { BrowserWindow: BW } = require("electron");
+        const popup = new BW({
+          width: 1024,
+          height: 768,
+          parent: mainWindow,
+          webPreferences: {
+            partition: "persist:browser",
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
+        });
+        popup.loadURL(url);
+        popup.webContents.setUserAgent(CHROME_UA);
         return { action: "deny" };
       });
     }
