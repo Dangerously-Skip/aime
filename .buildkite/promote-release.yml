@@ -161,3 +161,47 @@ steps:
       PublicRootDomain: internal.invalid
     concurrency: 1
     concurrency_group: ${BUILDKITE_PIPELINE_SLUG}/deploy/${BUILDKITE_BRANCH}/kaos-secure
+
+  - wait
+
+  - label: ':unlock: Remove WAF from CloudFront'
+    commands:
+      - |
+        echo "--- Removing Cloudflare-only WAF from internal CloudFront distribution"
+        # SAMOA attaches a Cloudflare-IP-whitelist WAF by default, but this is
+        # an internal VPN-only site not routed through Cloudflare.
+        STACK="quarry-master-stack"
+        DIST_ID=$$(aws cloudformation describe-stack-resources \
+          --stack-name "$$STACK" \
+          --query "StackResources[?ResourceType=='AWS::CloudFront::Distribution'].PhysicalResourceId" \
+          --output text 2>/dev/null)
+        if [ -z "$$DIST_ID" ]; then
+          echo "No CloudFront distribution found in stack $$STACK"
+          exit 0
+        fi
+        echo "Distribution: $$DIST_ID"
+        # Get current config + ETag
+        aws cloudfront get-distribution-config --id "$$DIST_ID" --output json > /tmp/cf.json
+        ETAG=$$(python3 -c "import json; print(json.load(open('/tmp/cf.json'))['ETag'])")
+        WAF=$$(python3 -c "import json; print(json.load(open('/tmp/cf.json'))['DistributionConfig'].get('WebACLId',''))")
+        if [ -z "$$WAF" ]; then
+          echo "No WAF attached — nothing to do"
+          exit 0
+        fi
+        echo "Removing WAF: $$WAF"
+        python3 -c "
+        import json
+        with open('/tmp/cf.json') as f:
+            data = json.load(f)
+        data['DistributionConfig']['WebACLId'] = ''
+        with open('/tmp/cf-updated.json', 'w') as f:
+            json.dump(data['DistributionConfig'], f)
+        "
+        aws cloudfront update-distribution \
+          --id "$$DIST_ID" \
+          --if-match "$$ETAG" \
+          --distribution-config file:///tmp/cf-updated.json \
+          --query "Distribution.Status" --output text
+        echo "WAF removed successfully"
+    agents:
+      queue: elastic
