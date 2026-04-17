@@ -40,9 +40,16 @@ function shortenPath(path: string): string {
   return `.../${parts.slice(-3).join("/")}`;
 }
 
-function openExternally(path: string) {
-  if ((window as unknown as { electronAPI?: { openPath?: (p: string) => void } }).electronAPI?.openPath) {
-    (window as unknown as { electronAPI: { openPath: (p: string) => void } }).electronAPI.openPath(path);
+async function openExternally(path: string) {
+  const api = (window as unknown as { electronAPI?: { openPath?: (p: string) => Promise<string>; fileExists?: (p: string) => Promise<boolean> } }).electronAPI;
+  if (!api?.openPath) return;
+  const exists = await api.fileExists?.(path).catch(() => false);
+  if (exists) {
+    api.openPath(path);
+  } else {
+    // Try opening the containing folder
+    const dir = path.split("/").slice(0, -1).join("/");
+    if (dir) api.openPath(dir);
   }
 }
 

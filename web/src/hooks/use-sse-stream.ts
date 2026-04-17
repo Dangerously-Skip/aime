@@ -230,8 +230,25 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         let buffer = '';
         let done = false;
 
+        // Inactivity timeout — abort if no data arrives for 120s.
+        // The server sends SSE heartbeat comments every ~30s, so 120s of
+        // silence means the connection or agent is truly stuck.
+        const INACTIVITY_TIMEOUT_MS = 120_000;
+        let inactivityTimer = setTimeout(() => {
+          console.warn('[SSE] Inactivity timeout — no data for 120s, aborting');
+          controller.abort();
+        }, INACTIVITY_TIMEOUT_MS);
+        const resetInactivityTimer = () => {
+          clearTimeout(inactivityTimer);
+          inactivityTimer = setTimeout(() => {
+            console.warn('[SSE] Inactivity timeout — no data for 120s, aborting');
+            controller.abort();
+          }, INACTIVITY_TIMEOUT_MS);
+        };
+
         while (!done) {
           const result = await reader.read();
+          resetInactivityTimer();
           if (result.done) {
             if (buffer.trim()) {
               parseSSELines(buffer + '\n', pinnedOnChunk, () => {});
@@ -275,11 +292,18 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
         pinnedOnDone();
       } catch (error: unknown) {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          // If this was an inactivity timeout (not user-initiated), show an error
+          if (!streamRegistry.has(chatId)) {
+            pinnedSetStreamError('Request timed out — the agent may be stuck. Try again.');
+          }
+          return;
+        }
         const err = error instanceof Error ? error : new Error(String(error));
         pinnedSetStreamError(err.message);
         pinnedOnError(err);
       } finally {
+        clearTimeout(inactivityTimer);
         streamRegistry.clear(chatId);
         activeChatIdRef.current = null;
         pinnedSetIsStreaming(false);
