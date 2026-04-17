@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState, useCallback } from "react";
+import { memo, useMemo, useState, useCallback, type ClipboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -92,8 +92,16 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     []
   );
 
+  const handleCopy = useCallback((e: ClipboardEvent<HTMLDivElement>) => {
+    const text = window.getSelection()?.toString();
+    if (text) {
+      e.preventDefault();
+      navigator.clipboard.writeText(text);
+    }
+  }, []);
+
   return (
-    <div className={`markdown-content ${className}`}>
+    <div className={`markdown-content ${className}`} onCopy={handleCopy}>
       <ReactMarkdown
         remarkPlugins={plugins}
         rehypePlugins={rehypePlugins}
