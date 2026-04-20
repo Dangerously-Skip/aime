@@ -2,8 +2,6 @@ import { NextRequest } from 'next/server';
 import { getProvider, getAvailableProviders } from '@/lib/providers';
 import { getSurfaceConfig, getAvailableSurfaces } from '@/lib/surfaces';
 import { createSSEStream } from '@/lib/sse';
-import { isGatewayConfigured } from '@/lib/gateway-env';
-import { GatewayProvider } from '@/lib/providers/gateway-provider';
 import { extractMemories } from '@/lib/memory/extractor';
 import { type SessionControls } from '@/lib/slash-commands';
 import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
@@ -146,17 +144,6 @@ async function loadProvisionedMcpServers(): Promise<Record<string, unknown>> {
   return { ...claudeCodeServers, ...quarryServers };
 }
 
-// Singleton gateway provider — cached on globalThis so message history survives hot reload
-declare global {
-  // eslint-disable-next-line no-var
-  var __gatewayProvider: GatewayProvider | undefined;
-}
-function getGatewayInstance(): GatewayProvider {
-  if (!globalThis.__gatewayProvider) {
-    globalThis.__gatewayProvider = new GatewayProvider();
-  }
-  return globalThis.__gatewayProvider;
-}
 
 /**
  * Surface-routed chat endpoint.
@@ -293,14 +280,10 @@ export async function POST(
     try {
       await sse.writeEvent({ type: 'connected', message: 'Processing request...' });
 
-      // Get the provider instance.
-      // Chat surface: use lightweight GatewayProvider (OpenAI SDK, supports multimodal).
-      // Cowork/Code surfaces: use ClaudeProvider with gateway env (needs agentic tool execution).
-      const useGateway = isGatewayConfigured(apiKey as string | null) && surfaceId === 'chat';
-      const provider = useGateway
-        ? getGatewayInstance()
-        : getProvider(providerName as string);
-      if (useGateway) console.log('[CHAT] Using nib AI Studio gateway provider');
+      // All surfaces use ClaudeProvider (Agent SDK) for consistent tool access,
+      // connector support, and session management. Gateway routing for billing is
+      // handled inside ClaudeProvider via ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL env vars.
+      const provider = getProvider(providerName as string);
 
       // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
       const mcpServers = await loadProvisionedMcpServers();
@@ -523,10 +506,9 @@ export async function POST(
           // Skip plain text (already handled by claude-provider inline)
           if (att.category === 'text') continue;
 
-          // Images: tool surfaces save to disk (model uses Read tool), chat keeps raw
-          // base64 for native multimodal API support via GatewayProvider
+          // Images: save to scratch so the model can use Read tool to view them
           if (att.category === 'image') {
-            if (isToolSurface && att.content) {
+            if (att.content) {
               const imgDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'uploads');
               eMkdir(imgDir, { recursive: true });
               const imgName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -537,14 +519,6 @@ export async function POST(
               att.content = ''; // Free memory
               console.log('[EXTRACT] Saved image to:', imgPath);
             }
-            // Chat: keep att.content intact for native image_url content block
-            continue;
-          }
-
-          // PDFs: tool surfaces extract to text, chat keeps raw base64 for native
-          // document content block support (model sees layout, charts, tables)
-          if (att.category === 'document' && att.type === 'application/pdf' && !isToolSurface) {
-            console.log('[EXTRACT] Skipping PDF extraction for chat — sending natively:', att.name);
             continue;
           }
 
@@ -630,8 +604,7 @@ export async function POST(
         }
       }
 
-      // GatewayProvider handles attachment inlining internally (multimodal content
-      // blocks for images/PDFs, text parts for extracted documents).
+      // ClaudeProvider handles attachment inlining into the prompt string.
       const finalMessage = message as string;
 
       // Stream responses from the provider

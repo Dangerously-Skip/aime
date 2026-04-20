@@ -12,7 +12,7 @@ export async function POST() {
   const state = crypto.randomUUID();
   const params = new URLSearchParams({
     client_id: clientId,
-    scope: "repo,read:user",
+    scope: "repo,read:org,read:user",
     state,
   });
 
