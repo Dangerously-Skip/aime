@@ -233,13 +233,17 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         // Inactivity timeout — abort if no data arrives for 120s.
         // The server sends SSE heartbeat comments every ~30s, so 120s of
         // silence means the connection or agent is truly stuck.
+        // NOTE: inactivityTimer is declared as `var` (not `let`) to avoid
+        // Turbopack TDZ issues where the bundler hoists the resetInactivityTimer
+        // closure before the `let` binding is initialized, causing
+        // "ReferenceError: inactivityTimer is not defined" in production builds.
         const INACTIVITY_TIMEOUT_MS = 120_000;
-        let inactivityTimer = setTimeout(() => {
+        var inactivityTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
           console.warn('[SSE] Inactivity timeout — no data for 120s, aborting');
           controller.abort();
         }, INACTIVITY_TIMEOUT_MS);
         const resetInactivityTimer = () => {
-          clearTimeout(inactivityTimer);
+          if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
           inactivityTimer = setTimeout(() => {
             console.warn('[SSE] Inactivity timeout — no data for 120s, aborting');
             controller.abort();
@@ -303,7 +307,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         pinnedSetStreamError(err.message);
         pinnedOnError(err);
       } finally {
-        clearTimeout(inactivityTimer);
+        if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
         streamRegistry.clear(chatId);
         activeChatIdRef.current = null;
         pinnedSetIsStreaming(false);

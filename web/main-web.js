@@ -5,7 +5,57 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require("electron");
 const os = require("os");
 const path = require("path");
+const fs = require("fs");
 const net = require("net");
+
+// --- File Logger ---
+// Captures console output to a rotating log file for diagnostics.
+const LOG_DIR = path.join(app.getPath("userData"), "logs");
+const LOG_FILE = path.join(LOG_DIR, "quarry.log");
+const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB — rotate when exceeded
+
+function ensureLogDir() {
+  try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
+}
+
+function rotateLogIfNeeded() {
+  try {
+    const stat = fs.statSync(LOG_FILE);
+    if (stat.size > MAX_LOG_SIZE) {
+      const rotated = path.join(LOG_DIR, "quarry.log.1");
+      fs.renameSync(LOG_FILE, rotated);
+    }
+  } catch {}
+}
+
+let logStream = null;
+function initLogger() {
+  ensureLogDir();
+  rotateLogIfNeeded();
+  logStream = fs.createWriteStream(LOG_FILE, { flags: "a" });
+
+  const timestamp = () => new Date().toISOString();
+  const origLog = console.log;
+  const origError = console.error;
+  const origWarn = console.warn;
+
+  console.log = (...args) => {
+    const line = `[${timestamp()}] [LOG] ${args.map(String).join(" ")}\n`;
+    logStream.write(line);
+    origLog.apply(console, args);
+  };
+  console.error = (...args) => {
+    const line = `[${timestamp()}] [ERR] ${args.map(String).join(" ")}\n`;
+    logStream.write(line);
+    origError.apply(console, args);
+  };
+  console.warn = (...args) => {
+    const line = `[${timestamp()}] [WRN] ${args.map(String).join(" ")}\n`;
+    logStream.write(line);
+    origWarn.apply(console, args);
+  };
+}
+initLogger();
 
 /** Find an available TCP port by binding to port 0 and reading the OS assignment. */
 function findFreePort() {
@@ -145,6 +195,16 @@ function buildAppMenu() {
         { role: "zoomOut" },
         { type: "separator" },
         { role: "togglefullscreen" },
+        { type: "separator" },
+        {
+          label: "View Logs",
+          accelerator: "CmdOrCtrl+Shift+L",
+          click: () => shell.openPath(LOG_FILE),
+        },
+        {
+          label: "Open Logs Folder",
+          click: () => shell.openPath(LOG_DIR),
+        },
       ],
     },
     {

@@ -478,8 +478,10 @@ export class ClaudeProvider extends BaseProvider {
         ...safeEnv,
         ...(queryOptions.env as Record<string, string> || {}),
         ...getGatewayEnv(apiKey),
-        // Gateway LiteLLM doesn't support adaptive thinking — disable it via CLI env var
+        // Gateway LiteLLM doesn't support adaptive thinking or experimental
+        // beta features (e.g. context_management) — disable via CLI env vars
         CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1',
+        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
       };
       // Override model to use gateway-compatible short names
       queryOptions.model = mapModelForGateway(model);
