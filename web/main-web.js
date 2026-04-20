@@ -287,7 +287,12 @@ function sendLifecycleEvent(action) {
       schema_version: '1.0',
       event_type: 'app_lifecycle',
       timestamp: new Date().toISOString(),
-      identity: { app_version: pkg.version ?? '1.0.0' },
+      identity: {
+        app: 'quarry',
+        app_version: pkg.version ?? '1.0.0',
+        platform: process.platform,
+        hostname: os.hostname(),
+      },
       data: { action, app_version: pkg.version ?? '1.0.0' },
     }],
     flush: action === 'close',
@@ -555,6 +560,10 @@ ipcMain.handle("get-user-name", () => {
 });
 
 ipcMain.handle("get-home-dir", () => os.homedir());
+
+ipcMain.on("get-app-version", (event) => {
+  event.returnValue = app.getVersion();
+});
 
 ipcMain.handle("open-path", async (_event, filePath) => {
   return shell.openPath(filePath);

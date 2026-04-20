@@ -8,10 +8,13 @@ const ANALYTICS_API_URL = process.env.ANALYTICS_API_URL ?? '';
 const ANALYTICS_AWS_REGION = process.env.ANALYTICS_AWS_REGION ?? 'ap-southeast-2';
 
 export interface AnalyticsIdentity {
+  app?: string;           // 'quarry' | 'claude-code'
+  app_version?: string;
   user_email?: string;
   machine_id?: string;
   team_slug?: string;
-  app_version?: string;
+  platform?: string;      // 'darwin' | 'win32' | 'linux'
+  hostname?: string;
 }
 
 export interface AnalyticsEvent {
@@ -78,6 +81,7 @@ export async function sendEvents(events: AnalyticsEvent[]): Promise<void> {
 /** Build an identity object from available context. */
 export function buildIdentity(overrides: Partial<AnalyticsIdentity> = {}): AnalyticsIdentity {
   return {
+    app: 'quarry',
     app_version: process.env.npm_package_version ?? '1.0.0',
     ...overrides,
   };
