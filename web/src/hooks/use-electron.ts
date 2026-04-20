@@ -18,6 +18,9 @@ interface ElectronAPI {
   detectEditors: () => Promise<{ id: string; name: string; command: string }[]>;
   openInEditor: (editorId: string, folderPath: string) => Promise<void>;
   onUpdateState: (callback: (data: { state: "idle" | "checking" | "available" | "downloading" | "ready" | "error"; statusLabel: string | null }) => void) => void;
+  getAppVersion: () => string;
+  getPlatform: () => string;
+  getHostname: () => string;
   checkForUpdates: () => void;
   installUpdate: () => void;
   onOpenSettings: (callback: () => void) => void;

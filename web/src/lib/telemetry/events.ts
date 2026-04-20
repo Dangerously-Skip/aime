@@ -54,17 +54,58 @@ export interface UserFeedbackData {
   domain?: string;
 }
 
+// Cache identity so we don't call IPC on every event
+let cachedIdentity: AnalyticsIdentity | null = null;
+
+/**
+ * Build the client-side identity for Quarry events.
+ * Uses Electron IPC for real platform/version info.
+ */
+function getQuarryIdentity(): AnalyticsIdentity {
+  if (cachedIdentity) return cachedIdentity;
+
+  const identity: AnalyticsIdentity = {
+    app: 'quarry',
+  };
+
+  if (typeof window !== 'undefined') {
+    const api = (window as unknown as {
+      electronAPI?: {
+        getAppVersion?: () => string;
+        getPlatform?: () => string;
+        getHostname?: () => string;
+      }
+    }).electronAPI;
+
+    if (api?.getAppVersion) identity.app_version = api.getAppVersion();
+    if (api?.getPlatform) identity.platform = api.getPlatform();
+    if (api?.getHostname) identity.hostname = api.getHostname();
+  }
+
+  // Get user email from settings store
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { useSettingsStore } = require('@/stores/settings-store');
+    const email = useSettingsStore.getState().displayName;
+    if (email) identity.user_email = email;
+  } catch { /* store not available */ }
+
+  cachedIdentity = identity;
+  return identity;
+}
+
 /** Post events to the local Next.js telemetry endpoint (which queues + forwards to cloud). */
 async function postEvents(
   events: Array<{ event_type: string; data: Record<string, unknown>; identity?: AnalyticsIdentity }>,
   flush = false,
 ): Promise<void> {
   try {
+    const baseIdentity = getQuarryIdentity();
     const payload = events.map((e) => ({
       schema_version: '1.0' as const,
       event_type: e.event_type,
       timestamp: new Date().toISOString(),
-      identity: e.identity ?? {},
+      identity: { ...baseIdentity, ...e.identity },
       data: e.data,
     }));
     await fetch('/api/telemetry/events', {

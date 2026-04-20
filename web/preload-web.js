@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onUpdateState: (callback) => {
     ipcRenderer.on("update-state", (_event, data) => callback(data));
   },
+  getAppVersion: () => ipcRenderer.sendSync("get-app-version"),
+  getPlatform: () => process.platform,
+  getHostname: () => require("os").hostname(),
   checkForUpdates: () => ipcRenderer.send("check-for-updates"),
   installUpdate: () => ipcRenderer.send("install-update"),
   onOpenSettings: (callback) => {
