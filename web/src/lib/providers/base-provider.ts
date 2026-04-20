@@ -59,6 +59,8 @@ export interface QueryParams {
   apiKey?: string;
   cwd?: string;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Session controls from slash commands (thinking, effort, model override). */
+  sessionControls?: import('../slash-commands').SessionControls;
   /** Callback to send an input_request event to the client during streaming. */
   onInputRequest?: (toolUseId: string, questions: unknown) => Promise<void>;
   /** Callback to send a browser_tool_use event to the client during streaming. */

@@ -37,7 +37,6 @@ export class ClaudeProvider extends BaseProvider {
   public lastInitData: SystemInitData | null = null;
   /** Recent tool calls per session for loop detection: key → [{name, inputHash}] */
   private toolCallWindows: Map<string, Array<{ name: string; inputHash: string }>> = new Map();
-
   constructor(config: ProviderConfig = {}) {
     super(config);
     this.defaultAllowedTools = config.allowedTools || [
@@ -48,6 +47,7 @@ export class ClaudeProvider extends BaseProvider {
     this.permissionMode = config.permissionMode || 'bypassPermissions';
     this.abortControllers = new Map();
   }
+
 
   get name(): string {
     return 'claude';
@@ -105,6 +105,7 @@ export class ClaudeProvider extends BaseProvider {
       apiKey,
       cwd,
       history,
+      sessionControls,
       onInputRequest,
       onBrowserToolUse,
     } = params;
@@ -284,6 +285,32 @@ export class ClaudeProvider extends BaseProvider {
         plugins: pluginPaths.map(p => ({ type: 'local', path: p })),
       }),
     };
+
+    // ── Native SDK options: thinking, effort, fallback, prompt suggestions ──
+    if (sessionControls?.thinkLevel && sessionControls.thinkLevel !== 'off') {
+      const { THINK_LEVEL_TOKENS } = await import('../slash-commands');
+      const level = sessionControls.thinkLevel;
+      queryOptions.thinking = level === 'adaptive'
+        ? { type: 'adaptive' }
+        : { type: 'enabled', budgetTokens: THINK_LEVEL_TOKENS[level] };
+      console.log('[Claude] Thinking:', level, queryOptions.thinking);
+    }
+
+    if (sessionControls?.effortLevel) {
+      queryOptions.effort = sessionControls.effortLevel;
+      console.log('[Claude] Effort:', sessionControls.effortLevel);
+    }
+
+    // Fallback model — auto-downgrade if primary model fails (rate limit, etc)
+    const fallbacks: Record<string, string> = { opus: 'sonnet', sonnet: 'haiku', coding: 'fast' };
+    if (model && fallbacks[model]) {
+      queryOptions.fallbackModel = fallbacks[model];
+    }
+
+    // Prompt suggestions — Chat surface only
+    if (surfaceId === 'chat') {
+      queryOptions.promptSuggestions = true;
+    }
 
     // In packaged Electron builds, the SDK can't find its CLI binary via import.meta.url
     // because the bundler minifies module paths. The instrumentation hook sets globalThis
@@ -618,6 +645,16 @@ export class ClaudeProvider extends BaseProvider {
             provider: this.name,
           };
 
+          continue;
+        }
+
+        // Handle prompt suggestions (Chat surface)
+        if (c.type === 'prompt_suggestion') {
+          yield {
+            type: 'prompt_suggestion',
+            suggestion: c.suggestion as string,
+            provider: this.name,
+          };
           continue;
         }
 

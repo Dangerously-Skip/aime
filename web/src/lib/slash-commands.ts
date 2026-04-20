@@ -4,6 +4,7 @@
  */
 
 export type ThinkLevel = 'off' | 'low' | 'medium' | 'high' | 'adaptive';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
 
 export interface SlashCommand {
   command: string;
@@ -13,6 +14,7 @@ export interface SlashCommand {
 
 export interface SessionControls {
   thinkLevel: ThinkLevel;
+  effortLevel: EffortLevel | null;
   verboseMode: boolean;
   reasoningVisible: boolean;
   modelOverride: string | null;
@@ -21,6 +23,7 @@ export interface SessionControls {
 
 export const DEFAULT_SESSION_CONTROLS: SessionControls = {
   thinkLevel: 'off',
+  effortLevel: null,
   verboseMode: true,
   reasoningVisible: true,
   modelOverride: null,
@@ -42,6 +45,7 @@ export const SLASH_COMMANDS = [
   { name: '/verbose', description: 'Toggle verbose tool output on/off', args: '[on|off]' },
   { name: '/reasoning', description: 'Toggle reasoning/thinking block visibility', args: '[on|off]' },
   { name: '/model', description: 'Override model for this session', args: '<name>' },
+  { name: '/effort', description: 'Set reasoning effort: low, medium, high, max', args: '<level>' },
   { name: '/agent', description: 'Bind session to a named agent from AGENTS.md', args: '<name>' },
   { name: '/help', description: 'Show available slash commands', args: '' },
 ];
@@ -101,6 +105,21 @@ export function applySlashCommand(
       return {
         controls: { ...controls, reasoningVisible },
         message: `Reasoning display **${reasoningVisible ? 'on' : 'off'}**`,
+      };
+    }
+
+    case '/effort': {
+      const level = (cmd.args[0] || '').toLowerCase() as EffortLevel;
+      const validEffort: EffortLevel[] = ['low', 'medium', 'high', 'max'];
+      if (!level || !validEffort.includes(level)) {
+        return {
+          controls,
+          message: `Usage: /effort <level>. Valid: ${validEffort.join(', ')}. Current: **${controls.effortLevel ?? 'default'}**`,
+        };
+      }
+      return {
+        controls: { ...controls, effortLevel: level },
+        message: `Reasoning effort set to **${level}**`,
       };
     }
 

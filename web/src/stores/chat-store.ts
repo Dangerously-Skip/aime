@@ -65,6 +65,7 @@ interface ChatState {
   streamError: string | null;
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
+  suggestions: Record<string, string[]>;
 }
 
 interface ChatActions {
@@ -84,6 +85,8 @@ interface ChatActions {
   touchActivity: (chatId: string) => void;
   setIsStreaming: (v: boolean) => void;
   setStreamError: (e: string | null) => void;
+  addSuggestion: (chatId: string, suggestion: string) => void;
+  clearSuggestions: (chatId: string) => void;
 }
 
 export type ChatStore = ChatState & ChatActions;
@@ -98,6 +101,7 @@ export const useChatStore = create<ChatStore>()(
       streamError: null,
       sessionControls: {},
       lastActivityAt: {},
+      suggestions: {},
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -227,6 +231,19 @@ export const useChatStore = create<ChatStore>()(
 
       setIsStreaming: (v) => set({ isStreaming: v }),
       setStreamError: (e) => set({ streamError: e }),
+
+      addSuggestion: (chatId, suggestion) =>
+        set((state) => ({
+          suggestions: {
+            ...state.suggestions,
+            [chatId]: [...(state.suggestions[chatId] || []), suggestion].slice(-3),
+          },
+        })),
+
+      clearSuggestions: (chatId) =>
+        set((state) => ({
+          suggestions: { ...state.suggestions, [chatId]: [] },
+        })),
     }),
     {
       name: 'nibcowork:chat',

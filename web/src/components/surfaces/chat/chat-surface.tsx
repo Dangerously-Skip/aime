@@ -128,6 +128,9 @@ export function ChatSurface() {
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
   const toolProfile = useSettingsStore((s) => s.toolProfile);
   const setSessionControlsInStore = useChatStore((s) => s.setSessionControls);
+  const addSuggestion = useChatStore((s) => s.addSuggestion);
+  const clearSuggestions = useChatStore((s) => s.clearSuggestions);
+  const suggestions = useChatStore((s) => chatId ? (s.suggestions[chatId] || []) : []);
   const sessionControlsMap = useChatStore((s) => s.sessionControls);
   const sessionControls: SessionControls = chatId
     ? (sessionControlsMap[chatId] ?? DEFAULT_SESSION_CONTROLS)
@@ -239,6 +242,13 @@ export function ChatSurface() {
             }
           } catch (e) {
             console.error('[Chat] CronCreate parse error:', e);
+          }
+          break;
+        }
+        case "prompt_suggestion": {
+          const suggestion = event.suggestion as string;
+          if (suggestion && chatId) {
+            addSuggestion(chatId, suggestion);
           }
           break;
         }
@@ -385,6 +395,9 @@ export function ChatSurface() {
       const memoriesStr = formatMemoriesForPrompt(relevantMemories);
       // Touch accessed memories
       relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
+
+      // Clear prompt suggestions when user sends a new message
+      if (chatId) clearSuggestions(chatId);
 
       await sendMessage(trimmed, id, "chat", model, {
         personalPreferences: personalPreferences || undefined,
@@ -704,6 +717,23 @@ export function ChatSurface() {
 
           {/* Messages */}
           <MessageList messages={messages} conversationId={chatId} onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onRetry={handleRetry} />
+
+          {/* Prompt suggestions */}
+          {suggestions.length > 0 && !isStreaming && (
+            <div className="px-6 pb-1">
+              <div className="max-w-3xl mx-auto flex flex-wrap gap-2">
+                {suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setInputValue(s)}
+                    className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Bottom input card */}
           <div className="px-6 pb-4 pt-2">

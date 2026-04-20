@@ -5,7 +5,7 @@ import { createSSEStream } from '@/lib/sse';
 import { isGatewayConfigured } from '@/lib/gateway-env';
 import { GatewayProvider } from '@/lib/providers/gateway-provider';
 import { extractMemories } from '@/lib/memory/extractor';
-import { type SessionControls, THINK_LEVEL_TOKENS } from '@/lib/slash-commands';
+import { type SessionControls } from '@/lib/slash-commands';
 import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
 
 /** Tool profile → allowed tool sets (intersected with surface defaults) */
@@ -294,17 +294,13 @@ export async function POST(
       await sse.writeEvent({ type: 'connected', message: 'Processing request...' });
 
       // Get the provider instance.
-      // Chat surface: use lightweight GatewayProvider (OpenAI SDK, no tools needed).
+      // Chat surface: use lightweight GatewayProvider (OpenAI SDK, supports multimodal).
       // Cowork/Code surfaces: use ClaudeProvider with gateway env (needs agentic tool execution).
-      // Only bypass gateway for image attachments (need multimodal API). Document attachments
-      // are extracted to text server-side and can go through the gateway.
-      const hasImageAttachments = attachments?.some(a => a.category === 'image') ?? false;
-      const useGateway = isGatewayConfigured(apiKey as string | null) && surfaceId === 'chat' && !hasImageAttachments;
+      const useGateway = isGatewayConfigured(apiKey as string | null) && surfaceId === 'chat';
       const provider = useGateway
         ? getGatewayInstance()
         : getProvider(providerName as string);
-      if (useGateway) console.log('[CHAT] Using nib AI Studio gateway provider (chat-only)');
-      if (hasImageAttachments && surfaceId === 'chat') console.log('[CHAT] Bypassing gateway — image attachments require Claude API');
+      if (useGateway) console.log('[CHAT] Using nib AI Studio gateway provider');
 
       // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
       const mcpServers = await loadProvisionedMcpServers();
@@ -511,15 +507,8 @@ export async function POST(
         || (model as string)
         || surfaceConfig.model;
 
-      // Build thinking config if thinkLevel is set
-      if (sessionControls?.thinkLevel && sessionControls.thinkLevel !== 'off') {
-        const budgetTokens = THINK_LEVEL_TOKENS[sessionControls.thinkLevel];
-        const thinkingBlock = budgetTokens === -1
-          ? `\n\n<thinking-config>\nThinking mode: adaptive\n</thinking-config>`
-          : `\n\n<thinking-config>\nThinking budget: ${budgetTokens} tokens\n</thinking-config>`;
-        systemPrompt = appendToSystemPrompt(systemPrompt, thinkingBlock);
-        console.log('[THINK] Level:', sessionControls.thinkLevel, 'budget:', budgetTokens);
-      }
+      // Thinking and effort are now handled natively by the SDK via ClaudeProvider
+      // (passed as queryOptions.thinking and queryOptions.effort)
 
       // ── Document extraction ───────────────────────────────────────────
       // Run extraction on non-text/non-image attachments before sending to provider
@@ -534,20 +523,28 @@ export async function POST(
           // Skip plain text (already handled by claude-provider inline)
           if (att.category === 'text') continue;
 
-          // Images: save to scratch so the model can use Read tool to view them
+          // Images: tool surfaces save to disk (model uses Read tool), chat keeps raw
+          // base64 for native multimodal API support via GatewayProvider
           if (att.category === 'image') {
             if (isToolSurface && att.content) {
               const imgDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'uploads');
               eMkdir(imgDir, { recursive: true });
               const imgName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
               const imgPath = ej(imgDir, imgName);
-              // Images from attachment-menu come as data URLs (data:image/png;base64,...)
               const base64Data = att.content.includes(',') ? att.content.split(',')[1] : att.content;
               eWrite(imgPath, Buffer.from(base64Data, 'base64'));
               att.extractedPath = imgPath;
               att.content = ''; // Free memory
               console.log('[EXTRACT] Saved image to:', imgPath);
             }
+            // Chat: keep att.content intact for native image_url content block
+            continue;
+          }
+
+          // PDFs: tool surfaces extract to text, chat keeps raw base64 for native
+          // document content block support (model sees layout, charts, tables)
+          if (att.category === 'document' && att.type === 'application/pdf' && !isToolSurface) {
+            console.log('[EXTRACT] Skipping PDF extraction for chat — sending natively:', att.name);
             continue;
           }
 
@@ -633,21 +630,9 @@ export async function POST(
         }
       }
 
-      // For gateway provider: inline extracted attachment text into the message
-      // (gateway doesn't support an attachments parameter)
-      let finalMessage = message as string;
-      if (useGateway && attachments && attachments.length > 0) {
-        const inlineParts: string[] = [];
-        for (const att of attachments) {
-          if (att.content && att.content.length > 0 && att.category !== 'image') {
-            inlineParts.push(`<document name="${att.name}">\n${att.content}\n</document>`);
-          }
-        }
-        if (inlineParts.length > 0) {
-          finalMessage = `${inlineParts.join('\n\n')}\n\n${finalMessage}`;
-          console.log('[CHAT] Inlined', inlineParts.length, 'attachment(s) into message for gateway');
-        }
-      }
+      // GatewayProvider handles attachment inlining internally (multimodal content
+      // blocks for images/PDFs, text parts for extracted documents).
+      const finalMessage = message as string;
 
       // Stream responses from the provider
       let collectedResponse = '';
@@ -689,6 +674,7 @@ export async function POST(
           apiKey: (apiKey as string) || undefined,
           cwd: (cwd as string) || undefined,
           history: history || undefined,
+          sessionControls: sessionControls || undefined,
           onInputRequest,
           onBrowserToolUse,
         })) {

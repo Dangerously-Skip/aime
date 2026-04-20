@@ -3,13 +3,22 @@ import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig }
 import { mapModelForGateway } from '../gateway-env';
 
 const NIB_GATEWAY_BASE_URL = 'https://ai-studio.internal.invalid/v1';
+const MAX_NATIVE_BYTES = 20 * 1024 * 1024; // 20 MB — skip native upload above this
+
+type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }
+  | { type: 'file'; file: { filename: string; file_data: string } };
+
+type MessageContent = string | ContentPart[];
 
 /**
  * Gateway provider — routes through nib AI Studio (LiteLLM) using the OpenAI-compatible API.
  * Maintains per-chat message history server-side.
+ * Supports multimodal content (images, PDFs) as native content blocks.
  */
 export class GatewayProvider extends BaseProvider {
-  private chatHistories: Map<string, Array<{ role: 'system' | 'user' | 'assistant'; content: string }>>;
+  private chatHistories: Map<string, Array<{ role: 'system' | 'user' | 'assistant'; content: MessageContent }>>;
   private abortControllers: Map<string, AbortController>;
 
   constructor(config: ProviderConfig = {}) {
@@ -42,6 +51,7 @@ export class GatewayProvider extends BaseProvider {
       systemPrompt,
       apiKey,
       history: clientHistory,
+      attachments,
     } = params;
 
     if (!apiKey) {
@@ -58,7 +68,7 @@ export class GatewayProvider extends BaseProvider {
 
     // Initialize or retrieve conversation history
     if (!this.chatHistories.has(chatId)) {
-      const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+      const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: MessageContent }> = [];
       // Add system prompt
       const sysPrompt = typeof systemPrompt === 'string'
         ? systemPrompt
@@ -79,7 +89,65 @@ export class GatewayProvider extends BaseProvider {
     }
 
     const history = this.chatHistories.get(chatId)!;
-    history.push({ role: 'user', content: prompt });
+
+    // Build user message — multimodal when image/PDF attachments are present
+    const nativeAttachments = (attachments || []).filter(
+      a => a.category === 'image' || (a.category === 'document' && a.type === 'application/pdf')
+    );
+    const extractedAttachments = (attachments || []).filter(
+      a => a.content && a.category !== 'image' && !(a.category === 'document' && a.type === 'application/pdf')
+    );
+
+    if (nativeAttachments.length > 0) {
+      const parts: ContentPart[] = [];
+
+      // Inline extracted document text (DOCX, XLSX, etc) as text parts
+      for (const att of extractedAttachments) {
+        if (att.content) {
+          parts.push({ type: 'text', text: `<document name="${att.name}">\n${att.content}\n</document>` });
+        }
+      }
+
+      // Add native image/PDF parts
+      for (const att of nativeAttachments) {
+        if (!att.content) continue;
+
+        // Size guard — skip native upload for very large files
+        const base64Data = att.content.includes(',') ? att.content.split(',')[1] : att.content;
+        const byteSize = Math.ceil(base64Data.length * 3 / 4);
+        if (byteSize > MAX_NATIVE_BYTES) {
+          parts.push({ type: 'text', text: `[Attachment ${att.name} too large for native upload (${(byteSize / 1024 / 1024).toFixed(1)}MB). Please use a smaller file.]` });
+          continue;
+        }
+
+        if (att.category === 'image') {
+          const dataUrl = att.content.startsWith('data:') ? att.content : `data:${att.type || 'image/png'};base64,${att.content}`;
+          parts.push({ type: 'image_url', image_url: { url: dataUrl } });
+          console.log('[Gateway] Added native image:', att.name);
+        } else if (att.category === 'document' && att.type === 'application/pdf') {
+          const pdfDataUrl = att.content.startsWith('data:') ? att.content : `data:application/pdf;base64,${att.content}`;
+          parts.push({ type: 'file', file: { filename: att.name, file_data: pdfDataUrl } });
+          console.log('[Gateway] Added native PDF:', att.name);
+        }
+      }
+
+      // Add the user's text message
+      parts.push({ type: 'text', text: prompt });
+      history.push({ role: 'user', content: parts });
+      console.log('[Gateway] Built multimodal message with', parts.length, 'content parts');
+    } else if (extractedAttachments.length > 0) {
+      // Text-only attachments: inline as document tags (existing behavior)
+      const inlineParts = extractedAttachments
+        .filter(a => a.content)
+        .map(a => `<document name="${a.name}">\n${a.content}\n</document>`);
+      const finalPrompt = inlineParts.length > 0
+        ? `${inlineParts.join('\n\n')}\n\n${prompt}`
+        : prompt;
+      history.push({ role: 'user', content: finalPrompt });
+    } else {
+      // No attachments — plain text message
+      history.push({ role: 'user', content: prompt });
+    }
 
     // Create abort controller
     const abortKey = this.getAbortKey(chatId, surfaceId);
@@ -92,7 +160,7 @@ export class GatewayProvider extends BaseProvider {
       const stream = await client.chat.completions.create(
         {
           model,
-          messages: history,
+          messages: history as OpenAI.ChatCompletionMessageParam[],
           stream: true,
           // MCP tools for server-side web search via LiteLLM
           tools: [
