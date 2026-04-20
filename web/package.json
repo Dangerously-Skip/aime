@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "1.1.6",
+  "version": "1.2.0",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -130,7 +130,7 @@
     ]
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.74",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.116",
     "@anthropic-ai/sdk": "^0.78.0",
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/credential-providers": "^3.1014.0",
