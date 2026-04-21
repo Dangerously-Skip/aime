@@ -256,7 +256,18 @@ export const useChatStore = create<ChatStore>()(
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
-        if (state) state.messages = cleanStaleStreamingFlags(state.messages);
+        if (state) {
+          state.messages = cleanStaleStreamingFlags(state.messages);
+          // Migrate persisted sessionControls to include effortLevel (added in v1.2.0)
+          if (state.sessionControls) {
+            for (const chatId of Object.keys(state.sessionControls)) {
+              const ctrl = state.sessionControls[chatId];
+              if (ctrl && !('effortLevel' in ctrl)) {
+                (ctrl as Record<string, unknown>).effortLevel = null;
+              }
+            }
+          }
+        }
       },
     }
   )
