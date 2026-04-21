@@ -170,24 +170,31 @@ export function ChatSurface() {
     }
   }, [chatId]);
 
+  // Read the CURRENT chatId from the store at call time, not from the
+  // closure. On the first message in a new chat, the closure chatId is ""
+  // because setCurrentChat(newId) hasn't triggered a re-render yet.
+  // This causes chunks to be written to chatId "" instead of the new ID.
+  const getChatId = () => useChatStore.getState().currentChatId ?? "";
+
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
     setStreamError,
     onChunk(event) {
+      const cid = getChatId();
       switch (event.type) {
         case "text":
-          appendToLastAssistant(chatId, (event.content as string) || "");
+          appendToLastAssistant(cid, (event.content as string) || "");
           break;
         case "thinking":
           appendToLastAssistant(
-            chatId,
+            cid,
             "",
             (event.content as string) || ""
           );
           break;
         case "tool_use":
-          addToolCall(chatId, {
+          addToolCall(cid, {
             id: (event.id as string) || `tool_${Date.now()}`,
             name: (event.name as string) || "Unknown",
             input: (event.input as Record<string, unknown>) || {},
@@ -197,7 +204,7 @@ export function ChatSurface() {
           break;
         case "tool_result":
           updateToolResult(
-            chatId,
+            cid,
             (event.tool_use_id as string) || (event.id as string) || "",
             typeof event.result === "string"
               ? event.result
@@ -206,7 +213,7 @@ export function ChatSurface() {
           );
           break;
         case "input_request":
-          addMessage(chatId, {
+          addMessage(cid, {
             id: (event.toolUseId as string) || `q_${Date.now()}`,
             role: "assistant",
             content: "",
@@ -249,23 +256,21 @@ export function ChatSurface() {
         }
         case "prompt_suggestion": {
           const suggestion = event.suggestion as string;
-          if (suggestion && chatId) {
-            addSuggestion(chatId, suggestion);
+          if (suggestion) {
+            addSuggestion(getChatId(), suggestion);
           }
           break;
         }
         case "document_extracted": {
-          // Persist extracted document text in the last user message so follow-up questions
-          // have the document context in conversation history
           const extractedText = event.extractedText as string | undefined;
           const docName = event.name as string;
-          if (extractedText && chatId) {
-            const msgs = useChatStore.getState().messages[chatId] || [];
-            // Find last user message (should be the one that had the attachment)
+          const did = getChatId();
+          if (extractedText && did) {
+            const msgs = useChatStore.getState().messages[did] || [];
             for (let i = msgs.length - 1; i >= 0; i--) {
               if (msgs[i].role === 'user') {
                 const docBlock = `\n\n<document name="${docName}">\n${extractedText}\n</document>`;
-                useChatStore.getState().updateMessageContent(chatId, msgs[i].id, msgs[i].content + docBlock);
+                useChatStore.getState().updateMessageContent(did, msgs[i].id, msgs[i].content + docBlock);
                 break;
               }
             }
@@ -275,26 +280,26 @@ export function ChatSurface() {
         case "memory_extract":
           handleMemoryExtractEvent(
             event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
-            chatId,
+            getChatId(),
           );
           break;
         case "error":
           appendToLastAssistant(
-            chatId,
+            cid,
             `\n\n**Error:** ${(event.message as string) || "An error occurred"}`
           );
           break;
       }
     },
     onDone() {
-      stopStreaming(chatId);
+      stopStreaming(getChatId());
       if (!document.hasFocus()) {
         showNotification("Task complete", "Claude has finished working on your request.");
       }
     },
     onError(error) {
-      stopStreaming(chatId);
-      appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
+      stopStreaming(getChatId());
+      appendToLastAssistant(getChatId(), `\n\n**Error:** ${error.message}`);
     },
   });
 
