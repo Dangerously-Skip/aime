@@ -2,7 +2,11 @@ import type { SurfaceConfig } from './index';
 
 export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
-    allowedTools: ['WebSearch', 'WebFetch', 'canvas'],
+    allowedTools: [
+      'Read', 'Glob', 'Grep',  // File access for attachments (images, PDFs, documents)
+      'WebFetch', 'canvas',
+      'mcp__nib-web-search__web_search',
+    ],
     permissionMode: 'default',
     systemPrompt: `You are Quarry, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.
 
