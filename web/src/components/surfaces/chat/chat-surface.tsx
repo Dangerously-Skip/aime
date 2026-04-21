@@ -102,6 +102,7 @@ export function ChatSurface() {
     (s) => s.appendToLastAssistant
   );
   const addToolCall = useChatStore((s) => s.addToolCall);
+  const completeRunningTools = useChatStore((s) => s.completeRunningTools);
   const updateMessage = useChatStore((s) => s.updateMessage);
   const updateToolResult = useChatStore((s) => s.updateToolResult);
   const startStreaming = useChatStore((s) => s.startStreaming);
@@ -183,7 +184,11 @@ export function ChatSurface() {
     onChunk(event) {
       const cid = getChatId();
       switch (event.type) {
+        case "turn_start":
+          completeRunningTools(cid);
+          break;
         case "text":
+          completeRunningTools(cid);
           appendToLastAssistant(cid, (event.content as string) || "");
           break;
         case "thinking":
@@ -194,6 +199,7 @@ export function ChatSurface() {
           );
           break;
         case "tool_use":
+          completeRunningTools(cid);
           addToolCall(cid, {
             id: (event.id as string) || `tool_${Date.now()}`,
             name: (event.name as string) || "Unknown",
@@ -292,7 +298,9 @@ export function ChatSurface() {
       }
     },
     onDone() {
-      stopStreaming(getChatId());
+      const doneId = getChatId();
+      completeRunningTools(doneId);
+      stopStreaming(doneId);
       if (!document.hasFocus()) {
         showNotification("Task complete", "Claude has finished working on your request.");
       }
