@@ -233,22 +233,21 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         // Inactivity timeout — abort if no data arrives for 120s.
         // The server sends SSE heartbeat comments every ~30s, so 120s of
         // silence means the connection or agent is truly stuck.
-        // NOTE: inactivityTimer is declared as `var` (not `let`) to avoid
-        // Turbopack TDZ issues where the bundler hoists the resetInactivityTimer
-        // closure before the `let` binding is initialized, causing
-        // "ReferenceError: inactivityTimer is not defined" in production builds.
+        // Timer state is stored in an object ref to avoid Turbopack TDZ issues
+        // where closures reference variables before their binding is initialized.
         const INACTIVITY_TIMEOUT_MS = 120_000;
-        var inactivityTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
-          console.warn('[SSE] Inactivity timeout — no data for 120s, aborting');
-          controller.abort();
-        }, INACTIVITY_TIMEOUT_MS);
-        const resetInactivityTimer = () => {
-          if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
-          inactivityTimer = setTimeout(() => {
+        const timerRef = { id: undefined as ReturnType<typeof setTimeout> | undefined };
+        const startInactivityTimer = () => {
+          timerRef.id = setTimeout(() => {
             console.warn('[SSE] Inactivity timeout — no data for 120s, aborting');
             controller.abort();
           }, INACTIVITY_TIMEOUT_MS);
         };
+        const resetInactivityTimer = () => {
+          if (timerRef.id !== undefined) clearTimeout(timerRef.id);
+          startInactivityTimer();
+        };
+        startInactivityTimer();
 
         while (!done) {
           const result = await reader.read();
@@ -307,7 +306,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         pinnedSetStreamError(err.message);
         pinnedOnError(err);
       } finally {
-        if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+        if (timerRef.id !== undefined) clearTimeout(timerRef.id);
         streamRegistry.clear(chatId);
         activeChatIdRef.current = null;
         pinnedSetIsStreaming(false);
