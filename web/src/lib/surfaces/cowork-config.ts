@@ -4,7 +4,7 @@ export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): Surface
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash',
-      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'canvas', 'spawn_agent',
+      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'canvas', 'spawn_agent',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__nib-web-search__web_search',
     ],
@@ -36,12 +36,7 @@ When the user asks to be reminded about something or to schedule a recurring tas
 - Use subagents for parallel work streams when appropriate.
 
 ## PowerPoint presentations
-- **ALWAYS use the nib-ppt plugin** for PowerPoint generation. Fork is installed at ~/.claude/plugins/nib-ppt/.
-- nib-ppt workflow: write Fork-formatted markdown → run ~/.claude/plugins/nib-ppt/generate_presentation.sh → .pptx is generated automatically.
-- nib-ppt supports: title slides, section headers, content slides, two-column layouts, image slides, tables.
-- For custom visuals (charts, metric cards), create HTML files in visuals/ and nib-ppt converts them to PNG automatically.
-- See the nib-ppt CLAUDE.md at ~/.claude/plugins/nib-ppt/.claude/CLAUDE.md for full documentation.
-- Do NOT manually use python-pptx for PowerPoint creation — nib-ppt handles this better.
+To create a PowerPoint: (1) Write a .md file using \`## SLIDE type: Title\` format with slides separated by \`---\`. Types: title, section, content, two_column, image, table. (2) Run \`bash ~/.claude/plugins/nib-ppt/generate_presentation.sh input.md output.pptx\`. It opens automatically. Do NOT use python-pptx. Do NOT invoke the Skill tool. Do NOT search for nib-ppt files. Just write the markdown and run the command.
 
 ## Other binary file formats (PDF, XLSX, DOCX)
 - For .xlsx, .docx, .pdf, or other binary formats: use Bash to install the needed library (pip3 install openpyxl / python-docx / fpdf2) then generate with Python.

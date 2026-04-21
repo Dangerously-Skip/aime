@@ -122,6 +122,9 @@ export const useAssistantStore = create<AssistantStore>()(
           ],
         }));
         get().addActivity({ type: 'order-created', label: `Created: ${order.instruction.slice(0, 60)}`, orderId: id });
+        import('@/lib/telemetry/events').then(({ sendFeatureAdoptionEvent }) => {
+          sendFeatureAdoptionEvent({ feature: 'standing_order', surface: 'assistant' });
+        }).catch(() => {});
         return id;
       },
 

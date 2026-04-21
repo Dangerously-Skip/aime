@@ -1,17 +1,74 @@
-# nib-ppt
+---
+name: nib-ppt
+description: Generate PowerPoint presentations from markdown
+allowed-tools: Bash, Write, Read
+---
 
-Generate professional PowerPoint presentations from natural language descriptions.
+# PowerPoint Generation
 
-## Usage
+When the user asks to create a PowerPoint or presentation, follow these steps exactly.
 
-Ask Claude to create a presentation:
-- "Create a 10-slide presentation about Q4 results"
-- "Make a pitch deck for our new product"
-- "Generate a team update presentation"
+## Step 1: Write markdown
 
-## Capabilities
+Write a `.md` file where each slide starts with `## SLIDE type: Title` and slides are separated by `---`.
 
-- Creates .pptx files with professional layouts
-- Supports multiple slide layouts (title, content, two-column, image)
-- Auto-generates speaker notes
-- Applies consistent branding and color themes
+Slide types: `title`, `section`, `content`, `two_column`, `image`, `table`.
+
+Example:
+```markdown
+## SLIDE title: Presentation Title
+<!-- subtitle: Optional Subtitle -->
+---
+## SLIDE section: Section Name
+---
+## SLIDE content: Slide Title
+
+- First point
+- Second point
+- **Bold point**
+
+---
+## SLIDE two_column: Comparison
+
+::: column-left
+### Left Side
+Content here
+:::
+
+::: column-right
+### Right Side
+Content here
+:::
+
+---
+## SLIDE table: Data Overview
+
+| Column 1 | Column 2 | Column 3 |
+|----------|----------|----------|
+| Value A  | Value B  | Value C  |
+```
+
+## Step 2: Generate the .pptx
+
+```bash
+bash ~/.claude/plugins/nib-ppt/generate_presentation.sh input.md output.pptx
+```
+
+The presentation opens automatically when done.
+
+## Options
+
+- `--skip-html-gen` — skip HTML-to-PNG conversion (faster for text-only changes)
+- `--no-open` — don't auto-open the result
+
+## If dependencies are missing
+
+```bash
+pip3 install python-pptx pyyaml
+```
+
+## Rules
+
+- Do NOT use python-pptx directly — always use the generate script
+- Do NOT search for nib-ppt as a CLI tool — it is the shell script above
+- Write the markdown first, then run the script

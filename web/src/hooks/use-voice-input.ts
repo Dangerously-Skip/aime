@@ -114,6 +114,9 @@ export function useVoiceInput({ onTranscript, lang = 'en' }: UseVoiceInputOption
       const text = result.text?.trim();
       if (text) {
         onTranscriptRef.current(text);
+        import('@/lib/telemetry/events').then(({ sendFeatureAdoptionEvent }) => {
+          sendFeatureAdoptionEvent({ feature: 'voice_input' });
+        }).catch(() => {});
       }
     } catch (err) {
       console.warn('[VoiceInput] Transcription error:', err);
