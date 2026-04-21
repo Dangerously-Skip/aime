@@ -80,6 +80,7 @@ interface ChatActions {
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   updateMessageContent: (chatId: string, messageId: string, content: string) => void;
+  completeRunningTools: (chatId: string) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   getSessionControls: (chatId: string) => SessionControls;
   touchActivity: (chatId: string) => void;
@@ -212,6 +213,29 @@ export const useChatStore = create<ChatStore>()(
           const msgs = state.messages[chatId];
           if (!msgs?.length) return state;
           const updated = msgs.map((m) => m.id === messageId ? { ...m, content } : m);
+          return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
+      completeRunningTools: (chatId) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          if (!msgs?.length) return state;
+          const lastIdx = msgs.length - 1;
+          const last = msgs[lastIdx];
+          if (last.role !== 'assistant' || !last.toolCalls) return state;
+          const hasRunning = last.toolCalls.some((tc) => tc.status === 'running');
+          if (!hasRunning) return state;
+          const updated = [...msgs];
+          updated[lastIdx] = {
+            ...last,
+            isLoading: false,
+            isStreaming: false,
+            toolCalls: last.toolCalls.map((tc) =>
+              tc.status === 'running'
+                ? { ...tc, status: 'complete' as const, endTime: Date.now() }
+                : tc
+            ),
+          };
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
