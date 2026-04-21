@@ -20,7 +20,7 @@ import { summarizeConversation } from "@/lib/memory/summarizer";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { useAutoProject } from "@/hooks/use-auto-project";
-import { sendConversationCompletedEvent } from "@/lib/telemetry/events";
+import { sendConversationCompletedEvent, sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useCronStore } from "@/stores/cron-store";
 import { useScratchDir } from "@/hooks/use-scratch-dir";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
@@ -58,6 +58,12 @@ import { useCanvasStore } from "@/stores/canvas-store";
 import type { A2UIDocument } from "@/lib/a2ui/types";
 import { useHeartbeat } from "@/hooks/use-heartbeat";
 import { useCron } from "@/hooks/use-cron";
+import {
+  BASH_WRITE_PATTERNS,
+  BASH_NOISE,
+  BASH_ARTIFACT_EXT,
+  isValidSidebarEntry,
+} from "@/lib/artifact-tracker";
 import { useReminderStore, playDing } from "@/stores/reminder-store";
 import { useHeartbeatStore } from "@/stores/heartbeat-store";
 import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
@@ -81,42 +87,10 @@ function truncateAtWordBoundary(text: string, maxLen: number): string {
   return lastSpace > maxLen * 0.5 ? truncated.substring(0, lastSpace) : truncated;
 }
 
-// Bash patterns that indicate file creation/modification (capture group 1 = output path)
-const BASH_WRITE_PATTERNS = [
-  /(?<![0-9&])>\s*(?!&|\s*$)(\S+)/,    // echo "x" > file, cat > file (skip 2>&1, >&2)
-  /tee\s+(?:-a\s+)?(\S+)/,             // tee file, tee -a file
-  /cp\s+\S+\s+(\S+)/,                  // cp src dest
-  /mv\s+\S+\s+(\S+)/,                  // mv src dest
-  /mkdir\s+(?:-p\s+)?(\S+)/,           // mkdir -p dir
-  /touch\s+(\S+)/,                      // touch file
-];
-
-// Bash commands that are noisy / not worth tracking in sidebar
-const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|show)|cat\s|head\s|tail\s|wc\s|which\s|type\s|env|printenv|date|whoami|uname|curl\s|wget\s)/;
-
-// Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools)
-const BASH_ARTIFACT_EXT = /\b([\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
-
 // Additional patterns for script output that names a file path (e.g. python-pptx "Saved to /tmp/foo.pptx")
 const BASH_OUTPUT_PATH_PATTERNS = [
   /(?:saved?|writ(?:ten|e|ing)|created?|generated?|exported?|output)\s+(?:to\s+|file\s+|as\s+)?['"]?([/~][\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|zip))/gi,
 ];
-
-// Filter out HTML tag fragments, internal paths, and garbage from artifact/context names
-function isValidSidebarEntry(path: string): boolean {
-  if (!path || path.length < 2) return false;
-  // HTML tag fragments: ]+>, a>, script>, etc.
-  if (/^[a-z]+>/.test(path) || path.includes('<') || path.includes('>')) return false;
-  // Pure punctuation / symbols / pipe fragments
-  if (/^[^a-zA-Z0-9/~.]+$/.test(path) || /^[|&;]+/.test(path)) return false;
-  // URLs / query strings — not file paths
-  if (path.includes('?') || path.includes('://') || path.startsWith('http')) return false;
-  // Bare web asset names from HTML output (e.g. "style.css", "bundle.js") — not real artifacts
-  if (!path.includes('/') && /^[\w.-]+\.(?:css|js|jsx|ts|tsx|html?|woff2?|ttf|eot|ico|map)$/i.test(path)) return false;
-  // Internal scratch directory operations — not user-supplied context
-  if (path.includes('.quarry/scratch') || path.includes('.quarry/') || (path.includes('/scratch/') && path.includes('/documents/'))) return false;
-  return true;
-}
 
 // Parse search results from MCP searxng output
 interface SearchResult {
@@ -1074,6 +1048,7 @@ export function CoworkSurface() {
             if (doc && doc.components) {
               pushCanvas(doc);
               setCanvasOpen('cowork', true);
+              sendFeatureAdoptionEvent({ feature: 'canvas', surface: 'cowork' });
             }
           } catch (e) {
             console.error('[Cowork] Canvas parse error:', e);
@@ -1323,6 +1298,9 @@ export function CoworkSurface() {
       setInputValue("");
       const currentAttachments = [...attachments];
       setAttachments([]);
+      if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'cowork' });
+      if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'cowork' });
+      if (sessionControls.agentName) sendFeatureAdoptionEvent({ feature: 'agent_routing', surface: 'cowork' });
       // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
       const priorMessages = useCoworkStore.getState().messages[id] || [];
       const history = stripMessagesForHistory(priorMessages.slice(0, -2));

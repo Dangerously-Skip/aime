@@ -142,6 +142,7 @@ export class ClaudeProvider extends BaseProvider {
 
     // Scan for installed plugins to pass to SDK
     const pluginPaths = await this.scanPlugins();
+    console.log('[Claude] Plugin paths found:', pluginPaths);
 
     // Per-request array to collect cron jobs created via the CronCreate MCP tool
     const pendingCronJobs: Array<{ expression: string; prompt: string; surfaceId: string }> = [];

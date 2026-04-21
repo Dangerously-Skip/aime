@@ -8,6 +8,7 @@ import { CATEGORY_LABELS } from "@/lib/nango-catalog";
 import type { ConnectorDefinition } from "@/lib/connectors/types";
 import { startOAuthFlow } from "@/lib/connectors/oauth";
 import { provisionConnector, deprovisionConnector } from "@/lib/connectors/provisioner";
+import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useMarketplace } from "@/lib/use-marketplace";
 import { CONNECTOR_LOGOS } from "./connector-logos";
 import { PluginRow } from "./plugin-row";
@@ -83,6 +84,7 @@ export function BrowseConnectors() {
           setToken(connector.id, key);
           setEnabled(connector.id, true);
           await provisionConnector(connector, key);
+          sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
         } catch (err) {
           console.error(`Failed to connect ${connector.id}:`, err);
           clearToken(connector.id);
@@ -104,6 +106,7 @@ export function BrowseConnectors() {
           setToken(connector.id, 'aws-iam');
           setEnabled(connector.id, true);
           await provisionConnector(connector, '');
+          sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
         } catch (err) {
           console.error(`Failed to connect ${connector.id}:`, err);
           clearToken(connector.id);
@@ -121,6 +124,7 @@ export function BrowseConnectors() {
         setToken(connector.id, result.accessToken);
         setEnabled(connector.id, true);
         await provisionConnector(connector, result.accessToken);
+        sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
       } catch (err) {
         console.error(`OAuth flow failed for ${connector.id}:`, err);
         // Don't clear token on cancel — user might retry

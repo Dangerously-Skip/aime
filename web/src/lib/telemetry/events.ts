@@ -133,13 +133,38 @@ export interface FeatureAdoptionData {
   surface?: string;
 }
 
-/** Fire when a user first uses a notable feature (connector, extended thinking, etc). */
+// Track which features have already been reported this session to avoid duplicates.
+// Persisted in localStorage so we only fire once per feature per device.
+const ADOPTION_STORAGE_KEY = 'quarry:adopted_features';
+
+function getAdoptedFeatures(): Set<string> {
+  try {
+    const stored = localStorage.getItem(ADOPTION_STORAGE_KEY);
+    return stored ? new Set(JSON.parse(stored)) : new Set();
+  } catch { return new Set(); }
+}
+
+function markFeatureAdopted(feature: string): void {
+  try {
+    const adopted = getAdoptedFeatures();
+    adopted.add(feature);
+    localStorage.setItem(ADOPTION_STORAGE_KEY, JSON.stringify([...adopted]));
+  } catch { /* ignore */ }
+}
+
+/**
+ * Fire when a user first uses a notable feature.
+ * Deduplicates: only fires once per feature per device (persisted in localStorage).
+ */
 export function sendFeatureAdoptionEvent(data: FeatureAdoptionData): void {
+  const key = data.surface ? `${data.feature}:${data.surface}` : data.feature;
+  if (getAdoptedFeatures().has(key)) return;
+  markFeatureAdopted(key);
   postEvents([{ event_type: 'feature_adoption', data: data as unknown as Record<string, unknown> }]);
 }
 
 export interface AppLifecycleData {
-  action: 'launch' | 'quit';
+  action: 'launch' | 'quit' | 'open' | 'close';
   sessionDurationMs?: number;
   version?: string;
 }

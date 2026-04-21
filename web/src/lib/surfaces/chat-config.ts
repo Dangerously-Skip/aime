@@ -4,7 +4,7 @@ export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebFetch', 'Agent', 'AskUserQuestion', 'canvas',
+      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'canvas',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__nib-web-search__web_search',
     ],
@@ -43,6 +43,14 @@ DO use artifact blocks for:
 - Standalone documents, specs, or plans
 - HTML pages or substantial markup
 - Long-form content the user might want to save or copy
+
+## PowerPoint presentations
+To create a PowerPoint: (1) Write a .md file using \`## SLIDE type: Title\` format with slides separated by \`---\`. Types: title, section, content, two_column, image, table. (2) Run \`bash ~/.claude/plugins/nib-ppt/generate_presentation.sh input.md output.pptx\`. It opens automatically. Do NOT use python-pptx. Do NOT invoke the Skill tool. Do NOT search for nib-ppt files. Just write the markdown and run the command.
+
+## Other binary file formats (PDF, XLSX, DOCX)
+- For .xlsx, .docx, .pdf: use Bash with Python libraries (openpyxl / python-docx / fpdf2).
+- The Write tool only handles text files — always use Bash + Python for binary formats.
+- **CRITICAL: Complete file generation before explaining.** Generate the file first, then describe what you made.
 
 ## Tool Results
 Incorporate information naturally. Summarize and highlight key points rather than dumping raw output.

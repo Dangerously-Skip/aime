@@ -11,7 +11,7 @@ import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File } from "lucide-react";
+import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File, FilePen, PanelRight } from "lucide-react";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import type { Message } from "@/stores/chat-store";
@@ -37,6 +37,9 @@ import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasPanel } from "@/components/shared/canvas-panel";
 import type { A2UIDocument } from "@/lib/a2ui/types";
 import { useAssistantStore } from "@/stores/assistant-store";
+import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
+import { categorizeToolCall, isValidSidebarEntry, BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
+import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 
 const EMPTY_SUGGESTIONS: string[] = [];
 
@@ -84,6 +87,12 @@ export function ChatSurface() {
   const canvasHistoryIndex = useCanvasStore((s) => s.historyIndex);
   const canvasHistoryLength = useCanvasStore((s) => s.history.length);
   const canvasOpen = useCanvasStore((s) => !!s.openSurfaces['chat']);
+  // Artifact tracking — files created by Write/Edit/Bash tool calls
+  const [artifactFiles, setArtifactFiles] = useState<string[]>([]);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const addArtifactFile = useCallback((path: string) => {
+    setArtifactFiles((prev) => prev.includes(path) ? prev : [...prev, path]);
+  }, []);
   const { isDragging, dropZoneProps } = useFileDrop(
     useCallback((file: AttachmentFile) => setAttachments((prev) => [...prev, file]), [])
   );
@@ -168,6 +177,9 @@ export function ChatSurface() {
       if (prevMessages && prevMessages.length > 0) {
         summarizeConversation(prevId, prevMessages);
       }
+      // Clear artifact state for the new conversation
+      setArtifactFiles([]);
+      setPreviewPath(null);
     }
   }, [chatId]);
 
@@ -198,16 +210,37 @@ export function ChatSurface() {
             (event.content as string) || ""
           );
           break;
-        case "tool_use":
+        case "tool_use": {
           completeRunningTools(cid);
+          const toolName = (event.name as string) || "Unknown";
+          const toolInput = (event.input as Record<string, unknown>) || {};
           addToolCall(cid, {
             id: (event.id as string) || `tool_${Date.now()}`,
-            name: (event.name as string) || "Unknown",
-            input: (event.input as Record<string, unknown>) || {},
+            name: toolName,
+            input: toolInput,
             status: "running",
             startTime: Date.now(),
           });
+          // Track artifact files from Write/Edit/Bash tool calls
+          const categorized = categorizeToolCall(toolName, toolInput);
+          if (categorized?.category === "artifact" && isValidSidebarEntry(categorized.path)) {
+            addArtifactFile(categorized.path);
+            if (currentProjectId) {
+              const fileName = categorized.path.split("/").pop() || categorized.path;
+              useProjectStore.getState().addArtifact(currentProjectId, {
+                id: crypto.randomUUID(),
+                name: fileName,
+                path: categorized.path,
+                type: "file",
+                surface: "chat",
+                conversationId: cid,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              });
+            }
+          }
           break;
+        }
         case "tool_result":
           updateToolResult(
             cid,
@@ -237,6 +270,7 @@ export function ChatSurface() {
             if (doc && doc.components) {
               pushCanvas(doc);
               setCanvasOpen('chat', true);
+              sendFeatureAdoptionEvent({ feature: 'canvas', surface: 'chat' });
             }
           } catch (e) {
             console.error('[Chat] Canvas parse error:', e);
@@ -301,6 +335,25 @@ export function ChatSurface() {
       const doneId = getChatId();
       completeRunningTools(doneId);
       stopStreaming(doneId);
+      // Detect binary artifacts from Bash tool calls (e.g. nib-ppt .pptx output)
+      if (doneId) {
+        const msgs = useChatStore.getState().messages[doneId] ?? [];
+        for (const msg of msgs) {
+          for (const tc of msg.toolCalls ?? []) {
+            if (tc.name === "Bash" && tc.input?.command) {
+              const cmd = String(tc.input.command);
+              BASH_ARTIFACT_EXT.lastIndex = 0;
+              let match;
+              while ((match = BASH_ARTIFACT_EXT.exec(cmd)) !== null) {
+                const filePath = match[1];
+                if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") continue;
+                if (!isValidSidebarEntry(filePath)) continue;
+                addArtifactFile(filePath);
+              }
+            }
+          }
+        }
+      }
       if (!document.hasFocus()) {
         showNotification("Task complete", "Claude has finished working on your request.");
       }
@@ -392,6 +445,10 @@ export function ChatSurface() {
       const currentWebSearch = webSearchEnabled;
       setAttachments([]);
       setWebSearchEnabled(false);
+
+      if (currentWebSearch) sendFeatureAdoptionEvent({ feature: 'web_search', surface: 'chat' });
+      if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'chat' });
+      if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'chat' });
 
       // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
       const priorMessages = useChatStore.getState().messages[id] || [];
@@ -706,7 +763,7 @@ export function ChatSurface() {
           </div>
         </div>
       ) : (
-        /* ── Active conversation: title + messages + bottom input ── */
+        /* ── Active conversation: title + messages + artifacts sidebar ── */
         <>
           {/* Title bar */}
           <ChatTitleBar
@@ -730,109 +787,153 @@ export function ChatSurface() {
             </div>
           )}
 
-          {/* Messages */}
-          <MessageList messages={messages} conversationId={chatId} onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onRetry={handleRetry} />
+          <div className="flex flex-1 min-h-0 overflow-hidden">
+            {/* Messages column */}
+            <div className="flex flex-1 flex-col min-w-0">
+              {/* Messages */}
+              <MessageList messages={messages} conversationId={chatId} onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onRetry={handleRetry} />
 
-          {/* Prompt suggestions */}
-          {suggestions.length > 0 && !isStreaming && (
-            <div className="px-6 pb-1">
-              <div className="max-w-3xl mx-auto flex flex-wrap gap-2">
-                {suggestions.map((s, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setInputValue(s)}
-                    className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Bottom input card */}
-          <div className="px-6 pb-4 pt-2">
-            <div className="max-w-3xl mx-auto">
-              <CommandPicker
-                suggestions={activeSuggestions}
-                selectedIndex={selectedSuggestionIdx}
-                onSelect={handleSelectSuggestion}
-                onSelectedIndexChange={setSelectedSuggestionIdx}
-              />
-              <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-                <Textarea
-                  value={inputValue}
-                  onChange={handleTextareaChange}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Reply..."
-                  rows={2}
-                  className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-                  style={{ opacity: isStreaming ? 0.6 : 1 }}
-                />
-                {/* Attachment chips */}
-                {attachments.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-                    {attachments.map((att, i) => (
-                      <span
+              {/* Prompt suggestions */}
+              {suggestions.length > 0 && !isStreaming && (
+                <div className="px-6 pb-1">
+                  <div className="max-w-3xl mx-auto flex flex-wrap gap-2">
+                    {suggestions.map((s, i) => (
+                      <button
                         key={i}
-                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                        onClick={() => setInputValue(s)}
+                        className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                       >
-                        {att.name}
-                        <button
-                          type="button"
-                          onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                          className="hover:text-foreground"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </span>
+                        {s}
+                      </button>
                     ))}
                   </div>
-                )}
-                <div className="flex items-center justify-between px-4 py-2.5">
-                  <div className="flex items-center gap-1">
-                    <AttachmentMenu
-                      onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                      onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                      webSearchEnabled={webSearchEnabled}
-                      currentProjectId={currentProjectId}
-                      onAddToProject={(pid) => assignToProject(chatId, pid)}
-                      onNewProject={() => setSidebarMode("projects")}
-                      projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                </div>
+              )}
+
+              {/* Bottom input card */}
+              <div className="px-6 pb-4 pt-2">
+                <div className="max-w-3xl mx-auto">
+                  <CommandPicker
+                    suggestions={activeSuggestions}
+                    selectedIndex={selectedSuggestionIdx}
+                    onSelect={handleSelectSuggestion}
+                    onSelectedIndexChange={setSelectedSuggestionIdx}
+                  />
+                  <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
+                    <Textarea
+                      value={inputValue}
+                      onChange={handleTextareaChange}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Reply..."
+                      rows={2}
+                      className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
+                      style={{ opacity: isStreaming ? 0.6 : 1 }}
                     />
-                    <VoiceButton onTranscript={handleVoiceTranscript} />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <ModelSelector
-                      value={model}
-                      onChange={setModel}
-                      className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                    />
-                    <Button
-                      size="icon"
-                      className={`h-8 w-8 rounded-lg ${
-                        isStreaming
-                          ? "bg-destructive hover:bg-destructive/80"
-                          : "bg-primary hover:bg-primary/80"
-                      }`}
-                      onClick={handleButtonClick}
-                      disabled={!isStreaming && !inputValue.trim()}
-                    >
-                      {isStreaming ? (
-                        <Square className="h-3.5 w-3.5" />
-                      ) : (
-                        <ArrowUp className="h-4 w-4" />
-                      )}
-                    </Button>
+                    {/* Attachment chips */}
+                    {attachments.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 px-4 pt-2">
+                        {attachments.map((att, i) => (
+                          <span
+                            key={i}
+                            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                          >
+                            {att.name}
+                            <button
+                              type="button"
+                              onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                              className="hover:text-foreground"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between px-4 py-2.5">
+                      <div className="flex items-center gap-1">
+                        <AttachmentMenu
+                          onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
+                          onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
+                          webSearchEnabled={webSearchEnabled}
+                          currentProjectId={currentProjectId}
+                          onAddToProject={(pid) => assignToProject(chatId, pid)}
+                          onNewProject={() => setSidebarMode("projects")}
+                          projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                        />
+                        <VoiceButton onTranscript={handleVoiceTranscript} />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <ModelSelector
+                          value={model}
+                          onChange={setModel}
+                          className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
+                        />
+                        <Button
+                          size="icon"
+                          className={`h-8 w-8 rounded-lg ${
+                            isStreaming
+                              ? "bg-destructive hover:bg-destructive/80"
+                              : "bg-primary hover:bg-primary/80"
+                          }`}
+                          onClick={handleButtonClick}
+                          disabled={!isStreaming && !inputValue.trim()}
+                        >
+                          {isStreaming ? (
+                            <Square className="h-3.5 w-3.5" />
+                          ) : (
+                            <ArrowUp className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
+
+            {/* Artifacts sidebar — appears when files are created */}
+            {artifactFiles.length > 0 && (
+              <div className="w-64 shrink-0 border-l border-border bg-card/50 flex flex-col">
+                <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
+                  <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
+                  <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length}</span>
+                </div>
+                <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
+                  {artifactFiles.map((filePath) => {
+                    const name = filePath.split("/").pop() || filePath;
+                    return (
+                      <button
+                        key={filePath}
+                        onClick={() => setPreviewPath(filePath)}
+                        className="w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-left hover:bg-muted transition-colors group"
+                        title={filePath}
+                      >
+                        <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <span className="truncate text-foreground/80 group-hover:text-foreground">{name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Canvas panel */}
+            <CanvasPanel
+              open={canvasOpen}
+              doc={canvasDoc}
+              onClose={() => setCanvasOpen('chat', false)}
+              onBack={goBackCanvas}
+              onForward={goForwardCanvas}
+              onClear={clearCanvas}
+              canGoBack={canvasHistoryIndex > 0}
+              canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
+            />
           </div>
         </>
       )}
 
-      {/* Artifact preview panel */}
+      {/* Inline artifact preview (:::artifact blocks from markdown) */}
       <ArtifactPanel
         artifact={activeArtifact}
         open={activeArtifact !== null}
@@ -843,21 +944,12 @@ export function ChatSurface() {
         onArtifactSaved={handleArtifactSaved}
       />
 
-      {/* Canvas panel */}
-      {canvasOpen && (
-        <div className="fixed right-0 top-0 h-full z-40">
-          <CanvasPanel
-            open={canvasOpen}
-            doc={canvasDoc}
-            onClose={() => setCanvasOpen('chat', false)}
-            onBack={goBackCanvas}
-            onForward={goForwardCanvas}
-            onClear={clearCanvas}
-            canGoBack={canvasHistoryIndex > 0}
-            canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
-          />
-        </div>
-      )}
+      {/* File artifact preview sheet */}
+      <FilePreviewSheet
+        path={previewPath}
+        open={!!previewPath}
+        onClose={() => setPreviewPath(null)}
+      />
     </div>
   );
 }
