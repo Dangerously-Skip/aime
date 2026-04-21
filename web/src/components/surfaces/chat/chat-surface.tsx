@@ -38,6 +38,8 @@ import { CanvasPanel } from "@/components/shared/canvas-panel";
 import type { A2UIDocument } from "@/lib/a2ui/types";
 import { useAssistantStore } from "@/stores/assistant-store";
 
+const EMPTY_SUGGESTIONS: string[] = [];
+
 function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
   switch (category) {
     case 'image': return <ImageIcon className="h-3 w-3" />
@@ -130,7 +132,7 @@ export function ChatSurface() {
   const setSessionControlsInStore = useChatStore((s) => s.setSessionControls);
   const addSuggestion = useChatStore((s) => s.addSuggestion);
   const clearSuggestions = useChatStore((s) => s.clearSuggestions);
-  const suggestions = useChatStore((s) => chatId ? (s.suggestions[chatId] || []) : []);
+  const suggestions = useChatStore((s) => chatId ? (s.suggestions[chatId] ?? EMPTY_SUGGESTIONS) : EMPTY_SUGGESTIONS);
   const sessionControlsMap = useChatStore((s) => s.sessionControls);
   const sessionControls: SessionControls = chatId
     ? (sessionControlsMap[chatId] ?? DEFAULT_SESSION_CONTROLS)
