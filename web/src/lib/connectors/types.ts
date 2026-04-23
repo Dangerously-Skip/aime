@@ -8,7 +8,7 @@ export interface ConnectorDefinition {
 
   // Auth config
   auth: {
-    type: 'oauth2' | 'api_key' | 'aws_iam';
+    type: 'oauth2' | 'api_key' | 'aws_iam' | 'mcp-oauth' | 'mcp-self-auth';
     authUrl?: string;
     tokenUrl?: string;
     scopes?: string[];
@@ -17,6 +17,12 @@ export interface ConnectorDefinition {
     redirectScheme?: 'http' | 'https'; // Default: http. Slack requires https.
     envVarName?: string; // For api_key type
     hint?: string;       // Instruction text shown in the Connect dialog
+    /** For mcp-oauth type: the HTTP MCP server URL that supports DCR. */
+    mcpUrl?: string;
+    /** For mcp-oauth type: fallback env var to read client_id from if server doesn't support DCR. */
+    fallbackClientIdEnv?: string;
+    /** For mcp-oauth type: literal pre-registered client_id used when DCR is unavailable (e.g. Slack's public MCP client). */
+    fallbackClientId?: string;
   };
 
   // MCP server config
