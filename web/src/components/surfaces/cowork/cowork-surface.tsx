@@ -88,8 +88,9 @@ function truncateAtWordBoundary(text: string, maxLen: number): string {
 }
 
 // Additional patterns for script output that names a file path (e.g. python-pptx "Saved to /tmp/foo.pptx")
+// Matches both absolute (/path/to/file.pptx) and relative (output.pptx) paths
 const BASH_OUTPUT_PATH_PATTERNS = [
-  /(?:saved?|writ(?:ten|e|ing)|created?|generated?|exported?|output)\s+(?:to\s+|file\s+|as\s+)?['"]?([/~][\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|zip))/gi,
+  /(?:saved?|writ(?:ten|e|ing)|created?|generated?|exported?|output)\s+(?:to\s+|file\s+|as\s+)?['"]?([\w/.~-][\w./-]*\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|zip))/gi,
 ];
 
 // Parse search results from MCP searxng output
@@ -997,18 +998,20 @@ export function CoworkSurface() {
               // Skip scanning curl/wget HTML output — too many false positives from embedded asset URLs
               const bashCmd = typeof matchingTc.input?.command === "string" ? matchingTc.input.command : "";
               const isCurlWget = /\bcurl\b|\bwget\b/.test(bashCmd);
-              const coworkFolder = useCoworkStore.getState().folder;
+              const coworkState = useCoworkStore.getState();
+              const coworkFolder = chatId ? coworkState.folderByChat[chatId] ?? null : null;
+              const cwd = coworkFolder || folder || projectFolder || scratchDir;
               const addBashArtifact = (raw: string) => {
                 let filePath = raw;
                 if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") return;
                 if (/^[0-9.:]+$/.test(filePath.replace(/\.(?:pdf|csv|png|jpe?g)$/i, ""))) return;
                 if (!isValidSidebarEntry(filePath)) return;
-                if (!filePath.startsWith("/") && coworkFolder) {
-                  const cwdBasename = coworkFolder.split("/").pop() || "";
+                if (!filePath.startsWith("/") && cwd) {
+                  const cwdBasename = cwd.split("/").pop() || "";
                   if (cwdBasename && filePath.startsWith(`${cwdBasename}/`)) {
                     filePath = filePath.slice(cwdBasename.length + 1);
                   }
-                  filePath = `${coworkFolder}/${filePath}`;
+                  filePath = `${cwd}/${filePath}`;
                 }
                 addArtifactFile(chatId, filePath);
               };
@@ -1122,7 +1125,9 @@ export function CoworkSurface() {
       // Detect binary artifacts from Bash tool calls (e.g. python-pptx, generate_presentation.sh).
       // The SDK doesn't emit tool_result events, so we scan Bash command inputs for output file paths.
       if (chatId) {
-        const coworkFolder = useCoworkStore.getState().folder;
+        const coworkState = useCoworkStore.getState();
+        const coworkFolder = chatId ? coworkState.folderByChat[chatId] ?? null : null;
+        const cwdFallback = coworkFolder || folder || projectFolder || scratchDir;
         const msgs = useCoworkStore.getState().messages[chatId] ?? [];
         for (const msg of msgs) {
           for (const tc of msg.toolCalls ?? []) {
@@ -1134,8 +1139,8 @@ export function CoworkSurface() {
                 let filePath = match[1];
                 if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") continue;
                 if (!isValidSidebarEntry(filePath)) continue;
-                if (!filePath.startsWith("/") && coworkFolder) {
-                  filePath = `${coworkFolder}/${filePath}`;
+                if (!filePath.startsWith("/") && cwdFallback) {
+                  filePath = `${cwdFallback}/${filePath}`;
                 }
                 const existing = useCoworkStore.getState().artifactFiles[chatId] ?? [];
                 if (!existing.includes(filePath)) {
@@ -1774,9 +1779,10 @@ export function CoworkSurface() {
               }
             }}
             onArtifactClick={(path) => {
-              // Resolve relative paths against the working folder
-              if (folder && !path.startsWith("/")) {
-                setPreviewPath(`${folder}/${path}`);
+              // Resolve relative paths against the working folder (or scratch dir)
+              const cwd = folder || projectFolder || scratchDir;
+              if (cwd && !path.startsWith("/")) {
+                setPreviewPath(`${cwd}/${path}`);
               } else {
                 setPreviewPath(path);
               }

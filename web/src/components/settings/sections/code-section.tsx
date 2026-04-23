@@ -2,10 +2,7 @@
 
 import { useSettingsStore } from '@/stores/settings-store'
 import { useCodeStore } from '@/stores/code-store'
-import { useElectron } from '@/hooks/use-electron'
 import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
-import { FolderOpen } from 'lucide-react'
 import type { PermissionMode } from '@/stores/code-store'
 
 const permissionOptions: {
@@ -43,19 +40,8 @@ export function CodeSection() {
 
   const permissionMode = useCodeStore((s) => s.permissionMode)
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode)
-  const folder = useCodeStore((s) => s.folder)
-  const setFolder = useCodeStore((s) => s.setFolder)
   const model = useCodeStore((s) => s.model)
   const setModel = useCodeStore((s) => s.setModel)
-
-  const { isElectron, selectFolder } = useElectron()
-
-  const handleSelectFolder = async () => {
-    const selected = await selectFolder()
-    if (selected) {
-      setFolder(selected)
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -88,31 +74,6 @@ export function CodeSection() {
             </label>
           ))}
         </div>
-      </div>
-
-      <div>
-        <label className="text-sm font-medium">Default folder path</label>
-        <div className="flex items-center gap-2 mt-1.5">
-          <Input
-            value={folder ?? ''}
-            readOnly
-            placeholder="No folder selected"
-            className="flex-1"
-          />
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={handleSelectFolder}
-            disabled={!isElectron}
-          >
-            <FolderOpen className="h-4 w-4" />
-          </Button>
-        </div>
-        {!isElectron && (
-          <p className="text-xs text-muted-foreground mt-1">
-            (available in desktop app)
-          </p>
-        )}
       </div>
 
       <div>

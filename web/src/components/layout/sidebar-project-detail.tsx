@@ -17,6 +17,7 @@ import {
   Briefcase,
   Terminal,
   Globe,
+  Bot,
 } from "lucide-react";
 import { ProjectIcon } from "@/components/shared/project-icon";
 
@@ -28,6 +29,7 @@ const SURFACE_CONFIG: Record<
   cowork: { icon: Briefcase, label: "Cowork" },
   code: { icon: Terminal, label: "Code" },
   browser: { icon: Globe, label: "Browser" },
+  assistant: { icon: Bot, label: "Assistant" },
 };
 
 const SURFACE_ORDER: Surface[] = ["chat", "cowork", "code", "browser"];

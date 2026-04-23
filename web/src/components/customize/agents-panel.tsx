@@ -51,7 +51,9 @@ export function AgentsPanel() {
   const setCustomizeSection = useAppStore((s) => s.setCustomizeSection);
   const selectedAgentName = useAppStore((s) => s.selectedAgentName);
   const setSelectedAgentName = useAppStore((s) => s.setSelectedAgentName);
-  const cwd = useCoworkStore((s) => s.folder);
+  const cwd = useCoworkStore((s) =>
+    s.currentChatId ? s.folderByChat[s.currentChatId] ?? null : null
+  );
 
   const [agents, setAgents] = useState<AgentWithScope[]>([]);
   const [loading, setLoading] = useState(false);

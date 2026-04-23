@@ -3,6 +3,7 @@ const getMemoryStore = () => require('@/stores/memory-store').useMemoryStore;
 const getConversationStore = () => require('@/stores/conversation-store').useConversationStore;
 const getSettingsStore = () => require('@/stores/settings-store').useSettingsStore;
 import type { MemoryCategory } from './types';
+import type { Conversation } from '@/stores/conversation-store';
 
 interface ExtractedMemoryEvent {
   content: string;
@@ -25,7 +26,7 @@ export function handleMemoryExtractEvent(
   if (autoExtractEnabled === false) return;
 
   const conv = getConversationStore().getState().conversations.find(
-    (c) => c.id === conversationId
+    (c: Conversation) => c.id === conversationId
   );
   const projectId = conv?.projectId || null;
 

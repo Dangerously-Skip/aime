@@ -19,7 +19,7 @@ export interface InspectorResult {
 
 export interface PendingContextItem {
   id: string;
-  type: 'screenshot' | 'element' | 'selection';
+  type: 'screenshot' | 'element' | 'selection' | 'document';
   label: string;
   preview?: string; // data URL for screenshots
   content: string;  // text content or base64 data

@@ -10,10 +10,11 @@ Quarry is an Electron desktop AI workspace powered by the Claude Agent SDK. Buil
 
 ```bash
 cd web && npm run electron:dev   # Start Next.js dev server + Electron
+cd web && npm run typecheck      # Run tsc --noEmit (run before shipping)
 cd web && npm run dist           # Build macOS app (next build + electron-builder)
 ```
 
-No test suite or linter is configured.
+No test suite or linter is configured. `npm run typecheck` is the only type-safety gate — run it before commits and ships.
 
 ## Architecture
 

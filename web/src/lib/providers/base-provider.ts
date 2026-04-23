@@ -19,7 +19,10 @@ export type ChunkType =
   | 'canvas'
   | 'heartbeat_result'
   | 'document_extracting'
-  | 'document_extracted';
+  | 'document_extracted'
+  | 'prompt_suggestion'
+  | 'cron_create'
+  | 'standing_order_create';
 
 /**
  * A single streaming chunk yielded by a provider's query() method.

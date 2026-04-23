@@ -1,4 +1,5 @@
 import { type Project, type ProjectArtifact } from '@/stores/project-store';
+import type { Conversation } from '@/stores/conversation-store';
 
 /**
  * Get a surface-specific store for reading messages.
@@ -94,16 +95,16 @@ export function buildProjectContext(
   // Primary: find conversations linked via conversation.projectId
   const { useConversationStore } = require('@/stores/conversation-store');
   const allConversations = useConversationStore.getState().conversations;
-  const projectConversations = allConversations.filter(
-    (c) => c.projectId === project.id && c.id !== currentConversationId
+  const projectConversations: Conversation[] = allConversations.filter(
+    (c: Conversation) => c.projectId === project.id && c.id !== currentConversationId
   );
 
   // Also check project.conversationIds for any not found via projectId
-  const foundIds = new Set(projectConversations.map((c) => c.id));
+  const foundIds = new Set(projectConversations.map((c: Conversation) => c.id));
   for (const convIds of Object.values(project.conversationIds ?? {})) {
     for (const convId of convIds) {
       if (convId === currentConversationId || foundIds.has(convId)) continue;
-      const conv = allConversations.find((c) => c.id === convId);
+      const conv = allConversations.find((c: Conversation) => c.id === convId);
       if (conv) {
         projectConversations.push(conv);
         foundIds.add(convId);
@@ -114,7 +115,7 @@ export function buildProjectContext(
   const summaries: string[] = [];
   // Sort by most recent first, take up to 8
   const sorted = projectConversations
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .sort((a: Conversation, b: Conversation) => b.updatedAt - a.updatedAt)
     .slice(0, 8);
 
   for (const conv of sorted) {
