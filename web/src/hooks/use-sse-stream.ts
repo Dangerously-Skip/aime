@@ -73,6 +73,7 @@ interface UseSSEStreamReturn {
         modelOverride?: string | null
       }
       toolProfile?: string
+      contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
     }
   ) => Promise<void>;
   abort: () => void;
@@ -123,6 +124,10 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
   // Keep a ref to the chatId that the current stream was started for,
   // so we can abort the correct stream even after conversation switches.
   const activeChatIdRef = useRef<string | null>(null);
+
+  // Inactivity timer ref — hoisted to hook level to avoid Turbopack TDZ issues
+  // where the bundler breaks closure scoping of block-scoped variables.
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const abort = useCallback(() => {
     const id = activeChatIdRef.current ?? optionsRef.current.chatId;
@@ -233,18 +238,17 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         // Inactivity timeout — abort if no data arrives for 120s.
         // The server sends SSE heartbeat comments every ~30s, so 120s of
         // silence means the connection or agent is truly stuck.
-        // Timer state is stored in an object ref to avoid Turbopack TDZ issues
-        // where closures reference variables before their binding is initialized.
+        // Timer ref is hoisted to hook-level useRef to avoid Turbopack TDZ
+        // issues where the bundler breaks closure scoping of block-scoped vars.
         const INACTIVITY_TIMEOUT_MS = 120_000;
-        const timerRef = { id: undefined as ReturnType<typeof setTimeout> | undefined };
         const startInactivityTimer = () => {
-          timerRef.id = setTimeout(() => {
+          inactivityTimerRef.current = setTimeout(() => {
             console.warn('[SSE] Inactivity timeout — no data for 120s, aborting');
             controller.abort();
           }, INACTIVITY_TIMEOUT_MS);
         };
         const resetInactivityTimer = () => {
-          if (timerRef.id !== undefined) clearTimeout(timerRef.id);
+          if (inactivityTimerRef.current !== undefined) clearTimeout(inactivityTimerRef.current);
           startInactivityTimer();
         };
         startInactivityTimer();
@@ -306,7 +310,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         pinnedSetStreamError(err.message);
         pinnedOnError(err);
       } finally {
-        if (timerRef.id !== undefined) clearTimeout(timerRef.id);
+        if (inactivityTimerRef.current !== undefined) clearTimeout(inactivityTimerRef.current);
         streamRegistry.clear(chatId);
         activeChatIdRef.current = null;
         pinnedSetIsStreaming(false);

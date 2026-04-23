@@ -564,25 +564,36 @@ export function BrowserSurface() {
       // Convert attachments to pending context items
       const currentAttachments = [...attachments];
       setAttachments([]);
+      const pushAtt = (
+        type: PendingContextItem['type'],
+        name: string,
+        content: string,
+      ) => {
+        context.push({
+          id: crypto.randomUUID(),
+          type,
+          label: name,
+          content,
+          timestamp: Date.now(),
+        });
+      };
       for (const att of currentAttachments) {
         if (att.category === 'image' && att.content) {
-          context.push({ type: 'screenshot', content: att.content });
+          pushAtt('screenshot', att.name, att.content);
         } else if (att.category === 'text' && att.content) {
-          // Text files: content is already readable
-          context.push({ type: 'document', content: `<document name="${att.name}">\n${att.content}\n</document>` });
+          pushAtt('document', att.name, `<document name="${att.name}">\n${att.content}\n</document>`);
         } else if (att.content) {
           // Binary files (PDF, DOCX): try decoding as text, otherwise note it's binary
           try {
             const decoded = atob(att.content);
-            // Check if it looks like readable text (not binary garbage)
             const isText = decoded.length > 0 && /^[\x20-\x7E\t\n\r]*$/.test(decoded.substring(0, 200));
             if (isText) {
-              context.push({ type: 'document', content: `<document name="${att.name}">\n${decoded}\n</document>` });
+              pushAtt('document', att.name, `<document name="${att.name}">\n${decoded}\n</document>`);
             } else {
-              context.push({ type: 'document', content: `[Attached file: ${att.name} (${att.category}). This is a binary file — for full document analysis, use the Cowork or Chat surface which can extract text from PDFs and documents.]` });
+              pushAtt('document', att.name, `[Attached file: ${att.name} (${att.category}). This is a binary file — for full document analysis, use the Cowork or Chat surface which can extract text from PDFs and documents.]`);
             }
           } catch {
-            context.push({ type: 'document', content: `[Attached file: ${att.name}]` });
+            pushAtt('document', att.name, `[Attached file: ${att.name}]`);
           }
         }
       }

@@ -38,6 +38,7 @@ interface Message {
   questionToolUseId?: string;
   questionAnswered?: boolean;
   isAutoContinue?: boolean;
+  attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>;
 }
 
 interface MessageListProps {

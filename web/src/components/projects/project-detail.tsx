@@ -33,6 +33,7 @@ import {
   ToggleLeft,
   ToggleRight,
   Users,
+  Bot,
 } from "lucide-react";
 import { useCronStore } from "@/stores/cron-store";
 import {
@@ -53,9 +54,10 @@ const SURFACE_CONFIG: Record<
   cowork: { icon: Briefcase, label: "Cowork", color: "bg-purple-500/10 text-purple-600" },
   code: { icon: Terminal, label: "Code", color: "bg-green-500/10 text-green-600" },
   browser: { icon: Globe, label: "Browser", color: "bg-orange-500/10 text-orange-600" },
+  assistant: { icon: Bot, label: "Assistant", color: "bg-pink-500/10 text-pink-600" },
 };
 
-const SURFACE_ORDER: Surface[] = ["chat", "cowork", "code", "browser"];
+const SURFACE_ORDER: Surface[] = ["chat", "cowork", "code", "browser", "assistant"];
 
 function formatTimeAgo(timestamp: number): string {
   const diff = Date.now() - timestamp;
@@ -280,6 +282,7 @@ export function ProjectDetail({
       cowork: "New Cowork Task",
       code: "New Code Session",
       browser: "New Browser Session",
+      assistant: "New Assistant Session",
     };
     const conv: Conversation = {
       id: crypto.randomUUID(),

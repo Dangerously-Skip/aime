@@ -3,6 +3,7 @@ const getMemoryStore = () => require('@/stores/memory-store').useMemoryStore;
 const getConversationStore = () => require('@/stores/conversation-store').useConversationStore;
 import type { Message } from '@/stores/chat-store';
 import type { Memory } from './types';
+import type { Conversation } from '@/stores/conversation-store';
 
 const MIN_MESSAGES_FOR_SUMMARY = 4; // At least 2 user + 2 assistant turns
 const MAX_CONTENT_FOR_SUMMARY = 6000; // Truncate conversation content to fit in a Haiku call
@@ -67,7 +68,7 @@ export function summarizeConversation(
   // Don't re-summarize if we already have an episodic memory for this conversation
   const existingMemories = getMemoryStore().getState().memories;
   const alreadySummarized = existingMemories.some(
-    (m) =>
+    (m: Memory) =>
       m.category === 'episodic' &&
       !m.supersededBy &&
       m.tags.includes(`conv:${conversationId}`)
@@ -79,7 +80,7 @@ export function summarizeConversation(
 
   // Determine project scope
   const conv = getConversationStore().getState().conversations.find(
-    (c) => c.id === conversationId
+    (c: Conversation) => c.id === conversationId
   );
   const projectId = conv?.projectId || null;
 

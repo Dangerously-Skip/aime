@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { FolderPicker } from "@/components/shared/folder-picker";
+import { CloneFromGitHub } from "@/components/shared/clone-from-github";
+import { useConnectorStore } from "@/stores/connector-store";
 import { ToolCallCard } from "@/components/shared/tool-call-card";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
 import { StreamingCursor } from "@/components/shared/streaming-cursor";
@@ -46,6 +48,7 @@ import {
   File,
   Folder,
   Globe,
+  Github,
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
 import { PlanSheet } from "@/components/shared/plan-sheet";
@@ -181,6 +184,7 @@ interface TerminalMessage {
   questionData?: unknown;
   questionToolUseId?: string;
   questionAnswered?: boolean;
+  attachments?: Array<{ name: string; category: string }>;
 }
 
 function TerminalOutput({
@@ -635,6 +639,10 @@ export function CodeSurface() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
+  const githubConnected = useConnectorStore(
+    (s) => s.connectorStates['github']?.authenticated && !!s.tokens['github']
+  );
   const previewWebviewRef = useRef<WebviewRef | null>(null);
   const consoleBufferRef = useRef(new ConsoleLogBuffer());
   // Track HTML file paths written during this stream for preview detection
@@ -1138,18 +1146,41 @@ export function CodeSurface() {
                 <BottomBar folder={folder} onFolderChange={handleFolderChange} />
               </>
             ) : (
-              <div className="rounded-2xl border border-border bg-card shadow-sm p-8 text-center">
-                <Folder className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
-                <h2 className="text-lg font-medium mb-1">Select a folder to start coding</h2>
-                <p className="text-sm text-muted-foreground mb-5">
-                  Choose a project folder so Claude knows where to read and write files.
-                </p>
-                <FolderPicker
-                  folder={folder}
-                  onFolderChange={handleFolderChange}
-                  className="mx-auto"
+              <>
+                <div className="rounded-2xl border border-border bg-card shadow-sm p-8 text-center">
+                  <Folder className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+                  <h2 className="text-lg font-medium mb-1">Start coding</h2>
+                  <p className="text-sm text-muted-foreground mb-5">
+                    Pick a folder to work in — or clone a GitHub repo.
+                  </p>
+                  <div className="flex flex-col items-center gap-2">
+                    <FolderPicker
+                      folder={folder}
+                      onFolderChange={handleFolderChange}
+                      className="mx-auto"
+                    />
+                    {githubConnected ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCloneDialogOpen(true)}
+                      >
+                        <Github className="h-3.5 w-3.5 mr-1.5" />
+                        Clone from GitHub
+                      </Button>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Connect GitHub in <span className="font-medium">Customize → Connectors</span> to enable repo cloning.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <CloneFromGitHub
+                  open={cloneDialogOpen}
+                  onOpenChange={setCloneDialogOpen}
+                  onCloned={(path) => handleFolderChange(path)}
                 />
-              </div>
+              </>
             )}
           </div>
         </div>

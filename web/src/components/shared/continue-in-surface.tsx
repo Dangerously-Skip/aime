@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { MessageSquare, Briefcase, Code2, Globe } from "lucide-react";
+import { MessageSquare, Briefcase, Code2, Globe, Bot } from "lucide-react";
 import { useAppStore, type Surface } from "@/stores/app-store";
 import { useProjectStore } from "@/stores/project-store";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -13,6 +13,7 @@ const SURFACE_CONFIG: Record<Surface, { icon: React.ComponentType<{ className?: 
   cowork: { icon: Briefcase, label: "Cowork" },
   code: { icon: Code2, label: "Code" },
   browser: { icon: Globe, label: "Browser" },
+  assistant: { icon: Bot, label: "Assistant" },
 };
 
 interface ContinueInSurfaceProps {
