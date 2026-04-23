@@ -7,6 +7,7 @@ import { CONNECTOR_REGISTRY, CONNECTOR_MAP } from "@/lib/connectors/registry";
 import { CATEGORY_LABELS } from "@/lib/nango-catalog";
 import type { ConnectorDefinition } from "@/lib/connectors/types";
 import { startOAuthFlow } from "@/lib/connectors/oauth";
+import { runMcpOAuthFlow } from "@/lib/mcp/oauth-flow";
 import { provisionConnector, deprovisionConnector } from "@/lib/connectors/provisioner";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useMarketplace } from "@/lib/use-marketplace";
@@ -38,13 +39,31 @@ export function BrowseConnectors() {
   const tokens = useConnectorStore((s) => s.tokens);
   const setEnabled = useConnectorStore((s) => s.setEnabled);
   const setToken = useConnectorStore((s) => s.setToken);
+  const setTokenMeta = useConnectorStore((s) => s.setTokenMeta);
   const clearToken = useConnectorStore((s) => s.clearToken);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [awsError, setAwsError] = useState<string | null>(null);
-  const [apiKeyDialog, setApiKeyDialog] = useState<{ connector: ConnectorDefinition; resolve: (key: string | null) => void } | null>(null);
+  const [connectorError, setConnectorError] = useState<{ name: string; message: string } | null>(null);
+  const [mcpSelfAuthNotice, setMcpSelfAuthNotice] = useState<{ name: string; hint: string } | null>(null);
+
+  function reportConnectorError(connector: ConnectorDefinition, err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Don't surface cancellations — the user knowingly closed the auth window.
+    if (message.toLowerCase().includes('cancel')) return;
+    setConnectorError({ name: connector.name, message });
+  }
+  const [apiKeyDialog, setApiKeyDialog] = useState<{
+    connector: ConnectorDefinition;
+    resolve: (key: string | null) => void;
+    title?: string;
+    label?: string;
+    placeholder?: string;
+    inputType?: string;
+    buttonText?: string;
+  } | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const apiKeyInputRef = useRef<HTMLInputElement>(null);
 
@@ -55,7 +74,40 @@ export function BrowseConnectors() {
     });
   }
 
+  function promptText(
+    connector: ConnectorDefinition,
+    opts: { title?: string; label?: string; placeholder?: string; inputType?: string; buttonText?: string }
+  ): Promise<string | null> {
+    return new Promise((resolve) => {
+      setApiKeyInput("");
+      setApiKeyDialog({ connector, resolve, ...opts });
+    });
+  }
+
   const { plugins: marketplacePlugins, loading: mpLoading } = useMarketplace();
+
+  // Hydrate connector state from .quarry-mcp.json on mount. This reflects
+  // MCPs connected via the marketplace (plugin install) or external means.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/connectors/hydrate")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.connectedIds) return;
+        for (const id of data.connectedIds as string[]) {
+          // Only mark as connected if we have a corresponding connector registry entry
+          if (CONNECTOR_MAP[id]) {
+            // Use a sentinel token so UI shows it as authenticated without leaking real tokens
+            setToken(id, "provisioned");
+            setEnabled(id, true);
+          }
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [setToken, setEnabled]);
 
   const categories = Array.from(
     new Set(CONNECTOR_REGISTRY.map((c) => c.category))
@@ -75,6 +127,88 @@ export function BrowseConnectors() {
 
   const handleConnect = useCallback(
     async (connector: ConnectorDefinition) => {
+      // Snowflake: custom PAT + per-user URL flow
+      if (connector.id === 'snowflake') {
+        setConnectingId(connector.id);
+        try {
+          // Step 1: show setup SQL so user can create MCP server + PAT
+          const setupHint =
+            'One-time setup — run in Snowsight (any role you have create privileges in):\n\n' +
+            '-- 1. Create an MCP server exposing raw SQL:\n' +
+            'CREATE DATABASE IF NOT EXISTS QUARRY_MCP;\n' +
+            'CREATE SCHEMA IF NOT EXISTS QUARRY_MCP.MCP;\n' +
+            'CREATE OR REPLACE MCP SERVER QUARRY_MCP.MCP.quarry FROM SPECIFICATION $$\n' +
+            'tools:\n' +
+            '  - name: "run_sql"\n' +
+            '    type: "SYSTEM_EXECUTE_SQL"\n' +
+            '    title: "Run SQL"\n' +
+            '    description: "Execute arbitrary SQL."\n' +
+            '$$;\n\n' +
+            '-- 2. Generate a PAT (replace ROLE with your preferred role, e.g. NIB_BI_ANALYSTS):\n' +
+            'ALTER USER IF EXISTS CURRENT_USER() ADD PROGRAMMATIC ACCESS TOKEN quarry_mcp\n' +
+            "  ROLE_RESTRICTION = 'NIB_BI_ANALYSTS' DAYS_TO_EXPIRY = 90;\n\n" +
+            '-- Copy token_secret from the output — you\'ll paste it on the next screen.';
+
+          const mcpUrl = await promptText(
+            { ...connector, auth: { ...connector.auth, hint: setupHint } } as ConnectorDefinition,
+            {
+              title: 'Connect Snowflake',
+              label: 'MCP server URL',
+              placeholder: 'https://ZY31549-LY01550.snowflakecomputing.com/api/v2/databases/QUARRY_MCP/schemas/MCP/mcp-servers/quarry',
+              inputType: 'text',
+              buttonText: 'Next',
+            }
+          );
+          if (!mcpUrl) {
+            setConnectingId(null);
+            return;
+          }
+
+          const pat = await promptText(
+            {
+              ...connector,
+              auth: { ...connector.auth, hint: 'Paste the token_secret from the ALTER USER ... ADD PROGRAMMATIC ACCESS TOKEN statement.' },
+            } as ConnectorDefinition,
+            {
+              title: 'Connect Snowflake',
+              label: 'Programmatic Access Token',
+              placeholder: 'Paste token_secret here',
+              inputType: 'password',
+              buttonText: 'Connect',
+            }
+          );
+          if (!pat) {
+            setConnectingId(null);
+            return;
+          }
+
+          // Provision MCP entry directly with the user's URL + PAT
+          await fetch('/api/connectors/provision', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              connectorId: connector.id,
+              connectorName: connector.name,
+              mcpEntry: {
+                transport: 'streamable-http',
+                url: mcpUrl,
+                headers: { Authorization: `Bearer ${pat}` },
+              },
+            }),
+          });
+
+          setToken(connector.id, pat);
+          setEnabled(connector.id, true);
+          sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
+        } catch (err) {
+          console.error(`Snowflake connect failed:`, err);
+          clearToken(connector.id);
+        } finally {
+          setConnectingId(null);
+        }
+        return;
+      }
+
       if (connector.auth.type === 'api_key') {
         const key = await promptApiKey(connector);
         if (!key) return;
@@ -88,6 +222,7 @@ export function BrowseConnectors() {
         } catch (err) {
           console.error(`Failed to connect ${connector.id}:`, err);
           clearToken(connector.id);
+          reportConnectorError(connector, err);
         } finally {
           setConnectingId(null);
         }
@@ -117,13 +252,171 @@ export function BrowseConnectors() {
         return;
       }
 
+      // MCP self-auth — the MCP server handles its own auth flow (e.g. device code).
+      // We just provision it; the user authenticates via the MCP's own tools
+      // (e.g. calling "login" in chat) on first use.
+      if (connector.auth.type === 'mcp-self-auth') {
+        setConnectingId(connector.id);
+        try {
+          setToken(connector.id, 'mcp-self-auth');
+          setEnabled(connector.id, true);
+          await provisionConnector(connector, '');
+          sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
+          // Surface clear next steps — the user expects an OAuth popup but
+          // this flow defers auth to first tool use in chat.
+          setMcpSelfAuthNotice({
+            name: connector.name,
+            hint: connector.auth.hint || 'Next: open a chat and ask Quarry to use this service. You\'ll be prompted to sign in the first time it needs access.',
+          });
+        } catch (err) {
+          console.error(`mcp-self-auth provision failed for ${connector.id}:`, err);
+          clearToken(connector.id);
+          reportConnectorError(connector, err);
+        } finally {
+          setConnectingId(null);
+        }
+        return;
+      }
+
+      // MCP OAuth 2.1 flow — zero-config via Dynamic Client Registration
+      if (connector.auth.type === 'mcp-oauth') {
+        if (!connector.auth.mcpUrl) {
+          console.error(`Connector ${connector.id} is mcp-oauth but missing mcpUrl`);
+          return;
+        }
+        setConnectingId(connector.id);
+        try {
+          let resolvedUrl = connector.auth.mcpUrl;
+
+          // Snowflake: prompt for account, database, schema, server name
+          if (resolvedUrl.includes('{account}')) {
+            const fields: Array<{
+              key: string;
+              label: string;
+              placeholder: string;
+              hint: string;
+            }> = [
+              { key: 'account', label: 'Account identifier', placeholder: 'ORG-ACCOUNT', hint: 'Find this in Snowflake → Account → Account Details → "Account identifier" (e.g. ZY31549-LY01550).' },
+              { key: 'database', label: 'Database', placeholder: 'MY_DB', hint: 'Snowflake database containing your MCP server.' },
+              { key: 'schema', label: 'Schema', placeholder: 'PUBLIC', hint: 'Schema containing your MCP server.' },
+              { key: 'server', label: 'MCP server name', placeholder: 'MY_MCP_SERVER', hint: 'Name of the MCP server you created in Snowflake (CREATE MCP SERVER ...).' },
+            ];
+            for (const f of fields) {
+              const value = await promptText(
+                { ...connector, auth: { ...connector.auth, hint: f.hint } } as ConnectorDefinition,
+                {
+                  title: `Connect ${connector.name}`,
+                  label: f.label,
+                  placeholder: f.placeholder,
+                  inputType: 'text',
+                  buttonText: 'Continue',
+                }
+              );
+              if (!value) {
+                setConnectingId(null);
+                return;
+              }
+              resolvedUrl = resolvedUrl.replace(`{${f.key}}`, encodeURIComponent(value));
+            }
+          }
+
+          // If the URL contains {tenant_id}, resolve it from the user's email domain
+          if (resolvedUrl.includes('{tenant_id}')) {
+            const email = await promptText(
+              {
+                ...connector,
+                auth: {
+                  ...connector.auth,
+                  hint: 'We need your work email to find the right Microsoft 365 tenant. Nothing is sent to Microsoft yet — this just discovers your tenant ID.',
+                },
+              } as ConnectorDefinition,
+              {
+                title: `Connect ${connector.name}`,
+                label: 'Work email',
+                placeholder: 'you@company.com',
+                inputType: 'email',
+                buttonText: 'Continue',
+              }
+            );
+            if (!email) {
+              setConnectingId(null);
+              return;
+            }
+            const domain = email.includes('@') ? email.split('@')[1] : email;
+            const tenantRes = await fetch('/api/mcp/resolve-tenant', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ domain }),
+            });
+            if (!tenantRes.ok) {
+              const err = await tenantRes.json().catch(() => ({}));
+              throw new Error(err.error || `Couldn't find Azure tenant for ${domain}`);
+            }
+            const { tenantId } = await tenantRes.json();
+            resolvedUrl = resolvedUrl.replace('{tenant_id}', tenantId);
+          }
+
+          let result;
+          try {
+            result = await runMcpOAuthFlow(connector.id, resolvedUrl, {
+              fallbackClientId: connector.auth.fallbackClientId,
+              fallbackClientIdEnv: connector.auth.fallbackClientIdEnv,
+            });
+          } catch (err) {
+            // Friendlier error for MCPs that require a pre-registered app via env var
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes('Dynamic Client Registration') && connector.auth.fallbackClientIdEnv) {
+              throw new Error(
+                `${connector.name} requires a pre-registered Azure AD app. ` +
+                `Ask IT to register an app (redirect URI: http://localhost:3000/api/connectors/oauth/callback) ` +
+                `and set ${connector.auth.fallbackClientIdEnv} in the Quarry config.`
+              );
+            }
+            throw err;
+          }
+          const expiresAt = result.expiresIn
+            ? Date.now() + result.expiresIn * 1000
+            : undefined;
+          // The /api/mcp/oauth/exchange endpoint already wrote to .quarry-mcp.json
+          // as `nib-mcp-<id>`. We store token metadata in the client store too so
+          // the UI reflects authenticated state.
+          setTokenMeta(connector.id, {
+            accessToken: result.accessToken,
+            refreshToken: result.refreshToken,
+            expiresAt,
+          });
+          setEnabled(connector.id, true);
+          sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
+        } catch (err) {
+          console.error(`MCP OAuth failed for ${connector.id}:`, err);
+          if (err instanceof Error && !err.message.includes('canceled')) {
+            clearToken(connector.id);
+          }
+          reportConnectorError(connector, err);
+        } finally {
+          setConnectingId(null);
+        }
+        return;
+      }
+
       // OAuth2 flow
       setConnectingId(connector.id);
       try {
         const result = await startOAuthFlow(connector);
-        setToken(connector.id, result.accessToken);
+        // Store full token metadata (refresh token, expiry) for auto-refresh
+        const expiresAt = result.expiresIn
+          ? Date.now() + result.expiresIn * 1000
+          : undefined;
+        setTokenMeta(connector.id, {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          expiresAt,
+        });
         setEnabled(connector.id, true);
-        await provisionConnector(connector, result.accessToken);
+        await provisionConnector(connector, result.accessToken, {
+          refreshToken: result.refreshToken,
+          expiresAt,
+        });
         sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
       } catch (err) {
         console.error(`OAuth flow failed for ${connector.id}:`, err);
@@ -131,6 +424,7 @@ export function BrowseConnectors() {
         if (err instanceof Error && !err.message.includes('canceled')) {
           clearToken(connector.id);
         }
+        reportConnectorError(connector, err);
       } finally {
         setConnectingId(null);
       }
@@ -140,6 +434,26 @@ export function BrowseConnectors() {
 
   const handleToggle = useCallback(
     async (connector: ConnectorDefinition, currentlyEnabled: boolean) => {
+      // For mcp-oauth connectors the toggle doesn't round-trip cleanly —
+      // re-enabling would require re-running the OAuth flow. Treat "disable"
+      // as a full disconnect.
+      if (connector.auth.type === 'mcp-oauth') {
+        if (currentlyEnabled) {
+          setEnabled(connector.id, false);
+          clearToken(connector.id);
+          try {
+            await fetch('/api/mcp/uninstall', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: connector.id }),
+            });
+          } catch (err) {
+            console.error(`Failed to uninstall MCP for ${connector.id}:`, err);
+          }
+        }
+        return;
+      }
+
       if (currentlyEnabled) {
         // Disable — remove from MCP
         setEnabled(connector.id, false);
@@ -162,20 +476,48 @@ export function BrowseConnectors() {
         }
       }
     },
-    [setEnabled, tokens]
+    [setEnabled, clearToken, tokens]
   );
 
   const handleDisconnect = useCallback(
     async (connectorId: string) => {
+      const token = tokens[connectorId];
+      const connector = CONNECTOR_MAP[connectorId];
       setEnabled(connectorId, false);
       clearToken(connectorId);
+
+      // For mcp-oauth connectors, the entry is written as `nib-mcp-<id>` by the
+      // exchange endpoint. Use the MCP uninstall path which cleans up both the
+      // MCP config entry and the stored DCR registration.
+      if (connector?.auth.type === 'mcp-oauth') {
+        try {
+          await fetch('/api/mcp/uninstall', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: connectorId }),
+          });
+        } catch (err) {
+          console.error(`Failed to uninstall MCP for ${connectorId}:`, err);
+        }
+        return;
+      }
+
       try {
         await deprovisionConnector(connectorId);
       } catch (err) {
         console.error(`Failed to deprovision ${connectorId}:`, err);
       }
+      // Revoke the OAuth token with the provider so reconnecting triggers
+      // a fresh authorization flow (with updated scopes if changed)
+      if (token) {
+        fetch('/api/connectors/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectorId, token }),
+        }).catch((err) => console.warn(`Token revocation failed for ${connectorId}:`, err));
+      }
     },
-    [setEnabled, clearToken]
+    [setEnabled, clearToken, tokens]
   );
 
   return (
@@ -198,6 +540,44 @@ export function BrowseConnectors() {
       </DialogContent>
     </Dialog>
 
+    {/* Generic connector error dialog */}
+    <Dialog open={!!connectorError} onOpenChange={(open) => { if (!open) setConnectorError(null); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Couldn&apos;t connect {connectorError?.name}</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground py-2 whitespace-pre-wrap leading-relaxed">{connectorError?.message}</p>
+        <DialogFooter>
+          <button
+            onClick={() => setConnectorError(null)}
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            OK
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    {/* MCP self-auth notice */}
+    <Dialog open={!!mcpSelfAuthNotice} onOpenChange={(open) => { if (!open) setMcpSelfAuthNotice(null); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{mcpSelfAuthNotice?.name} connected</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground py-2 leading-relaxed">
+          {mcpSelfAuthNotice?.hint}
+        </p>
+        <DialogFooter>
+          <button
+            onClick={() => setMcpSelfAuthNotice(null)}
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            Got it
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
     {/* API Key Input Dialog */}
     <Dialog
       open={!!apiKeyDialog}
@@ -210,21 +590,23 @@ export function BrowseConnectors() {
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Connect {apiKeyDialog?.connector.name}</DialogTitle>
+          <DialogTitle>
+            {apiKeyDialog?.title || `Connect ${apiKeyDialog?.connector.name}`}
+          </DialogTitle>
         </DialogHeader>
         <div className="py-2 space-y-3">
           {apiKeyDialog?.connector.auth.hint && (
-            <p className="text-xs text-muted-foreground bg-muted rounded-md px-3 py-2 leading-relaxed">
+            <pre className="text-xs text-muted-foreground bg-muted rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap font-mono max-h-64 overflow-y-auto">
               {apiKeyDialog.connector.auth.hint}
-            </p>
+            </pre>
           )}
           <div>
           <label className="text-xs text-muted-foreground mb-1.5 block">
-            {apiKeyDialog?.connector.name} API token
+            {apiKeyDialog?.label || `${apiKeyDialog?.connector.name} API token`}
           </label>
           <input
             ref={apiKeyInputRef}
-            type="password"
+            type={apiKeyDialog?.inputType || "password"}
             value={apiKeyInput}
             onChange={(e) => setApiKeyInput(e.target.value)}
             onKeyDown={(e) => {
@@ -233,8 +615,8 @@ export function BrowseConnectors() {
                 setApiKeyDialog(null);
               }
             }}
-            placeholder="Paste your token here"
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+            placeholder={apiKeyDialog?.placeholder || "Paste your token here"}
+            className={`flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${apiKeyDialog?.inputType === 'email' ? '' : 'font-mono'}`}
           />
           </div>
         </div>
@@ -255,7 +637,7 @@ export function BrowseConnectors() {
             }}
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Connect
+            {apiKeyDialog?.buttonText || 'Connect'}
           </button>
         </DialogFooter>
       </DialogContent>

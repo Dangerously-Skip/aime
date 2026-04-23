@@ -20,16 +20,15 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     description: 'Code hosting & collaboration',
     category: 'development',
     auth: {
-      type: 'oauth2',
-      authUrl: 'https://github.com/login/oauth/authorize',
-      tokenUrl: 'https://github.com/login/oauth/access_token',
-      scopes: ['repo', 'read:org', 'read:user', 'gist'],
+      type: 'api_key',
+      envVarName: 'GITHUB_PERSONAL_ACCESS_TOKEN',
+      hint: 'Go to github.com/settings/tokens → Generate new token (classic). Recommended scopes: repo, read:org, read:user, workflow, gist. Fine-grained tokens also work — grant access to the repos you want Quarry to work with.',
     },
     mcp: {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-github@latest'],
-      tokenInjection: { method: 'env', envVar: 'GITHUB_PERSONAL_ACCESS_TOKEN' },
+      // Official hosted GitHub MCP — ~100 tools including PRs, issues, workflows, code scanning
+      transport: 'http',
+      url: 'https://api.githubcopilot.com/mcp/',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
     },
   },
 
@@ -59,24 +58,16 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     description: 'Team messaging & notifications',
     category: 'communication',
     auth: {
-      type: 'oauth2',
-      authUrl: 'https://slack.com/oauth/v2/authorize',
-      tokenUrl: 'https://slack.com/api/oauth.v2.access',
-      redirectScheme: 'https',
-      scopes: [
-        'channels:read', 'channels:history', 'channels:join',
-        'groups:read', 'groups:history',
-        'users:read', 'users:read.email',
-        'chat:write', 'files:read', 'reactions:read',
-        'search:read.files', 'search:read.im', 'search:read.mpim',
-        'search:read.private', 'search:read.public', 'search:read.users',
-      ],
+      type: 'mcp-oauth',
+      // Slack's hosted MCP. DCR isn't supported, so we use the public client_id
+      // that slackapi publishes in their marketplace plugin's .mcp.json.
+      mcpUrl: 'https://mcp.slack.com/mcp',
+      fallbackClientId: '1601185624273.8899143856786',
     },
     mcp: {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-slack@latest'],
-      tokenInjection: { method: 'env', envVar: 'SLACK_BOT_TOKEN' },
+      transport: 'http',
+      url: 'https://mcp.slack.com/mcp',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
     },
   },
 
@@ -103,25 +94,33 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   // ── Project Management ─────────────────────────────────────────────────────
 
   {
-    id: 'jira',
-    name: 'Jira',
-    description: 'Issue tracking & project management',
+    id: 'atlassian',
+    name: 'Atlassian',
+    description: 'Jira + Confluence — issue tracking, team wiki, documentation',
     category: 'project-management',
     auth: {
-      type: 'oauth2',
-      authUrl: 'https://auth.atlassian.com/authorize',
-      tokenUrl: 'https://auth.atlassian.com/oauth/token',
-      scopes: [
-        'read:jira-work', 'write:jira-work',
-        'read:jira-user',
-        'offline_access',
-      ],
-      pkce: true,
+      type: 'mcp-oauth',
+      mcpUrl: 'https://mcp.atlassian.com/v1/mcp',
     },
     mcp: {
-      // Atlassian provides an official remote MCP server — no local install needed.
       transport: 'http',
       url: 'https://mcp.atlassian.com/v1/mcp',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
+    },
+  },
+
+  {
+    id: 'linear',
+    name: 'Linear',
+    description: 'Issue tracking for modern software teams',
+    category: 'project-management',
+    auth: {
+      type: 'mcp-oauth',
+      mcpUrl: 'https://mcp.linear.app/mcp',
+    },
+    mcp: {
+      transport: 'http',
+      url: 'https://mcp.linear.app/mcp',
       tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
     },
   },
@@ -129,48 +128,18 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   // ── Documentation ──────────────────────────────────────────────────────────
 
   {
-    id: 'confluence',
-    name: 'Confluence',
-    description: 'Team wiki & documentation',
+    id: 'notion',
+    name: 'Notion',
+    description: 'Notes, docs, and knowledge base',
     category: 'documentation',
     auth: {
-      type: 'oauth2',
-      authUrl: 'https://auth.atlassian.com/authorize',
-      tokenUrl: 'https://auth.atlassian.com/oauth/token',
-      scopes: [
-        'read:confluence-content.all', 'write:confluence-content',
-        'search:confluence',
-        'offline_access',
-      ],
-      pkce: true,
+      type: 'mcp-oauth',
+      mcpUrl: 'https://mcp.notion.com/mcp',
     },
     mcp: {
-      // Shares Atlassian's remote MCP server with Jira.
       transport: 'http',
-      url: 'https://mcp.atlassian.com/v1/mcp',
+      url: 'https://mcp.notion.com/mcp',
       tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
-    },
-  },
-
-  {
-    id: 'sharepoint',
-    name: 'SharePoint',
-    comingSoon: true,
-    description: 'Document management & collaboration',
-    category: 'documentation',
-    auth: {
-      type: 'oauth2',
-      authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
-      tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
-      scopes: [
-        'Sites.Read.All', 'Files.Read.All', 'offline_access',
-      ],
-    },
-    mcp: {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@softeria/ms-365-mcp-server@latest'],
-      tokenInjection: { method: 'env', envVar: 'MS365_ACCESS_TOKEN' },
     },
   },
 
@@ -201,26 +170,95 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   // ── Communication (M365) ──────────────────────────────────────────────────
 
   {
-    id: 'outlook',
-    name: 'Outlook 365',
-    comingSoon: true,
-    description: 'Email & calendar',
+    id: 'outlook-mail',
+    name: 'Outlook Mail',
+    description: 'Read, send, and search email via Microsoft Graph',
     category: 'communication',
     auth: {
-      type: 'oauth2',
-      authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
-      tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
-      scopes: [
-        'Mail.Read', 'Mail.Send', 'Mail.ReadWrite',
-        'Calendars.Read', 'Calendars.ReadWrite',
-        'offline_access',
-      ],
+      type: 'mcp-oauth',
+      // Microsoft's official MCP for mail. {tenant_id} is resolved from the user's
+      // email domain at connect time. DCR isn't supported, so we fall back to a
+      // pre-registered Azure AD app via MS365_CLIENT_ID.
+      mcpUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_MailTools',
+      fallbackClientIdEnv: 'MS365_CLIENT_ID',
     },
     mcp: {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@softeria/ms-365-mcp-server@latest'],
-      tokenInjection: { method: 'env', envVar: 'MS365_ACCESS_TOKEN' },
+      transport: 'http',
+      url: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_MailTools',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
+    },
+  },
+
+  {
+    id: 'outlook-calendar',
+    name: 'Outlook Calendar',
+    description: 'Create and manage calendar events via Microsoft Graph',
+    category: 'communication',
+    auth: {
+      type: 'mcp-oauth',
+      mcpUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_CalendarTools',
+      fallbackClientIdEnv: 'MS365_CLIENT_ID',
+    },
+    mcp: {
+      transport: 'http',
+      url: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_CalendarTools',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
+    },
+  },
+
+  {
+    id: 'm365-copilot',
+    name: 'Microsoft 365 Copilot',
+    description: 'Search across M365 content — documents, emails, sites, files, chats',
+    category: 'documentation',
+    auth: {
+      type: 'mcp-oauth',
+      mcpUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_M365Copilot',
+      fallbackClientIdEnv: 'MS365_CLIENT_ID',
+    },
+    mcp: {
+      transport: 'http',
+      url: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_M365Copilot',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
+    },
+  },
+
+  {
+    id: 'onedrive-sharepoint',
+    name: 'OneDrive & SharePoint',
+    description: 'Read and manage files across OneDrive and SharePoint',
+    category: 'documentation',
+    auth: {
+      type: 'mcp-oauth',
+      mcpUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_ODSPRemoteServer',
+      fallbackClientIdEnv: 'MS365_CLIENT_ID',
+    },
+    mcp: {
+      transport: 'http',
+      url: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_ODSPRemoteServer',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
+    },
+  },
+
+  // ── Data ───────────────────────────────────────────────────────────────────
+
+  {
+    id: 'snowflake',
+    name: 'Snowflake',
+    description: 'Query Snowflake data via your org\'s hosted MCP server',
+    category: 'cloud',
+    auth: {
+      // Snowflake's hosted MCP doesn't support Dynamic Client Registration, and
+      // OAuth setup requires ACCOUNTADMIN to CREATE SECURITY INTEGRATION. PATs
+      // are user-generated (no admin needed) and pass as a Bearer token.
+      type: 'api_key',
+      envVarName: 'SNOWFLAKE_PAT',
+      hint: 'Use a Programmatic Access Token (PAT). See the connect dialog for the one-time setup SQL to run in Snowsight.',
+    },
+    mcp: {
+      transport: 'http',
+      url: 'https://{account}.snowflakecomputing.com/api/v2/databases/{database}/schemas/{schema}/mcp-servers/{server}',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
     },
   },
 
@@ -229,15 +267,19 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   {
     id: 'aws',
     name: 'AWS',
-    description: 'Cloud infrastructure & services',
+    description: 'Cloud infrastructure & services (via AWS Labs MCP)',
     category: 'cloud',
     auth: {
       type: 'aws_iam',
     },
     mcp: {
+      // AWS Labs publishes MCPs on PyPI. The `core-mcp-server` provides
+      // a general-purpose entry point. Additional service-specific MCPs
+      // (docs, CDK, CloudWatch, Cost Explorer, Terraform, EKS) can be
+      // installed via Marketplace.
       transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@aws/mcp-server-aws@latest'],
+      command: 'uvx',
+      args: ['awslabs.core-mcp-server@latest'],
       tokenInjection: { method: 'env', envVar: 'AWS_ACCESS_KEY_ID' },
     },
   },
@@ -268,16 +310,13 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     description: 'UI/UX design & prototyping',
     category: 'design',
     auth: {
-      type: 'oauth2',
-      authUrl: 'https://www.figma.com/oauth',
-      tokenUrl: 'https://www.figma.com/api/oauth/token',
-      scopes: ['files:read'],
+      type: 'mcp-oauth',
+      mcpUrl: 'https://mcp.figma.com/mcp',
     },
     mcp: {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', 'figma-mcp@latest'],
-      tokenInjection: { method: 'env', envVar: 'FIGMA_ACCESS_TOKEN' },
+      transport: 'http',
+      url: 'https://mcp.figma.com/mcp',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
     },
   },
 
@@ -286,18 +325,15 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     name: 'Miro',
     description: 'Visual collaboration & whiteboarding',
     category: 'design',
-    comingSoon: true,
     auth: {
-      type: 'oauth2',
-      authUrl: 'https://miro.com/oauth/authorize',
-      tokenUrl: 'https://api.miro.com/v1/oauth/token',
-      scopes: ['boards:read', 'boards:write'],
+      type: 'mcp-oauth',
+      // Miro serves OAuth discovery at /mcp but actual JSON-RPC at /
+      mcpUrl: 'https://mcp.miro.com/',
     },
     mcp: {
-      transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@mirohq/mcp-server@latest'],
-      tokenInjection: { method: 'env', envVar: 'MIRO_ACCESS_TOKEN' },
+      transport: 'http',
+      url: 'https://mcp.miro.com/',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
     },
   },
 ];
