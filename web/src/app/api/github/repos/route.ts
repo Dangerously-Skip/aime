@@ -1,19 +1,25 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { readProvisionedGithubToken } from "@/lib/github-token";
 
-export async function GET(request: NextRequest) {
-  const token = request.headers.get("x-github-token");
+export const runtime = 'nodejs';
+
+export async function GET() {
+  // Read the real PAT from ~/.claude/.quarry-mcp.json — the client-side store
+  // holds a "provisioned" sentinel that isn't a valid GitHub token.
+  const token = await readProvisionedGithubToken();
 
   if (!token) {
     return NextResponse.json(
-      { error: "Missing GitHub token" },
+      { error: "GitHub not connected. Connect GitHub in Customize → Connectors." },
       { status: 401 }
     );
   }
 
   const url = new URL("https://api.github.com/user/repos");
   url.searchParams.set("sort", "updated");
-  url.searchParams.set("per_page", "30");
-  url.searchParams.set("type", "owner");
+  url.searchParams.set("per_page", "100");
+  // Include repos the user collaborates on or has org access to, not just owned
+  url.searchParams.set("affiliation", "owner,collaborator,organization_member");
 
   const res = await fetch(url.toString(), {
     headers: {
