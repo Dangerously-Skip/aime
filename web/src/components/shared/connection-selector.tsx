@@ -1,125 +1,90 @@
 "use client";
 
-import { useCallback } from "react";
-import { useCodeStore, type ConnectionType } from "@/stores/code-store";
-import { useSettingsStore } from "@/stores/settings-store";
+import { useState, useCallback } from "react";
+import { useConnectorStore } from "@/stores/connector-store";
+import { useCodeStore } from "@/stores/code-store";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuLabel,
   DropdownMenuItem,
+  DropdownMenuGroup,
 } from "@/components/ui/dropdown-menu";
-import { Monitor, Github, ChevronDown, LogOut } from "lucide-react";
+import { Monitor, Github, ChevronDown } from "lucide-react";
+import { CloneFromGitHub } from "./clone-from-github";
 
 export function ConnectionSelector() {
-  const connectionType = useCodeStore((s) => s.connectionType);
-  const setConnectionType = useCodeStore((s) => s.setConnectionType);
-  const githubToken = useSettingsStore((s) => s.githubToken);
-  const githubUser = useSettingsStore((s) => s.githubUser);
-  const clearGithubAuth = useSettingsStore((s) => s.clearGithubAuth);
+  const currentChatId = useCodeStore((s) => s.currentChatId);
+  const folder = useCodeStore((s) =>
+    currentChatId ? s.folderByChat[currentChatId] ?? null : null
+  );
+  const setFolder = useCodeStore((s) => s.setFolder);
+  const isGithubConnected = useConnectorStore(
+    (s) => !!s.connectorStates['github']?.authenticated && !!s.tokens['github']
+  );
+  const [cloneOpen, setCloneOpen] = useState(false);
 
-  const isGithubConnected = !!githubToken;
+  const handleCloned = useCallback(
+    (path: string) => {
+      if (currentChatId) setFolder(currentChatId, path);
+    },
+    [setFolder, currentChatId]
+  );
 
-  const handleConnectGithub = useCallback(async () => {
-    try {
-      const res = await fetch("/api/auth/github", { method: "POST" });
-      if (!res.ok) return;
-      const { url } = await res.json();
-
-      // Try Electron popup first, fall back to window.open
-      const electron = (window as { electronAPI?: { openAuthWindow?: (url: string) => Promise<void> } }).electronAPI;
-      if (electron?.openAuthWindow) {
-        electron.openAuthWindow(url);
-      } else {
-        window.open(url, "github-auth", "width=600,height=700");
-      }
-
-      // Listen for postMessage from OAuth callback
-      const handler = (event: MessageEvent) => {
-        if (event.data?.type === "github-auth-success") {
-          const { token, user } = event.data;
-          useSettingsStore.getState().setGithubToken(token);
-          useSettingsStore.getState().setGithubUser(user);
-          setConnectionType("github");
-          window.removeEventListener("message", handler);
-        }
-      };
-      window.addEventListener("message", handler);
-    } catch {
-      // OAuth not configured — silently fail
-    }
-  }, [setConnectionType]);
-
-  const handleDisconnect = useCallback(() => {
-    clearGithubAuth();
-    setConnectionType("local");
-  }, [clearGithubAuth, setConnectionType]);
+  const label = folder ? folder.split("/").filter(Boolean).pop() || "Local" : "Local";
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <button className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
-            {connectionType === "github" ? (
-              <Github className="h-3.5 w-3.5" />
-            ) : (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <button className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
               <Monitor className="h-3.5 w-3.5" />
-            )}
-            <span>{connectionType === "github" ? githubUser || "GitHub" : "Local"}</span>
-            <ChevronDown className="h-3 w-3" />
-          </button>
-        }
-      />
+              <span className="max-w-[200px] truncate">{label}</span>
+              <ChevronDown className="h-3 w-3" />
+            </button>
+          }
+        />
 
-      <DropdownMenuContent side="top" align="end" sideOffset={8} className="w-52">
-        <DropdownMenuRadioGroup
-          value={connectionType}
-          onValueChange={(v) => {
-            if (v === "github" && !isGithubConnected) return;
-            setConnectionType(v as ConnectionType);
-          }}
-        >
-          <DropdownMenuRadioItem value="local">
-            <Monitor className="h-4 w-4" />
-            Local
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-
-        <DropdownMenuSeparator />
-
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>GitHub</DropdownMenuLabel>
-
-          {isGithubConnected ? (
-            <>
-              <DropdownMenuRadioGroup
-                value={connectionType}
-                onValueChange={(v) => setConnectionType(v as ConnectionType)}
-              >
-                <DropdownMenuRadioItem value="github">
-                  <Github className="h-4 w-4" />
-                  {githubUser || "GitHub"}
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleDisconnect}>
-                <LogOut className="h-4 w-4" />
-                Disconnect GitHub
-              </DropdownMenuItem>
-            </>
-          ) : (
-            <DropdownMenuItem onClick={handleConnectGithub}>
-              <Github className="h-4 w-4" />
-              Connect to GitHub...
+        <DropdownMenuContent side="top" align="end" sideOffset={8} className="w-56">
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wider">
+              Working folder
+            </DropdownMenuLabel>
+            <DropdownMenuItem disabled className="text-xs opacity-80">
+              <Monitor className="h-3.5 w-3.5" />
+              <span className="truncate">{folder || "No folder selected"}</span>
             </DropdownMenuItem>
-          )}
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          </DropdownMenuGroup>
+
+          <DropdownMenuSeparator />
+
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wider">
+              GitHub
+            </DropdownMenuLabel>
+            {isGithubConnected ? (
+              <DropdownMenuItem onClick={() => setCloneOpen(true)}>
+                <Github className="h-4 w-4" />
+                Clone a repo...
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem disabled className="text-xs opacity-60">
+                <Github className="h-4 w-4" />
+                Connect GitHub in Customize
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <CloneFromGitHub
+        open={cloneOpen}
+        onOpenChange={setCloneOpen}
+        onCloned={handleCloned}
+      />
+    </>
   );
 }
