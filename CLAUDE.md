@@ -168,8 +168,26 @@ The pipeline (`.github/workflows/release.yml`):
 1. **GitHub Actions** builds macOS (DMG + ZIP, signed + notarized) and Windows (NSIS installer) artifacts
 2. Creates a **GitHub Release** with the artifacts attached
 3. Triggers **Buildkite `promote-release`** pipeline via API — downloads artifacts, bundles with landing page, deploys to internal site via SAMOA (`RQP::StaticSite`)
+4. **Strips the CloudFront WAF** (`:unlock: Remove WAF from CloudFront` step)
 
 Internal download page: `quarry.internal.invalid` (VPN required). Existing installs auto-update.
+
+### ⚠️ WAF bypass constraint — don't remove
+
+SAMOA attaches a Cloudflare-IP-whitelist WAF to every CloudFront distribution it
+provisions. This site is **VPN-only internal**, not routed through Cloudflare, so
+the WAF blocks every legitimate nib VPN user with 403s.
+
+The final Buildkite step (`.buildkite/promote-release.yml:167`) detaches the
+WebACL from the distribution after each deploy. It is `soft_fail: true`, so if
+this step errors the overall pipeline still goes green — **and the download site
+silently becomes inaccessible to VPN users until someone notices**.
+
+After pushing a release tag, watch the Buildkite pipeline and confirm the
+`:unlock: Remove WAF from CloudFront` step logs `WAF removed successfully`
+(or `No WAF attached — nothing to do` if SAMOA's defaults have shifted). If it
+fails, re-run that step manually or hand-strip the WebACL via `aws cloudfront
+update-distribution` using the `deployer` role in account `384553929753`.
 
 ### Release infrastructure
 
