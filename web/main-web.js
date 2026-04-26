@@ -375,7 +375,79 @@ function sendLifecycleEvent(action) {
   }
 }
 
+/**
+ * Patch known-broken MCP URLs in ~/.claude/.quarry-mcp.json so users don't
+ * have to manually reconnect when we find and fix URL bugs in the registry.
+ */
+function migrateMcpConfig() {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const configPath = path.join(os.homedir(), ".claude", ".quarry-mcp.json");
+    if (!fs.existsSync(configPath)) return;
+
+    const raw = fs.readFileSync(configPath, "utf-8");
+    const config = JSON.parse(raw);
+    if (!config.mcpServers) return;
+
+    let changed = false;
+    const servers = config.mcpServers;
+
+    // Fix Miro — the actual MCP JSON-RPC endpoint is at / not /mcp
+    if (servers["nib-mcp-miro"]?.url === "https://mcp.miro.com/mcp") {
+      servers["nib-mcp-miro"].url = "https://mcp.miro.com/";
+      changed = true;
+      console.log("[Quarry] Migrated Miro MCP URL (/mcp -> /)");
+    }
+
+    // Fix AWS — switch from non-existent npm package to AWS Labs' Python MCP via uvx
+    const aws = servers["nib-connector-aws"];
+    if (aws && Array.isArray(aws.args) && aws.args.some((a) => typeof a === "string" && a.includes("@aws/mcp-server-aws"))) {
+      aws.command = "uvx";
+      aws.args = ["awslabs.core-mcp-server@latest"];
+      changed = true;
+      console.log("[Quarry] Migrated AWS MCP to awslabs.core-mcp-server via uvx");
+    }
+
+    if (changed) {
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+    }
+  } catch (err) {
+    console.warn("[Quarry] MCP config migration failed:", err.message);
+  }
+}
+
+/**
+ * Copy bundled Quarry skills plugin to ~/.claude/plugins/quarry-skills so the
+ * Agent SDK picks them up. Runs on every app start so updates ship with releases.
+ * Skipped silently if the source doesn't exist (e.g. local dev without bundled resources).
+ */
+function installBundledSkills() {
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const srcDir = app.isPackaged
+      ? path.join(process.resourcesPath, "quarry-skills")
+      : path.join(__dirname, "resources", "quarry-skills");
+
+    if (!fs.existsSync(srcDir)) return;
+
+    const destDir = path.join(os.homedir(), ".claude", "plugins", "quarry-skills");
+    fs.mkdirSync(path.dirname(destDir), { recursive: true });
+
+    // Remove and recopy so updates land every launch
+    fs.rmSync(destDir, { recursive: true, force: true });
+    fs.cpSync(srcDir, destDir, { recursive: true });
+    console.log("[Quarry] Installed bundled skills at:", destDir);
+  } catch (err) {
+    console.warn("[Quarry] Failed to install bundled skills:", err.message);
+  }
+}
+
 app.whenReady().then(async () => {
+  migrateMcpConfig();
+  installBundledSkills();
+
   // Determine the port: dev-with-port.js sets PORT in env; for packaged builds we find one here.
   let port = parseInt(process.env.PORT || '0', 10);
   if (!port) {
@@ -740,6 +812,9 @@ ipcMain.handle("open-auth-window", async (_event, url) => {
 // to the renderer without needing a running localhost server.
 ipcMain.handle("open-connector-auth-window", async (_event, url, callbackPath) => {
   return new Promise((resolve, reject) => {
+    // Use a unique partition per auth attempt so each connect starts with a clean
+    // session (no cached cookies from previous logins). This ensures the user can
+    // pick a different account or site when reconnecting.
     const authWindow = new BrowserWindow({
       width: 600,
       height: 700,
@@ -749,6 +824,7 @@ ipcMain.handle("open-connector-auth-window", async (_event, url, callbackPath) =
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
+        partition: `connector-auth-${Date.now()}`,
       },
     });
 

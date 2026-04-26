@@ -12,6 +12,28 @@ import { homedir } from 'os';
 const MCP_CONFIG_DIR = join(homedir(), '.claude');
 const MCP_CONFIG_PATH = join(MCP_CONFIG_DIR, '.quarry-mcp.json');
 
+/**
+ * Resolve the directory Quarry's bundled MCP servers live in. Dev: web/.
+ * Packaged app: process.resourcesPath (from electron-builder extraResources).
+ * Used to substitute {quarryAppDir} placeholders in connector args.
+ */
+function resolveQuarryAppDir(): string {
+  // process.resourcesPath is set by Electron at runtime; the Node types don't
+  // know about it, so we read through the process as a loose record.
+  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) {
+    // In packaged Electron, our mcp-servers are copied via extraResources.
+    return resourcesPath;
+  }
+  return process.cwd();
+}
+
+function substituteArgs(args: string[] | undefined): string[] | undefined {
+  if (!args) return args;
+  const appDir = resolveQuarryAppDir();
+  return args.map((a) => a.replace(/\{quarryAppDir\}/g, appDir));
+}
+
 interface McpConfig {
   mcpServers?: Record<string, unknown>;
 }
@@ -35,7 +57,16 @@ async function writeMcpConfig(config: McpConfig): Promise<void> {
  */
 export async function POST(request: Request) {
   try {
-    const { connectorId, connectorName, mcpEntry } = await request.json();
+    const {
+      connectorId,
+      connectorName,
+      mcpEntry,
+      refreshToken,
+      expiresAt,
+      oauthClientId,
+      oauthClientSecret,
+      oauthTokenEndpoint,
+    } = await request.json();
 
     if (!connectorId || !mcpEntry) {
       return Response.json({ error: 'Missing connectorId or mcpEntry' }, { status: 400 });
@@ -46,11 +77,29 @@ export async function POST(request: Request) {
       config.mcpServers = {};
     }
 
+    const entryWithArgs = mcpEntry as { args?: string[] };
+    const resolvedMcpEntry = {
+      ...mcpEntry,
+      ...(entryWithArgs.args ? { args: substituteArgs(entryWithArgs.args) } : {}),
+    };
+
     // Use a prefixed key so we can identify our entries
     const serverKey = `nib-connector-${connectorId}`;
     config.mcpServers[serverKey] = {
-      ...mcpEntry,
-      _meta: { connectorId, connectorName, managedBy: 'nib-cowork' },
+      ...resolvedMcpEntry,
+      _meta: {
+        connectorId,
+        connectorName,
+        managedBy: 'nib-cowork',
+        // Token refresh metadata — used by loadProvisionedMcpServers() to auto-refresh
+        ...(refreshToken && { refreshToken }),
+        ...(expiresAt && { expiresAt }),
+        // For byoCredentials connectors, persist the user's OAuth client so
+        // server-side refresh can run without them re-authenticating.
+        ...(oauthClientId && { clientId: oauthClientId }),
+        ...(oauthClientSecret && { clientSecret: oauthClientSecret }),
+        ...(oauthTokenEndpoint && { tokenEndpoint: oauthTokenEndpoint }),
+      },
     };
 
     await writeMcpConfig(config);
@@ -82,8 +131,9 @@ export async function DELETE(request: Request) {
       return Response.json({ success: true });
     }
 
-    const serverKey = `nib-connector-${connectorId}`;
-    delete config.mcpServers[serverKey];
+    // Remove both legacy and new MCP OAuth entry formats
+    delete config.mcpServers[`nib-connector-${connectorId}`];
+    delete config.mcpServers[`nib-mcp-${connectorId}`];
 
     await writeMcpConfig(config);
 

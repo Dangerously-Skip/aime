@@ -8,7 +8,7 @@ export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__nib-web-search__web_search',
     ],
-    permissionMode: 'acceptEdits',
+    permissionMode: 'bypassPermissions',
     systemPrompt: `You are Quarry, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.
 
 ## Tone & Formatting

@@ -15,6 +15,10 @@ export interface ConnectorDefinition {
     clientId?: string;
     pkce?: boolean;
     redirectScheme?: 'http' | 'https'; // Default: http. Slack requires https.
+    /** Custom callback path for OAuth redirect. Default: /api/connectors/oauth/callback.
+     * Microsoft's public-client apps (Graph PowerShell, Azure CLI) only accept
+     * http://localhost/ (path "/"), so m365-graph overrides this. */
+    redirectPath?: string;
     envVarName?: string; // For api_key type
     hint?: string;       // Instruction text shown in the Connect dialog
     /** For mcp-oauth type: the HTTP MCP server URL that supports DCR. */
@@ -23,6 +27,8 @@ export interface ConnectorDefinition {
     fallbackClientIdEnv?: string;
     /** For mcp-oauth type: literal pre-registered client_id used when DCR is unavailable (e.g. Slack's public MCP client). */
     fallbackClientId?: string;
+    /** For oauth2 type: user brings their own clientId + clientSecret via a setup dialog (no env var / pre-registered app). */
+    byoCredentials?: boolean;
   };
 
   // MCP server config

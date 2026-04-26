@@ -8,7 +8,7 @@ import type { ConnectorDefinition } from './types';
  * Swappable: replace this module with Nango SDK calls for managed OAuth.
  */
 
-const CALLBACK_PATH = '/api/connectors/oauth/callback';
+const DEFAULT_CALLBACK_PATH = '/api/connectors/oauth/callback';
 
 function generateRandomString(length: number): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
@@ -38,19 +38,33 @@ export interface OAuthResult {
  * Start an OAuth2 authorization flow for a connector.
  * Opens an auth window, waits for the redirect with the auth code,
  * then exchanges the code for tokens server-side.
+ *
+ * For byoCredentials connectors, pass user-supplied clientId + clientSecret
+ * — they're used in place of the server's env-var lookup.
  */
-export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OAuthResult> {
+export async function startOAuthFlow(
+  connector: ConnectorDefinition,
+  byoCreds?: { clientId: string; clientSecret: string },
+): Promise<OAuthResult> {
   if (connector.auth.type !== 'oauth2' || !connector.auth.authUrl) {
     throw new Error(`Connector ${connector.id} does not support OAuth2`);
   }
 
-  // Fetch the client_id from server (env vars aren't available client-side)
-  const configRes = await fetch(`/api/connectors/oauth/config?connectorId=${connector.id}`);
-  if (!configRes.ok) {
-    const err = await configRes.json().catch(() => ({}));
-    throw new Error(err.error || `Failed to get OAuth config for ${connector.id}`);
+  let clientId: string;
+  if (connector.auth.byoCredentials) {
+    if (!byoCreds?.clientId) {
+      throw new Error(`${connector.name} requires client credentials — run the setup dialog first`);
+    }
+    clientId = byoCreds.clientId;
+  } else {
+    // Fetch the client_id from server (env vars aren't available client-side)
+    const configRes = await fetch(`/api/connectors/oauth/config?connectorId=${connector.id}`);
+    if (!configRes.ok) {
+      const err = await configRes.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to get OAuth config for ${connector.id}`);
+    }
+    ({ clientId } = await configRes.json());
   }
-  const { clientId } = await configRes.json();
 
   const state = generateRandomString(32);
   const codeVerifier = connector.auth.pkce ? generateRandomString(64) : undefined;
@@ -65,7 +79,8 @@ export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OA
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.openConnectorAuthWindow;
   const scheme = connector.auth.redirectScheme || 'http';
   const callbackOrigin = isElectron ? `${scheme}://localhost:3000` : (typeof window !== 'undefined' ? window.location.origin : `${scheme}://localhost:3000`);
-  const redirectUri = `${callbackOrigin}${CALLBACK_PATH}`;
+  const callbackPath = connector.auth.redirectPath || DEFAULT_CALLBACK_PATH;
+  const redirectUri = `${callbackOrigin}${callbackPath}`;
 
   // Build authorization URL
   // Slack v2 OAuth uses comma-separated scopes; all other providers use space-separated.
@@ -98,7 +113,7 @@ export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OA
   console.log('[OAuth] Auth URL:', authUrl);
 
   // Get the auth code — Electron intercepts the redirect, browser uses popup
-  const { code, error } = await getAuthCode(authUrl, state, connector.id);
+  const { code, error } = await getAuthCode(authUrl, state, connector.id, callbackPath);
 
   if (error) {
     throw new Error(error === 'canceled' ? 'OAuth flow was canceled' : `OAuth error: ${error}`);
@@ -107,7 +122,9 @@ export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OA
     throw new Error('No authorization code received');
   }
 
-  // Exchange code for token server-side
+  // Exchange code for token server-side. For byoCredentials connectors we
+  // include the user-supplied clientId + clientSecret so the server skips
+  // its env-var lookup and uses the pasted creds instead.
   const tokenResponse = await fetch('/api/connectors/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -116,6 +133,9 @@ export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OA
       code,
       redirectUri,
       codeVerifier,
+      ...(byoCreds
+        ? { byoClientId: byoCreds.clientId, byoClientSecret: byoCreds.clientSecret }
+        : {}),
     }),
   });
 
@@ -130,11 +150,12 @@ export async function startOAuthFlow(connector: ConnectorDefinition): Promise<OA
 async function getAuthCode(
   authUrl: string,
   expectedState: string,
-  connectorId: string
+  connectorId: string,
+  callbackPath: string = DEFAULT_CALLBACK_PATH,
 ): Promise<{ code: string | null; error: string | null }> {
   // Use Electron's BrowserWindow if available — intercepts redirect directly
   if (typeof window !== 'undefined' && window.electronAPI?.openConnectorAuthWindow) {
-    const result = await window.electronAPI.openConnectorAuthWindow(authUrl, CALLBACK_PATH);
+    const result = await window.electronAPI.openConnectorAuthWindow(authUrl, callbackPath);
 
     if (result.error) {
       return { code: null, error: result.error };

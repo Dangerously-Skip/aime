@@ -1,7 +1,9 @@
 "use client";
 
+import { useState, useCallback } from "react";
 import type { MarketplacePlugin } from "@/lib/marketplace";
-import { getPluginUrl, MARKETPLACE_CATEGORIES } from "@/lib/marketplace";
+import { MARKETPLACE_CATEGORIES } from "@/lib/marketplace";
+import { runMcpOAuthFlow } from "@/lib/mcp/oauth-flow";
 import {
   Code2,
   Briefcase,
@@ -13,7 +15,9 @@ import {
   GraduationCap,
   Activity,
   Puzzle,
-  ExternalLink,
+  Check,
+  Loader2,
+  Trash2,
 } from "lucide-react";
 
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -43,23 +47,109 @@ const CATEGORY_COLORS: Record<string, string> = {
 interface PluginRowProps {
   plugin: MarketplacePlugin;
   compact?: boolean;
+  /** Called after install/uninstall to trigger a re-fetch of installed state. */
+  onStateChange?: () => void;
+  /** Installation state from the parent. */
+  installedState?: {
+    installed: boolean;
+    authenticated: boolean;
+    hasMcpOAuth: boolean;
+  };
 }
 
-export function PluginRow({ plugin, compact }: PluginRowProps) {
+export function PluginRow({ plugin, compact, onStateChange, installedState }: PluginRowProps) {
   const category = plugin.category || "development";
   const Icon = CATEGORY_ICONS[category] || Puzzle;
   const colorClass = CATEGORY_COLORS[category] || "bg-muted text-muted-foreground";
-  const url = getPluginUrl(plugin);
   const authorName = plugin.author?.name;
   const label = MARKETPLACE_CATEGORIES[category] || category;
 
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const installed = installedState?.installed ?? false;
+  const authenticated = installedState?.authenticated ?? false;
+  const needsAuth = installedState?.hasMcpOAuth ?? false;
+
+  const handleInstall = useCallback(async () => {
+    setWorking(true);
+    setError(null);
+    try {
+      // Step 1: git clone + read manifest
+      const installRes = await fetch("/api/mcp/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: plugin.name, source: plugin.source }),
+      });
+      if (!installRes.ok) {
+        const err = await installRes.json().catch(() => ({}));
+        throw new Error(err.error || `Install failed: ${installRes.status}`);
+      }
+      const { manifest } = await installRes.json();
+
+      // Step 2: Check if the plugin has an HTTP/SSE MCP server that needs OAuth
+      const needsOAuth = Object.values(manifest?.mcpServers || {}).some(
+        (s: unknown) =>
+          typeof s === "object" &&
+          s !== null &&
+          (s as { url?: string }).url
+      );
+
+      if (needsOAuth) {
+        // Step 3: Run the OAuth flow
+        await runMcpOAuthFlow(plugin.name);
+      }
+
+      onStateChange?.();
+    } catch (err) {
+      console.error(`[Plugin Install] Failed for ${plugin.name}:`, err);
+      setError(err instanceof Error ? err.message : "Install failed");
+    } finally {
+      setWorking(false);
+    }
+  }, [plugin, onStateChange]);
+
+  const handleUninstall = useCallback(async () => {
+    if (!confirm(`Uninstall ${plugin.name}? This will remove its plugin files and revoke any OAuth tokens.`)) {
+      return;
+    }
+    setWorking(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/mcp/uninstall", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: plugin.name }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Uninstall failed");
+      }
+      onStateChange?.();
+    } catch (err) {
+      console.error(`[Plugin Uninstall] Failed for ${plugin.name}:`, err);
+      setError(err instanceof Error ? err.message : "Uninstall failed");
+    } finally {
+      setWorking(false);
+    }
+  }, [plugin, onStateChange]);
+
+  const handleReauth = useCallback(async () => {
+    setWorking(true);
+    setError(null);
+    try {
+      await runMcpOAuthFlow(plugin.name);
+      onStateChange?.();
+    } catch (err) {
+      console.error(`[Plugin Reauth] Failed for ${plugin.name}:`, err);
+      setError(err instanceof Error ? err.message : "Reauth failed");
+    } finally {
+      setWorking(false);
+    }
+  }, [plugin, onStateChange]);
+
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="group flex items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 hover:border-border/80 hover:bg-accent/30 transition-colors"
-    >
+    <div className="group flex items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 hover:border-border/80 hover:bg-accent/30 transition-colors">
       {/* Category icon */}
       <div className={`shrink-0 flex items-center justify-center h-10 w-10 rounded-lg ${colorClass}`}>
         <Icon className={compact ? "h-4 w-4" : "h-5 w-5"} />
@@ -76,21 +166,61 @@ export function PluginRow({ plugin, compact }: PluginRowProps) {
           )}
         </div>
         <p className="text-xs text-muted-foreground mt-0.5 truncate">
-          {plugin.description}
+          {error || plugin.description}
         </p>
-        {!compact && (
+        {!compact && !error && (
           <span className="inline-block mt-1 text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
             {label}
           </span>
         )}
       </div>
 
-      {/* Action */}
-      <div className="shrink-0">
-        <span className="flex items-center justify-center h-8 w-8 rounded-full border border-border text-muted-foreground group-hover:bg-accent group-hover:text-foreground transition-colors">
-          <ExternalLink className="h-3.5 w-3.5" />
-        </span>
+      {/* Actions */}
+      <div className="shrink-0 flex items-center gap-1.5">
+        {working ? (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Working
+          </span>
+        ) : installed ? (
+          <>
+            {needsAuth && !authenticated && (
+              <button
+                onClick={handleReauth}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              >
+                Sign in
+              </button>
+            )}
+            {needsAuth && authenticated && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 px-3 py-1.5 text-[11px] font-medium">
+                <Check className="h-3 w-3" />
+                Connected
+              </span>
+            )}
+            {!needsAuth && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+                <Check className="h-3 w-3" />
+                Installed
+              </span>
+            )}
+            <button
+              onClick={handleUninstall}
+              className="flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+              title="Uninstall"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={handleInstall}
+            className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            Install
+          </button>
+        )}
       </div>
-    </a>
+    </div>
   );
 }
