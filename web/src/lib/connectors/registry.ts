@@ -109,65 +109,106 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     },
   },
 
-  {
-    id: 'linear',
-    name: 'Linear',
-    description: 'Issue tracking for modern software teams',
-    category: 'project-management',
-    auth: {
-      type: 'mcp-oauth',
-      mcpUrl: 'https://mcp.linear.app/mcp',
-    },
-    mcp: {
-      transport: 'http',
-      url: 'https://mcp.linear.app/mcp',
-      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
-    },
-  },
-
   // ── Documentation ──────────────────────────────────────────────────────────
 
   {
-    id: 'notion',
-    name: 'Notion',
-    description: 'Notes, docs, and knowledge base',
-    category: 'documentation',
-    auth: {
-      type: 'mcp-oauth',
-      mcpUrl: 'https://mcp.notion.com/mcp',
-    },
-    mcp: {
-      transport: 'http',
-      url: 'https://mcp.notion.com/mcp',
-      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
-    },
-  },
-
-  {
-    id: 'google-drive',
-    name: 'Google Drive',
-    comingSoon: true,
-    description: 'File storage & collaboration',
+    id: 'google-workspace',
+    name: 'Google Workspace (nib)',
+    description: 'Gmail, Calendar, and Drive — uses your nib Google account',
     category: 'documentation',
     auth: {
       type: 'oauth2',
       authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
       scopes: [
-        'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/drive.metadata.readonly',
+        'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/calendar',
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/userinfo.profile',
       ],
       pkce: true,
     },
     mcp: {
       transport: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-gdrive@latest'],
+      command: 'node',
+      args: ['{quarryAppDir}/mcp-servers/google-workspace/index.mjs'],
+      tokenInjection: { method: 'env', envVar: 'GOOGLE_ACCESS_TOKEN' },
+    },
+  },
+
+  {
+    id: 'google-personal',
+    name: 'Google (Personal)',
+    description: 'Personal Gmail, Calendar, Drive — uses your own Google Cloud OAuth app',
+    category: 'documentation',
+    auth: {
+      type: 'oauth2',
+      authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      scopes: [
+        'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/calendar',
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/userinfo.profile',
+      ],
+      pkce: true,
+      byoCredentials: true,
+      hint:
+        'Create your own Google OAuth client (10 min):\n' +
+        '1. Go to console.cloud.google.com → select or create a project\n' +
+        '2. Enable Gmail API, Calendar API, Drive API (APIs & Services → Library)\n' +
+        '3. OAuth consent screen → External → add yourself as test user. Scopes: gmail.modify, gmail.send, calendar, drive\n' +
+        '4. Credentials → Create OAuth Client ID → "Desktop app"\n' +
+        '5. Paste the client_id and client_secret here.\n\n' +
+        'Works for personal @gmail.com AND any other Google accounts you add as test users.',
+    },
+    mcp: {
+      transport: 'stdio',
+      command: 'node',
+      args: ['{quarryAppDir}/mcp-servers/google-workspace/index.mjs'],
       tokenInjection: { method: 'env', envVar: 'GOOGLE_ACCESS_TOKEN' },
     },
   },
 
   // ── Communication (M365) ──────────────────────────────────────────────────
+
+  {
+    // Mail + Calendar via standard Microsoft Graph (not the WorkIQ MCP).
+    // Uses Microsoft's first-party "Microsoft Graph PowerShell" public client
+    // that lives in every Entra tenant — no custom app registration, no
+    // MS365_CLIENT_ID env var. Each user signs in as themselves.
+    id: 'm365-graph',
+    name: 'Microsoft 365 (Mail + Calendar)',
+    description: 'Read/send email and manage calendar via Microsoft Graph',
+    category: 'communication',
+    auth: {
+      type: 'oauth2',
+      // /common accepts any Entra tenant; Microsoft routes by signed-in user
+      authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+      tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+      scopes: [
+        'Mail.ReadWrite',
+        'Mail.Send',
+        'Calendars.ReadWrite',
+        'User.Read',
+        'offline_access',
+      ],
+      pkce: true,
+      // Microsoft's public-client apps only accept path "/" as the redirect.
+      redirectPath: '/',
+    },
+    mcp: {
+      transport: 'stdio',
+      command: 'node',
+      // {quarryAppDir} is substituted server-side at provision time
+      args: ['{quarryAppDir}/mcp-servers/m365-graph/index.mjs'],
+      tokenInjection: { method: 'env', envVar: 'GRAPH_ACCESS_TOKEN' },
+    },
+  },
 
   {
     id: 'outlook-mail',

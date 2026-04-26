@@ -1,0 +1,8 @@
+{
+  "name": "quarry-skills",
+  "description": "Quarry's built-in skill library — visual design, brand guidelines, internal comms, and Office automation",
+  "author": {
+    "name": "Quarry"
+  },
+  "skills": "./skills/"
+}

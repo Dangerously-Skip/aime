@@ -1,17 +1,47 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { useMarketplace } from "@/lib/use-marketplace";
 import { MARKETPLACE_CATEGORIES } from "@/lib/marketplace";
 import { PluginRow } from "./plugin-row";
 import { ArrowLeft, Search, Loader2, Puzzle } from "lucide-react";
 
+interface InstalledState {
+  installed: boolean;
+  authenticated: boolean;
+  hasMcpOAuth: boolean;
+}
+
 export function BrowseMarketplace() {
   const setCustomizeSection = useAppStore((s) => s.setCustomizeSection);
   const { plugins, categories, loading } = useMarketplace();
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [installed, setInstalled] = useState<Record<string, InstalledState>>({});
+
+  const refreshInstalled = useCallback(async () => {
+    try {
+      const res = await fetch("/api/mcp/installed");
+      if (!res.ok) return;
+      const data = await res.json();
+      const map: Record<string, InstalledState> = {};
+      for (const p of data.plugins || []) {
+        map[p.name] = {
+          installed: true,
+          authenticated: p.authenticated,
+          hasMcpOAuth: p.hasMcpOAuth,
+        };
+      }
+      setInstalled(map);
+    } catch (err) {
+      console.error("[Marketplace] Failed to load installed plugins:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshInstalled();
+  }, [refreshInstalled]);
 
   const filtered = useMemo(() => {
     return plugins.filter((p) => {
@@ -104,7 +134,12 @@ export function BrowseMarketplace() {
               </p>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
                 {filtered.map((plugin) => (
-                  <PluginRow key={plugin.name} plugin={plugin} />
+                  <PluginRow
+                    key={plugin.name}
+                    plugin={plugin}
+                    installedState={installed[plugin.name]}
+                    onStateChange={refreshInstalled}
+                  />
                 ))}
               </div>
             </>

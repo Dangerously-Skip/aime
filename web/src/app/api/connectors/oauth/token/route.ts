@@ -10,7 +10,8 @@ import { getCredentials } from '@/lib/connectors/credentials';
  */
 export async function POST(request: Request) {
   try {
-    const { connectorId, code, redirectUri, codeVerifier } = await request.json();
+    const { connectorId, code, redirectUri, codeVerifier, byoClientId, byoClientSecret } =
+      await request.json();
 
     if (!connectorId || !code || !redirectUri) {
       return Response.json(
@@ -31,22 +32,52 @@ export async function POST(request: Request) {
       );
     }
 
-    const credentials = getCredentials(connectorId);
-    if (!credentials || !credentials.clientId || !credentials.clientSecret) {
-      return Response.json(
-        { error: `No OAuth credentials configured for ${connectorId}. Set the appropriate env vars.` },
-        { status: 500 }
-      );
+    // Resolve credentials: byoCredentials connectors take creds from request
+    // body (user-pasted), everything else uses the server-side env/credentials map.
+    let effectiveClientId: string;
+    let effectiveClientSecret: string;
+    const isPublicClient = !!getCredentials(connectorId)?.publicClient;
+
+    if (connector.auth.byoCredentials) {
+      if (!byoClientId) {
+        return Response.json(
+          { error: `${connector.name} requires user-supplied OAuth credentials.` },
+          { status: 400 }
+        );
+      }
+      effectiveClientId = byoClientId;
+      effectiveClientSecret = byoClientSecret || '';
+    } else {
+      const credentials = getCredentials(connectorId);
+      if (!credentials || !credentials.clientId) {
+        return Response.json(
+          { error: `No OAuth credentials configured for ${connectorId}. Set the appropriate env vars.` },
+          { status: 500 }
+        );
+      }
+      if (!credentials.publicClient && !credentials.clientSecret) {
+        return Response.json(
+          { error: `No OAuth client secret configured for ${connectorId}.` },
+          { status: 500 }
+        );
+      }
+      effectiveClientId = credentials.clientId;
+      effectiveClientSecret = credentials.clientSecret;
     }
 
-    // Build token exchange request
     const tokenParams = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
       redirect_uri: redirectUri,
-      client_id: credentials.clientId,
-      client_secret: credentials.clientSecret,
+      client_id: effectiveClientId,
     });
+
+    // Send client_secret for every non-public-client flow (including BYO —
+    // Google "Desktop app" clients have a non-really-secret secret that's
+    // still required at the token endpoint).
+    if (!isPublicClient && effectiveClientSecret) {
+      tokenParams.set('client_secret', effectiveClientSecret);
+    }
 
     if (codeVerifier) {
       tokenParams.set('code_verifier', codeVerifier);

@@ -34,15 +34,24 @@ export function PptxRenderer({ content, encoding, name }: PptxRendererProps) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!content) return;
+    if (!content) {
+      setLoading(false);
+      setError("No file content available");
+      return;
+    }
 
-    const data =
-      encoding === "base64"
-        ? base64ToUint8Array(content)
-        : new TextEncoder().encode(content);
+    let cancelled = false;
 
-    JSZip.loadAsync(data)
-      .then(async (zip) => {
+    (async () => {
+      try {
+        const data =
+          encoding === "base64"
+            ? base64ToUint8Array(content)
+            : new TextEncoder().encode(content);
+
+        const zip = await JSZip.loadAsync(data);
+        if (cancelled) return;
+
         const slideFiles = Object.keys(zip.files)
           .filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))
           .sort((a, b) => {
@@ -54,19 +63,26 @@ export function PptxRenderer({ content, encoding, name }: PptxRendererProps) {
         const parsed: SlideContent[] = [];
         for (let i = 0; i < slideFiles.length; i++) {
           const xml = await zip.files[slideFiles[i]].async("string");
+          if (cancelled) return;
           parsed.push({
             index: i + 1,
             texts: extractSlideTexts(xml),
           });
         }
 
-        setSlides(parsed);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to parse PPTX");
-        setLoading(false);
-      });
+        if (!cancelled) {
+          setSlides(parsed);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to parse PPTX");
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [content, encoding]);
 
   if (error) {

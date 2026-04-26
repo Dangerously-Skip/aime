@@ -400,10 +400,40 @@ export function BrowseConnectors() {
       }
 
       // OAuth2 flow
+      // For byoCredentials connectors: prompt for client_id + client_secret
+      // (once — we persist them) before kicking off the OAuth dance.
+      let byoCreds: { clientId: string; clientSecret: string } | undefined;
+      if (connector.auth.byoCredentials) {
+        let existing = useConnectorStore.getState().getOAuthClientCreds(connector.id);
+        if (!existing) {
+          const newClientId = await promptText(connector, {
+            title: `Connect ${connector.name}`,
+            label: 'OAuth Client ID',
+            placeholder: '...apps.googleusercontent.com',
+            inputType: 'text',
+            buttonText: 'Next',
+          });
+          if (!newClientId) return;
+          const newClientSecret = await promptText(connector, {
+            title: `Connect ${connector.name}`,
+            label: 'OAuth Client Secret',
+            placeholder: 'GOCSPX-...',
+            inputType: 'password',
+            buttonText: 'Continue',
+          });
+          if (!newClientSecret) return;
+          useConnectorStore.getState().setOAuthClientCreds(connector.id, {
+            clientId: newClientId,
+            clientSecret: newClientSecret,
+          });
+          existing = { clientId: newClientId, clientSecret: newClientSecret };
+        }
+        byoCreds = existing;
+      }
+
       setConnectingId(connector.id);
       try {
-        const result = await startOAuthFlow(connector);
-        // Store full token metadata (refresh token, expiry) for auto-refresh
+        const result = await startOAuthFlow(connector, byoCreds);
         const expiresAt = result.expiresIn
           ? Date.now() + result.expiresIn * 1000
           : undefined;
@@ -416,6 +446,15 @@ export function BrowseConnectors() {
         await provisionConnector(connector, result.accessToken, {
           refreshToken: result.refreshToken,
           expiresAt,
+          // Persist user-supplied OAuth creds so server-side refresh works
+          // without the browser later.
+          ...(byoCreds && connector.auth.tokenUrl
+            ? {
+                oauthClientId: byoCreds.clientId,
+                oauthClientSecret: byoCreds.clientSecret,
+                oauthTokenEndpoint: connector.auth.tokenUrl,
+              }
+            : {}),
         });
         sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
       } catch (err) {

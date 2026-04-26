@@ -57,7 +57,15 @@ function buildMcpEntry(connector: ConnectorDefinition, token: string): McpServer
  */
 export async function provisionConnector(
   connector: ConnectorDefinition,
-  token: string
+  token: string,
+  tokenMeta?: {
+    refreshToken?: string;
+    expiresAt?: number;
+    /** For byoCredentials connectors — persisted to _meta for server-side refresh. */
+    oauthClientId?: string;
+    oauthClientSecret?: string;
+    oauthTokenEndpoint?: string;
+  },
 ): Promise<void> {
   const mcpEntry = buildMcpEntry(connector, token);
 
@@ -68,6 +76,11 @@ export async function provisionConnector(
       connectorId: connector.id,
       connectorName: connector.name,
       mcpEntry,
+      refreshToken: tokenMeta?.refreshToken,
+      expiresAt: tokenMeta?.expiresAt,
+      oauthClientId: tokenMeta?.oauthClientId,
+      oauthClientSecret: tokenMeta?.oauthClientSecret,
+      oauthTokenEndpoint: tokenMeta?.oauthTokenEndpoint,
     }),
   });
 

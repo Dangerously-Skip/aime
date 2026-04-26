@@ -281,6 +281,11 @@ export class ClaudeProvider extends BaseProvider {
         },
       },
       permissionMode,
+      // Required by SDK when permissionMode is 'bypassPermissions'. Without it,
+      // the SDK may fail to handle certain tool calls (e.g. MCP tools with
+      // complex schemas) because it tries to render a permission prompt that
+      // we don't have the bridge for.
+      allowDangerouslySkipPermissions: permissionMode === 'bypassPermissions',
       settingSources: ['user', 'project'], // Enable Skills from filesystem
       ...(pluginPaths.length > 0 && {
         plugins: pluginPaths.map(p => ({ type: 'local', path: p })),
@@ -380,17 +385,10 @@ export class ClaudeProvider extends BaseProvider {
           message: `Tool call denied — you've called ${toolName} ${consecutiveCount} times with identical inputs. This is a loop. Stop and tell the user what went wrong and suggest an alternative approach.`,
         };
       }
-      // Warn after 3 consecutive identical calls
+      // Warn after 3 consecutive identical calls (log only — don't mutate input,
+      // as MCP tools have strict Zod schemas that reject unknown fields)
       if (consecutiveCount >= LOOP_WARN_THRESHOLD) {
         console.warn('[Claude] Loop warning for tool:', toolName, 'id:', toolUseID, `(${consecutiveCount} consecutive identical calls)`);
-        return {
-          behavior: 'allow' as const,
-          updatedInput: {
-            ...input,
-            __loopDetected: true,
-            __loopMessage: `Loop detected — you've called ${toolName} ${consecutiveCount} times with identical inputs. Try a different approach or call a different tool. After ${LOOP_DENY_THRESHOLD} identical calls the tool will be blocked.`,
-          },
-        };
       }
 
       // ── CronCreate (in-process MCP or direct) ─────────────────────────

@@ -13,6 +13,8 @@ interface OAuthCredentials {
   clientSecret: string;
   tenantId?: string;
   accountId?: string;
+  /** If true, client is public (PKCE, no secret) — token endpoints are called without client_secret. */
+  publicClient?: boolean;
 }
 
 export const OAUTH_CREDENTIALS: Record<string, OAuthCredentials> = {
@@ -42,9 +44,18 @@ export const OAUTH_CREDENTIALS: Record<string, OAuthCredentials> = {
     clientSecret: process.env.MS365_CLIENT_SECRET || '',
     tenantId: process.env.MS365_TENANT_ID || 'common',
   },
-  'google-drive': {
+  // Workspace Google — IT-managed OAuth app. Same env vars as the
+  // retired google-drive connector so nib's existing config carries over.
+  'google-workspace': {
     clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+  },
+  // Personal Google — user brings their own client_id + secret via a setup
+  // dialog. Server-side credentials are empty; the OAuth flow accepts
+  // client-supplied creds in the request body for byoCredentials connectors.
+  'google-personal': {
+    clientId: '',
+    clientSecret: '',
   },
   figma: {
     clientId: process.env.FIGMA_CLIENT_ID || '',
@@ -58,6 +69,15 @@ export const OAUTH_CREDENTIALS: Record<string, OAuthCredentials> = {
     clientId: process.env.ZOOM_CLIENT_ID || '',
     clientSecret: process.env.ZOOM_CLIENT_SECRET || '',
     accountId: process.env.ZOOM_ACCOUNT_ID || '',
+  },
+  // Microsoft Graph PowerShell — Microsoft first-party public client (FOCI app).
+  // Pre-registered in every Entra tenant, accepts http://localhost:* redirects,
+  // no client_secret required (PKCE). Lets any nib user connect their own
+  // mail/calendar without IT creating a bespoke Entra app.
+  'm365-graph': {
+    clientId: '14d82eec-204b-4c2f-b7e8-296a70dab67e',
+    clientSecret: '',
+    publicClient: true,
   },
 };
 
