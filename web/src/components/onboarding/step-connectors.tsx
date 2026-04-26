@@ -2,17 +2,20 @@
 
 import { useState, useCallback } from "react";
 import { useConnectorStore } from "@/stores/connector-store";
+import { useAppStore } from "@/stores/app-store";
+import { useSettingsStore } from "@/stores/settings-store";
 import { startOAuthFlow } from "@/lib/connectors/oauth";
 import { provisionConnector } from "@/lib/connectors/provisioner";
 import {
   GitHubLogo,
-  SlackLogo,
-  JiraLogo,
-  ConfluenceLogo,
+  AtlassianLogo,
+  M365GraphLogo,
+  MiroLogo,
+  BuildkiteLogo,
 } from "@/components/customize/connector-logos";
 import { ArrowLeft, Check, Loader2, Power } from "lucide-react";
 
-// Featured connectors for onboarding
+// Featured connectors for onboarding — the five that actually work end-to-end.
 const FEATURED_CONNECTORS = [
   {
     id: "github",
@@ -21,22 +24,28 @@ const FEATURED_CONNECTORS = [
     Logo: GitHubLogo,
   },
   {
-    id: "slack",
-    name: "Slack",
-    description: "Channels, messages, and threads",
-    Logo: SlackLogo,
+    id: "atlassian",
+    name: "Atlassian",
+    description: "Jira + Confluence — issue tracking and wiki",
+    Logo: AtlassianLogo,
   },
   {
-    id: "jira",
-    name: "Jira",
-    description: "Projects, tickets, and boards",
-    Logo: JiraLogo,
+    id: "m365-graph",
+    name: "Microsoft 365 (Mail + Calendar)",
+    description: "Read/send email and manage calendar via Graph",
+    Logo: M365GraphLogo,
   },
   {
-    id: "confluence",
-    name: "Confluence",
-    description: "Spaces, pages, and documentation",
-    Logo: ConfluenceLogo,
+    id: "miro",
+    name: "Miro",
+    description: "Visual collaboration & whiteboarding",
+    Logo: MiroLogo,
+  },
+  {
+    id: "buildkite",
+    name: "Buildkite",
+    description: "CI/CD pipelines & builds",
+    Logo: BuildkiteLogo,
   },
 ];
 
@@ -55,30 +64,48 @@ export function StepConnectors({
   const setToken = useConnectorStore((s) => s.setToken);
   const setEnabled = useConnectorStore((s) => s.setEnabled);
   const clearToken = useConnectorStore((s) => s.clearToken);
+  const setCustomizeSection = useAppStore((s) => s.setCustomizeSection);
+  const setOnboardingSkippedAt = useSettingsStore((s) => s.setOnboardingSkippedAt);
 
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const handleConnect = useCallback(
     async (connectorId: string) => {
-      setConnectingId(connectorId);
       setErrors((prev) => {
         const { [connectorId]: _, ...rest } = prev;
         return rest;
       });
 
-      try {
-        // Dynamically import the registry to get the connector definition
-        const { CONNECTOR_MAP } = await import("@/lib/connectors/registry");
-        const connector = CONNECTOR_MAP[connectorId];
-        if (!connector) {
-          throw new Error(`Connector ${connectorId} not found in registry`);
-        }
+      // Look up the connector — api_key / mcp-oauth / byoCredentials types
+      // need dialogs that only live in the Customize view, so redirect there.
+      const { CONNECTOR_MAP } = await import("@/lib/connectors/registry");
+      const connector = CONNECTOR_MAP[connectorId];
+      if (!connector) {
+        setErrors((prev) => ({ ...prev, [connectorId]: `Connector ${connectorId} not found` }));
+        return;
+      }
 
+      const isInlineOAuth2 =
+        connector.auth.type === "oauth2" && !connector.auth.byoCredentials;
+      if (!isInlineOAuth2) {
+        // Dismiss onboarding and jump to Customize → browse-connectors so the
+        // user can complete setup (paste PAT, sign in, etc) in the proper UI.
+        setOnboardingSkippedAt(Date.now());
+        setCustomizeSection("browse-connectors");
+        return;
+      }
+
+      setConnectingId(connectorId);
+      try {
         const result = await startOAuthFlow(connector);
+        const expiresAt = result.expiresIn ? Date.now() + result.expiresIn * 1000 : undefined;
         setToken(connectorId, result.accessToken);
         setEnabled(connectorId, true);
-        await provisionConnector(connector, result.accessToken);
+        await provisionConnector(connector, result.accessToken, {
+          refreshToken: result.refreshToken,
+          expiresAt,
+        });
         onConnectorConnected(connectorId);
       } catch (err) {
         console.error(`OAuth flow failed for ${connectorId}:`, err);
@@ -93,7 +120,7 @@ export function StepConnectors({
         setConnectingId(null);
       }
     },
-    [setToken, setEnabled, clearToken, onConnectorConnected]
+    [setToken, setEnabled, clearToken, onConnectorConnected, setCustomizeSection, setOnboardingSkippedAt]
   );
 
   return (
