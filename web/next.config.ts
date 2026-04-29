@@ -9,6 +9,24 @@ const nextConfig: NextConfig = {
   outputFileTracingExcludes: {
     '*': ['./dist/**', './release/**', './temp/**', './.next/cache/**'],
   },
+  // Force Next.js standalone output to include the Claude Agent SDK's cli.js
+  // and platform-specific native binary siblings. The tracer normally skips
+  // cli.js (it's a CLI binary, not an imported module) which leaves the SDK
+  // unable to spawn at runtime in the packaged Electron build. Listing them
+  // here makes the standalone output authoritative — extraResources merging
+  // is no longer load-bearing (and was failing silently on Windows due to
+  // MAX_PATH limits under claude-agent-sdk-win32-x64).
+  outputFileTracingIncludes: {
+    '*': [
+      './node_modules/@anthropic-ai/claude-agent-sdk/**/*',
+      './node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/**/*',
+      './node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/**/*',
+      './node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*',
+      './node_modules/@anthropic-ai/claude-agent-sdk-win32-arm64/**/*',
+      './node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/**/*',
+      './node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/**/*',
+    ],
+  },
   experimental: {
     serverActions: {
       bodySizeLimit: '100mb',
