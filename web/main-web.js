@@ -554,6 +554,22 @@ app.whenReady().then(async () => {
     }
     fs.writeFileSync(sdkMarkerPath, sdkCliPath || sdkSrcPath, 'utf-8');
 
+    // The Claude Agent SDK on Windows shells out to bash for tool execution
+    // and refuses to start without it. We bundle MinGit in extraResources
+    // (resources/mingit/usr/bin/bash.exe) so users don't have to install
+    // Git for Windows themselves. If MinGit somehow went missing (e.g.
+    // antivirus quarantined it), fall back to letting cli.js search PATH —
+    // which produces a clear error pointing to the official installer.
+    let gitBashPath = '';
+    if (process.platform === 'win32') {
+      const candidate = path.join(process.resourcesPath, 'mingit', 'usr', 'bin', 'bash.exe');
+      if (fs.existsSync(candidate)) {
+        gitBashPath = candidate;
+      } else {
+        console.warn('[Quarry] Bundled MinGit bash.exe not found at:', candidate);
+      }
+    }
+
     const child = utilityProcess.fork(serverScript, [], {
       cwd: standaloneDir,
       env: {
@@ -563,6 +579,7 @@ app.whenReady().then(async () => {
         NODE_ENV: 'production',
         QUARRY_RESOURCES_PATH: process.resourcesPath,
         ...(sdkCliPath ? { QUARRY_SDK_CLI_PATH: sdkCliPath } : {}),
+        ...(gitBashPath ? { CLAUDE_CODE_GIT_BASH_PATH: gitBashPath } : {}),
         // Point the SDK's config dir to Quarry's own directory so it doesn't
         // write to ~/.claude/settings.json (which belongs to Claude Code).
         CLAUDE_CONFIG_DIR: path.join(os.homedir(), '.quarry'),

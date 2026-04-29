@@ -44,3 +44,7 @@ src/config/teams.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# CI-downloaded MinGit (bundled into Windows installer for bash.exe)
+/resources/mingit-x64/
+/resources/mingit-arm64/
