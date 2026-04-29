@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "1.3.5",
+  "version": "1.3.6",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -45,8 +45,8 @@
         "to": ".next/standalone/web/public"
       },
       {
-        "from": "node_modules/@anthropic-ai/claude-agent-sdk",
-        "to": ".next/standalone/web/node_modules/@anthropic-ai/claude-agent-sdk"
+        "from": "node_modules/@anthropic-ai",
+        "to": ".next/standalone/web/node_modules/@anthropic-ai"
       },
       {
         "from": "node_modules/pdfjs-dist",
