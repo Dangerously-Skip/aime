@@ -538,45 +538,19 @@ app.whenReady().then(async () => {
       return;
     }
 
-    // Resolve where to point the Claude Agent SDK at cli.js.
-    //
-    // macOS: Gatekeeper/SIP can block executing JS that's inside a signed
-    // .app bundle in some configurations, so we copy cli.js + its vendor
-    // dir to userData/claude-sdk/ first.
-    //
-    // Windows/Linux: no equivalent restriction — execute directly from the
-    // bundled location. The previous unconditional copy was failing on
-    // Windows (likely AV/permissions) but the env var still pointed at the
-    // missing destination, producing "Claude Code executable not found".
+    // Point the Claude Agent SDK at the in-bundle cli.js. Earlier versions
+    // copied cli.js to userData/claude-sdk/cli.js to dodge a hypothetical
+    // Gatekeeper/SIP issue on macOS, but that broke native-binary resolution:
+    // cli.js does Node's normal `node_modules` walk-up to load its platform-
+    // specific sibling (e.g. @anthropic-ai/claude-agent-sdk-darwin-arm64).
+    // When run from userData the sibling isn't on any walk-up path, hence
+    // "Native CLI binary for darwin-arm64 not found". Keeping cli.js inside
+    // its own npm package directory fixes both macOS and Windows in one go.
     const sdkSrcPath = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js');
-    const sdkDestDir = path.join(app.getPath('userData'), 'claude-sdk');
-    const sdkDestPath = path.join(sdkDestDir, 'cli.js');
     const sdkMarkerPath = path.join(app.getPath('userData'), '.quarry-sdk-path');
-
-    let sdkCliPath = sdkSrcPath;
-    if (process.platform === 'darwin') {
-      try {
-        fs.mkdirSync(sdkDestDir, { recursive: true });
-        fs.copyFileSync(sdkSrcPath, sdkDestPath);
-        fs.chmodSync(sdkDestPath, 0o755);
-        const vendorSrc = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'vendor');
-        const vendorDest = path.join(sdkDestDir, 'vendor');
-        if (fs.existsSync(vendorSrc) && !fs.existsSync(vendorDest)) {
-          fs.cpSync(vendorSrc, vendorDest, { recursive: true });
-        }
-        sdkCliPath = sdkDestPath;
-        console.log('[Quarry] SDK cli.js copied to:', sdkDestPath);
-      } catch (e) {
-        console.warn('[Quarry] SDK copy failed, falling back to in-bundle path:', e.message);
-      }
-    }
-
-    // Final sanity check — only export the path if the file actually exists,
-    // otherwise let the SDK's own resolution kick in (which may still fail,
-    // but with a more useful error than a stale env var).
-    if (!fs.existsSync(sdkCliPath)) {
-      console.warn('[Quarry] Claude SDK cli.js not found at:', sdkCliPath);
-      sdkCliPath = '';
+    const sdkCliPath = fs.existsSync(sdkSrcPath) ? sdkSrcPath : '';
+    if (!sdkCliPath) {
+      console.warn('[Quarry] Claude SDK cli.js not found at:', sdkSrcPath);
     }
     fs.writeFileSync(sdkMarkerPath, sdkCliPath || sdkSrcPath, 'utf-8');
 
