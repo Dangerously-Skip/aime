@@ -321,8 +321,6 @@ export class ClaudeProvider extends BaseProvider {
     // In packaged Electron builds, the SDK can't find its CLI binary via import.meta.url
     // because the bundler minifies module paths. The instrumentation hook sets globalThis
     // from the QUARRY_SDK_CLI_PATH env var passed by the Electron main process.
-    // Also set executable to the current Node process so the SDK doesn't try to find
-    // 'node' in PATH (which doesn't exist in packaged Electron apps).
     const sdkCliPath = (globalThis as Record<string, unknown>).__quarryClaudeSDKPath as string | undefined;
     if (sdkCliPath) {
       queryOptions.pathToClaudeCodeExecutable = sdkCliPath;

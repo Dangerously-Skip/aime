@@ -511,31 +511,47 @@ app.whenReady().then(async () => {
       return;
     }
 
-    // Copy the Claude SDK cli.js outside the app bundle so it can be executed
-    // without codesign/sandbox restrictions. Write the path to a marker file
-    // so the Next.js server can find it.
+    // Resolve where to point the Claude Agent SDK at cli.js.
+    //
+    // macOS: Gatekeeper/SIP can block executing JS that's inside a signed
+    // .app bundle in some configurations, so we copy cli.js + its vendor
+    // dir to userData/claude-sdk/ first.
+    //
+    // Windows/Linux: no equivalent restriction — execute directly from the
+    // bundled location. The previous unconditional copy was failing on
+    // Windows (likely AV/permissions) but the env var still pointed at the
+    // missing destination, producing "Claude Code executable not found".
     const sdkSrcPath = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js');
     const sdkDestDir = path.join(app.getPath('userData'), 'claude-sdk');
     const sdkDestPath = path.join(sdkDestDir, 'cli.js');
     const sdkMarkerPath = path.join(app.getPath('userData'), '.quarry-sdk-path');
-    try {
-      fs.mkdirSync(sdkDestDir, { recursive: true });
-      // Copy cli.js + vendor directory (contains ripgrep etc)
-      fs.copyFileSync(sdkSrcPath, sdkDestPath);
-      fs.chmodSync(sdkDestPath, 0o755);
-      // Also copy the vendor directory if it exists
-      const vendorSrc = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'vendor');
-      const vendorDest = path.join(sdkDestDir, 'vendor');
-      if (fs.existsSync(vendorSrc) && !fs.existsSync(vendorDest)) {
-        fs.cpSync(vendorSrc, vendorDest, { recursive: true });
+
+    let sdkCliPath = sdkSrcPath;
+    if (process.platform === 'darwin') {
+      try {
+        fs.mkdirSync(sdkDestDir, { recursive: true });
+        fs.copyFileSync(sdkSrcPath, sdkDestPath);
+        fs.chmodSync(sdkDestPath, 0o755);
+        const vendorSrc = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'vendor');
+        const vendorDest = path.join(sdkDestDir, 'vendor');
+        if (fs.existsSync(vendorSrc) && !fs.existsSync(vendorDest)) {
+          fs.cpSync(vendorSrc, vendorDest, { recursive: true });
+        }
+        sdkCliPath = sdkDestPath;
+        console.log('[Quarry] SDK cli.js copied to:', sdkDestPath);
+      } catch (e) {
+        console.warn('[Quarry] SDK copy failed, falling back to in-bundle path:', e.message);
       }
-      fs.writeFileSync(sdkMarkerPath, sdkDestPath, 'utf-8');
-      console.log('[Quarry] SDK cli.js copied to:', sdkDestPath);
-    } catch (e) {
-      // Fallback: just write the in-bundle path
-      fs.writeFileSync(sdkMarkerPath, sdkSrcPath, 'utf-8');
-      console.warn('[Quarry] Failed to copy SDK, using in-bundle path:', e.message);
     }
+
+    // Final sanity check — only export the path if the file actually exists,
+    // otherwise let the SDK's own resolution kick in (which may still fail,
+    // but with a more useful error than a stale env var).
+    if (!fs.existsSync(sdkCliPath)) {
+      console.warn('[Quarry] Claude SDK cli.js not found at:', sdkCliPath);
+      sdkCliPath = '';
+    }
+    fs.writeFileSync(sdkMarkerPath, sdkCliPath || sdkSrcPath, 'utf-8');
 
     const child = utilityProcess.fork(serverScript, [], {
       cwd: standaloneDir,
@@ -545,12 +561,16 @@ app.whenReady().then(async () => {
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
         QUARRY_RESOURCES_PATH: process.resourcesPath,
-        QUARRY_SDK_CLI_PATH: sdkDestPath,
+        ...(sdkCliPath ? { QUARRY_SDK_CLI_PATH: sdkCliPath } : {}),
         // Point the SDK's config dir to Quarry's own directory so it doesn't
         // write to ~/.claude/settings.json (which belongs to Claude Code).
         CLAUDE_CONFIG_DIR: path.join(os.homedir(), '.quarry'),
-        // Ensure node is available in PATH for the Claude Agent SDK to spawn cli.js
-        PATH: ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', process.env.PATH].filter(Boolean).join(':'),
+        // Use platform-correct PATH separator (`:` on Unix, `;` on Windows)
+        // and only prepend the Unix Homebrew/system paths on Unix.
+        PATH: (process.platform === 'win32'
+          ? [process.env.PATH]
+          : ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', process.env.PATH]
+        ).filter(Boolean).join(path.delimiter),
       },
       stdio: 'pipe',
     });
