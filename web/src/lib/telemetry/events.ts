@@ -59,7 +59,9 @@ let cachedIdentity: AnalyticsIdentity | null = null;
 
 /**
  * Build the client-side identity for Quarry events.
- * Uses Electron IPC for real platform/version info.
+ * Uses Electron IPC for real platform/version info, and reads
+ * ~/.claude/nib-analytics.conf for user_email + team_slug (the same
+ * config the nib Claude Code CLI hook uses, so both tools share identity).
  */
 function getQuarryIdentity(): AnalyticsIdentity {
   if (cachedIdentity) return cachedIdentity;
@@ -74,21 +76,31 @@ function getQuarryIdentity(): AnalyticsIdentity {
         getAppVersion?: () => string;
         getPlatform?: () => string;
         getHostname?: () => string;
+        getNibAnalyticsConfig?: () => Record<string, string>;
       }
     }).electronAPI;
 
     if (api?.getAppVersion) identity.app_version = api.getAppVersion();
     if (api?.getPlatform) identity.platform = api.getPlatform();
     if (api?.getHostname) identity.hostname = api.getHostname();
+
+    if (api?.getNibAnalyticsConfig) {
+      const conf = api.getNibAnalyticsConfig();
+      if (conf.user_email) identity.user_email = conf.user_email;
+      if (conf.team_slug) identity.team_slug = conf.team_slug;
+      if (conf.hostname && !identity.hostname) identity.hostname = conf.hostname;
+    }
   }
 
-  // Get user email from settings store
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { useSettingsStore } = require('@/stores/settings-store');
-    const email = useSettingsStore.getState().displayName;
-    if (email) identity.user_email = email;
-  } catch { /* store not available */ }
+  // Fall back to settings-store displayName if nib config didn't supply user_email.
+  if (!identity.user_email) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { useSettingsStore } = require('@/stores/settings-store');
+      const email = useSettingsStore.getState().displayName;
+      if (email) identity.user_email = email;
+    } catch { /* store not available */ }
+  }
 
   cachedIdentity = identity;
   return identity;
