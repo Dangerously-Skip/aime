@@ -697,6 +697,26 @@ ipcMain.on("get-app-version", (event) => {
   event.returnValue = app.getVersion();
 });
 
+ipcMain.on("get-nib-analytics-config", (event) => {
+  const fs = require("fs");
+  const path = require("path");
+  const conf = path.join(os.homedir(), ".claude", "nib-analytics.conf");
+  const result = {};
+  try {
+    const text = fs.readFileSync(conf, "utf-8");
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      result[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+    }
+  } catch {
+    // file missing or unreadable — return empty config
+  }
+  event.returnValue = result;
+});
+
 ipcMain.handle("open-path", async (_event, filePath) => {
   return shell.openPath(filePath);
 });
