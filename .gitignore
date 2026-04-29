@@ -145,3 +145,6 @@ vite.config.ts.timestamp-*
 # Build artifacts
 release/
 temp/
+
+# Claude Code per-user permission grants
+.claude/settings.local.json
