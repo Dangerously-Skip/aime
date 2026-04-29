@@ -815,6 +815,22 @@ export async function POST(
         const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
         if (!queryTimedOut) {
           console.error('[CHAT] Stream error during iteration:', errMsg);
+          // Surface every property the SDK might have attached (stderr,
+          // exit code, stack, cause). The default Error.message often
+          // strips this, leaving us with "process exited with code 1".
+          if (streamError instanceof Error) {
+            const errObj = streamError as Error & {
+              stderr?: string;
+              stdout?: string;
+              code?: string | number;
+              cause?: unknown;
+            };
+            if (errObj.stderr) console.error('[CHAT] cli.js stderr:', errObj.stderr);
+            if (errObj.stdout) console.error('[CHAT] cli.js stdout:', errObj.stdout);
+            if (errObj.code !== undefined) console.error('[CHAT] cli.js exit code:', errObj.code);
+            if (errObj.cause) console.error('[CHAT] cause:', errObj.cause);
+            if (errObj.stack) console.error('[CHAT] stack:', errObj.stack);
+          }
           await sse.writeEvent({ type: 'error', message: errMsg });
         }
       } finally {

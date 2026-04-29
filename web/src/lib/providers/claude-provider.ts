@@ -506,6 +506,11 @@ export class ClaudeProvider extends BaseProvider {
         // beta features (e.g. context_management) — disable via CLI env vars
         CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1',
         CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
+        // Verbose logging to stderr — captured by the Next.js server's
+        // stderr handler in main-web.js and written to main.log. Without
+        // this, "process exited with code 1" comes through with no detail.
+        ANTHROPIC_LOG: 'debug',
+        DEBUG: 'anthropic:*',
       };
       // Override model to use gateway-compatible short names
       queryOptions.model = mapModelForGateway(model);
