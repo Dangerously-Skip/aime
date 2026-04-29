@@ -24,9 +24,9 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Force-install all SDK platform binaries
+      - name: Ensure darwin-arm64 SDK binary
         working-directory: web
-        run: npm install --no-save --force @anthropic-ai/claude-agent-sdk-darwin-arm64@0.2.116 @anthropic-ai/claude-agent-sdk-darwin-x64@0.2.116 @anthropic-ai/claude-agent-sdk-linux-x64@0.2.116 @anthropic-ai/claude-agent-sdk-linux-arm64@0.2.116 @anthropic-ai/claude-agent-sdk-win32-x64@0.2.116 @anthropic-ai/claude-agent-sdk-win32-arm64@0.2.116
+        run: npm install --no-save --force @anthropic-ai/claude-agent-sdk-darwin-arm64@0.2.116
 
       - name: Create teams.json
         working-directory: web
@@ -81,9 +81,9 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Force-install all SDK platform binaries
+      - name: Force-install both Windows SDK binaries
         working-directory: web
-        run: npm install --no-save --force @anthropic-ai/claude-agent-sdk-darwin-arm64@0.2.116 @anthropic-ai/claude-agent-sdk-darwin-x64@0.2.116 @anthropic-ai/claude-agent-sdk-linux-x64@0.2.116 @anthropic-ai/claude-agent-sdk-linux-arm64@0.2.116 @anthropic-ai/claude-agent-sdk-win32-x64@0.2.116 @anthropic-ai/claude-agent-sdk-win32-arm64@0.2.116
+        run: npm install --no-save --force @anthropic-ai/claude-agent-sdk-win32-x64@0.2.116 @anthropic-ai/claude-agent-sdk-win32-arm64@0.2.116
 
       - name: Create teams.json
         working-directory: web
@@ -111,6 +111,8 @@ jobs:
           path: |
             web/dist/*.yml
             web/dist/*.exe
+            !web/dist/*-x64.exe
+            !web/dist/*-arm64.exe
           retention-days: 7
 
   create-release:

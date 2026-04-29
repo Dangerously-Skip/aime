@@ -43,7 +43,6 @@
     </div>
     <div class="downloads">
       <a class="btn btn-primary" id="dl-mac-arm" href="#">Download for macOS (Apple Silicon)</a>
-      <a class="btn btn-secondary" id="dl-mac-intel" href="#">Download for macOS (Intel)</a>
       <a class="btn btn-secondary" id="dl-win" href="#">Download for Windows</a>
     </div>
     <p class="note">
@@ -89,12 +88,9 @@
 
           const files = [...macRes.matchAll(/url:\s*(.+)/g)].map(m => m[1].trim());
           const armDmg = files.find(f => f.includes('arm64') && f.endsWith('.dmg'));
-          const intelDmg = files.find(f => !f.includes('arm64') && f.endsWith('.dmg'));
           const armZip = files.find(f => f.includes('arm64') && f.endsWith('.zip'));
-          const intelZip = files.find(f => !f.includes('arm64') && f.endsWith('.zip'));
 
           if (armDmg || armZip) document.getElementById('dl-mac-arm').href = armDmg || armZip;
-          if (intelDmg || intelZip) document.getElementById('dl-mac-intel').href = intelDmg || intelZip;
         }
 
         if (winRes) {

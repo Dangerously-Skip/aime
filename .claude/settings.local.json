@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p ~/.claude/plugins/nib-ppt/agents)",
+      "Bash(cp ~/.claude/plugins/nib-ppt/.claude/agents/visual-reviewer.md ~/.claude/plugins/nib-ppt/agents/visual-reviewer.md)",
+      "Bash(mkdir -p ~/\".claude/skills/nib-ppt\")",
+      "Bash(cp \"public/bundled-skills/nib-ppt/SKILL.md\" ~/\".claude/skills/nib-ppt/SKILL.md\")",
+      "Bash(npm run *)",
+      "Bash(/bin/rm -rf \"/Users/adam.witanowski@nibTravel.com/Applications/Quarry.app\")",
+      "Bash(/bin/cp -R \"/Users/adam.witanowski@nibTravel.com/personal/repos/projects/skunkworks/tricoderLite/open-claude-cowork/web/dist/mac-arm64/Quarry.app\" \"/Users/adam.witanowski@nibTravel.com/Applications/\")",
+      "Bash(/usr/bin/xattr -dr com.apple.quarantine \"/Users/adam.witanowski@nibTravel.com/Applications/Quarry.app\")",
+      "Bash(/bin/ls -la \"/Users/adam.witanowski@nibTravel.com/Applications/Quarry.app/Contents/Info.plist\")"
+    ]
+  }
+}
