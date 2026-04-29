@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "1.3.13",
+  "version": "1.3.14",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -96,6 +96,18 @@
             "x64",
             "arm64"
           ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "resources/mingit-x64",
+          "to": "mingit",
+          "arch": "x64"
+        },
+        {
+          "from": "resources/mingit-arm64",
+          "to": "mingit",
+          "arch": "arm64"
         }
       ]
     },
