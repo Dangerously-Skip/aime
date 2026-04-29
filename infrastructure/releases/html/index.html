@@ -99,7 +99,14 @@
 
         if (winRes) {
           const files = [...winRes.matchAll(/url:\s*(.+)/g)].map(m => m[1].trim());
-          const exe = files.find(f => f.endsWith('.exe'));
+          // Prefer the universal installer (no -x64/-arm64 suffix) — it works
+          // on both archs. Fall back to x64 (most Windows machines), then any.
+          // Without this preference latest.yml's file ordering would silently
+          // ship the arm64-only installer to x64 users.
+          const exe =
+            files.find(f => /Quarry-Setup-[\d.]+\.exe$/.test(f)) ||
+            files.find(f => f.endsWith('-x64.exe')) ||
+            files.find(f => f.endsWith('.exe'));
           if (exe) document.getElementById('dl-win').href = exe;
         }
       } catch (e) {
