@@ -326,6 +326,14 @@ export class ClaudeProvider extends BaseProvider {
       queryOptions.pathToClaudeCodeExecutable = sdkCliPath;
     }
 
+    // Capture every stderr line from cli.js — when it exits 1 before producing
+    // any structured output (e.g. native-binary load failure on Windows arm64),
+    // its actual error only goes to stderr. The SDK's exit-code error doesn't
+    // include this, so without piping it ourselves we're flying blind.
+    queryOptions.stderr = (data: string) => {
+      console.error('[cli.js stderr]', data);
+    };
+
     // Loop detection window for this query
     const loopWindow: Array<{ name: string; inputHash: string }> = [];
     const LOOP_WARN_THRESHOLD = 3;
