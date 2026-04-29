@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "1.3.10",
+  "version": "1.3.11",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
@@ -43,10 +43,6 @@
       {
         "from": "public",
         "to": ".next/standalone/web/public"
-      },
-      {
-        "from": "node_modules/@anthropic-ai",
-        "to": ".next/standalone/web/node_modules/@anthropic-ai"
       },
       {
         "from": "node_modules/pdfjs-dist",
