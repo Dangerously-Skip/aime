@@ -217,6 +217,33 @@ function buildAppMenu() {
           : [{ role: "close" }]),
       ],
     },
+    // Windows / Linux Help menu — gives users a manual "Check for Updates"
+    // affordance. macOS already has it under the app menu (above).
+    ...(isMac
+      ? []
+      : [
+          {
+            label: "Help",
+            submenu: [
+              {
+                label: checkLabel,
+                enabled: updateMenuState === "idle" || updateMenuState === "error" || updateMenuState === "ready",
+                click: () => {
+                  if (updateMenuState === "ready" && autoUpdater) {
+                    autoUpdater.quitAndInstall();
+                  } else {
+                    checkForUpdates(true);
+                  }
+                },
+              },
+              ...(updateStatusLabel
+                ? [{ label: updateStatusLabel, enabled: false }]
+                : []),
+              { type: "separator" },
+              { label: "About Quarry", click: () => app.showAboutPanel?.() },
+            ],
+          },
+        ]),
   ];
 
   const menu = Menu.buildFromTemplate(template);
