@@ -85,20 +85,25 @@ jobs:
         working-directory: web
         run: npm install --no-save --force @anthropic-ai/claude-agent-sdk-win32-x64@0.2.116 @anthropic-ai/claude-agent-sdk-win32-arm64@0.2.116
 
-      - name: Bundle MinGit (provides bash.exe required by Claude Agent SDK)
+      - name: Bundle PortableGit (provides bash.exe required by Claude Agent SDK)
         working-directory: web
         shell: pwsh
         run: |
           $version = "2.54.0"
           $tag = "v$version.windows.1"
-          New-Item -ItemType Directory -Force -Path "resources\mingit-x64" | Out-Null
-          New-Item -ItemType Directory -Force -Path "resources\mingit-arm64" | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/$tag/MinGit-$version-64-bit.zip" -OutFile "$env:RUNNER_TEMP\mingit-x64.zip"
-          Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/$tag/MinGit-$version-arm64.zip" -OutFile "$env:RUNNER_TEMP\mingit-arm64.zip"
-          Expand-Archive -Path "$env:RUNNER_TEMP\mingit-x64.zip" -DestinationPath "resources\mingit-x64" -Force
-          Expand-Archive -Path "$env:RUNNER_TEMP\mingit-arm64.zip" -DestinationPath "resources\mingit-arm64" -Force
-          if (-not (Test-Path "resources\mingit-x64\usr\bin\bash.exe")) { throw "x64 bash.exe missing after extract" }
-          if (-not (Test-Path "resources\mingit-arm64\usr\bin\bash.exe")) { throw "arm64 bash.exe missing after extract" }
+          $x64Out = "$PWD\resources\portablegit-x64"
+          $armOut = "$PWD\resources\portablegit-arm64"
+          New-Item -ItemType Directory -Force -Path $x64Out | Out-Null
+          New-Item -ItemType Directory -Force -Path $armOut | Out-Null
+          $x64Sfx = "$env:RUNNER_TEMP\portablegit-x64.7z.exe"
+          $armSfx = "$env:RUNNER_TEMP\portablegit-arm64.7z.exe"
+          Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/$tag/PortableGit-$version-64-bit.7z.exe" -OutFile $x64Sfx
+          Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/$tag/PortableGit-$version-arm64.7z.exe" -OutFile $armSfx
+          # Self-extracting 7z: -o<path> sets output, -y answers yes to prompts
+          & $x64Sfx "-o$x64Out" -y | Out-Null
+          & $armSfx "-o$armOut" -y | Out-Null
+          if (-not (Test-Path "$x64Out\bin\bash.exe")) { throw "x64 bash.exe missing after extract" }
+          if (-not (Test-Path "$armOut\bin\bash.exe")) { throw "arm64 bash.exe missing after extract" }
 
       - name: Create teams.json
         working-directory: web

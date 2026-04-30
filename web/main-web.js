@@ -555,18 +555,18 @@ app.whenReady().then(async () => {
     fs.writeFileSync(sdkMarkerPath, sdkCliPath || sdkSrcPath, 'utf-8');
 
     // The Claude Agent SDK on Windows shells out to bash for tool execution
-    // and refuses to start without it. We bundle MinGit in extraResources
-    // (resources/mingit/usr/bin/bash.exe) so users don't have to install
-    // Git for Windows themselves. If MinGit somehow went missing (e.g.
-    // antivirus quarantined it), fall back to letting cli.js search PATH —
-    // which produces a clear error pointing to the official installer.
+    // and refuses to start without it. We bundle PortableGit in extraResources
+    // (resources/portablegit/bin/bash.exe — MinGit explicitly omits bash) so
+    // users don't have to install Git for Windows themselves. If the bundle
+    // went missing (e.g. AV quarantined it), fall back to letting cli.js
+    // search PATH — which produces a clear error pointing to the installer.
     let gitBashPath = '';
     if (process.platform === 'win32') {
-      const candidate = path.join(process.resourcesPath, 'mingit', 'usr', 'bin', 'bash.exe');
+      const candidate = path.join(process.resourcesPath, 'portablegit', 'bin', 'bash.exe');
       if (fs.existsSync(candidate)) {
         gitBashPath = candidate;
       } else {
-        console.warn('[Quarry] Bundled MinGit bash.exe not found at:', candidate);
+        console.warn('[Quarry] Bundled PortableGit bash.exe not found at:', candidate);
       }
     }
 

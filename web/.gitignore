@@ -45,6 +45,6 @@ src/config/teams.json
 *.tsbuildinfo
 next-env.d.ts
 
-# CI-downloaded MinGit (bundled into Windows installer for bash.exe)
-/resources/mingit-x64/
-/resources/mingit-arm64/
+# CI-downloaded PortableGit (bundled into Windows installer for bash.exe)
+/resources/portablegit-x64/
+/resources/portablegit-arm64/
