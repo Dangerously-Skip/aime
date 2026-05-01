@@ -10,11 +10,20 @@ When the user asks to create a PowerPoint or presentation, follow these steps ex
 
 ## Step 1: Write markdown
 
-Write a `.md` file where each slide starts with `## SLIDE type: Title` and slides are separated by `---`.
+Write a `.md` file where each slide header has the form
+`## SLIDE <slide-type>: <Slide Title>`. Slides are separated by `---`.
 
-Slide types: `title`, `section`, `content`, `two_column`, `image`, `table`.
+`<slide-type>` is one of: `title`, `section`, `content`, `two_column`, `image`, `table`.
+`<Slide Title>` is the actual title text the slide should display.
 
-Example:
+CRITICAL: do not write the literal word `type` after `## SLIDE`. The
+word `type` in the template above is a placeholder for the slide type
+(e.g. `title`, `content`). Writing `## SLIDE type: My Title` produces
+broken output where the slide title shows as "My Title" but the slide
+type defaults to `content`, and the markdown content below leaks
+through unparsed. Always substitute both placeholders.
+
+Example (substituting both placeholders):
 ```markdown
 ## SLIDE title: Presentation Title
 <!-- subtitle: Optional Subtitle -->
