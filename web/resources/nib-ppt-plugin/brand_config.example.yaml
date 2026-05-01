@@ -1,0 +1,118 @@
+# Brand Design System Configuration (Example)
+# Customize these values to match your organization's brand guidelines
+# NOTE: This is for HTML visualizations, NOT PowerPoint template
+
+colors:
+  # Primary Brand Colors
+  primary:
+    brand_green: "#144a38"
+    bright_green: "#82e578"
+    dark_green_1: "#13362a"
+    dark_green_2: "#122a21"
+
+  # Neutrals (Grayscale)
+  neutrals:
+    black: "#000000"
+    gray_900: "#1a1a1a"
+    gray_800: "#333333"
+    gray_700: "#4d4d4d"
+    gray_600: "#666666"
+    gray_500: "#808080"
+    gray_400: "#999999"
+    gray_300: "#b3b3b3"
+    gray_200: "#cccccc"
+    gray_100: "#e6e6e6"
+    gray_50: "#f2f2f2"
+    white: "#ffffff"
+
+  # Functional Colors
+  functional:
+    error: "#75160f"
+    warning: "#eaaf18"
+    info: "#003b77"
+    success: "#82e578"  # Uses bright green
+
+  # Theme Variants
+  themes:
+    sage:
+      primary: "#b5c7b5"
+      secondary: "#6b8e6b"
+    sunset:
+      primary: "#f4a261"
+      secondary: "#e76f51"
+    warm:
+      primary: "#ffd6ba"
+      secondary: "#ffb380"
+
+typography:
+  # Font Families
+  fonts:
+    primary: "Buenos Aires"
+    serif: "Grenette Pro"
+    fallback_sans: "Arial, Helvetica, sans-serif"
+    fallback_serif: "Georgia, serif"
+
+  # Heading Sizes (converted to points for PowerPoint)
+  headings:
+    xxl: 54  # 3.375rem × 16 = 54pt
+    xl: 36   # 2.25rem × 16 = 36pt
+    lg: 28   # 1.75rem × 16 = 28pt
+    md: 20   # 1.25rem × 16 = 20pt
+    sm: 18   # 1.125rem × 16 = 18pt
+
+  # Body Text Sizes
+  body:
+    regular: 16  # 1rem × 16 = 16pt
+    small: 14    # 0.875rem × 16 = 14pt
+    tiny: 12     # 0.75rem × 16 = 12pt
+
+spacing:
+  # Base spacing unit: 0.25rem = 4pt
+  base_unit: 4  # points
+
+  # Common spacing values (in points)
+  gaps:
+    xs: 12   # 0.75rem
+    sm: 16   # 1rem
+    md: 24   # 1.5rem
+    lg: 32   # 2rem
+    xl: 48   # 3rem
+    xxl: 64  # 4rem
+
+components:
+  # Slide-specific styling
+  tables:
+    header_bg_color: "#144a38"  # Brand green
+    header_text_color: "#ffffff"
+    header_font_size: 14
+    header_bold: true
+    body_font_size: 12
+    border_color: "#cccccc"
+    cell_padding: 8
+
+  metrics:
+    value_color: "#144a38"  # Brand green for large numbers
+    label_color: "#4d4d4d"  # Gray 700
+    value_font_size: 48
+    label_font_size: 16
+
+  bullets:
+    color: "#144a38"  # Brand green
+    text_color: "#1a1a1a"  # Gray 900
+
+  borders:
+    radius: 8  # pixels
+    color: "#cccccc"
+
+  focus:
+    color: "#373663"  # Purple focus state
+
+powerpoint_mapping:
+  # RGB values for PowerPoint (converted from hex)
+  rgb_colors:
+    brand_green: [20, 74, 56]      # #144a38
+    bright_green: [130, 229, 120]  # #82e578
+    white: [255, 255, 255]
+    gray_900: [26, 26, 26]
+    gray_700: [77, 77, 77]
+    gray_200: [204, 204, 204]

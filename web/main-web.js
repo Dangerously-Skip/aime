@@ -7,6 +7,7 @@ const os = require("os");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
+const setupHandler = require("./setup-handler");
 
 // --- File Logger ---
 // Captures console output to a rotating log file for diagnostics.
@@ -471,9 +472,126 @@ function installBundledSkills() {
   }
 }
 
+/**
+ * Copy the bundled nib-ppt plugin to ~/.claude/plugins/nib-ppt/ so its
+ * SKILL.md (installed separately into ~/.claude/skills/) can resolve the
+ * generate_presentation.sh script reference. Mirrors installBundledSkills.
+ */
+function installNibPptPlugin() {
+  try {
+    const srcDir = app.isPackaged
+      ? path.join(process.resourcesPath, "nib-ppt-plugin")
+      : path.join(__dirname, "resources", "nib-ppt-plugin");
+    if (!fs.existsSync(srcDir)) return;
+
+    const destDir = path.join(os.homedir(), ".claude", "plugins", "nib-ppt");
+    fs.mkdirSync(path.dirname(destDir), { recursive: true });
+    fs.rmSync(destDir, { recursive: true, force: true });
+    fs.cpSync(srcDir, destDir, { recursive: true });
+    // Make the shell script executable on POSIX (cpSync drops the +x bit
+    // on some filesystems, e.g. when the source lives inside an asar).
+    if (process.platform !== "win32") {
+      const script = path.join(destDir, "generate_presentation.sh");
+      if (fs.existsSync(script)) fs.chmodSync(script, 0o755);
+    }
+    console.log("[Quarry] Installed nib-ppt plugin at:", destDir);
+  } catch (err) {
+    console.warn("[Quarry] Failed to install nib-ppt plugin:", err.message);
+  }
+}
+
+/**
+ * Show the first-launch setup modal and run the Python + deps install.
+ * Resolves to true if Python is set up (now or already was) and false if
+ * the user chose to skip. Called before the main window opens, so users
+ * see progress instead of a blank screen.
+ *
+ * Skipped silently in unpackaged dev mode — dev users have their own setup.
+ */
+async function ensureSetup() {
+  if (!app.isPackaged) return true;
+  if (setupHandler.isSetupComplete()) return true;
+
+  return new Promise((resolve) => {
+    const win = new BrowserWindow({
+      width: 520,
+      height: 320,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      title: "Setting up Quarry",
+      webPreferences: { nodeIntegration: true, contextIsolation: false },
+    });
+    win.loadFile(path.join(__dirname, "setup-window.html"));
+
+    const onProgress = (msg) => {
+      if (!win.isDestroyed()) win.webContents.send("setup:progress", msg);
+    };
+
+    let resolved = false;
+    const finish = (ok) => {
+      if (resolved) return;
+      resolved = true;
+      ipcMain.removeAllListeners("setup:retry");
+      ipcMain.removeAllListeners("setup:skip");
+      if (!win.isDestroyed()) win.close();
+      resolve(ok);
+    };
+
+    const start = () => {
+      setupHandler
+        .runSetup(onProgress)
+        .then(() => finish(true))
+        .catch((err) => {
+          console.error("[Quarry] Setup failed:", err);
+          if (!win.isDestroyed()) {
+            win.webContents.send("setup:error", err.message || String(err));
+          }
+          // Don't finish — leave the user on the error screen so they can
+          // hit Retry or Skip themselves.
+        });
+    };
+
+    ipcMain.on("setup:retry", start);
+    ipcMain.on("setup:skip", () => finish(false));
+    // X-button / Cmd+W on the setup window: treat the same as Skip.
+    win.on("closed", () => finish(false));
+
+    start();
+  });
+}
+
+/**
+ * After the Next.js server is up, fire the System 2 install endpoint that
+ * copies SKILL.md files from web/public/bundled-skills/ → ~/.claude/skills/.
+ * Fire-and-forget; failure just means nib-pdf / nib-ppt skills won't load
+ * this session. Idempotent server-side, so retried on next launch.
+ */
+function triggerBundledSkillInstall(port) {
+  const http = require("http");
+  const req = http.request(
+    {
+      hostname: "127.0.0.1",
+      port,
+      path: "/api/customize/skills/install-bundled",
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": "0" },
+    },
+    (res) => {
+      res.resume();
+      res.on("end", () => console.log("[Quarry] Bundled-skills install:", res.statusCode));
+    }
+  );
+  req.on("error", (err) => console.warn("[Quarry] Bundled-skills install failed:", err.message));
+  req.end();
+}
+
 app.whenReady().then(async () => {
   migrateMcpConfig();
   installBundledSkills();
+  installNibPptPlugin();
+  await ensureSetup();
 
   // Determine the port: dev-with-port.js sets PORT in env; for packaged builds we find one here.
   let port = parseInt(process.env.PORT || '0', 10);
@@ -570,6 +688,18 @@ app.whenReady().then(async () => {
       }
     }
 
+    // First-launch-installed Python + Playwright. If setup was skipped,
+    // these paths simply don't exist and skill scripts fall through to
+    // whatever's on the user's PATH (or fail gracefully).
+    const quarryPython = setupHandler.pythonExe();
+    const quarryPythonAvailable = fs.existsSync(quarryPython);
+    const pythonBinDir = process.platform === 'win32'
+      ? setupHandler.PYTHON_DIR
+      : path.join(setupHandler.PYTHON_DIR, 'bin');
+    const pythonScriptsDir = process.platform === 'win32'
+      ? path.join(setupHandler.PYTHON_DIR, 'Scripts')
+      : null;
+
     const child = utilityProcess.fork(serverScript, [], {
       cwd: standaloneDir,
       env: {
@@ -580,14 +710,28 @@ app.whenReady().then(async () => {
         QUARRY_RESOURCES_PATH: process.resourcesPath,
         ...(sdkCliPath ? { QUARRY_SDK_CLI_PATH: sdkCliPath } : {}),
         ...(gitBashPath ? { CLAUDE_CODE_GIT_BASH_PATH: gitBashPath } : {}),
+        ...(quarryPythonAvailable ? {
+          QUARRY_PYTHON: quarryPython,
+          PLAYWRIGHT_BROWSERS_PATH: setupHandler.PLAYWRIGHT_DIR,
+        } : {}),
         // Point the SDK's config dir to Quarry's own directory so it doesn't
         // write to ~/.claude/settings.json (which belongs to Claude Code).
         CLAUDE_CONFIG_DIR: path.join(os.homedir(), '.quarry'),
         // Use platform-correct PATH separator (`:` on Unix, `;` on Windows)
-        // and only prepend the Unix Homebrew/system paths on Unix.
+        // and prepend Quarry's bundled Python (so skill scripts can call
+        // `python` / `python3` / `pip` without knowing about ~/.quarry/) and
+        // PortableGit's bash dir (Windows only) before the user's PATH.
         PATH: (process.platform === 'win32'
-          ? [process.env.PATH]
-          : ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', process.env.PATH]
+          ? [
+              ...(quarryPythonAvailable ? [pythonBinDir, pythonScriptsDir] : []),
+              ...(gitBashPath ? [path.dirname(gitBashPath)] : []),
+              process.env.PATH,
+            ]
+          : [
+              ...(quarryPythonAvailable ? [pythonBinDir] : []),
+              '/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin',
+              process.env.PATH,
+            ]
         ).filter(Boolean).join(path.delimiter),
       },
       stdio: 'pipe',
@@ -599,6 +743,10 @@ app.whenReady().then(async () => {
 
     try {
       await waitForPort(port);
+      // Server is up — kick off the System 2 bundled-skill install so
+      // nib-pdf's and nib-ppt's SKILL.md land in ~/.claude/skills/. Idempotent;
+      // safe to fire on every launch.
+      triggerBundledSkillInstall(port);
     } catch (err) {
       console.error('Failed to start production server:', err.message);
       dialog.showErrorBox('Quarry - Server Failed', `The Next.js server failed to start on port ${port}.\n\nCheck Console.app for logs.`);
