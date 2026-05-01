@@ -99,9 +99,12 @@ jobs:
           $armSfx = "$env:RUNNER_TEMP\portablegit-arm64.7z.exe"
           Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/$tag/PortableGit-$version-64-bit.7z.exe" -OutFile $x64Sfx
           Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/$tag/PortableGit-$version-arm64.7z.exe" -OutFile $armSfx
-          # Self-extracting 7z: -o<path> sets output, -y answers yes to prompts
-          & $x64Sfx "-o$x64Out" -y | Out-Null
-          & $armSfx "-o$armOut" -y | Out-Null
+          # Self-extracting 7z: -o<path> sets output, -y answers yes to prompts.
+          # The SFX detaches from a piped invocation, so use Start-Process -Wait
+          # to block until extraction finishes.
+          Start-Process -FilePath $x64Sfx -ArgumentList "-o`"$x64Out`"", "-y" -Wait -NoNewWindow
+          Start-Process -FilePath $armSfx -ArgumentList "-o`"$armOut`"", "-y" -Wait -NoNewWindow
+          Get-ChildItem -Path $x64Out -Recurse -Filter bash.exe | Select-Object -First 5 FullName
           if (-not (Test-Path "$x64Out\bin\bash.exe")) { throw "x64 bash.exe missing after extract" }
           if (-not (Test-Path "$armOut\bin\bash.exe")) { throw "arm64 bash.exe missing after extract" }
 
