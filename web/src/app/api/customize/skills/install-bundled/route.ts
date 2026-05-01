@@ -1,18 +1,35 @@
 export const runtime = 'nodejs';
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { BUNDLED_SKILLS } from '@/lib/bundled-skills';
 
 const SKILLS_DIR = join(homedir(), '.claude', 'skills');
 
+// Skills that used to be bundled here but have moved to the System 1
+// plugin path (~/.claude/plugins/<plugin>/skills/<skill>) or been
+// retired. We delete these on each install so existing users don't keep
+// stale duplicates that confuse skill matching.
+const OBSOLETE_SKILL_IDS = ['nib-ppt'];
+
 /**
  * POST /api/customize/skills/install-bundled
  * Copies bundled skills to ~/.claude/skills/ if they don't already exist.
  */
 export async function POST() {
-  const results: { id: string; status: 'installed' | 'exists' | 'error'; error?: string }[] = [];
+  const results: { id: string; status: 'installed' | 'exists' | 'error' | 'removed'; error?: string }[] = [];
+
+  // Clean up obsolete bundled skills first so registry stays canonical.
+  for (const id of OBSOLETE_SKILL_IDS) {
+    const dir = join(SKILLS_DIR, id);
+    try {
+      await rm(dir, { recursive: true, force: true });
+      results.push({ id, status: 'removed' });
+    } catch (err) {
+      console.warn(`[BundledSkills] Failed to remove obsolete ${id}:`, err);
+    }
+  }
 
   for (const skill of BUNDLED_SKILLS) {
     const skillDir = join(SKILLS_DIR, skill.id);
