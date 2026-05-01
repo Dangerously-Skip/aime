@@ -603,6 +603,32 @@ export class ClaudeProvider extends BaseProvider {
       this.abortControllers.set(abortKey, abortController);
     }
 
+    // Per-tool watchdog: abort the query if any single tool runs past
+    // TOOL_DEADLINE_MS. The SDK doesn't expose per-tool timeouts, and
+    // WebFetch in particular can hang for many minutes when its model-
+    // backed summarization step is slow (e.g. nib AI Studio Gateway
+    // queueing). Without this, a single hung tool freezes the whole
+    // session until the user manually aborts.
+    const TOOL_DEADLINE_MS = 90_000;
+    const activeTools = new Map<string, { name: string; startedAt: number }>();
+    // Use a single-element array so TS doesn't narrow to `never` —
+    // the assignment below happens inside an interval callback which
+    // isn't visible to TS's control-flow analysis.
+    const watchdogTrip: Array<{ name: string; elapsedMs: number }> = [];
+    const watchdog = setInterval(() => {
+      const now = Date.now();
+      for (const [id, info] of activeTools) {
+        const elapsed = now - info.startedAt;
+        if (elapsed > TOOL_DEADLINE_MS) {
+          console.warn(`[Claude] Tool ${info.name} (id=${id}) hung ${(elapsed / 1000).toFixed(0)}s, aborting query`);
+          watchdogTrip.push({ name: info.name, elapsedMs: elapsed });
+          abortController.abort();
+          activeTools.clear();
+          break;
+        }
+      }
+    }, 5000);
+
     try {
       // Stream responses from Claude Agent SDK - matches server.js exactly
       for await (const chunk of query({
@@ -714,6 +740,7 @@ export class ClaudeProvider extends BaseProvider {
                     provider: this.name,
                   };
                   console.log('[Claude] Tool use:', toolName);
+                  activeTools.set(block.id as string, { name: toolName, startedAt: Date.now() });
                 }
               }
             }
@@ -725,6 +752,7 @@ export class ClaudeProvider extends BaseProvider {
         // since different SDK versions may use different conventions
         if (c.type === 'tool_result' || c.type === 'result') {
           const toolUseId = (c.tool_use_id || c.toolUseId || c.id) as string;
+          activeTools.delete(toolUseId);
           yield {
             type: 'tool_result',
             result: (c.result || c.content || c) as unknown,
@@ -773,6 +801,16 @@ export class ClaudeProvider extends BaseProvider {
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'AbortError') {
         console.log('[Claude] Query aborted for chatId:', chatId);
+        const trip = watchdogTrip[0];
+        if (trip) {
+          // Surface the watchdog reason so the user sees what hung
+          // instead of a generic "aborted" — the abort here was ours.
+          yield {
+            type: 'error',
+            message: `Tool "${trip.name}" exceeded ${(trip.elapsedMs / 1000).toFixed(0)}s and was aborted. The downstream call (e.g. WebFetch's gateway-side summarization) hung. Try again or rephrase.`,
+            provider: this.name,
+          };
+        }
         yield {
           type: 'aborted',
           provider: this.name,
@@ -781,6 +819,7 @@ export class ClaudeProvider extends BaseProvider {
         throw error;
       }
     } finally {
+      clearInterval(watchdog);
       // Clean up abort controller using composite key
       if (chatId) {
         this.abortControllers.delete(abortKey);
