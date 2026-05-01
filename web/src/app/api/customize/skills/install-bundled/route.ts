@@ -1,6 +1,6 @@
 export const runtime = 'nodejs';
 
-import { readFile, writeFile, mkdir, access } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { BUNDLED_SKILLS } from '@/lib/bundled-skills';
@@ -18,15 +18,11 @@ export async function POST() {
     const skillDir = join(SKILLS_DIR, skill.id);
 
     try {
-      // Check if skill already exists
-      try {
-        await access(skillDir);
-        results.push({ id: skill.id, status: 'exists' });
-        continue;
-      } catch {
-        // Directory doesn't exist — install it
-      }
-
+      // Always overwrite — the bundled-skills set is Quarry-curated and
+      // ships fixes (e.g. wording corrections to a SKILL.md that misled
+      // the model). Existing installs need to receive those updates each
+      // launch. Mirrors the force-recopy pattern in main-web.js's
+      // installBundledSkills() for the plugin path.
       await mkdir(skillDir, { recursive: true });
 
       // Copy each file from bundled-skills
