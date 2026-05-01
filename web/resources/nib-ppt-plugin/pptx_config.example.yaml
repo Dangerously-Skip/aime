@@ -1,0 +1,111 @@
+# PowerPoint Template Configuration
+# Maps markdown slide types to PowerPoint template layouts
+
+template:
+  path: "brands/your-brand/template.pptx"
+  slide_width: 13.33  # inches
+  slide_height: 7.5   # inches
+
+# Layout indices from the template
+# Inspect your template to find the correct layout indices
+# NOTE: Some layouts may require manual text box placement
+layouts:
+  title_slide: 4          # "2_Title Slide" (custom design, fill programmatically)
+  section_header: 3       # "Insight True Green Warm White" (branded section header)
+  title_and_content: 0    # "Single Column" (title + content)
+  two_content: 1          # "2 Column" (side-by-side)
+  blank: 0                # "Single Column" (no true blank, use content layout)
+  picture_with_caption: 0 # "Single Column" (for image slides)
+
+# Default layout for each slide type
+slide_type_defaults:
+  title: title_slide
+  section: section_header
+  content: title_and_content
+  two_column: two_content
+  metrics: title_and_content
+  table: title_and_content
+  quote: title_and_content
+  image: picture_with_caption
+  blank: blank
+
+# Font settings (optional overrides)
+fonts:
+  title:
+    size: 32  # points
+    bold: true
+  body:
+    size: 18  # points
+  caption:
+    size: 14  # points
+
+# Content limits
+limits:
+  max_bullets_per_slide: 15
+  max_table_rows: 10
+  max_chars_per_bullet: 150
+
+# Auto-detection patterns
+auto_detect:
+  table:
+    # Detect table if content has 3+ lines with pipe characters
+    min_pipe_lines: 3
+
+  metrics:
+    # Patterns that indicate metrics slide
+    patterns:
+      - '\$\d+[MmKk]'
+      - '\d+:\d+'
+      - '\d+[MmKk]\+'
+
+  quote:
+    # Patterns that indicate quote slide
+    patterns:
+      - '^>\s'
+      - '^_"'
+      - '—'
+
+  section:
+    # Keywords in title that suggest section header
+    keywords:
+      - 'deep dive'
+      - 'overview'
+      - 'roadmap -'
+      - 'appendix'
+
+  two_column:
+    # Use two columns if content exceeds this line count
+    min_lines: 20
+
+# Markdown cleaning rules
+cleaning:
+  remove_emojis: true
+  remove_markdown_formatting: true  # Bold, italic markers
+  remove_links: true  # Keep text, remove URLs
+  remove_html_comments: false  # Keep for metadata
+
+# Special formatting rules
+formatting:
+  bullet_styles:
+    level_0: '•'
+    level_1: '◦'
+    level_2: '▪'
+
+  emphasis:
+    # How to handle markdown emphasis in PowerPoint
+    bold: true
+    italic: true
+    underline: false
+
+  tables:
+    header_background: true  # Use theme color for header
+    alternating_rows: true   # Alternate row colors
+    border_width: 0.5        # points
+
+# Column split rules for two_column slides
+column_split:
+  # How to split content when using two columns
+  strategy: 'balanced'  # Options: 'balanced', 'sequential', 'manual'
+  # 'balanced' = try to balance line count
+  # 'sequential' = first half left, second half right
+  # 'manual' = use ::: column-left and ::: column-right markers
