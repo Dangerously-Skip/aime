@@ -216,6 +216,19 @@ function categorizeToolCall(
       }
     }
 
+    // Script invocations whose output is a binary/document type
+    // (e.g. `bash generate_presentation.sh in.md out.pptx` produces the .pptx).
+    // Pick the rightmost matching token — by convention scripts take outputs
+    // as the last positional arg. Surfacing here means the artifact appears
+    // inline as soon as the tool_use event arrives, without waiting for the
+    // onDone scan that runs after the whole stream finishes.
+    BASH_ARTIFACT_EXT.lastIndex = 0;
+    const extMatches = [...cmd.matchAll(BASH_ARTIFACT_EXT)];
+    if (extMatches.length > 0) {
+      const last = extMatches[extMatches.length - 1][1].replace(/['"]/g, "");
+      return { category: "artifact", path: last };
+    }
+
     // Skip noisy read/explore commands
     if (BASH_NOISE.test(cmd)) return null;
 
