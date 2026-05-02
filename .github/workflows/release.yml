@@ -127,6 +127,38 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD || '' }}
         run: npx electron-builder --win --publish never
 
+      - name: Strip per-arch entries from latest.yml
+        # electron-builder produces three Windows installers (x64, arm64,
+        # universal) and writes all three into latest.yml's `files` list +
+        # `path` field. We only upload the universal `Quarry-Setup-X.Y.Z.exe`
+        # to the GitHub Release, so latest.yml's references to the per-arch
+        # filenames 404 in production and break electron-updater on arm64.
+        # Rewrite latest.yml to reference only the universal entry.
+        working-directory: web
+        shell: pwsh
+        run: |
+          $yml = Get-Content -Raw -Path "dist/latest.yml"
+          # Match the universal entry: `Quarry-Setup-<version>.exe` (no -x64 / -arm64 suffix)
+          if ($yml -match '(?s)- url: (Quarry-Setup-[\d.]+\.exe)\s+sha512: ([^\r\n]+)\s+size: (\d+)') {
+            $url = $Matches[1]; $sha = $Matches[2]; $size = $Matches[3]
+            $version = (Get-Content -Raw -Path "package.json" | ConvertFrom-Json).version
+            $releaseDate = if ($yml -match "releaseDate:\s*'([^']+)'") { $Matches[1] } else { (Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ") }
+            $rewritten = @"
+version: $version
+files:
+  - url: $url
+    sha512: $sha
+    size: $size
+path: $url
+sha512: $sha
+releaseDate: '$releaseDate'
+"@
+            Set-Content -Path "dist/latest.yml" -Value $rewritten
+            Get-Content "dist/latest.yml"
+          } else {
+            throw "Could not find universal Quarry-Setup-*.exe entry in latest.yml"
+          }
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
