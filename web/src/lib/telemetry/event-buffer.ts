@@ -44,25 +44,22 @@ export async function persistBuffer(): Promise<void> {
   }
 }
 
-/** Flush buffer: write to disk and attempt to send to analytics pipeline. */
+/** Flush buffer: send in-memory events, persist to disk on failure for retry. */
 export async function flushBuffer(): Promise<void> {
   if (memoryBuffer.length === 0) {
-    // Try sending any previously-persisted events
     await sendPersistedEvents();
     return;
   }
   const toSend = [...memoryBuffer];
   memoryBuffer = [];
-  try {
-    await sendEvents(toSend);
-  } catch {
-    // Put them back on failure
+  const ok = await sendEvents(toSend);
+  if (!ok) {
     memoryBuffer = [...toSend, ...memoryBuffer];
     await persistBuffer();
   }
 }
 
-/** Send events from the on-disk JSONL buffer, then clear it. */
+/** Send events from the on-disk JSONL buffer, clearing only on success. */
 async function sendPersistedEvents(): Promise<void> {
   try {
     const fs = await import('fs/promises');
@@ -79,8 +76,11 @@ async function sendPersistedEvents(): Promise<void> {
       try { events.push(JSON.parse(line)); } catch { /* skip malformed */ }
     }
     if (events.length === 0) return;
-    await sendEvents(events);
-    await fs.writeFile(path, '', 'utf-8'); // clear
+    const ok = await sendEvents(events);
+    if (ok) {
+      await fs.writeFile(path, '', 'utf-8');
+    }
+    // On failure leave the file alone — next flush retries the same batch.
   } catch {
     // Non-fatal
   }

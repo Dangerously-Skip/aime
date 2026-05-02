@@ -86,6 +86,32 @@ function waitForPort(port, timeout = 60000) {
   });
 }
 
+// --- nib analytics config ---
+// Reads ~/.claude/nib-analytics.conf — shared with the nib Claude Code CLI hook.
+// Used both as a runtime override for ANALYTICS_API_URL (set on the Next.js
+// child env below) and as the renderer-side identity source via IPC.
+const ANALYTICS_API_URL_DEFAULT =
+  "https://ompkko4b72.execute-api.ap-southeast-2.amazonaws.com/kaos";
+const ANALYTICS_AWS_REGION_DEFAULT = "ap-southeast-2";
+
+function readNibAnalyticsConf() {
+  const conf = path.join(os.homedir(), ".claude", "nib-analytics.conf");
+  const result = {};
+  try {
+    const text = fs.readFileSync(conf, "utf-8");
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      result[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+    }
+  } catch {
+    // file missing or unreadable — caller treats as empty
+  }
+  return result;
+}
+
 // --- Auto Updater ---
 // Only active in packaged builds; disabled in dev to avoid errors.
 let autoUpdater = null;
@@ -700,6 +726,15 @@ app.whenReady().then(async () => {
       ? path.join(setupHandler.PYTHON_DIR, 'Scripts')
       : null;
 
+    // Resolve analytics endpoint with precedence:
+    //   1. nib-analytics.conf `endpoint=` (per-user override, lets one binary
+    //      target different AWS accounts without a rebuild)
+    //   2. Hardcoded kaos default (covers a fresh install with no nib setup)
+    // process.env.ANALYTICS_API_URL is intentionally NOT used as a layer here:
+    // .env.local is dev-only and was the source of the silent-discard bug
+    // where packaged builds had ANALYTICS_API_URL='' and sendEvents bailed.
+    const nibConf = readNibAnalyticsConf();
+
     const child = utilityProcess.fork(serverScript, [], {
       cwd: standaloneDir,
       env: {
@@ -707,6 +742,8 @@ app.whenReady().then(async () => {
         PORT: String(port),
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
+        ANALYTICS_API_URL: nibConf.endpoint || ANALYTICS_API_URL_DEFAULT,
+        ANALYTICS_AWS_REGION: nibConf.region || ANALYTICS_AWS_REGION_DEFAULT,
         QUARRY_RESOURCES_PATH: process.resourcesPath,
         ...(sdkCliPath ? { QUARRY_SDK_CLI_PATH: sdkCliPath } : {}),
         ...(gitBashPath ? { CLAUDE_CODE_GIT_BASH_PATH: gitBashPath } : {}),
@@ -884,23 +921,7 @@ ipcMain.on("get-app-version", (event) => {
 });
 
 ipcMain.on("get-nib-analytics-config", (event) => {
-  const fs = require("fs");
-  const path = require("path");
-  const conf = path.join(os.homedir(), ".claude", "nib-analytics.conf");
-  const result = {};
-  try {
-    const text = fs.readFileSync(conf, "utf-8");
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq <= 0) continue;
-      result[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
-    }
-  } catch {
-    // file missing or unreadable — return empty config
-  }
-  event.returnValue = result;
+  event.returnValue = readNibAnalyticsConf();
 });
 
 ipcMain.handle("open-path", async (_event, filePath) => {
