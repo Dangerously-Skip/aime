@@ -9,8 +9,23 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Wrench, ChevronDown, Loader2, Check, X, FileText, Globe, AlertTriangle } from "lucide-react";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
+import { BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
 
 const ARTIFACT_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
+
+/**
+ * For a Bash command like `bash generate_presentation.sh in.md out.pptx`,
+ * pick the rightmost token matching a binary/document extension and treat
+ * it as the artifact the command produced. Returns null if no match.
+ */
+function detectBashArtifactPath(input: Record<string, unknown>): string | null {
+  const cmd = typeof input.command === "string" ? input.command : "";
+  if (!cmd) return null;
+  BASH_ARTIFACT_EXT.lastIndex = 0;
+  const matches = [...cmd.matchAll(BASH_ARTIFACT_EXT)];
+  if (matches.length === 0) return null;
+  return matches[matches.length - 1][1].replace(/['"]/g, "");
+}
 
 interface ToolCallCardProps {
   name: string;
@@ -196,6 +211,24 @@ export function ToolCallCard({
               >
                 <Globe className="h-3 w-3" />
                 Open Preview
+              </button>
+            );
+          })()}
+
+          {/* Artifact preview chip for Bash tools that produced a file
+              (e.g. nib-ppt's generate_presentation.sh writing a .pptx).
+              Falls through to onArtifactClick like Write/Edit do. */}
+          {name === "Bash" && status === "complete" && onArtifactClick && (() => {
+            const bashPath = detectBashArtifactPath(input);
+            if (!bashPath) return null;
+            return (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onArtifactClick(bashPath); }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 transition-colors"
+              >
+                <FileText className="h-3 w-3" />
+                Preview {bashPath.split("/").pop()}
               </button>
             );
           })()}
