@@ -143,17 +143,17 @@ jobs:
             $url = $Matches[1]; $sha = $Matches[2]; $size = $Matches[3]
             $version = (Get-Content -Raw -Path "package.json" | ConvertFrom-Json).version
             $releaseDate = if ($yml -match "releaseDate:\s*'([^']+)'") { $Matches[1] } else { (Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ") }
-            $rewritten = @"
-version: $version
-files:
-  - url: $url
-    sha512: $sha
-    size: $size
-path: $url
-sha512: $sha
-releaseDate: '$releaseDate'
-"@
-            Set-Content -Path "dist/latest.yml" -Value $rewritten
+            $lines = @(
+              "version: $version",
+              "files:",
+              "  - url: $url",
+              "    sha512: $sha",
+              "    size: $size",
+              "path: $url",
+              "sha512: $sha",
+              "releaseDate: '$releaseDate'"
+            )
+            Set-Content -Path "dist/latest.yml" -Value $lines
             Get-Content "dist/latest.yml"
           } else {
             throw "Could not find universal Quarry-Setup-*.exe entry in latest.yml"
