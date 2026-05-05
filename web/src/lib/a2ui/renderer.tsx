@@ -743,11 +743,12 @@ class ComponentErrorBoundary extends React.Component<
 
 export function A2UIDocumentRenderer({ doc, onAction }: { doc: A2UIDocument; onAction?: (action: A2UIAction) => void }) {
   const components = doc.components ?? [];
+  // Note: we deliberately don't render `doc.title` here — the canvas-panel
+  // header already shows it. Rendering it twice creates a visible "gap" at
+  // the top of the content area when the agent passes the same title at
+  // both levels (which is the common case).
   return (
     <div className="space-y-4 p-4">
-      {doc.title && (
-        <h2 className="text-lg font-semibold text-foreground px-1">{doc.title}</h2>
-      )}
       {components.map((component, i) => (
         <CardShell key={component.id ?? `c-${i}`}>
           <ComponentErrorBoundary componentType={component.type}>
