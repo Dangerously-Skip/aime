@@ -101,6 +101,22 @@ export function ChatSurface() {
   );
   const currentChatId = useChatStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
+
+  // Clear canvas + per-conversation artifact state when switching conversations,
+  // so a kanban from a previous chat doesn't leak into a new one.
+  // Skip when chatId is empty — that's a transient between-conversations state,
+  // not a deliberate switch, and clearing on it can cascade through the layout.
+  const lastChatIdRef = useRef<string>("");
+  useEffect(() => {
+    if (!chatId) return;
+    if (lastChatIdRef.current === chatId) return;
+    lastChatIdRef.current = chatId;
+    clearCanvas();
+    setCanvasOpen('chat', false);
+    setArtifactFiles([]);
+    setCanvasArtifacts([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
   const messages = useChatStore(
     (s) =>
       (s.currentChatId ? s.messages[s.currentChatId] : undefined) ??
