@@ -789,7 +789,7 @@ export function ChatSurface() {
             {/* Messages column */}
             <div className="flex flex-1 flex-col min-w-0">
               {/* Messages */}
-              <MessageList messages={messages} conversationId={chatId} onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
+              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
 
               {/* Prompt suggestions */}
               {suggestions.length > 0 && !isStreaming && (
@@ -901,7 +901,7 @@ export function ChatSurface() {
                   {canvasArtifacts.map((c) => (
                     <button
                       key={c.id}
-                      onClick={() => { pushCanvas(c.doc); setCanvasOpen('chat', true); }}
+                      onClick={() => { pushCanvas('chat', c.doc); setCanvasOpen('chat', true); }}
                       className="w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-left hover:bg-muted transition-colors group"
                       title={c.title}
                     >

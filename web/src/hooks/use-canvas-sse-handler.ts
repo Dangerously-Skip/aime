@@ -30,7 +30,7 @@ export function useCanvasSseHandler(surfaceId: SurfaceId, chatId: string) {
         const doc = event.doc as A2UIDocument | undefined;
         if (!doc || !doc.components) return;
 
-        pushCanvas(doc);
+        pushCanvas(surfaceId, doc);
         setCanvasOpen(surfaceId, true);
 
         if (chatId) {
