@@ -95,6 +95,8 @@ function ActionButton({ label, variant, onClick }: { label: string; variant?: 'p
 // ── Table ─────────────────────────────────────────────────────────────────────
 
 function TableRenderer({ component }: { component: TableComponent }) {
+  const columns = component.columns ?? [];
+  const rows = component.rows ?? [];
   return (
     <div>
       <CardHeader title={component.title} />
@@ -103,7 +105,7 @@ function TableRenderer({ component }: { component: TableComponent }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-muted/40">
-                {component.columns.map((col) => (
+                {columns.map((col) => (
                   <th key={col.key} className="text-left py-2.5 px-4 font-medium text-xs uppercase tracking-wider text-muted-foreground border-b border-border/40">
                     {col.label}
                   </th>
@@ -111,9 +113,9 @@ function TableRenderer({ component }: { component: TableComponent }) {
               </tr>
             </thead>
             <tbody>
-              {component.rows.map((row, i) => (
+              {rows.map((row, i) => (
                 <tr key={i} className="border-b border-border/20 last:border-0 hover:bg-muted/20 transition-colors">
-                  {component.columns.map((col) => {
+                  {columns.map((col) => {
                     const val = row[col.key];
                     return (
                       <td key={col.key} className="py-2.5 px-4 text-foreground">
@@ -138,7 +140,8 @@ function TableRenderer({ component }: { component: TableComponent }) {
 // ── Chart ─────────────────────────────────────────────────────────────────────
 
 function ChartRenderer({ component }: { component: ChartComponent }) {
-  const allData = component.series.flatMap((s) => s.data);
+  const series = component.series ?? [];
+  const allData = series.flatMap((s) => s.data ?? []);
   const maxVal = Math.max(...allData.map((d) => d.value), 1);
 
   return (
@@ -147,8 +150,8 @@ function ChartRenderer({ component }: { component: ChartComponent }) {
       <CardBody>
         {component.chartType === 'pie' ? (
           <div className="space-y-2.5">
-            {component.series[0]?.data.map((d) => {
-              const total = allData.reduce((s, x) => s + x.value, 0);
+            {(series[0]?.data ?? []).map((d) => {
+              const total = allData.reduce((s, x) => s + x.value, 0) || 1;
               const pct = Math.round((d.value / total) * 100);
               return (
                 <div key={d.label} className="flex items-center gap-3">
@@ -161,7 +164,7 @@ function ChartRenderer({ component }: { component: ChartComponent }) {
           </div>
         ) : (
           <div className="space-y-3">
-            {component.series[0]?.data.map((d) => (
+            {(series[0]?.data ?? []).map((d) => (
               <div key={d.label}>
                 <div className="flex justify-between text-xs mb-1.5">
                   <span className="text-muted-foreground">{d.label}</span>
@@ -194,19 +197,22 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 function KanbanRenderer({ component, onAction }: { component: KanbanComponent; onAction?: (action: A2UIAction) => void }) {
+  const columns = component.columns ?? [];
   return (
     <div>
       <CardHeader title={component.title} />
       <CardBody>
         <div className="flex gap-4 overflow-x-auto pb-2">
-          {component.columns.map((col) => (
+          {columns.map((col) => {
+            const cards = col.cards ?? [];
+            return (
             <div key={col.id} className="flex-shrink-0 w-60">
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{col.title}</span>
-                <span className="text-[10px] bg-muted rounded-full px-1.5 py-0.5 text-muted-foreground">{col.cards.length}</span>
+                <span className="text-[10px] bg-muted rounded-full px-1.5 py-0.5 text-muted-foreground">{cards.length}</span>
               </div>
               <div className="space-y-2">
-                {col.cards.map((card) => (
+                {cards.map((card) => (
                   <div key={card.id} className={`rounded-lg border border-border/50 bg-card p-3 shadow-sm border-l-2 ${PRIORITY_COLORS[card.priority || ''] || 'border-l-transparent'}`}>
                     {card.url ? (
                       <a href={card.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-foreground hover:underline">
@@ -252,7 +258,8 @@ function KanbanRenderer({ component, onAction }: { component: KanbanComponent; o
                 ))}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </CardBody>
     </div>
@@ -262,12 +269,13 @@ function KanbanRenderer({ component, onAction }: { component: KanbanComponent; o
 // ── Stat ──────────────────────────────────────────────────────────────────────
 
 function StatRenderer({ component }: { component: StatComponent }) {
+  const stats = component.stats ?? [];
   return (
     <div>
       <CardHeader title={component.title} />
       <CardBody>
         <div className="grid grid-cols-2 gap-3">
-          {component.stats.map((stat, i) => (
+          {stats.map((stat, i) => (
             <div key={i} className="rounded-lg bg-muted/30 border border-border/30 p-3.5">
               <div className="text-xs text-muted-foreground font-medium">{stat.label}</div>
               <div className="text-2xl font-bold mt-1 tabular-nums text-foreground">{String(stat.value)}</div>
@@ -292,9 +300,10 @@ function StatRenderer({ component }: { component: StatComponent }) {
 // ── Form ──────────────────────────────────────────────────────────────────────
 
 function FormRenderer({ component, onAction }: { component: FormComponent; onAction?: (action: A2UIAction) => void }) {
+  const fields = component.fields ?? [];
   const [values, setValues] = React.useState<Record<string, unknown>>(() => {
     const defaults: Record<string, unknown> = {};
-    for (const field of component.fields) {
+    for (const field of fields) {
       if (field.defaultValue !== undefined) defaults[field.name] = field.defaultValue;
     }
     return defaults;
@@ -305,7 +314,7 @@ function FormRenderer({ component, onAction }: { component: FormComponent; onAct
       <CardHeader title={component.title} />
       <CardBody>
         <div className="space-y-4">
-          {component.fields.map((field) => (
+          {fields.map((field) => (
             <div key={field.name}>
               <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1.5">
                 {field.label}{field.required && <span className="text-destructive ml-0.5">*</span>}
@@ -376,12 +385,13 @@ function MarkdownRenderer({ component }: { component: MarkdownComponent }) {
 // ── List ──────────────────────────────────────────────────────────────────────
 
 function ListRenderer({ component, onAction }: { component: ListComponent; onAction?: (action: A2UIAction) => void }) {
+  const items = component.items ?? [];
   return (
     <div>
       <CardHeader title={component.title} />
       <CardBody>
         <div className="divide-y divide-border/30">
-          {component.items.map((item) => (
+          {items.map((item) => (
             <div key={item.id} className="flex items-start gap-3 py-2.5 first:pt-0 last:pb-0">
               {typeof item.checked === 'boolean' ? (
                 <input
@@ -409,12 +419,13 @@ function ListRenderer({ component, onAction }: { component: ListComponent; onAct
 // ── Progress ──────────────────────────────────────────────────────────────────
 
 function ProgressRenderer({ component }: { component: ProgressComponent }) {
+  const items = component.items ?? [];
   return (
     <div>
       <CardHeader title={component.title} />
       <CardBody>
         <div className="space-y-4">
-          {component.items.map((item, i) => (
+          {items.map((item, i) => (
             <div key={i}>
               <div className="flex justify-between text-xs mb-2">
                 <span className="font-medium text-foreground">{item.label}</span>
@@ -440,6 +451,7 @@ function ProgressRenderer({ component }: { component: ProgressComponent }) {
 // ── Action Card ──────────────────────────────────────────────────────────────
 
 function ActionCardRenderer({ component, onAction }: { component: ActionCardComponent; onAction?: (action: A2UIAction) => void }) {
+  const actions = component.actions ?? [];
   return (
     <div>
       <CardHeader
@@ -452,9 +464,9 @@ function ActionCardRenderer({ component, onAction }: { component: ActionCardComp
         {component.description && (
           <p className="text-sm text-muted-foreground leading-relaxed mb-4">{component.description}</p>
         )}
-        {component.actions.length > 0 && (
+        {actions.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {component.actions.map((action) => (
+            {actions.map((action) => (
               <ActionButton
                 key={action.actionId}
                 label={action.label}
@@ -478,19 +490,20 @@ const TODO_PRIORITY_DOT: Record<string, string> = {
 };
 
 function TodoRenderer({ component, onAction }: { component: TodoComponent; onAction?: (action: A2UIAction) => void }) {
+  const items = component.items ?? [];
   const [newItemText, setNewItemText] = React.useState('');
-  const doneCount = component.items.filter((i) => i.done).length;
+  const doneCount = items.filter((i) => i.done).length;
 
   return (
     <div>
       <CardHeader
         title={component.title}
         subtitle={component.date}
-        trailing={<span className="text-xs text-muted-foreground tabular-nums">{doneCount}/{component.items.length}</span>}
+        trailing={<span className="text-xs text-muted-foreground tabular-nums">{doneCount}/{items.length}</span>}
       />
       <CardBody>
         <div className="divide-y divide-border/20">
-          {component.items.map((item, idx) => (
+          {items.map((item, idx) => (
             <div key={item.id} className="flex items-center gap-3 py-2.5 group first:pt-0">
               <input
                 type="checkbox"
@@ -510,16 +523,16 @@ function TodoRenderer({ component, onAction }: { component: TodoComponent; onAct
               <div className="hidden group-hover:flex gap-1 shrink-0">
                 {idx > 0 && (
                   <button type="button" className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors" onClick={() => {
-                    const ids = component.items.map(i => i.id);
+                    const ids = items.map(i => i.id);
                     [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
                     onAction?.({ type: 'todo-reorder', componentId: component.id, itemIds: ids });
                   }}>
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" /></svg>
                   </button>
                 )}
-                {idx < component.items.length - 1 && (
+                {idx < items.length - 1 && (
                   <button type="button" className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted transition-colors" onClick={() => {
-                    const ids = component.items.map(i => i.id);
+                    const ids = items.map(i => i.id);
                     [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
                     onAction?.({ type: 'todo-reorder', componentId: component.id, itemIds: ids });
                   }}>
@@ -630,13 +643,14 @@ const TIMELINE_STATUS_COLORS: Record<string, { dot: string; bg: string }> = {
 };
 
 function TimelineRenderer({ component }: { component: TimelineComponent }) {
+  const entries = component.entries ?? [];
   return (
     <div>
       <CardHeader title={component.title} />
       <CardBody>
         <div className="relative pl-6">
           <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border/60" />
-          {component.entries.map((entry, i) => {
+          {entries.map((entry, i) => {
             const colors = TIMELINE_STATUS_COLORS[entry.status || 'info'] || TIMELINE_STATUS_COLORS.info;
             return (
               <div key={entry.id} className="relative flex items-start gap-3 pb-4 last:pb-0">
@@ -696,17 +710,49 @@ function A2UIComponentRenderer({ component, onAction }: { component: A2UICompone
   }
 }
 
+// ── Per-component error boundary ─────────────────────────────────────────────
+
+class ComponentErrorBoundary extends React.Component<
+  { children: React.ReactNode; componentType?: string },
+  { hasError: boolean; message?: string }
+> {
+  constructor(props: { children: React.ReactNode; componentType?: string }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error.message };
+  }
+  componentDidCatch(error: Error) {
+    console.error('[a2ui] Component crashed:', this.props.componentType, error);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="px-5 py-3 text-xs text-muted-foreground">
+          <div className="font-medium text-destructive mb-1">Could not render {this.props.componentType ?? 'component'}</div>
+          <div className="font-mono opacity-70">{this.state.message}</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ── Document renderer ─────────────────────────────────────────────────────────
 
 export function A2UIDocumentRenderer({ doc, onAction }: { doc: A2UIDocument; onAction?: (action: A2UIAction) => void }) {
+  const components = doc.components ?? [];
   return (
     <div className="space-y-4 p-4">
       {doc.title && (
         <h2 className="text-lg font-semibold text-foreground px-1">{doc.title}</h2>
       )}
-      {doc.components.map((component) => (
-        <CardShell key={component.id}>
-          <A2UIComponentRenderer component={component} onAction={onAction} />
+      {components.map((component, i) => (
+        <CardShell key={component.id ?? `c-${i}`}>
+          <ComponentErrorBoundary componentType={component.type}>
+            <A2UIComponentRenderer component={component} onAction={onAction} />
+          </ComponentErrorBoundary>
         </CardShell>
       ))}
     </div>

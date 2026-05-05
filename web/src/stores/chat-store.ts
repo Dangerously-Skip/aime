@@ -38,6 +38,8 @@ export interface Message {
   questionAnswered?: boolean;
   /** Auto-continue message injected by the system, not typed by the user */
   isAutoContinue?: boolean;
+  /** Inline canvas chips — A2UI docs the agent rendered during this turn */
+  inlineCanvases?: Array<{ id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }>;
 }
 
 /** Clean stale streaming/loading flags from persisted messages (no active stream on rehydration). */
@@ -72,6 +74,7 @@ interface ChatActions {
   addMessage: (chatId: string, message: Message) => void;
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
+  attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }) => void;
   setModel: (model: string) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
@@ -137,6 +140,21 @@ export const useChatStore = create<ChatStore>()(
             content: last.content + content,
             isLoading: false,
             ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
+          };
+          return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
+      attachCanvasToLastAssistant: (chatId, canvas) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          if (!msgs?.length) return state;
+          const lastIdx = msgs.length - 1;
+          const last = msgs[lastIdx];
+          if (last.role !== 'assistant') return state;
+          const updated = [...msgs];
+          updated[lastIdx] = {
+            ...last,
+            inlineCanvases: [...(last.inlineCanvases ?? []), canvas],
           };
           return { messages: { ...state.messages, [chatId]: updated } };
         }),

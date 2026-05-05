@@ -47,7 +47,7 @@ import {
   Globe2,
   type LucideIcon,
 } from "lucide-react";
-import { WIDGET_PRESETS } from "@/lib/assistant/widget-presets";
+import { WIDGET_PRESETS, buildWidgetCard } from "@/lib/assistant/widget-presets";
 
 const TEMPLATE_ICONS: Record<string, LucideIcon> = {
   sun: Sun, moon: Moon, timer: Timer, hammer: Hammer,
@@ -758,7 +758,7 @@ export function AssistantSurface() {
                         <button
                           key={preset.id}
                           className="flex flex-col items-center gap-1.5 text-center p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                          onClick={() => addCard(preset.build())}
+                          onClick={() => addCard(buildWidgetCard(preset))}
                           title={preset.description}
                         >
                           <Icon className="h-4 w-4 text-muted-foreground" />
@@ -780,7 +780,7 @@ export function AssistantSurface() {
                       <button
                         key={preset.id}
                         className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                        onClick={() => addCard(preset.build())}
+                        onClick={() => addCard(buildWidgetCard(preset))}
                         title={preset.description}
                       >
                         <Icon className="h-3 w-3" />
