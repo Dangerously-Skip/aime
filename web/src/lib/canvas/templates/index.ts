@@ -89,13 +89,26 @@ export function buildCanvasTemplatesPrompt(surfaceId: string): string {
   );
   return `## Visualisations — you MUST call the canvas tool
 
-For ANY visual artefact — diagrams, charts, kanban boards, schemas, dashboards, mind maps, sequence diagrams, PR/Jira/build lists — you **must** call the \`mcp__quarry__canvas\` (a.k.a. \`canvas\`) tool.
+For ANY visual artefact — diagrams, charts, kanban boards, schemas, dashboards, mind maps, sequence diagrams, PR/Jira/build/endpoint lists — you **must** call the \`mcp__quarry__canvas\` tool. The user sees nothing visual unless this tool fires.
 
-**Do not** describe a visualisation in prose ("Your kanban is rendered in the canvas panel...") *without* actually calling the tool. The user will see no canvas. If you cannot fetch real data, call the tool with whatever data you have plus a \`caption\` explaining the situation.
+### Hard rule (read this twice)
 
-**Do not** generate HTML/SVG files for these — the canvas panel renders them natively with proper interactivity, theming, pinning, and writeback.
+If you find yourself about to type any of these phrases:
+  - "is up in the canvas"
+  - "rendered in the canvas panel"
+  - "shown in the canvas"
+  - "is on the canvas"
+  - "the canvas above/below shows"
 
-Use a templated payload whenever a template fits:
+…**STOP**. Either you have already called \`mcp__quarry__canvas\` in this turn, or you are about to lie to the user. Call the tool first; only mention the canvas in prose AFTER the tool call has succeeded.
+
+### Do / don't
+
+- ✅ Gather data → call \`mcp__quarry__canvas\` with a templated payload → write a 1–2 sentence summary referencing the canvas.
+- ❌ Describe a visualisation in prose without calling the tool.
+- ❌ Generate HTML/SVG files for diagrams or lists — the canvas panel renders them natively.
+
+### Templated payload
 
 \`\`\`json
 { "templateId": "<id>", "input": { ... } }
@@ -107,9 +120,9 @@ ${lines.join('\n\n')}
 
 If none of the templates fit, pass a raw A2UI document: \`{ "version": "1", "components": [...] }\`.
 
-**Order of operations**: gather data (read files, call MCP tools) → call \`canvas\` with templated payload → write a brief 1–2 sentence summary referencing the canvas. The canvas call must come BEFORE the summary text.
+If your data is too large to fit (e.g. a 200-endpoint OpenAPI spec), TRUNCATE — pick the 20 most relevant items and add a \`caption\` saying so. Do NOT skip the canvas call; partial data is always better than no canvas at all.
 
-Reserve HTML artefacts for things the canvas can't render — e.g. interactive prototypes, full marketing pages, web app shells, custom games. For diagrams, lists, kanban, charts, schemas: always canvas.`;
+Reserve HTML artefacts for things the canvas can't render — interactive prototypes, full marketing pages, web app shells, custom games.`;
 }
 
 export type { CanvasTemplate };
