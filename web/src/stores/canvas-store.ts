@@ -3,83 +3,134 @@
 import { create } from 'zustand';
 import type { A2UIDocument, A2UIComponent } from '@/lib/a2ui/types';
 
-interface CanvasState {
-  canvasDoc: A2UIDocument | null;
+/**
+ * Per-surface canvas state. Each surface (chat, cowork, code, ...) keeps its
+ * own current document, history, and open flag. Previously this was global,
+ * which meant the most recently-pushed canvas leaked into other surfaces.
+ */
+interface SurfaceCanvasState {
+  doc: A2UIDocument | null;
   history: A2UIDocument[];
   historyIndex: number;
-  openSurfaces: Record<string, boolean>;
+  open: boolean;
+}
+
+interface CanvasState {
+  bySurface: Record<string, SurfaceCanvasState>;
 }
 
 interface CanvasActions {
-  pushCanvas: (doc: A2UIDocument) => void;
-  clearCanvas: () => void;
-  goBack: () => void;
-  goForward: () => void;
+  pushCanvas: (surfaceId: string, doc: A2UIDocument) => void;
+  clearCanvas: (surfaceId: string) => void;
+  goBack: (surfaceId: string) => void;
+  goForward: (surfaceId: string) => void;
   setOpen: (surfaceId: string, open: boolean) => void;
   isOpen: (surfaceId: string) => boolean;
-  updateComponent: (componentId: string, updater: (comp: A2UIComponent) => A2UIComponent) => void;
+  updateComponent: (
+    surfaceId: string,
+    componentId: string,
+    updater: (comp: A2UIComponent) => A2UIComponent,
+  ) => void;
+  /** Read-only accessor for a surface's state. Always returns a defined object. */
+  getSurface: (surfaceId: string) => SurfaceCanvasState;
 }
 
 export type CanvasStore = CanvasState & CanvasActions;
 
-export const useCanvasStore = create<CanvasStore>()((set, get) => ({
-  canvasDoc: null,
+const EMPTY_SURFACE: SurfaceCanvasState = {
+  doc: null,
   history: [],
   historyIndex: -1,
-  openSurfaces: {} as Record<string, boolean>,
+  open: false,
+};
 
-  pushCanvas: (doc) =>
+function ensureSurface(state: CanvasState, surfaceId: string): SurfaceCanvasState {
+  return state.bySurface[surfaceId] ?? EMPTY_SURFACE;
+}
+
+export const useCanvasStore = create<CanvasStore>()((set, get) => ({
+  bySurface: {},
+
+  pushCanvas: (surfaceId, doc) =>
     set((state) => {
-      // Truncate forward history when pushing new doc
-      const newHistory = [...state.history.slice(0, state.historyIndex + 1), doc];
+      const prev = ensureSurface(state, surfaceId);
+      const newHistory = [...prev.history.slice(0, prev.historyIndex + 1), doc];
       return {
-        canvasDoc: doc,
-        history: newHistory,
-        historyIndex: newHistory.length - 1,
+        bySurface: {
+          ...state.bySurface,
+          [surfaceId]: {
+            ...prev,
+            doc,
+            history: newHistory,
+            historyIndex: newHistory.length - 1,
+          },
+        },
       };
     }),
 
-  clearCanvas: () => set({ canvasDoc: null, history: [], historyIndex: -1 }),
+  clearCanvas: (surfaceId) =>
+    set((state) => ({
+      bySurface: {
+        ...state.bySurface,
+        [surfaceId]: { ...EMPTY_SURFACE, open: state.bySurface[surfaceId]?.open ?? false },
+      },
+    })),
 
-  goBack: () =>
+  goBack: (surfaceId) =>
     set((state) => {
-      const newIndex = state.historyIndex - 1;
+      const prev = ensureSurface(state, surfaceId);
+      const newIndex = prev.historyIndex - 1;
       if (newIndex < 0) return state;
       return {
-        historyIndex: newIndex,
-        canvasDoc: state.history[newIndex],
+        bySurface: {
+          ...state.bySurface,
+          [surfaceId]: { ...prev, historyIndex: newIndex, doc: prev.history[newIndex] },
+        },
       };
     }),
 
-  goForward: () =>
+  goForward: (surfaceId) =>
     set((state) => {
-      const newIndex = state.historyIndex + 1;
-      if (newIndex >= state.history.length) return state;
+      const prev = ensureSurface(state, surfaceId);
+      const newIndex = prev.historyIndex + 1;
+      if (newIndex >= prev.history.length) return state;
       return {
-        historyIndex: newIndex,
-        canvasDoc: state.history[newIndex],
+        bySurface: {
+          ...state.bySurface,
+          [surfaceId]: { ...prev, historyIndex: newIndex, doc: prev.history[newIndex] },
+        },
       };
     }),
 
   setOpen: (surfaceId, open) =>
-    set((state) => ({
-      openSurfaces: { ...state.openSurfaces, [surfaceId]: open },
-    })),
-
-  isOpen: (surfaceId) => !!get().openSurfaces[surfaceId],
-
-  updateComponent: (componentId, updater) =>
     set((state) => {
-      if (!state.canvasDoc) return state;
-      const updatedComponents = state.canvasDoc.components.map((c) =>
-        c.id === componentId ? updater(c) : c
-      );
-      const updatedDoc = { ...state.canvasDoc, components: updatedComponents };
-      // Also update in history
-      const updatedHistory = [...state.history];
-      if (state.historyIndex >= 0) {
-        updatedHistory[state.historyIndex] = updatedDoc;
-      }
-      return { canvasDoc: updatedDoc, history: updatedHistory };
+      const prev = ensureSurface(state, surfaceId);
+      return {
+        bySurface: { ...state.bySurface, [surfaceId]: { ...prev, open } },
+      };
     }),
+
+  isOpen: (surfaceId) => !!get().bySurface[surfaceId]?.open,
+
+  updateComponent: (surfaceId, componentId, updater) =>
+    set((state) => {
+      const prev = ensureSurface(state, surfaceId);
+      if (!prev.doc) return state;
+      const updatedComponents = prev.doc.components.map((c) =>
+        c.id === componentId ? updater(c) : c,
+      );
+      const updatedDoc = { ...prev.doc, components: updatedComponents };
+      const updatedHistory = [...prev.history];
+      if (prev.historyIndex >= 0) {
+        updatedHistory[prev.historyIndex] = updatedDoc;
+      }
+      return {
+        bySurface: {
+          ...state.bySurface,
+          [surfaceId]: { ...prev, doc: updatedDoc, history: updatedHistory },
+        },
+      };
+    }),
+
+  getSurface: (surfaceId) => ensureSurface(get(), surfaceId),
 }));

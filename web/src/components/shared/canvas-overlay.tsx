@@ -20,20 +20,22 @@ interface CanvasOverlayProps {
  * and call `useCanvasSseHandler` from their SSE switch.
  */
 export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps) {
-  const canvasDoc = useCanvasStore((s) => s.canvasDoc);
-  const canvasOpen = useCanvasStore((s) => !!s.openSurfaces[surfaceId]);
-  const canvasHistoryIndex = useCanvasStore((s) => s.historyIndex);
-  const canvasHistoryLength = useCanvasStore((s) => s.history.length);
-  const goBackCanvas = useCanvasStore((s) => s.goBack);
-  const goForwardCanvas = useCanvasStore((s) => s.goForward);
-  const clearCanvas = useCanvasStore((s) => s.clearCanvas);
-  const setCanvasOpen = useCanvasStore((s) => s.setOpen);
+  // Per-surface state: each surface has its own current doc, history,
+  // and open flag. Switching surfaces no longer leaks canvases.
+  const surfaceState = useCanvasStore((s) => s.bySurface[surfaceId]);
+  const canvasDoc = surfaceState?.doc ?? null;
+  const canvasOpen = !!surfaceState?.open;
+  const canvasHistoryIndex = surfaceState?.historyIndex ?? -1;
+  const canvasHistoryLength = surfaceState?.history.length ?? 0;
+  const goBackStore = useCanvasStore((s) => s.goBack);
+  const goForwardStore = useCanvasStore((s) => s.goForward);
+  const clearStore = useCanvasStore((s) => s.clearCanvas);
+  const setOpenStore = useCanvasStore((s) => s.setOpen);
   // Subscribe to activeSurface so we re-render when switching back; this
   // gives the panel a chance to recompute its layout (parent went from
   // display:none to display:block, which can leave absolute children in a
   // stale layout state if nothing re-renders).
   const activeSurface = useAppStore((s) => s.activeSurface);
-  // The variable is read intentionally to keep the dep — no further use.
   void activeSurface;
 
   // Close + clear when conversation changes within this surface, so the
@@ -50,18 +52,18 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
     // to leak from, and clearing here would close a canvas the agent just
     // streamed.
     if (isFirstSetting) return;
-    clearCanvas();
-    setCanvasOpen(surfaceId, false);
-  }, [conversationId, surfaceId, clearCanvas, setCanvasOpen]);
+    clearStore(surfaceId);
+    setOpenStore(surfaceId, false);
+  }, [conversationId, surfaceId, clearStore, setOpenStore]);
 
   return (
     <CanvasPanel
       open={canvasOpen}
       doc={canvasDoc}
-      onClose={() => setCanvasOpen(surfaceId, false)}
-      onBack={goBackCanvas}
-      onForward={goForwardCanvas}
-      onClear={clearCanvas}
+      onClose={() => setOpenStore(surfaceId, false)}
+      onBack={() => goBackStore(surfaceId)}
+      onForward={() => goForwardStore(surfaceId)}
+      onClear={() => clearStore(surfaceId)}
       canGoBack={canvasHistoryIndex > 0}
       canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
       surface={surfaceId}

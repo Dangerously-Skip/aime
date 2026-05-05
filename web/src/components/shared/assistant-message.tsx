@@ -106,6 +106,8 @@ interface AssistantMessageProps {
   conversationId?: string;
   /** Inline canvas chips — A2UI docs the agent emitted during this turn. */
   inlineCanvases?: Array<{ id: string; title: string; doc: A2UIDocument }>;
+  /** Surface this message is rendered in — drives where canvas chips reopen. */
+  surfaceId?: 'chat' | 'cowork';
 }
 
 function CanvasChip({ title, onOpen }: { title: string; onOpen: () => void }) {
@@ -138,6 +140,7 @@ export function AssistantMessage({
   onCancel,
   conversationId,
   inlineCanvases,
+  surfaceId,
 }: AssistantMessageProps) {
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const setOpen = useCanvasStore((s) => s.setOpen);
@@ -268,14 +271,11 @@ export function AssistantMessage({
                 key={c.id}
                 title={c.title}
                 onOpen={() => {
-                  pushCanvas(c.doc);
-                  // Open in whichever surface this message belongs to.
-                  if (conversationId) {
-                    // Best-effort: open both surfaces' canvas state — only the
-                    // currently-mounted one will be visible.
-                    setOpen('chat', true);
-                    setOpen('cowork', true);
-                  }
+                  // Push into THIS message's surface only — per-surface state
+                  // means we no longer have to fan out to both.
+                  const target = surfaceId ?? 'chat';
+                  pushCanvas(target, c.doc);
+                  setOpen(target, true);
                 }}
               />
             ))}

@@ -52,9 +52,11 @@ interface MessageListProps {
   /** Cancels the active stream — wired to streamRegistry.abort by the surface. */
   onCancel?: () => void;
   conversationId?: string;
+  /** Surface this list is rendered in — passed to inline canvas chips. */
+  surfaceId?: 'chat' | 'cowork';
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, onRetry, onCancel, conversationId }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, onRetry, onCancel, conversationId, surfaceId }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -147,6 +149,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             onCancel={msg.isStreaming ? onCancel : undefined}
             conversationId={conversationId}
             inlineCanvases={msg.inlineCanvases}
+            surfaceId={surfaceId}
           />
         ) : null;
       })}
