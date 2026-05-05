@@ -7,7 +7,9 @@ import { ToolCallsSummaryBar } from "./tool-calls-summary-bar";
 import { StreamingCursor } from "./streaming-cursor";
 import { ArtifactCard } from "./artifact-card";
 import { Button } from "@/components/ui/button";
-import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw, FileText, FileCode2, FileSpreadsheet, FileImage, File, ExternalLink, FolderOpen } from "lucide-react";
+import { Copy, Check, ThumbsUp, ThumbsDown, RefreshCw, FileText, FileCode2, FileSpreadsheet, FileImage, File, ExternalLink, FolderOpen, LayoutDashboard } from "lucide-react";
+import { useCanvasStore } from "@/stores/canvas-store";
+import type { A2UIDocument } from "@/lib/a2ui/types";
 import { MemoryButton } from "./memory-button";
 import { useConversationStore } from "@/stores/conversation-store";
 import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
@@ -102,6 +104,25 @@ interface AssistantMessageProps {
   /** Abort the active stream — only meaningful for the streaming message. */
   onCancel?: () => void;
   conversationId?: string;
+  /** Inline canvas chips — A2UI docs the agent emitted during this turn. */
+  inlineCanvases?: Array<{ id: string; title: string; doc: A2UIDocument }>;
+}
+
+function CanvasChip({ title, onOpen }: { title: string; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex items-center gap-2.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-left hover:bg-primary/10 transition-colors group/canvas"
+    >
+      <LayoutDashboard className="h-4 w-4 text-primary shrink-0" />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-medium truncate text-foreground" title={title}>{title}</div>
+      </div>
+      <span className="text-[10px] font-mono text-primary/70 bg-primary/10 rounded px-1.5 py-0.5">CANVAS</span>
+      <ExternalLink className="h-3 w-3 text-primary/60 opacity-0 group-hover/canvas:opacity-100 transition-opacity" />
+    </button>
+  );
 }
 
 export function AssistantMessage({
@@ -116,7 +137,10 @@ export function AssistantMessage({
   onRetry,
   onCancel,
   conversationId,
+  inlineCanvases,
 }: AssistantMessageProps) {
+  const pushCanvas = useCanvasStore((s) => s.pushCanvas);
+  const setOpen = useCanvasStore((s) => s.setOpen);
   const [copied, setCopied] = useState(false);
   const updateConversationMetrics = useConversationStore((s) => s.updateConversationMetrics);
   const currentRating = useConversationStore((s) =>
@@ -234,6 +258,28 @@ export function AssistantMessage({
             onPreviewUrl={onPreviewUrl}
             onCancel={isStreaming ? onCancel : undefined}
           />
+        )}
+
+        {/* Inline canvas chips — A2UI docs the agent rendered this turn */}
+        {inlineCanvases && inlineCanvases.length > 0 && (
+          <div className="flex flex-wrap gap-2 items-center">
+            {inlineCanvases.map((c) => (
+              <CanvasChip
+                key={c.id}
+                title={c.title}
+                onOpen={() => {
+                  pushCanvas(c.doc);
+                  // Open in whichever surface this message belongs to.
+                  if (conversationId) {
+                    // Best-effort: open both surfaces' canvas state — only the
+                    // currently-mounted one will be visible.
+                    setOpen('chat', true);
+                    setOpen('cowork', true);
+                  }
+                }}
+              />
+            ))}
+          </div>
         )}
 
         {/* Document artifact cards for written files */}

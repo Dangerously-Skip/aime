@@ -47,6 +47,7 @@ import {
   FolderOpen,
   Globe,
   ListChecks,
+  LayoutDashboard,
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
 import { CanvasPanel } from "@/components/shared/canvas-panel";
@@ -78,6 +79,7 @@ import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-sugg
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_FILES: string[] = [];
+const EMPTY_CANVASES: import("@/stores/cowork-store").CanvasArtifact[] = [];
 const EMPTY_SEARCH_GROUPS: SearchQueryGroup[] = [];
 
 /** Truncate text at the nearest word boundary before maxLen. */
@@ -500,13 +502,16 @@ function TaskMetricsCard({ metrics }: {
 function SidebarPanel({
   contextFiles,
   artifactFiles,
+  canvasArtifacts,
   folder,
   open,
   onToggle,
   onContextClick,
   onArtifactClick,
+  onCanvasClick,
   onContextRemove,
   onArtifactRemove,
+  onCanvasRemove,
   searchGroups,
   onClearSearch,
   previewUrl,
@@ -515,13 +520,16 @@ function SidebarPanel({
 }: {
   contextFiles: string[];
   artifactFiles: string[];
+  canvasArtifacts: import("@/stores/cowork-store").CanvasArtifact[];
   folder: string | null;
   open: boolean;
   onToggle: () => void;
   onContextClick?: (path: string) => void;
   onArtifactClick?: (path: string) => void;
+  onCanvasClick?: (artifact: import("@/stores/cowork-store").CanvasArtifact) => void;
   onContextRemove?: (path: string) => void;
   onArtifactRemove?: (path: string) => void;
+  onCanvasRemove?: (artifactId: string) => void;
   searchGroups?: SearchQueryGroup[];
   onClearSearch?: () => void;
   previewUrl?: string | null;
@@ -595,6 +603,38 @@ function SidebarPanel({
               onItemRemove={onArtifactRemove}
             />
 
+            {canvasArtifacts.length > 0 && (
+              <div className="rounded-xl border border-border/50 bg-card/50 overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3">
+                  <LayoutDashboard className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="flex-1 text-sm font-semibold">Canvases</span>
+                  <span className="text-xs text-muted-foreground">{canvasArtifacts.length}</span>
+                </div>
+                <div className="px-2 pb-2 space-y-1">
+                  {canvasArtifacts.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors group">
+                      <button
+                        type="button"
+                        onClick={() => onCanvasClick?.(c)}
+                        className="flex-1 min-w-0 text-left flex items-center gap-2"
+                      >
+                        <LayoutDashboard className="h-3 w-3 text-primary shrink-0" />
+                        <span className="truncate text-xs text-foreground">{c.title}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onCanvasRemove?.(c.id)}
+                        className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
+                        title="Remove"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Task Metrics panel */}
             {taskMetrics && <TaskMetricsCard metrics={taskMetrics} />}
 
@@ -665,6 +705,7 @@ export function CoworkSurface() {
   const folder = storeFolder || pendingFolder;
   const contextFiles = useCoworkStore((s) => (chatId ? s.contextFiles[chatId] : undefined) ?? EMPTY_FILES);
   const artifactFiles = useCoworkStore((s) => (chatId ? s.artifactFiles[chatId] : undefined) ?? EMPTY_FILES);
+  const canvasArtifacts = useCoworkStore((s) => (chatId ? s.canvasArtifacts[chatId] : undefined) ?? EMPTY_CANVASES);
   const setModel = useCoworkStore((s) => s.setModel);
   const setFolder = useCoworkStore((s) => s.setFolder);
   const addMessage = useCoworkStore((s) => s.addMessage);
@@ -1059,12 +1100,23 @@ export function CoworkSurface() {
           break;
         }
         case "canvas": {
-          // Agent pushed a canvas document — open the canvas panel
+          // Agent pushed a canvas document — open the canvas panel + persist as artifact + inline chip
           try {
             const doc = event.doc as A2UIDocument;
             if (doc && doc.components) {
               pushCanvas(doc);
               setCanvasOpen('cowork', true);
+              const canvasId = crypto.randomUUID();
+              const title = doc.title || 'Canvas';
+              if (chatId) {
+                useCoworkStore.getState().addCanvasArtifact(chatId, {
+                  id: canvasId,
+                  title,
+                  doc,
+                  createdAt: Date.now(),
+                });
+                useCoworkStore.getState().attachCanvasToLastAssistant(chatId, { id: canvasId, title, doc });
+              }
               sendFeatureAdoptionEvent({ feature: 'canvas', surface: 'cowork' });
             }
           } catch (e) {
@@ -1680,7 +1732,7 @@ export function CoworkSurface() {
         </div>
       ) : (
         /* ── Active state: messages + sidebar (no header bar) ── */
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="relative flex flex-1 min-h-0 overflow-hidden">
           {/* Messages column */}
           <div className="flex flex-1 flex-col min-w-0">
             {/* Continue in Surface handoff (when project is active) */}
@@ -1777,9 +1829,17 @@ export function CoworkSurface() {
           <SidebarPanel
             contextFiles={contextFiles}
             artifactFiles={artifactFiles}
+            canvasArtifacts={canvasArtifacts}
             folder={folder}
             open={sidebarOpen}
             onToggle={() => setSidebarOpen((prev) => !prev)}
+            onCanvasClick={(c) => {
+              pushCanvas(c.doc);
+              setCanvasOpen('cowork', true);
+            }}
+            onCanvasRemove={(id) => {
+              if (chatId) useCoworkStore.getState().removeCanvasArtifact(chatId, id);
+            }}
             onContextClick={(path) => {
               // Non-file entries: search queries, bash commands, agent labels — no-op
               if (path.startsWith("🔍 ") || path.startsWith("bash: ") || path.startsWith("⚡ ")) return;

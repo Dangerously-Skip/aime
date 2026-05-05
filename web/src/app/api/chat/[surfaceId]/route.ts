@@ -496,7 +496,7 @@ export async function POST(
       // ── Canvas templates ──────────────────────────────────────────────
       // Inject available canvas templates into the system prompt so the agent
       // can pick a templated payload instead of authoring full A2UI JSON.
-      if (surfaceConfig.allowedTools?.includes('canvas')) {
+      if (surfaceConfig.allowedTools?.includes('mcp__quarry__canvas') || surfaceConfig.allowedTools?.includes('canvas')) {
         const { buildCanvasTemplatesPrompt } = await import('@/lib/canvas/templates');
         const templatesPrompt = buildCanvasTemplatesPrompt(surfaceId);
         if (templatesPrompt) {

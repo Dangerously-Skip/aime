@@ -3,7 +3,7 @@ import type { SurfaceConfig } from './index';
 export function getAssistantConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
     allowedTools: [
-      'WebSearch', 'WebFetch', 'canvas',
+      'WebSearch', 'WebFetch', 'mcp__quarry__canvas',
       'StandingOrderCreate', 'StandingOrderList',
       'StandingOrderUpdate', 'StandingOrderCancel', 'StandingOrderHistory',
     ],
