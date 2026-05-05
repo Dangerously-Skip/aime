@@ -23,10 +23,12 @@ import type {
   TodoComponent,
   ApprovalCardComponent,
   TimelineComponent,
+  MermaidComponent,
 } from './types';
 import { Badge } from '@/components/ui/badge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MermaidBlock } from '@/components/shared/mermaid-block';
 
 // ── Shared primitives ────────────────────────────────────────────────────────
 
@@ -623,6 +625,22 @@ function TimelineRenderer({ component }: { component: TimelineComponent }) {
   );
 }
 
+// ── Mermaid ──────────────────────────────────────────────────────────────────
+
+function MermaidRendererCard({ component }: { component: MermaidComponent }) {
+  return (
+    <div>
+      <CardHeader title={component.title} />
+      <CardBody>
+        <MermaidBlock chart={component.code} />
+        {component.caption && (
+          <p className="mt-2 text-xs text-muted-foreground italic text-center">{component.caption}</p>
+        )}
+      </CardBody>
+    </div>
+  );
+}
+
 // ── Component dispatcher ──────────────────────────────────────────────────────
 
 function A2UIComponentRenderer({ component, onAction }: { component: A2UIComponent; onAction?: (action: A2UIAction) => void }) {
@@ -639,6 +657,7 @@ function A2UIComponentRenderer({ component, onAction }: { component: A2UICompone
     case 'todo': return <TodoRenderer component={component} onAction={onAction} />;
     case 'approval-card': return <ApprovalCardRenderer component={component} onAction={onAction} />;
     case 'timeline': return <TimelineRenderer component={component} />;
+    case 'mermaid': return <MermaidRendererCard component={component} />;
     default:
       return <div className="text-xs text-muted-foreground px-5 py-3">Unknown component type</div>;
   }

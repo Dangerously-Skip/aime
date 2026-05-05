@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ProjectEditDialog } from "./project-edit-dialog";
 import { ProjectIcon } from "@/components/shared/project-icon";
+import { ProjectCanvases } from "./project-canvases";
 
 const SURFACE_CONFIG: Record<
   Surface,
@@ -562,6 +563,9 @@ export function ProjectDetail({
             </div>
           </>
         )}
+
+        {/* Pinned canvases */}
+        <ProjectCanvases projectId={projectId} />
 
         {/* Automations */}
         <div className="mt-8">
