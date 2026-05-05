@@ -222,6 +222,35 @@ Existing installs auto-update when connected to VPN. The electron auto-updater c
 
 See `docs/release-pipeline-investigation.md` for the full investigation into the pipeline architecture and roadblocks encountered during setup.
 
+#### GitHub PAT secret (SSM)
+
+The `Download release + bundle` step needs a GitHub PAT to pull release assets from this private repo. The token lives in **AWS SSM (SecureString)** at:
+
+```
+arn:aws:ssm:ap-southeast-2:384553929753:parameter/quarry/promote-release/github-token
+```
+
+The pipeline assumes the kaos `deployer` role (same role the WAF-strip step uses), reads the parameter at runtime, and exports it as `GITHUB_TOKEN` for the rest of the step. The token is **not** stored in the BK pipeline YAML or anywhere else in this repo — anyone with pipeline-read on BK or who hits the BK API previously saw it in plaintext, which is what motivated the move.
+
+**Minimum scope:** fine-grained PAT, resource owner `redacted-org`, repository `quarry` only, permission `Contents: Read`. Set the longest expiry GitHub allows (currently 1 year for redacted-org) and add a calendar reminder.
+
+**Rotation:**
+
+```bash
+# 1. Mint new fine-grained PAT at https://github.com/settings/personal-access-tokens
+# 2. Overwrite the SSM value (one liner — pipeline picks up the new token on next build)
+aws ssm put-parameter \
+  --name /quarry/promote-release/github-token \
+  --type SecureString \
+  --value "ghp_NEW" \
+  --region ap-southeast-2 \
+  --overwrite
+# 3. Trigger a test promote-release build to verify (BK > quarry-promote-release > New Build, set RELEASE_TAG to the latest tag)
+# 4. Revoke the old token at https://github.com/settings/tokens
+```
+
+If you need to update what role can read the parameter or change the storage location, the assume-role + read logic is in `.buildkite/promote-release.yml` step 1.
+
 ### Git remotes
 
 | Remote | Repository | Purpose |
