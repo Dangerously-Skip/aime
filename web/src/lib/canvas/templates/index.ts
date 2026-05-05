@@ -4,6 +4,10 @@ import { architectureTemplate } from './architecture';
 import { erDiagramTemplate, sequenceDiagramTemplate, mindmapTemplate } from './diagrams';
 import { jiraKanbanTemplate } from './jira-kanban';
 import { snowflakeSchemaTemplate } from './snowflake-schema';
+import { githubPrTriageTemplate } from './github-pr-triage';
+import { apiExplorerTemplate } from './api-explorer';
+import { codeReviewTemplate } from './code-review';
+import { buildPipelineTemplate } from './build-pipeline';
 
 /** Registry of all known canvas templates. */
 export const CANVAS_TEMPLATES: CanvasTemplate[] = [
@@ -13,6 +17,10 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   mindmapTemplate as unknown as CanvasTemplate,
   jiraKanbanTemplate as unknown as CanvasTemplate,
   snowflakeSchemaTemplate as unknown as CanvasTemplate,
+  githubPrTriageTemplate as unknown as CanvasTemplate,
+  apiExplorerTemplate as unknown as CanvasTemplate,
+  codeReviewTemplate as unknown as CanvasTemplate,
+  buildPipelineTemplate as unknown as CanvasTemplate,
 ];
 
 export function getCanvasTemplate(id: string): CanvasTemplate | undefined {
