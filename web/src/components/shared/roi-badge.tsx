@@ -32,12 +32,23 @@ export function RoiBadge({ roi, tokenUsage, effortEstimate, size = "sm" }: RoiBa
   tooltipParts.push(`ROI: ${multiplier.toFixed(1)}× faster`);
   tooltipParts.push(`Saved: $${roi.dollarsSaved.toFixed(0)}`);
 
+  // Use a span (not a button) so this can be nested inside the conversation
+  // list item button without breaking HTML semantics. Click still toggles via
+  // role="button" + tabIndex for keyboard access.
   return (
-    <button
-      type="button"
+    <span
+      role="button"
+      tabIndex={0}
       onClick={(e) => { e.stopPropagation(); setShowDollars((v) => !v); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowDollars((v) => !v);
+        }
+      }}
       title={tooltipParts.join(" · ")}
-      className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 font-mono font-semibold transition-colors hover:bg-muted/50 ${color} ${textSize}`}
+      className={`inline-flex items-center gap-0.5 rounded px-1 py-0.5 font-mono font-semibold transition-colors hover:bg-muted/50 cursor-pointer ${color} ${textSize}`}
     >
       {showDollars ? (
         <span>${Math.abs(roi.dollarsSaved).toFixed(0)} saved</span>
@@ -47,6 +58,6 @@ export function RoiBadge({ roi, tokenUsage, effortEstimate, size = "sm" }: RoiBa
           <span>{multiplier.toFixed(1)}×</span>
         </>
       )}
-    </button>
+    </span>
   );
 }

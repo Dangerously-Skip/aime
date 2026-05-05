@@ -87,9 +87,13 @@ export function buildCanvasTemplatesPrompt(surfaceId: string): string {
   const lines = templates.map((t) =>
     `- **${t.id}** — ${t.name}. ${t.description}\n  When to use: ${t.whenToUse}\n  Input shape: ${t.inputShape}`
   );
-  return `## Visualisations — prefer the canvas tool
+  return `## Visualisations — you MUST call the canvas tool
 
-For ANY visual artefact — diagrams, charts, kanban boards, schemas, dashboards, mind maps, sequence diagrams — call the \`canvas\` tool. **Do NOT** generate HTML/SVG files for these; the canvas panel renders them natively with proper interactivity, theming, pinning, and writeback.
+For ANY visual artefact — diagrams, charts, kanban boards, schemas, dashboards, mind maps, sequence diagrams, PR/Jira/build lists — you **must** call the \`mcp__quarry__canvas\` (a.k.a. \`canvas\`) tool.
+
+**Do not** describe a visualisation in prose ("Your kanban is rendered in the canvas panel...") *without* actually calling the tool. The user will see no canvas. If you cannot fetch real data, call the tool with whatever data you have plus a \`caption\` explaining the situation.
+
+**Do not** generate HTML/SVG files for these — the canvas panel renders them natively with proper interactivity, theming, pinning, and writeback.
 
 Use a templated payload whenever a template fits:
 
@@ -103,7 +107,9 @@ ${lines.join('\n\n')}
 
 If none of the templates fit, pass a raw A2UI document: \`{ "version": "1", "components": [...] }\`.
 
-**Reserve HTML artefacts for things the canvas can't render** — e.g. interactive prototypes, full marketing pages, web app shells, custom games. For diagrams and dashboards, always pick a canvas template.`;
+**Order of operations**: gather data (read files, call MCP tools) → call \`canvas\` with templated payload → write a brief 1–2 sentence summary referencing the canvas. The canvas call must come BEFORE the summary text.
+
+Reserve HTML artefacts for things the canvas can't render — e.g. interactive prototypes, full marketing pages, web app shells, custom games. For diagrams, lists, kanban, charts, schemas: always canvas.`;
 }
 
 export type { CanvasTemplate };
