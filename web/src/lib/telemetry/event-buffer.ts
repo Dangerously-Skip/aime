@@ -1,27 +1,40 @@
 /**
  * Local JSONL event buffer.
- * Accumulates analytics events in memory and persists them to
- * ~/.claude/analytics-buffer.jsonl on flush.
+ * Accumulates analytics events in memory and, when delivery fails, persists
+ * them to disk (under Electron's userData dir, or ~/.quarry/ in dev) so they
+ * can be retried on the next flush.
  */
 
 import type { AnalyticsEvent } from './analytics-client';
 import { sendEvents } from './analytics-client';
 
-const BUFFER_PATH_SEGMENT = '.quarry/analytics-buffer.jsonl';
+const BUFFER_FILENAME = 'analytics-buffer.jsonl';
 const FLUSH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 let memoryBuffer: AnalyticsEvent[] = [];
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 let bufferFilePath: string | null = null;
 
+/**
+ * Resolve the on-disk buffer location. In packaged builds the Electron main
+ * process passes its userData dir via QUARRY_USER_DATA_DIR — we land the
+ * buffer under `<userData>/telemetry/`. Dev mode falls back to `~/.quarry/`.
+ * Either way we mkdir the parent so appendFile never silently ENOENTs.
+ */
 async function getBufferPath(): Promise<string> {
   if (bufferFilePath) return bufferFilePath;
   try {
     const os = await import('os');
     const path = await import('path');
-    bufferFilePath = path.join(os.homedir(), BUFFER_PATH_SEGMENT);
+    const fs = await import('fs/promises');
+    const userDataDir = process.env.QUARRY_USER_DATA_DIR;
+    const dir = userDataDir
+      ? path.join(userDataDir, 'telemetry')
+      : path.join(os.homedir(), '.quarry');
+    await fs.mkdir(dir, { recursive: true });
+    bufferFilePath = path.join(dir, BUFFER_FILENAME);
   } catch {
-    bufferFilePath = `/tmp/analytics-buffer.jsonl`;
+    bufferFilePath = `/tmp/${BUFFER_FILENAME}`;
   }
   return bufferFilePath;
 }
@@ -39,8 +52,10 @@ export async function persistBuffer(): Promise<void> {
     const path = await getBufferPath();
     const lines = memoryBuffer.map((e) => JSON.stringify(e)).join('\n') + '\n';
     await fs.appendFile(path, lines, 'utf-8');
-  } catch {
-    // Non-fatal — buffer lives in memory
+  } catch (err) {
+    // Non-fatal — buffer lives in memory. Log so a misconfigured path doesn't
+    // silently shred undeliverable events the way it used to.
+    console.warn('[telemetry] failed to persist buffer to disk:', err instanceof Error ? err.message : err);
   }
 }
 

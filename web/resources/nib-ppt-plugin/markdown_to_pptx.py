@@ -106,8 +106,39 @@ class MarkdownToPptxConverter:
         if not match:
             return None
 
-        slide_type = match.group(1) or 'content'
+        raw_slide_type = match.group(1)
+        slide_type = raw_slide_type or 'content'
         title = match.group(2).strip()
+
+        # Guards for the recurring SKILL.md misread bug. The model has shipped
+        # broken decks via at least three header patterns, each producing the
+        # same symptom (slide-type keyword rendered literally as the title,
+        # real headers leaking through as raw markdown body):
+        #
+        #   1. `## SLIDE title: title`        — both placeholders left literal
+        #   2. `## SLIDE type: title`         — kept `type` as the literal
+        #                                       slide-type, valid type leaked
+        #                                       into the title slot
+        #   3. `## SLIDE: title`              — slide-type omitted, title is
+        #                                       the placeholder name
+        #
+        # Refuse all three so the failure is loud at generation time instead
+        # of silently producing a deck the user has to debug visually.
+        VALID_SLIDE_TYPES = {'title', 'section', 'content', 'two_column', 'image', 'table'}
+        if raw_slide_type and raw_slide_type.lower() not in VALID_SLIDE_TYPES:
+            raise ValueError(
+                f"Refusing to render slide header `## SLIDE {raw_slide_type}: {title}` — "
+                f"`{raw_slide_type}` is not a valid slide type. Use one of "
+                f"{sorted(VALID_SLIDE_TYPES)}. Rewrite as "
+                f"`## SLIDE <slide-type>: <Real Slide Title>` substituting both placeholders."
+            )
+        if title.lower() in VALID_SLIDE_TYPES:
+            raise ValueError(
+                f"Refusing to render slide header `## SLIDE {slide_type}: {title}` — "
+                f"the title is `{title}`, which is the literal name of a slide type. "
+                f"That means the title placeholder wasn't substituted. Rewrite as "
+                f"`## SLIDE {slide_type}: <Real Slide Title>` with a real title."
+            )
 
         # Parse metadata comments
         metadata = SlideMetadata()

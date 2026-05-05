@@ -48,10 +48,12 @@ interface MessageListProps {
   onArtifactClick?: (pathOrArtifact: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
   onRetry?: () => void;
+  /** Cancels the active stream — wired to streamRegistry.abort by the surface. */
+  onCancel?: () => void;
   conversationId?: string;
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, onRetry, conversationId }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, onRetry, onCancel, conversationId }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -141,6 +143,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             onArtifactClick={onArtifactClick}
             onPreviewUrl={onPreviewUrl}
             onRetry={isLastAssistant ? onRetry : undefined}
+            onCancel={msg.isStreaming ? onCancel : undefined}
             conversationId={conversationId}
           />
         ) : null;

@@ -1,17 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
-import { Wrench, ChevronDown, Loader2, Check, X, FileText, Globe, AlertTriangle } from "lucide-react";
+import { Wrench, ChevronDown, Loader2, Check, X, FileText, Globe, AlertTriangle, Square } from "lucide-react";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
 
 const ARTIFACT_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
+
+// Elapsed-time thresholds for the running-tool badge.
+// At AMBER the badge changes colour to flag a slow tool; at TIMEOUT we
+// surface a Cancel button so the user can abort instead of waiting on a
+// hung tool. Values picked to feel snappy without nagging on routine
+// 30-60s WebFetches.
+const ELAPSED_AMBER_S = 30;
+const ELAPSED_TIMEOUT_S = 90;
 
 /**
  * For a Bash command like `bash generate_presentation.sh in.md out.pptx`,
@@ -36,6 +44,28 @@ interface ToolCallCardProps {
   endTime?: number;
   onArtifactClick?: (path: string) => void;
   onPreviewUrl?: (url: string) => void;
+  /** Abort the parent SSE stream. When provided, a Cancel button appears
+      once a running tool has been pending past ELAPSED_TIMEOUT_S. */
+  onCancel?: () => void;
+}
+
+/** Live-ticking elapsed badge for running tools. Idle (complete/error)
+ *  tools render a static duration via formatDuration on the parent. */
+function RunningElapsedBadge({ startTime }: { startTime: number }) {
+  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startTime) / 1000));
+  useEffect(() => {
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [startTime]);
+  const tone =
+    elapsed >= ELAPSED_TIMEOUT_S
+      ? "text-destructive"
+      : elapsed >= ELAPSED_AMBER_S
+      ? "text-orange-500"
+      : "text-muted-foreground";
+  return <span className={`tabular-nums text-[10px] ${tone}`}>{elapsed}s</span>;
 }
 
 function formatToolPreview(input: Record<string, unknown>): string {
@@ -84,8 +114,21 @@ export function ToolCallCard({
   endTime,
   onArtifactClick,
   onPreviewUrl,
+  onCancel,
 }: ToolCallCardProps) {
   const [isOpen, setIsOpen] = useState(status === "running");
+  // Re-render every second while running so the inline cancel button can
+  // appear once the tool is past ELAPSED_TIMEOUT_S — the elapsed badge
+  // already ticks via its own state, but the trigger row needs to know
+  // when to show the button.
+  const [, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (status !== "running" || !startTime) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [status, startTime]);
+  const elapsedS = startTime && status === "running" ? Math.floor((Date.now() - startTime) / 1000) : 0;
+  const showCancel = status === "running" && !!onCancel && elapsedS >= ELAPSED_TIMEOUT_S;
   const [showFullOutput, setShowFullOutput] = useState(false);
   const preview = formatToolPreview(input);
   const inputStr = JSON.stringify(input, null, 2);
@@ -114,10 +157,23 @@ export function ToolCallCard({
               Risky
             </span>
           )}
-          {startTime && (
+          {startTime && status === "running" ? (
+            <RunningElapsedBadge startTime={startTime} />
+          ) : startTime ? (
             <span className="text-muted-foreground text-[10px]">
               {formatDuration(startTime, endTime)}
             </span>
+          ) : null}
+          {showCancel && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onCancel?.(); }}
+              className="inline-flex items-center gap-1 rounded-sm bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive hover:bg-destructive/20 transition-colors"
+              title={`Tool has been running for ${elapsedS}s — click to cancel`}
+            >
+              <Square className="h-2.5 w-2.5 fill-current" />
+              Cancel
+            </button>
           )}
           {STATUS_ICONS[status]}
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />

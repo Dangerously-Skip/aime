@@ -1693,7 +1693,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} conversationId={chatId} />
+            <MessageList messages={messages} onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">

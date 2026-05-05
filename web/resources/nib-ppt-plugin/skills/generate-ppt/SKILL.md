@@ -16,51 +16,69 @@ Use this skill to create professional PowerPoint presentations from markdown.
 
 ## Markdown Format
 
+Every slide header has the form `## SLIDE <slide-type>: <Slide Title>`,
+and slides are separated by `---`.
+
+`<slide-type>` is one of: `title`, `section`, `content`, `two_column`,
+`image`, `table`. `<Slide Title>` is the actual title text the slide
+should display.
+
+CRITICAL: substitute BOTH placeholders with real values. Do NOT write
+the literal word `type` after `## SLIDE`, and do NOT write the literal
+slide-type name as the title (e.g. `## SLIDE title: title`,
+`## SLIDE section: section`). Both produce broken decks where the
+slide-type name shows up as the title and the user's real headers/body
+leak through as raw markdown beneath. The slide type and the slide
+title are different things — the type is one of the six keywords above,
+the title is whatever the slide should be called.
+
+Example (real values, both placeholders substituted):
 ```markdown
-## SLIDE title: Presentation Title
-<!-- subtitle: Optional Subtitle -->
+## SLIDE title: Top 5 Restaurants in Sydney
+<!-- subtitle: A guide to the city's finest dining experiences — 2026 -->
 <!-- authors: Author Name -->
-<!-- date: 2024-01-05 -->
+<!-- date: 2026-01-05 -->
 
 ---
 
-## SLIDE section: Section Name
+## SLIDE section: Bennelong
 
 ---
 
-## SLIDE content: Slide Title
+## SLIDE content: Why Bennelong Stands Out
 
 Bullet points:
-- Point 1
-- Point 2
-- **Bold text**
+- Chef: Peter Gilmore
+- Cuisine: Modern Australian fine dining
+- **Sydney Opera House setting**
 
 ---
 
-## SLIDE two_column: Comparison Title
+## SLIDE two_column: Bennelong vs Quay
 
 ::: column-left
-### Left Side
-Content here
+### Bennelong
+Iconic Opera House setting
 :::
 
 ::: column-right
-### Right Side
-Content here
+### Quay
+Harbour-bridge views
 :::
 
 ---
 
-## SLIDE image: Visual Slide
+## SLIDE image: Bennelong Dining Room
 <!-- image: path/to/image.png -->
 
 ---
 
-## SLIDE table: Data Table
+## SLIDE table: 2026 Top 5 — At A Glance
 
-| Header 1 | Header 2 |
-|----------|----------|
-| Data 1   | Data 2   |
+| Restaurant | Chef         | Cuisine             |
+|------------|--------------|---------------------|
+| Bennelong  | Peter Gilmore| Modern Australian   |
+| Quay       | Peter Gilmore| Contemporary tasting|
 ```
 
 ## Commands

@@ -17,8 +17,10 @@ export const BASH_WRITE_PATTERNS = [
 // Bash commands that are noisy / not worth tracking in sidebar
 export const BASH_NOISE = /^\s*(ls|cd|pwd|echo(?!\s.*>)|git\s+(status|log|diff|branch|show)|cat\s|head\s|tail\s|wc\s|which\s|type\s|env|printenv|date|whoami|uname|curl\s|wget\s)/;
 
-// Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools)
-export const BASH_ARTIFACT_EXT = /\b([\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
+// Binary/document extensions that Bash scripts produce (not tracked by Write/Edit tools).
+// Character class includes `~` so paths like `~/foo.pptx` are captured intact —
+// without it the leading tilde gets stripped, leaving `/foo.pptx`, which doesn't exist.
+export const BASH_ARTIFACT_EXT = /(?:^|[\s'"=])(~?[\w./-]+\.(?:pptx?|docx?|xlsx?|pdf|csv|png|jpe?g|gif|svg|webp|mp[34]|wav|ogg|zip|tar\.gz|tgz))\b/gi;
 
 // Filter out HTML tag fragments, internal paths, and garbage from artifact/context names
 export function isValidSidebarEntry(path: string): boolean {
