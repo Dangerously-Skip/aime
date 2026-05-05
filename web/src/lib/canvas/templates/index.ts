@@ -1,10 +1,18 @@
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { CanvasTemplate } from './types';
 import { architectureTemplate } from './architecture';
+import { erDiagramTemplate, sequenceDiagramTemplate, mindmapTemplate } from './diagrams';
+import { jiraKanbanTemplate } from './jira-kanban';
+import { snowflakeSchemaTemplate } from './snowflake-schema';
 
 /** Registry of all known canvas templates. */
 export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   architectureTemplate as unknown as CanvasTemplate,
+  erDiagramTemplate as unknown as CanvasTemplate,
+  sequenceDiagramTemplate as unknown as CanvasTemplate,
+  mindmapTemplate as unknown as CanvasTemplate,
+  jiraKanbanTemplate as unknown as CanvasTemplate,
+  snowflakeSchemaTemplate as unknown as CanvasTemplate,
 ];
 
 export function getCanvasTemplate(id: string): CanvasTemplate | undefined {

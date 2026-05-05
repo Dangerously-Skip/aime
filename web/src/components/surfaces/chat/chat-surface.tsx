@@ -35,7 +35,8 @@ import { CommandPicker, type CommandSuggestion } from "@/components/shared/comma
 import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasPanel } from "@/components/shared/canvas-panel";
-import type { A2UIDocument } from "@/lib/a2ui/types";
+import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
+import { dispatchCanvasToolCall } from "@/lib/canvas/dispatch";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
 import { categorizeToolCall, isValidSidebarEntry, BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
@@ -928,6 +929,13 @@ export function ChatSurface() {
               onClear={clearCanvas}
               canGoBack={canvasHistoryIndex > 0}
               canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
+              surface="chat"
+              conversationId={chatId}
+              onAction={(action: A2UIAction) => {
+                if (action.type === 'tool-call') {
+                  dispatchCanvasToolCall(action, { surfaceId: 'chat' }).catch((err) => console.error('[canvas] tool-call failed:', err));
+                }
+              }}
             />
           </div>
         </>
