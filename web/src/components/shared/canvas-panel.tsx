@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, Trash2, X, LayoutDashboard, Pin, Check, Maximize2, Minimize2 } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
@@ -42,6 +42,34 @@ export function CanvasPanel({
   const [pinned, setPinned] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [customWidth, setCustomWidth] = useState<number | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Clamp customWidth + auto-expand on narrow viewports.
+  // Below MIN_SIDE_BY_SIDE the side-by-side layout doesn't fit, so we flip
+  // into expanded (full-viewport) mode automatically.
+  const MIN_SIDE_BY_SIDE = 900;
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => {
+      const w = window.innerWidth;
+      if (w < MIN_SIDE_BY_SIDE) {
+        setExpanded(true);
+        return;
+      }
+      const flexParent = panelRef.current?.parentElement;
+      const parentWidth = flexParent?.getBoundingClientRect().width;
+      if (!parentWidth) return;
+      const max = Math.max(360, parentWidth - 360);
+      setCustomWidth((prev) => {
+        if (prev == null) return prev;
+        if (prev > max) return max;
+        return prev;
+      });
+    };
+    onResize(); // run once on mount
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -86,6 +114,7 @@ export function CanvasPanel({
 
   return (
     <div
+      ref={panelRef}
       className={
         expanded
           ? "fixed inset-x-0 bottom-0 top-7 z-50 flex flex-col bg-background"
@@ -97,6 +126,7 @@ export function CanvasPanel({
               // Default 720px so kanban-style canvases (~3 columns × 200px) fit
               // without horizontal scroll. User can drag-resize wider/narrower.
               width: customWidth ? `${customWidth}px` : "720px",
+              minWidth: "360px",
               // Hard cap so the panel can never crush sibling columns, even if
               // customWidth was somehow set too high.
               maxWidth: "calc(100% - 360px)",
