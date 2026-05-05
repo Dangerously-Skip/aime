@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { CanvasPanel } from "./canvas-panel";
 import { useCanvasStore } from "@/stores/canvas-store";
+import { useAppStore } from "@/stores/app-store";
 import { dispatchCanvasToolCall } from "@/lib/canvas/dispatch";
 import type { A2UIAction } from "@/lib/a2ui/types";
 
@@ -27,6 +28,13 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
   const goForwardCanvas = useCanvasStore((s) => s.goForward);
   const clearCanvas = useCanvasStore((s) => s.clearCanvas);
   const setCanvasOpen = useCanvasStore((s) => s.setOpen);
+  // Subscribe to activeSurface so we re-render when switching back; this
+  // gives the panel a chance to recompute its layout (parent went from
+  // display:none to display:block, which can leave absolute children in a
+  // stale layout state if nothing re-renders).
+  const activeSurface = useAppStore((s) => s.activeSurface);
+  // The variable is read intentionally to keep the dep — no further use.
+  void activeSurface;
 
   // Close + clear when conversation changes within this surface, so the
   // previous conversation's canvas doesn't leak. Guarded with a ref so
