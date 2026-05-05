@@ -31,8 +31,11 @@ export function ProjectCanvases({ projectId }: ProjectCanvasesProps) {
   };
 
   const openInPanel = (canvas: PinnedCanvas) => {
-    pushCanvas(canvas.doc);
-    if (canvas.surface) setOpen(canvas.surface, true);
+    // Re-open in the surface this canvas was pinned from. Default to chat
+    // if the source wasn't recorded.
+    const target = canvas.surface ?? 'chat';
+    pushCanvas(target, canvas.doc);
+    setOpen(target, true);
   };
 
   return (
