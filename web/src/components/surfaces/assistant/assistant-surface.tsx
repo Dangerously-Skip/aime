@@ -7,6 +7,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useAppStore } from "@/stores/app-store";
 import { useHydrated } from "@/components/store-hydration";
 import { useStandingOrders } from "@/hooks/use-standing-orders";
+import { useAssistantWidgets } from "@/hooks/use-assistant-widgets";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -456,6 +457,9 @@ export function AssistantSurface() {
 
   // Standing order trigger engine
   useStandingOrders();
+
+  // Auto-refresh dashboard widgets on the heartbeat
+  useAssistantWidgets();
 
   // Clear selection when the selected order is deleted
   useEffect(() => {

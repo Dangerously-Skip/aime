@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import type { A2UIDocument } from '@/lib/a2ui/types';
 
 export interface KnowledgeFile {
   id: string;
@@ -11,6 +12,17 @@ export interface KnowledgeFile {
   type: string;
   size: number;
   addedAt: number;
+}
+
+export interface PinnedCanvas {
+  id: string;
+  name: string;
+  doc: A2UIDocument;
+  pinnedAt: number;
+  /** Source surface ('chat' | 'cowork' | etc.) — for context. */
+  surface?: string;
+  /** Source conversation, so we can offer "regenerate from chat". */
+  conversationId?: string;
 }
 
 export interface ProjectArtifact {
@@ -50,6 +62,7 @@ export interface Project {
   // Cross-surface fields
   artifacts: ProjectArtifact[];
   timeline: ProjectTimeline[];
+  pinnedCanvases?: PinnedCanvas[];
   folder?: string;
   urls?: string[];
   conversationIds: Record<string, string[]>;  // surface → conversationIds
@@ -76,6 +89,7 @@ function migrateProject(p: Partial<Project> & { id: string }): Project {
     ...p,
     artifacts: p.artifacts ?? [],
     timeline: p.timeline ?? [],
+    pinnedCanvases: p.pinnedCanvases ?? [],
     conversationIds: p.conversationIds ?? {},
     folder: p.folder ?? undefined,
     urls: p.urls ?? undefined,
@@ -115,6 +129,10 @@ interface ProjectActions {
   getConversationsForSurface: (projectId: string, surface: string) => string[];
   setProjectFolder: (projectId: string, folder: string) => void;
   addProjectUrl: (projectId: string, url: string) => void;
+  // Canvas pinning
+  pinCanvas: (projectId: string, canvas: PinnedCanvas) => void;
+  unpinCanvas: (projectId: string, canvasId: string) => void;
+  renamePinnedCanvas: (projectId: string, canvasId: string, name: string) => void;
 }
 
 export type ProjectStore = ProjectState & ProjectActions;
@@ -314,6 +332,47 @@ export const useProjectStore = create<ProjectStore>()(
               updatedAt: Date.now(),
             };
           }),
+        })),
+
+      pinCanvas: (projectId, canvas) =>
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId
+              ? {
+                  ...migrateProject(p),
+                  pinnedCanvases: [...(p.pinnedCanvases ?? []), canvas],
+                  updatedAt: Date.now(),
+                }
+              : p
+          ),
+        })),
+
+      unpinCanvas: (projectId, canvasId) =>
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId
+              ? {
+                  ...migrateProject(p),
+                  pinnedCanvases: (p.pinnedCanvases ?? []).filter((c) => c.id !== canvasId),
+                  updatedAt: Date.now(),
+                }
+              : p
+          ),
+        })),
+
+      renamePinnedCanvas: (projectId, canvasId, name) =>
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId
+              ? {
+                  ...migrateProject(p),
+                  pinnedCanvases: (p.pinnedCanvases ?? []).map((c) =>
+                    c.id === canvasId ? { ...c, name } : c
+                  ),
+                  updatedAt: Date.now(),
+                }
+              : p
+          ),
         })),
     }),
     {
