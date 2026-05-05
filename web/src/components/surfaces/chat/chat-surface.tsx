@@ -34,9 +34,9 @@ import type { SessionControls } from "@/lib/slash-commands";
 import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
 import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
 import { useCanvasStore } from "@/stores/canvas-store";
-import { CanvasPanel } from "@/components/shared/canvas-panel";
-import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
-import { dispatchCanvasToolCall } from "@/lib/canvas/dispatch";
+import { CanvasOverlay } from "@/components/shared/canvas-overlay";
+import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
+import type { CanvasArtifact } from "@/stores/chat-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
 import { categorizeToolCall, isValidSidebarEntry, BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
@@ -53,6 +53,7 @@ function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) 
 }
 
 const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_CANVAS_ARTIFACTS: CanvasArtifact[] = [];
 
 /** Truncate text at the nearest word boundary before maxLen. */
 function truncateAtWordBoundary(text: string, maxLen: number): string {
@@ -79,19 +80,8 @@ export function ChatSurface() {
   const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
     useAtSuggestions();
   // Cron jobs now route to standing orders via useAssistantStore (see cron_create handler)
-  const pushCanvas = useCanvasStore((s) => s.pushCanvas);
-  const clearCanvas = useCanvasStore((s) => s.clearCanvas);
-  const goBackCanvas = useCanvasStore((s) => s.goBack);
-  const goForwardCanvas = useCanvasStore((s) => s.goForward);
-  const setCanvasOpen = useCanvasStore((s) => s.setOpen);
-  const canvasDoc = useCanvasStore((s) => s.canvasDoc);
-  const canvasHistoryIndex = useCanvasStore((s) => s.historyIndex);
-  const canvasHistoryLength = useCanvasStore((s) => s.history.length);
-  const canvasOpen = useCanvasStore((s) => !!s.openSurfaces['chat']);
   // Artifact tracking — files created by Write/Edit/Bash tool calls
   const [artifactFiles, setArtifactFiles] = useState<string[]>([]);
-  // Canvas artifacts — A2UI docs the agent rendered in this session
-  const [canvasArtifacts, setCanvasArtifacts] = useState<Array<{ id: string; title: string; doc: A2UIDocument; createdAt: number }>>([]);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const addArtifactFile = useCallback((path: string) => {
     setArtifactFiles((prev) => prev.includes(path) ? prev : [...prev, path]);
@@ -101,21 +91,20 @@ export function ChatSurface() {
   );
   const currentChatId = useChatStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
+  // Canvas SSE handler + persisted per-chat canvas artifacts now live in chat-store.
+  const onCanvasEvent = useCanvasSseHandler('chat', chatId);
+  const canvasArtifacts = useChatStore((s) => (chatId ? s.canvasArtifacts[chatId] : undefined) ?? EMPTY_CANVAS_ARTIFACTS);
+  const pushCanvas = useCanvasStore((s) => s.pushCanvas);
+  const setCanvasOpen = useCanvasStore((s) => s.setOpen);
 
-  // Clear canvas + per-conversation artifact state when switching conversations,
-  // so a kanban from a previous chat doesn't leak into a new one.
-  // Skip when chatId is empty — that's a transient between-conversations state,
-  // not a deliberate switch, and clearing on it can cascade through the layout.
+  // Clear local artifact state on conversation change. Canvas-store lifecycle
+  // is handled by <CanvasOverlay /> via its own useEffect.
   const lastChatIdRef = useRef<string>("");
   useEffect(() => {
     if (!chatId) return;
     if (lastChatIdRef.current === chatId) return;
     lastChatIdRef.current = chatId;
-    clearCanvas();
-    setCanvasOpen('chat', false);
     setArtifactFiles([]);
-    setCanvasArtifacts([]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
   const messages = useChatStore(
     (s) =>
@@ -283,28 +272,9 @@ export function ChatSurface() {
             showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
           }
           break;
-        case "canvas": {
-          try {
-            const doc = event.doc as A2UIDocument;
-            if (doc && doc.components) {
-              pushCanvas(doc);
-              setCanvasOpen('chat', true);
-              const canvasId = crypto.randomUUID();
-              const title = doc.title || 'Canvas';
-              setCanvasArtifacts((prev) => [
-                ...prev,
-                { id: canvasId, title, doc, createdAt: Date.now() },
-              ]);
-              if (chatId) {
-                useChatStore.getState().attachCanvasToLastAssistant(chatId, { id: canvasId, title, doc });
-              }
-              sendFeatureAdoptionEvent({ feature: 'canvas', surface: 'chat' });
-            }
-          } catch (e) {
-            console.error('[Chat] Canvas parse error:', e);
-          }
+        case "canvas":
+          onCanvasEvent(event as { doc?: unknown });
           break;
-        }
         case "cron_create": {
           try {
             const input = event.input as Record<string, unknown>;
@@ -957,24 +927,8 @@ export function ChatSurface() {
               </div>
             )}
 
-            {/* Canvas panel */}
-            <CanvasPanel
-              open={canvasOpen}
-              doc={canvasDoc}
-              onClose={() => setCanvasOpen('chat', false)}
-              onBack={goBackCanvas}
-              onForward={goForwardCanvas}
-              onClear={clearCanvas}
-              canGoBack={canvasHistoryIndex > 0}
-              canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
-              surface="chat"
-              conversationId={chatId}
-              onAction={(action: A2UIAction) => {
-                if (action.type === 'tool-call') {
-                  dispatchCanvasToolCall(action, { surfaceId: 'chat' }).catch((err) => console.error('[canvas] tool-call failed:', err));
-                }
-              }}
-            />
+            {/* Canvas overlay — slides in over the chat content */}
+            <CanvasOverlay surfaceId="chat" conversationId={chatId} />
           </div>
         </>
       )}
