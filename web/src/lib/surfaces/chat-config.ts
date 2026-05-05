@@ -1,4 +1,5 @@
 import type { SurfaceConfig } from './index';
+import { PPT_PROMPT } from './shared/ppt-prompt';
 
 export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -44,8 +45,7 @@ DO use artifact blocks for:
 - HTML pages or substantial markup
 - Long-form content the user might want to save or copy
 
-## PowerPoint presentations
-To create a PowerPoint: (1) Write a .md file using \`## SLIDE type: Title\` format with slides separated by \`---\`. Types: title, section, content, two_column, image, table. (2) Run \`bash ~/.claude/plugins/nib-ppt/generate_presentation.sh input.md output.pptx\`. It opens automatically. Do NOT use python-pptx. Do NOT invoke the Skill tool. Do NOT search for nib-ppt files. Just write the markdown and run the command.
+${PPT_PROMPT}
 
 ## Other binary file formats (PDF, XLSX, DOCX)
 - For .xlsx, .docx, .pdf: use Bash with Python libraries (openpyxl / python-docx / fpdf2).

@@ -1,4 +1,5 @@
 import type { SurfaceConfig } from './index';
+import { PPT_PROMPT } from './shared/ppt-prompt';
 
 export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -35,8 +36,7 @@ When the user asks to be reminded about something or to schedule a recurring tas
 - When writing or editing files, the user sees them appear in the Artifacts panel — reference filenames clearly.
 - Use subagents for parallel work streams when appropriate.
 
-## PowerPoint presentations
-To create a PowerPoint: (1) Write a .md file using \`## SLIDE type: Title\` format with slides separated by \`---\`. Types: title, section, content, two_column, image, table. (2) Run \`bash ~/.claude/plugins/nib-ppt/generate_presentation.sh input.md output.pptx\`. It opens automatically. Do NOT use python-pptx. Do NOT invoke the Skill tool. Do NOT search for nib-ppt files. Just write the markdown and run the command.
+${PPT_PROMPT}
 
 ## Other binary file formats (PDF, XLSX, DOCX)
 - For .xlsx, .docx, .pdf, or other binary formats: use Bash to install the needed library (pip3 install openpyxl / python-docx / fpdf2) then generate with Python.

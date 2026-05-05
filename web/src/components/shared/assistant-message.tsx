@@ -13,6 +13,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
 import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
+import { BASH_ARTIFACT_EXT, isValidSidebarEntry } from "@/lib/artifact-tracker";
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "ExcelWrite", "ExcelEdit"]);
 
@@ -98,6 +99,8 @@ interface AssistantMessageProps {
   onArtifactClick?: (path: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
   onRetry?: () => void;
+  /** Abort the active stream — only meaningful for the streaming message. */
+  onCancel?: () => void;
   conversationId?: string;
 }
 
@@ -111,6 +114,7 @@ export function AssistantMessage({
   onArtifactClick,
   onPreviewUrl,
   onRetry,
+  onCancel,
   conversationId,
 }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false);
@@ -142,14 +146,37 @@ export function AssistantMessage({
 
   const hasArtifacts = parsed?.segments.some((s) => s.type === "artifact") ?? false;
 
-  // Extract file paths from completed Write/Edit tool calls
+  // Extract file paths from completed Write/Edit tool calls + binary artifacts
+  // produced by Bash (e.g. nib-ppt's generate_presentation.sh writing a .pptx).
+  // The Bash scan reuses BASH_ARTIFACT_EXT so chips and the right-side panel agree
+  // on what counts as a produced artifact.
   const writtenFiles = useMemo(() => {
     if (isStreaming) return [];
     const paths: string[] = [];
+    const seen = new Set<string>();
+    const add = (p: string | undefined) => {
+      if (!p) return;
+      const trimmed = p.replace(/['"]/g, "").trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      paths.push(trimmed);
+    };
     for (const tc of toolCalls) {
-      if (tc.status === "complete" && WRITE_TOOLS.has(tc.name)) {
-        const p = (tc.input.file_path || tc.input.path || tc.input.notebook_path) as string | undefined;
-        if (p && !paths.includes(p)) paths.push(p);
+      if (tc.status !== "complete") continue;
+      if (WRITE_TOOLS.has(tc.name)) {
+        add((tc.input.file_path || tc.input.path || tc.input.notebook_path) as string | undefined);
+        continue;
+      }
+      if (tc.name === "Bash" && typeof tc.input.command === "string") {
+        const cmd = tc.input.command;
+        BASH_ARTIFACT_EXT.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = BASH_ARTIFACT_EXT.exec(cmd)) !== null) {
+          const candidate = m[1];
+          if (!candidate || candidate.length < 3 || candidate.startsWith(".")) continue;
+          if (!isValidSidebarEntry(candidate)) continue;
+          add(candidate);
+        }
       }
     }
     return paths;
@@ -205,6 +232,7 @@ export function AssistantMessage({
             toolCalls={toolCalls}
             onArtifactClick={onArtifactClick}
             onPreviewUrl={onPreviewUrl}
+            onCancel={isStreaming ? onCancel : undefined}
           />
         )}
 

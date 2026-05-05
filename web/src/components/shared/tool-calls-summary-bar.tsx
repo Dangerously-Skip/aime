@@ -24,6 +24,8 @@ interface ToolCallsSummaryBarProps {
   toolCalls: ToolCall[];
   onArtifactClick?: (path: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
+  /** Forwarded to ToolCallCard so a stuck tool can offer Cancel inline. */
+  onCancel?: () => void;
 }
 
 function ElapsedTimer({ startTime }: { startTime: number }) {
@@ -43,6 +45,7 @@ export function ToolCallsSummaryBar({
   toolCalls,
   onArtifactClick,
   onPreviewUrl,
+  onCancel,
 }: ToolCallsSummaryBarProps) {
   const { running, completed, errored, label, icon, runningStartTime } = useMemo(() => {
     const running = toolCalls.filter((t) => t.status === "running");
@@ -113,6 +116,7 @@ export function ToolCallsSummaryBar({
               endTime={tool.endTime}
               onArtifactClick={onArtifactClick}
               onPreviewUrl={onPreviewUrl}
+              onCancel={onCancel}
             />
           ))}
         </div>

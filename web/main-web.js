@@ -9,6 +9,17 @@ const fs = require("fs");
 const net = require("net");
 const setupHandler = require("./setup-handler");
 
+// Bash-produced artifact paths often contain a literal `~` (e.g. the nib-ppt
+// generate_presentation.sh script writes to `~/foo.pptx`). Node fs APIs do not
+// expand `~` — that's a shell concept — so passing the raw path to statSync
+// errors with ENOENT. Expand it here so every IPC file handler is `~`-safe.
+function expandHome(p) {
+  if (typeof p !== "string") return p;
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
 // --- File Logger ---
 // Captures console output to a rotating log file for diagnostics.
 const LOG_DIR = path.join(app.getPath("userData"), "logs");
@@ -393,7 +404,12 @@ if (autoUpdater) {
   });
 }
 
-/** Send an app_lifecycle telemetry event to the Next.js API. */
+/**
+ * Send an app_lifecycle telemetry event to the Next.js API.
+ * Returns a Promise that resolves once the request completes (or after a
+ * short timeout). Caller may ignore the promise for fire-and-forget use, or
+ * await it (e.g. in `before-quit`) to ensure delivery before exit.
+ */
 function sendLifecycleEvent(action) {
   const pkg = (() => { try { return require('./package.json'); } catch { return {}; } })();
   const payload = {
@@ -411,22 +427,33 @@ function sendLifecycleEvent(action) {
     }],
     flush: action === 'close',
   };
-  // Fire-and-forget — use http to avoid ESM import issues in main process
-  try {
-    const http = require('http');
-    const body = JSON.stringify(payload);
-    const req = http.request({
-      hostname: 'localhost',
-      port: parseInt(process.env.PORT || '3000', 10),
-      path: '/api/telemetry/events',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-    });
-    req.write(body);
-    req.end();
-  } catch {
-    // Non-fatal
-  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; resolve(); } };
+    // 2s budget — long enough for a healthy ingest, short enough that quitting
+    // never feels stuck if the API or the local Next.js server is unreachable.
+    const timer = setTimeout(finish, 2000);
+    try {
+      const http = require('http');
+      const body = JSON.stringify(payload);
+      const req = http.request({
+        hostname: '127.0.0.1',
+        port: parseInt(process.env.PORT || '3000', 10),
+        path: '/api/telemetry/events',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      }, (res) => {
+        res.resume();
+        res.on('end', () => { clearTimeout(timer); finish(); });
+      });
+      req.on('error', () => { clearTimeout(timer); finish(); });
+      req.write(body);
+      req.end();
+    } catch {
+      clearTimeout(timer);
+      finish();
+    }
+  });
 }
 
 /**
@@ -734,6 +761,11 @@ app.whenReady().then(async () => {
     // .env.local is dev-only and was the source of the silent-discard bug
     // where packaged builds had ANALYTICS_API_URL='' and sendEvents bailed.
     const nibConf = readNibAnalyticsConf();
+    // Normalise: nib-managed conf bakes the full path in (`…/kaos/v1/events`),
+    // but analytics-client appends `/v1/events` itself. Strip a trailing
+    // `/v1/events` so we don't end up POSTing to `…/v1/events/v1/events` (404).
+    const rawEndpoint = (nibConf.endpoint || '').replace(/\/+$/, '');
+    const normalisedEndpoint = rawEndpoint.replace(/\/v1\/events$/, '');
 
     const child = utilityProcess.fork(serverScript, [], {
       cwd: standaloneDir,
@@ -742,9 +774,10 @@ app.whenReady().then(async () => {
         PORT: String(port),
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
-        ANALYTICS_API_URL: nibConf.endpoint || ANALYTICS_API_URL_DEFAULT,
+        ANALYTICS_API_URL: normalisedEndpoint || ANALYTICS_API_URL_DEFAULT,
         ANALYTICS_AWS_REGION: nibConf.region || ANALYTICS_AWS_REGION_DEFAULT,
         QUARRY_RESOURCES_PATH: process.resourcesPath,
+        QUARRY_USER_DATA_DIR: app.getPath('userData'),
         ...(sdkCliPath ? { QUARRY_SDK_CLI_PATH: sdkCliPath } : {}),
         ...(gitBashPath ? { CLAUDE_CODE_GIT_BASH_PATH: gitBashPath } : {}),
         ...(quarryPythonAvailable ? {
@@ -885,8 +918,18 @@ app.whenReady().then(async () => {
   }, 60_000);
 });
 
-app.on("before-quit", () => {
-  sendLifecycleEvent('close');
+let isQuitting = false;
+app.on("before-quit", async (event) => {
+  if (isQuitting) return;
+  // Defer the actual quit until the close event has been delivered (or timed
+  // out). Without this the Next.js child gets killed before the HTTP POST
+  // finishes, dropping the queued events with it.
+  event.preventDefault();
+  isQuitting = true;
+  try {
+    await sendLifecycleEvent('close');
+  } catch {}
+  app.quit();
 });
 
 app.on("window-all-closed", () => {
@@ -925,36 +968,34 @@ ipcMain.on("get-nib-analytics-config", (event) => {
 });
 
 ipcMain.handle("open-path", async (_event, filePath) => {
-  return shell.openPath(filePath);
+  return shell.openPath(expandHome(filePath));
 });
 
 ipcMain.handle("read-file", async (_event, filePath) => {
-  const fs = require("fs");
-  const path = require("path");
-  const stats = fs.statSync(filePath);
-  const ext = path.extname(filePath).toLowerCase();
+  const resolved = expandHome(filePath);
+  const stats = fs.statSync(resolved);
+  const ext = path.extname(resolved).toLowerCase();
   const imageExts = [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"];
   const binaryExts = [...imageExts, ".pdf", ".xlsx", ".xls", ".docx", ".doc", ".pptx", ".ppt"];
   const isBinary = binaryExts.includes(ext);
 
   return {
-    name: path.basename(filePath),
-    path: filePath,
+    name: path.basename(resolved),
+    path: resolved,
     size: stats.size,
     ext,
     content: isBinary
-      ? fs.readFileSync(filePath).toString("base64")
-      : fs.readFileSync(filePath, "utf-8"),
+      ? fs.readFileSync(resolved).toString("base64")
+      : fs.readFileSync(resolved, "utf-8"),
     encoding: isBinary ? "base64" : "utf-8",
   };
 });
 
 ipcMain.handle("write-file", async (_event, filePath, content) => {
-  const fs = require("fs");
-  const path = require("path");
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, content, "utf-8");
-  return { success: true, path: filePath };
+  const resolved = expandHome(filePath);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  fs.writeFileSync(resolved, content, "utf-8");
+  return { success: true, path: resolved };
 });
 
 ipcMain.handle("save-file-dialog", async (_event, defaultName, filters) => {
@@ -966,14 +1007,12 @@ ipcMain.handle("save-file-dialog", async (_event, defaultName, filters) => {
 });
 
 ipcMain.handle("ensure-dir", async (_event, dirPath) => {
-  const fs = require("fs");
-  fs.mkdirSync(dirPath, { recursive: true });
+  fs.mkdirSync(expandHome(dirPath), { recursive: true });
   return { success: true };
 });
 
 ipcMain.handle("file-exists", async (_event, filePath) => {
-  const fs = require("fs");
-  return fs.existsSync(filePath);
+  return fs.existsSync(expandHome(filePath));
 });
 
 ipcMain.on("check-for-updates", () => checkForUpdates(true));
