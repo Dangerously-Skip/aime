@@ -206,7 +206,7 @@ function KanbanRenderer({ component, onAction }: { component: KanbanComponent; o
           {columns.map((col) => {
             const cards = col.cards ?? [];
             return (
-            <div key={col.id} className="flex-shrink-0 w-60">
+            <div key={col.id} className="flex-shrink-0 w-52">
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{col.title}</span>
                 <span className="text-[10px] bg-muted rounded-full px-1.5 py-0.5 text-muted-foreground">{cards.length}</span>

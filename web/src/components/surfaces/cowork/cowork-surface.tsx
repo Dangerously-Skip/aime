@@ -696,6 +696,20 @@ export function CoworkSurface() {
   const { isDragging, dropZoneProps } = useFileDrop(handleFileAttach);
   const currentChatId = useCoworkStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
+
+  // Clear the global canvas + close the panel when switching conversations,
+  // so a kanban from a previous chat doesn't leak into a new one. Per-chat
+  // canvas artifacts in the store stay (sidebar shows the right ones).
+  // Skip when chatId is empty — transient state, clearing causes layout cascades.
+  const lastChatIdRef = useRef<string>("");
+  useEffect(() => {
+    if (!chatId) return;
+    if (lastChatIdRef.current === chatId) return;
+    lastChatIdRef.current = chatId;
+    clearCanvas();
+    setCanvasOpen('cowork', false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
   const messages = useCoworkStore(
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
