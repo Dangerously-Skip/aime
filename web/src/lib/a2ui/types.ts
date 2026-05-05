@@ -46,12 +46,33 @@ export interface ChartSeries {
 
 // ── Kanban types ──────────────────────────────────────────────────────────────
 
+export interface KanbanCardAction {
+  /** Identifier emitted in the action when clicked. */
+  actionId: string;
+  label: string;
+  variant?: 'primary' | 'secondary' | 'destructive';
+  /**
+   * Optional MCP tool to call directly via canvas action dispatch. When set,
+   * clicking the action emits a `tool-call` A2UIAction; otherwise it emits
+   * a plain `button-click` carrying the actionId.
+   */
+  tool?: string;
+  /** Args passed when `tool` is set. */
+  args?: Record<string, unknown>;
+  /** Optional human-readable feedback prompt for the agent after the call. */
+  feedbackPrompt?: string;
+}
+
 export interface KanbanCard {
   id: string;
   title: string;
   description?: string;
   labels?: string[];
   priority?: 'low' | 'medium' | 'high';
+  /** Per-card action buttons (e.g. transition to next status, assign, comment). */
+  actions?: KanbanCardAction[];
+  /** External URL the title links to (e.g. Jira issue link). */
+  url?: string;
 }
 
 export interface KanbanColumn {

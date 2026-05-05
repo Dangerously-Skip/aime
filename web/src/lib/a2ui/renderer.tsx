@@ -193,14 +193,14 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: 'border-l-muted-foreground',
 };
 
-function KanbanRenderer({ component }: { component: KanbanComponent }) {
+function KanbanRenderer({ component, onAction }: { component: KanbanComponent; onAction?: (action: A2UIAction) => void }) {
   return (
     <div>
       <CardHeader title={component.title} />
       <CardBody>
         <div className="flex gap-4 overflow-x-auto pb-2">
           {component.columns.map((col) => (
-            <div key={col.id} className="flex-shrink-0 w-52">
+            <div key={col.id} className="flex-shrink-0 w-60">
               <div className="flex items-center gap-2 mb-3">
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{col.title}</span>
                 <span className="text-[10px] bg-muted rounded-full px-1.5 py-0.5 text-muted-foreground">{col.cards.length}</span>
@@ -208,11 +208,44 @@ function KanbanRenderer({ component }: { component: KanbanComponent }) {
               <div className="space-y-2">
                 {col.cards.map((card) => (
                   <div key={card.id} className={`rounded-lg border border-border/50 bg-card p-3 shadow-sm border-l-2 ${PRIORITY_COLORS[card.priority || ''] || 'border-l-transparent'}`}>
-                    <div className="text-sm font-medium text-foreground">{card.title}</div>
+                    {card.url ? (
+                      <a href={card.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-foreground hover:underline">
+                        {card.title}
+                      </a>
+                    ) : (
+                      <div className="text-sm font-medium text-foreground">{card.title}</div>
+                    )}
                     {card.description && <div className="mt-1 text-xs text-muted-foreground leading-relaxed">{card.description}</div>}
                     {card.labels && card.labels.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
                         {card.labels.map((l) => <PillBadge key={l}>{l}</PillBadge>)}
+                      </div>
+                    )}
+                    {card.actions && card.actions.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {card.actions.map((a) => {
+                          const styles = a.variant === 'primary'
+                            ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                            : a.variant === 'destructive'
+                              ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                              : 'bg-muted text-foreground hover:bg-muted/70 border border-border/40';
+                          return (
+                            <button
+                              key={a.actionId}
+                              type="button"
+                              onClick={() => {
+                                if (a.tool) {
+                                  onAction?.({ type: 'tool-call', componentId: component.id, tool: a.tool, args: a.args ?? {}, feedbackPrompt: a.feedbackPrompt });
+                                } else {
+                                  onAction?.({ type: 'button-click', componentId: component.id, actionId: a.actionId, payload: { cardId: card.id, ...a.args } });
+                                }
+                              }}
+                              className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${styles}`}
+                            >
+                              {a.label}
+                            </button>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -647,7 +680,7 @@ function A2UIComponentRenderer({ component, onAction }: { component: A2UICompone
   switch (component.type) {
     case 'table': return <TableRenderer component={component} />;
     case 'chart': return <ChartRenderer component={component} />;
-    case 'kanban': return <KanbanRenderer component={component} />;
+    case 'kanban': return <KanbanRenderer component={component} onAction={onAction} />;
     case 'stat': return <StatRenderer component={component} />;
     case 'form': return <FormRenderer component={component} onAction={onAction} />;
     case 'markdown': return <MarkdownRenderer component={component} />;

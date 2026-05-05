@@ -55,7 +55,8 @@ import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
 import { useCanvasStore } from "@/stores/canvas-store";
-import type { A2UIDocument } from "@/lib/a2ui/types";
+import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
+import { dispatchCanvasToolCall } from "@/lib/canvas/dispatch";
 import { useHeartbeat } from "@/hooks/use-heartbeat";
 import { useCron } from "@/hooks/use-cron";
 import {
@@ -1855,6 +1856,13 @@ export function CoworkSurface() {
             onClear={clearCanvas}
             canGoBack={canvasHistoryIndex > 0}
             canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
+            surface="cowork"
+            conversationId={chatId}
+            onAction={(action: A2UIAction) => {
+              if (action.type === 'tool-call') {
+                dispatchCanvasToolCall(action, { surfaceId: 'cowork' }).catch((err) => console.error('[canvas] tool-call failed:', err));
+              }
+            }}
           />
         </div>
       )}
