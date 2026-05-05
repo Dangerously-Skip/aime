@@ -6,6 +6,16 @@ import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
+import type { A2UIDocument } from '@/lib/a2ui/types';
+
+export interface CanvasArtifact {
+  id: string;
+  title: string;
+  doc: A2UIDocument;
+  /** Optional templateId so the sidebar can show a more specific icon. */
+  templateId?: string;
+  createdAt: number;
+}
 
 const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
@@ -18,6 +28,7 @@ interface CoworkState {
   folderByChat: Record<string, string | null>;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
+  canvasArtifacts: Record<string, CanvasArtifact[]>;
   planContent: Record<string, string>;
   planOpen: boolean;
   sessionControls: Record<string, SessionControls>;
@@ -29,6 +40,7 @@ interface CoworkActions {
   addMessage: (chatId: string, message: Message) => void;
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
+  attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: A2UIDocument }) => void;
   setModel: (model: string) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
@@ -42,6 +54,8 @@ interface CoworkActions {
   addArtifactFile: (chatId: string, path: string) => void;
   removeContextFile: (chatId: string, path: string) => void;
   removeArtifactFile: (chatId: string, path: string) => void;
+  addCanvasArtifact: (chatId: string, artifact: CanvasArtifact) => void;
+  removeCanvasArtifact: (chatId: string, artifactId: string) => void;
   clearSidebarFiles: (chatId: string) => void;
   setPlanContent: (chatId: string, content: string) => void;
   setPlanOpen: (open: boolean) => void;
@@ -66,6 +80,7 @@ export const useCoworkStore = create<CoworkStore>()(
       folderByChat: {},
       contextFiles: {},
       artifactFiles: {},
+      canvasArtifacts: {},
       planContent: {},
       planOpen: false,
       sessionControls: {},
@@ -105,6 +120,21 @@ export const useCoworkStore = create<CoworkStore>()(
             content: last.content + content,
             isLoading: false,
             ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
+          };
+          return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
+      attachCanvasToLastAssistant: (chatId, canvas) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          if (!msgs?.length) return state;
+          const lastIdx = msgs.length - 1;
+          const last = msgs[lastIdx];
+          if (last.role !== 'assistant') return state;
+          const updated = [...msgs];
+          updated[lastIdx] = {
+            ...last,
+            inlineCanvases: [...(last.inlineCanvases ?? []), canvas],
           };
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
@@ -226,11 +256,24 @@ export const useCoworkStore = create<CoworkStore>()(
           return { artifactFiles: { ...state.artifactFiles, [chatId]: existing.filter((p) => p !== path) } };
         }),
 
+      addCanvasArtifact: (chatId, artifact) =>
+        set((state) => {
+          const existing = state.canvasArtifacts[chatId] ?? [];
+          return { canvasArtifacts: { ...state.canvasArtifacts, [chatId]: [...existing, artifact] } };
+        }),
+
+      removeCanvasArtifact: (chatId, artifactId) =>
+        set((state) => {
+          const existing = state.canvasArtifacts[chatId] ?? [];
+          return { canvasArtifacts: { ...state.canvasArtifacts, [chatId]: existing.filter((c) => c.id !== artifactId) } };
+        }),
+
       clearSidebarFiles: (chatId) =>
         set((state) => {
           const { [chatId]: _ctx, ...restCtx } = state.contextFiles;
           const { [chatId]: _art, ...restArt } = state.artifactFiles;
-          return { contextFiles: restCtx, artifactFiles: restArt };
+          const { [chatId]: _canvas, ...restCanvas } = state.canvasArtifacts;
+          return { contextFiles: restCtx, artifactFiles: restArt, canvasArtifacts: restCanvas };
         }),
 
       setPlanContent: (chatId, content) =>
@@ -274,6 +317,7 @@ export const useCoworkStore = create<CoworkStore>()(
         folderByChat: state.folderByChat,
         contextFiles: state.contextFiles,
         artifactFiles: state.artifactFiles,
+        canvasArtifacts: state.canvasArtifacts,
         planContent: state.planContent,
         sessionControls: state.sessionControls,
         searchGroups: state.searchGroups,

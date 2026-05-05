@@ -1,84 +1,205 @@
 import type { AssistantCard } from '@/stores/assistant-store';
+import type { A2UIDocument } from '@/lib/a2ui/types';
 
 /**
- * Widget preset = a `addCard()` payload that turns a card into an
- * auto-refreshing dashboard tile. The `widget.regeneratePrompt` is sent
- * to /api/chat/<surface> on each `widget.refreshIntervalMs` interval.
+ * Widget preset = a self-contained dashboard tile. Instead of round-tripping
+ * to the LLM, each preset's `fetchAndRender()` produces an A2UIDocument
+ * directly — public APIs, pure computation, etc. Refreshes happen on the
+ * heartbeat without touching the agent.
  */
 export interface WidgetPreset {
   id: string;
-  /** Short label shown on the install button. */
+  /** Unique kind so the heartbeat hook knows how to refresh this card. */
+  kind: 'world_clock' | 'weather' | 'stock_ticker';
   label: string;
-  /** Lucide icon name. */
   icon: string;
-  /** One-line description shown beneath the label. */
   description: string;
-  /** Card payload passed to addCard(). */
-  build: () => Omit<AssistantCard, 'id' | 'timestamp' | 'unread' | 'pinned'>;
+  refreshIntervalMs: number;
+  fetchAndRender(): Promise<A2UIDocument>;
 }
 
 const FIFTEEN_MIN = 15 * 60_000;
 const ONE_HOUR = 60 * 60_000;
 
+// ── World clock — pure computation ─────────────────────────────────────────────
+
+const ZONES: Array<{ label: string; tz: string }> = [
+  { label: 'Sydney', tz: 'Australia/Sydney' },
+  { label: 'San Francisco', tz: 'America/Los_Angeles' },
+  { label: 'London', tz: 'Europe/London' },
+  { label: 'Singapore', tz: 'Asia/Singapore' },
+];
+
+function formatInZone(tz: string): string {
+  // Intl handles DST automatically.
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date());
+}
+
+async function renderWorldClock(): Promise<A2UIDocument> {
+  return {
+    version: '1',
+    title: 'World clock',
+    components: [
+      {
+        type: 'stat',
+        id: 'clocks',
+        stats: ZONES.map((z) => ({ label: z.label, value: formatInZone(z.tz) })),
+      },
+    ],
+  };
+}
+
+// ── Weather — Open-Meteo (no auth) ─────────────────────────────────────────────
+
+const WEATHER_CODES: Record<number, string> = {
+  0: '☀️', 1: '🌤', 2: '⛅', 3: '☁️',
+  45: '🌫', 48: '🌫',
+  51: '🌦', 53: '🌦', 55: '🌧',
+  61: '🌧', 63: '🌧', 65: '🌧',
+  71: '🌨', 73: '🌨', 75: '❄️',
+  80: '🌦', 81: '🌧', 82: '⛈',
+  95: '⛈', 96: '⛈', 99: '⛈',
+};
+
+async function renderWeather(): Promise<A2UIDocument> {
+  // Sydney by default; could read from settings later.
+  const url = 'https://api.open-meteo.com/v1/forecast?latitude=-33.87&longitude=151.21&current=temperature_2m,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&timezone=auto&forecast_days=1';
+  const fallback: A2UIDocument = {
+    version: '1',
+    title: 'Weather · Sydney',
+    components: [
+      {
+        type: 'stat',
+        id: 'now',
+        stats: [{ label: 'Status', value: 'Unavailable' }],
+      },
+    ],
+  };
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return fallback;
+    const data = await res.json();
+    const current = data.current ?? {};
+    const code = current.weather_code as number | undefined;
+    const emoji = (code !== undefined && WEATHER_CODES[code]) || '🌡';
+    return {
+      version: '1',
+      title: 'Weather · Sydney',
+      components: [
+        {
+          type: 'stat',
+          id: 'now',
+          stats: [
+            { label: 'Now', value: `${Math.round(current.temperature_2m ?? 0)}°C` },
+            { label: 'Wind', value: `${Math.round(current.wind_speed_10m ?? 0)} km/h` },
+            { label: 'Sky', value: emoji },
+          ],
+        },
+      ],
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// ── Stock ticker — Yahoo Finance public chart API ─────────────────────────────
+
+const TICKERS: Array<{ symbol: string; label: string }> = [
+  { symbol: 'NHF.AX', label: 'NHF (nib)' },
+  { symbol: '%5EAXJO', label: 'ASX 200' },
+  { symbol: 'AUDUSD=X', label: 'AUD/USD' },
+];
+
+async function fetchQuote(symbol: string): Promise<{ value: string; trend: 'up' | 'down' | 'neutral'; trendValue: string } | null> {
+  try {
+    // Proxy through our local API — Yahoo blocks browser CORS.
+    const res = await fetch(`/api/widget/stock?symbol=${encodeURIComponent(symbol)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const result = data?.chart?.result?.[0];
+    const closes: number[] | undefined = result?.indicators?.quote?.[0]?.close?.filter((x: number | null) => x !== null);
+    if (!closes || closes.length < 2) return null;
+    const last = closes[closes.length - 1];
+    const prev = closes[closes.length - 2];
+    const pct = ((last - prev) / prev) * 100;
+    return {
+      value: last.toFixed(symbol.includes('=X') ? 4 : 2),
+      trend: pct > 0.05 ? 'up' : pct < -0.05 ? 'down' : 'neutral',
+      trendValue: `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function renderStockTicker(): Promise<A2UIDocument> {
+  const quotes = await Promise.all(TICKERS.map((t) => fetchQuote(t.symbol)));
+  return {
+    version: '1',
+    title: 'Markets',
+    components: [
+      {
+        type: 'stat',
+        id: 'tickers',
+        stats: TICKERS.map((t, i) => {
+          const q = quotes[i];
+          if (!q) return { label: t.label, value: '—' };
+          return { label: t.label, value: q.value, trend: q.trend, trendValue: q.trendValue };
+        }),
+      },
+    ],
+  };
+}
+
+// ── Registry ───────────────────────────────────────────────────────────────────
+
 export const WIDGET_PRESETS: WidgetPreset[] = [
   {
     id: 'weather',
+    kind: 'weather',
     label: 'Weather',
     icon: 'cloud-sun',
-    description: 'Local forecast for the day, refreshed every 15 minutes',
-    build: () => ({
-      title: 'Weather',
-      summary: 'Loading…',
-      widget: {
-        refreshIntervalMs: FIFTEEN_MIN,
-        surface: 'assistant',
-        regeneratePrompt:
-          'Use WebFetch to get the current weather and a 6-hour forecast for the user\'s location (or Sydney, Australia if location is unknown). ' +
-          'Use https://api.open-meteo.com/v1/forecast?latitude=-33.87&longitude=151.21&current=temperature_2m,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&timezone=auto&forecast_days=1 ' +
-          '— this endpoint requires no API key. ' +
-          'Then call the canvas tool with templateId "architecture" disabled — instead emit a raw A2UI doc using "stat" + "list" components: ' +
-          'one stat block showing current temperature + condition + wind, and one list of the next 6 hourly entries with temperature and a weather emoji. Title: "Weather".',
-      },
-    }),
+    description: 'Sydney current conditions, refreshed every 15 min',
+    refreshIntervalMs: FIFTEEN_MIN,
+    fetchAndRender: renderWeather,
   },
   {
     id: 'stock_ticker',
+    kind: 'stock_ticker',
     label: 'Stock ticker',
     icon: 'trending-up',
-    description: 'Watch tickers refreshed every 15 minutes',
-    build: () => ({
-      title: 'Stock ticker',
-      summary: 'Loading…',
-      widget: {
-        refreshIntervalMs: FIFTEEN_MIN,
-        surface: 'assistant',
-        regeneratePrompt:
-          'Fetch current quotes for ASX:NHF (nib Holdings), ^AXJO (S&P/ASX 200), and AUD/USD via WebFetch using ' +
-          'https://query1.finance.yahoo.com/v8/finance/chart/<symbol>?interval=1d&range=2d ' +
-          '(URL-encode ^AXJO as %5EAXJO, AUDUSD=X for currency). ' +
-          'Compute today\'s change vs previous close. ' +
-          'Emit a raw A2UI canvas doc with title "Markets" and one "stat" component listing each symbol with its value, trend (up/down/neutral), and trendValue showing the percent change.',
-      },
-    }),
+    description: 'NHF, ASX 200, AUD/USD — refreshed every 15 min',
+    refreshIntervalMs: FIFTEEN_MIN,
+    fetchAndRender: renderStockTicker,
   },
   {
     id: 'world_clock',
+    kind: 'world_clock',
     label: 'World clock',
     icon: 'globe-2',
-    description: 'Sydney, San Francisco, London, Singapore — refreshed hourly',
-    build: () => ({
-      title: 'World clock',
-      summary: 'Loading…',
-      widget: {
-        refreshIntervalMs: ONE_HOUR,
-        surface: 'assistant',
-        regeneratePrompt:
-          'Compute the current local time in Sydney, San Francisco, London, and Singapore. ' +
-          'Use Bash with `TZ=<zone> date "+%Y-%m-%d %H:%M %Z"` for each: ' +
-          'Australia/Sydney, America/Los_Angeles, Europe/London, Asia/Singapore. ' +
-          'Emit a raw A2UI canvas doc with title "World clock" and one "stat" component listing each city as label and the time as value. ' +
-          'No trend data needed.',
-      },
-    }),
+    description: 'Sydney · SF · London · Singapore — refreshed hourly',
+    refreshIntervalMs: ONE_HOUR,
+    fetchAndRender: renderWorldClock,
   },
 ];
+
+export function getWidgetPreset(kind: string): WidgetPreset | undefined {
+  return WIDGET_PRESETS.find((p) => p.kind === kind);
+}
+
+/** Build an AssistantCard payload for a preset. */
+export function buildWidgetCard(preset: WidgetPreset): Omit<AssistantCard, 'id' | 'timestamp' | 'unread' | 'pinned'> {
+  return {
+    title: preset.label,
+    summary: 'Loading…',
+    widget: {
+      kind: preset.kind,
+      refreshIntervalMs: preset.refreshIntervalMs,
+    },
+  };
+}

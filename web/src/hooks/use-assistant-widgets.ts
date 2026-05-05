@@ -2,89 +2,64 @@
 
 import { useEffect, useRef } from 'react';
 import { useAssistantStore } from '@/stores/assistant-store';
-import { useSettingsStore } from '@/stores/settings-store';
+import { getWidgetPreset } from '@/lib/assistant/widget-presets';
 
 /**
- * Drives auto-refreshing dashboard widgets in the Assistant surface.
+ * Refreshes dashboard widgets on the heartbeat (and once on mount).
  *
- * Each card with a `widget` block is re-fired on the heartbeat schedule:
- *   - On every minute:tick we check `widget.refreshIntervalMs`
- *   - If `(now - lastRefreshedAt) >= refreshIntervalMs`, we POST the
- *     `regeneratePrompt` to /api/chat/<surface> and replace the card body
- *     with the resulting text + canvas doc.
- *
- * Widgets are pinned by default so they survive store restarts.
+ * Each card with a `widget` block dispatches by `widget.kind` to the
+ * corresponding preset's client-side `fetchAndRender()`. No LLM round-trip,
+ * no SDK process — just public APIs / pure computation.
  */
 export function useAssistantWidgets() {
   const cards = useAssistantStore((s) => s.cards);
   const updateCard = useAssistantStore((s) => s.updateCard);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
 
-  // Use a ref so the heartbeat handler always sees fresh cards without resubscribing.
   const cardsRef = useRef(cards);
   cardsRef.current = cards;
 
+  const refreshOne = async (cardId: string, kind: string) => {
+    const preset = getWidgetPreset(kind);
+    if (!preset) return;
+    try {
+      const doc = await preset.fetchAndRender();
+      const card = cardsRef.current.find((c) => c.id === cardId);
+      const widget = card?.widget;
+      updateCard(cardId, {
+        doc,
+        summary: undefined,
+        timestamp: Date.now(),
+        widget: widget ? { ...widget, lastRefreshedAt: Date.now() } : undefined,
+      });
+    } catch (err) {
+      console.error('[widgets] refresh failed:', kind, err);
+    }
+  };
+
+  // Initial fetch — fire any widget that hasn't been refreshed yet.
+  useEffect(() => {
+    for (const card of cardsRef.current) {
+      if (card.widget && !card.widget.lastRefreshedAt) {
+        refreshOne(card.id, card.widget.kind);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Detect newly added widgets and prime them.
+  useEffect(() => {
+    for (const card of cards) {
+      if (card.widget && !card.widget.lastRefreshedAt) {
+        refreshOne(card.id, card.widget.kind);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cards.length]);
+
+  // Periodic refresh on the heartbeat tick.
   useEffect(() => {
     const api = (window as unknown as { electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => void } }).electronAPI;
     if (!api?.onMinuteTick) return;
-
-    const inFlight = new Set<string>();
-
-    const refreshWidget = async (cardId: string, prompt: string, surface: string) => {
-      if (inFlight.has(cardId)) return;
-      inFlight.add(cardId);
-      try {
-        const chatId = `widget-${cardId}`;
-        const response = await fetch(`/api/chat/${surface}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: prompt,
-            chatId,
-            model: 'sonnet',
-            apiKey: nibGatewayApiKey || undefined,
-          }),
-        });
-        if (!response.ok || !response.body) return;
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let text = '';
-        let doc: import('@/lib/a2ui/types').A2UIDocument | undefined;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const event = JSON.parse(line.slice(6));
-              if (event.type === 'text' && typeof event.content === 'string') {
-                text += event.content;
-              } else if (event.type === 'canvas' && event.doc) {
-                doc = event.doc as import('@/lib/a2ui/types').A2UIDocument;
-              }
-            } catch { /* ignore */ }
-          }
-        }
-
-        const updates: Partial<import('@/stores/assistant-store').AssistantCard> = {
-          summary: text || undefined,
-          doc,
-          timestamp: Date.now(),
-        };
-        // Bump lastRefreshedAt on the existing widget block.
-        const card = cardsRef.current.find((c) => c.id === cardId);
-        if (card?.widget) {
-          updates.widget = { ...card.widget, lastRefreshedAt: Date.now() };
-        }
-        updateCard(cardId, updates);
-      } finally {
-        inFlight.delete(cardId);
-      }
-    };
 
     const handler = () => {
       const now = Date.now();
@@ -92,10 +67,11 @@ export function useAssistantWidgets() {
         if (!card.widget) continue;
         const last = card.widget.lastRefreshedAt ?? 0;
         if (now - last < card.widget.refreshIntervalMs) continue;
-        refreshWidget(card.id, card.widget.regeneratePrompt, card.widget.surface ?? 'assistant');
+        refreshOne(card.id, card.widget.kind);
       }
     };
 
     api.onMinuteTick(handler);
-  }, [nibGatewayApiKey, updateCard]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 }

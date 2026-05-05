@@ -39,6 +39,7 @@ interface Message {
   questionAnswered?: boolean;
   isAutoContinue?: boolean;
   attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>;
+  inlineCanvases?: Array<{ id: string; title: string; doc: import("@/lib/a2ui/types").A2UIDocument }>;
 }
 
 interface MessageListProps {
@@ -145,6 +146,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
             onRetry={isLastAssistant ? onRetry : undefined}
             onCancel={msg.isStreaming ? onCancel : undefined}
             conversationId={conversationId}
+            inlineCanvases={msg.inlineCanvases}
           />
         ) : null;
       })}

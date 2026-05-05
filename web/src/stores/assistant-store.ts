@@ -45,16 +45,14 @@ export interface AssistantCard {
   unread: boolean;
   pinned: boolean;
   /**
-   * When set, this card is a dashboard widget that auto-refreshes by re-running
-   * `widget.regeneratePrompt` on the heartbeat schedule. Pinned widgets persist
-   * across sessions; the `lastRefreshedAt` timestamp gates re-firing.
+   * When set, this card is a dashboard widget. Refresh logic lives in the
+   * `useAssistantWidgets` hook which dispatches by `widget.kind` to the
+   * corresponding preset's client-side fetcher (no LLM round-trip).
    */
   widget?: {
+    kind: string;
     refreshIntervalMs: number;
-    regeneratePrompt: string;
     lastRefreshedAt?: number;
-    /** Optional surface to run the refresh against (default: 'assistant'). */
-    surface?: string;
   };
 }
 

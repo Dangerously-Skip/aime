@@ -259,6 +259,25 @@ export class ClaudeProvider extends BaseProvider {
             return { content: [{ type: 'text' as const, text: result }] };
           }
         ),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'canvas',
+          'Render a structured visualisation in the right-side canvas panel. Use for diagrams, charts, kanban boards, schemas, dashboards. Pass either a templated payload `{ templateId, input }` (preferred when a template fits) OR a raw A2UI document `{ version: "1", title, components }`. The visualisation appears immediately in the canvas panel; the user can pin it to a project and interact with action buttons. PREFER this over generating HTML for visualisations.',
+          {
+            // Permissive schema so both templated and raw forms validate.
+            templateId: z.string().optional().describe('Canvas template id (e.g. "architecture", "er_diagram", "jira_kanban"). When set, `input` is the template input; everything else is ignored.'),
+            input: z.record(z.string(), z.unknown()).optional().describe('Template input — required when templateId is set. Shape depends on the template.'),
+            version: z.string().optional().describe('Raw A2UI doc version, e.g. "1". Only when not using a template.'),
+            title: z.string().optional().describe('Raw A2UI doc title.'),
+            components: z.array(z.record(z.string(), z.unknown())).optional().describe('Raw A2UI components array.'),
+          },
+          async (input: Record<string, unknown>) => {
+            const label = typeof input.templateId === 'string'
+              ? `template "${input.templateId}"`
+              : 'raw A2UI document';
+            return { content: [{ type: 'text' as const, text: `Canvas rendered (${label}). The user sees it now in the canvas panel.` }] };
+          }
+        ),
       ],
     });
 
@@ -717,10 +736,12 @@ export class ClaudeProvider extends BaseProvider {
                 // Intercept canvas tool — emit canvas SSE event instead of regular tool_use.
                 // If the agent passed { templateId, input }, expand via the template registry
                 // so downstream consumers always see a fully-rendered A2UIDocument.
-                if (toolName === CANVAS_TOOL_NAME) {
+                // The tool may arrive as bare `canvas` or MCP-prefixed `mcp__quarry__canvas`.
+                if (toolName === CANVAS_TOOL_NAME || toolName === 'mcp__quarry__canvas') {
                   const expanded = expandCanvasTemplate(toolInput);
                   const doc = expanded ?? toolInput;
-                  console.log('[Claude] Canvas tool use — emitting canvas event', expanded ? `(template: ${(toolInput as Record<string, unknown>).templateId})` : '(raw)');
+                  const rawSummary = JSON.stringify(toolInput).slice(0, 600);
+                  console.log('[Claude] Canvas tool use — emitting canvas event', expanded ? `(template: ${(toolInput as Record<string, unknown>).templateId})` : '(raw)', '| input:', rawSummary);
                   yield {
                     type: 'canvas',
                     doc,

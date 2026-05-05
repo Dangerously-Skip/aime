@@ -11,7 +11,7 @@ import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File, FilePen, PanelRight } from "lucide-react";
+import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File, FilePen, PanelRight, LayoutDashboard } from "lucide-react";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import type { Message } from "@/stores/chat-store";
@@ -90,6 +90,8 @@ export function ChatSurface() {
   const canvasOpen = useCanvasStore((s) => !!s.openSurfaces['chat']);
   // Artifact tracking — files created by Write/Edit/Bash tool calls
   const [artifactFiles, setArtifactFiles] = useState<string[]>([]);
+  // Canvas artifacts — A2UI docs the agent rendered in this session
+  const [canvasArtifacts, setCanvasArtifacts] = useState<Array<{ id: string; title: string; doc: A2UIDocument; createdAt: number }>>([]);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const addArtifactFile = useCallback((path: string) => {
     setArtifactFiles((prev) => prev.includes(path) ? prev : [...prev, path]);
@@ -271,6 +273,15 @@ export function ChatSurface() {
             if (doc && doc.components) {
               pushCanvas(doc);
               setCanvasOpen('chat', true);
+              const canvasId = crypto.randomUUID();
+              const title = doc.title || 'Canvas';
+              setCanvasArtifacts((prev) => [
+                ...prev,
+                { id: canvasId, title, doc, createdAt: Date.now() },
+              ]);
+              if (chatId) {
+                useChatStore.getState().attachCanvasToLastAssistant(chatId, { id: canvasId, title, doc });
+              }
               sendFeatureAdoptionEvent({ feature: 'canvas', surface: 'chat' });
             }
           } catch (e) {
@@ -788,7 +799,7 @@ export function ChatSurface() {
             </div>
           )}
 
-          <div className="flex flex-1 min-h-0 overflow-hidden">
+          <div className="relative flex flex-1 min-h-0 overflow-hidden">
             {/* Messages column */}
             <div className="flex flex-1 flex-col min-w-0">
               {/* Messages */}
@@ -892,15 +903,26 @@ export function ChatSurface() {
               </div>
             </div>
 
-            {/* Artifacts sidebar — appears when files are created */}
-            {artifactFiles.length > 0 && (
+            {/* Artifacts sidebar — files + canvases produced this session */}
+            {(artifactFiles.length > 0 || canvasArtifacts.length > 0) && (
               <div className="w-64 shrink-0 border-l border-border bg-card/50 flex flex-col">
                 <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
                   <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
-                  <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length}</span>
+                  <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
                 </div>
                 <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
+                  {canvasArtifacts.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => { pushCanvas(c.doc); setCanvasOpen('chat', true); }}
+                      className="w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-left hover:bg-muted transition-colors group"
+                      title={c.title}
+                    >
+                      <LayoutDashboard className="h-3.5 w-3.5 text-primary shrink-0" />
+                      <span className="truncate text-foreground/80 group-hover:text-foreground">{c.title}</span>
+                    </button>
+                  ))}
                   {artifactFiles.map((filePath) => {
                     const name = filePath.split("/").pop() || filePath;
                     return (

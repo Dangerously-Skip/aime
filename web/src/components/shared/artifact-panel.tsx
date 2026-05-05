@@ -21,6 +21,8 @@ import {
   Loader2,
   ExternalLink,
   Eye,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { MarkdownRenderer } from "./markdown-renderer";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
@@ -60,6 +62,27 @@ export function ArtifactPanel({
   const [copied, setCopied] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: "idle" });
   const [htmlTab, setHtmlTab] = useState<"preview" | "code">("preview");
+  const [expanded, setExpanded] = useState(false);
+  const [customWidth, setCustomWidth] = useState<number | null>(null);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    // Capture current pixel width so drag deltas land on the right baseline.
+    const sheet = (e.currentTarget as HTMLElement).parentElement;
+    const startWidth = sheet?.getBoundingClientRect().width ?? 640;
+    const onMove = (ev: MouseEvent) => {
+      // Dragging left grows the panel because it's anchored to the right edge.
+      const next = Math.min(window.innerWidth - 80, Math.max(360, startWidth + (startX - ev.clientX)));
+      setCustomWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
   const autoSavedRef = useRef<string | null>(null);
 
   // Auto-save when panel opens with a project folder
@@ -156,8 +179,21 @@ export function ArtifactPanel({
     >
       <SheetContent
         side="right"
-        className="w-full sm:max-w-xl md:max-w-2xl overflow-hidden flex flex-col"
+        className={`overflow-hidden flex flex-col transition-[max-width,width] duration-200 ${
+          expanded
+            ? "!w-screen !max-w-none"
+            : "w-full sm:max-w-xl md:max-w-2xl"
+        }`}
+        style={!expanded && customWidth ? { width: `${customWidth}px`, maxWidth: 'none' } : undefined}
       >
+        {/* Resize handle — drag to widen */}
+        {!expanded && (
+          <div
+            onMouseDown={handleResizeStart}
+            className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-primary/30 transition-colors z-10"
+            title="Drag to resize"
+          />
+        )}
         <SheetHeader className="shrink-0">
           <div className="flex items-center gap-2 pr-8">
             <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -172,6 +208,15 @@ export function ArtifactPanel({
                   {artifact.language || artifact.type}
                 </Badge>
                 <div className="flex items-center gap-1 ml-auto">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setExpanded((v) => !v)}
+                    title={expanded ? "Collapse panel" : "Expand panel"}
+                  >
+                    {expanded ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
