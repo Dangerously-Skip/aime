@@ -14,6 +14,31 @@ steps:
   - label: ':github: Download release + bundle'
     commands:
       - |
+        # Fetch GitHub PAT from SSM kaos via assume-role (same role pattern as the WAF step).
+        # Stored as SecureString at /quarry/promote-release/github-token in account 384553929753.
+        echo "--- Fetching GITHUB_TOKEN from SSM"
+        CREDS=$$(aws sts assume-role \
+          --role-arn "arn:aws:iam::384553929753:role/deployer" \
+          --role-session-name "fetch-github-token" \
+          --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
+          --output text)
+        AWS_ACCESS_KEY_ID_SAVED=$$(echo "$$CREDS" | awk '{print $$1}')
+        AWS_SECRET_ACCESS_KEY_SAVED=$$(echo "$$CREDS" | awk '{print $$2}')
+        AWS_SESSION_TOKEN_SAVED=$$(echo "$$CREDS" | awk '{print $$3}')
+        export GITHUB_TOKEN=$$(AWS_ACCESS_KEY_ID="$$AWS_ACCESS_KEY_ID_SAVED" \
+          AWS_SECRET_ACCESS_KEY="$$AWS_SECRET_ACCESS_KEY_SAVED" \
+          AWS_SESSION_TOKEN="$$AWS_SESSION_TOKEN_SAVED" \
+          aws ssm get-parameter \
+            --name /quarry/promote-release/github-token \
+            --with-decryption \
+            --region ap-southeast-2 \
+            --query Parameter.Value --output text)
+        if [ -z "$$GITHUB_TOKEN" ]; then
+          echo "Failed to fetch GITHUB_TOKEN from SSM"
+          exit 1
+        fi
+        echo "  ✓ GITHUB_TOKEN fetched"
+
         TAG="$${RELEASE_TAG:-$${BUILDKITE_TAG:-latest}}"
         echo "--- Downloading release: $$TAG"
         mkdir -p content
@@ -21,12 +46,7 @@ steps:
         # Copy landing page from repo
         cp infrastructure/releases/html/index.html content/
 
-        # Download release artifacts from GitHub
-        # GITHUB_TOKEN is set as a pipeline environment variable in Buildkite
-        AUTH_HEADER=""
-        if [ -n "$$GITHUB_TOKEN" ]; then
-          AUTH_HEADER="Authorization: token $$GITHUB_TOKEN"
-        fi
+        AUTH_HEADER="Authorization: token $$GITHUB_TOKEN"
 
         if [ "$$TAG" = "latest" ]; then
           RELEASE_URL="https://api.github.com/repos/redacted-org/quarry/releases/latest"
