@@ -7,6 +7,7 @@ import { getClaudeSDKPath } from './sdk-path';
 import { waitForAnswer } from '../pending-questions';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
+import { expandCanvasTemplate } from '../canvas/templates';
 
 /** Canvas tool name — intercepted to push A2UI documents to client. */
 const CANVAS_TOOL_NAME = 'canvas';
@@ -713,12 +714,16 @@ export class ClaudeProvider extends BaseProvider {
                 const toolName = block.name as string;
                 const toolInput = block.input as Record<string, unknown>;
 
-                // Intercept canvas tool — emit canvas SSE event instead of regular tool_use
+                // Intercept canvas tool — emit canvas SSE event instead of regular tool_use.
+                // If the agent passed { templateId, input }, expand via the template registry
+                // so downstream consumers always see a fully-rendered A2UIDocument.
                 if (toolName === CANVAS_TOOL_NAME) {
-                  console.log('[Claude] Canvas tool use — emitting canvas event');
+                  const expanded = expandCanvasTemplate(toolInput);
+                  const doc = expanded ?? toolInput;
+                  console.log('[Claude] Canvas tool use — emitting canvas event', expanded ? `(template: ${(toolInput as Record<string, unknown>).templateId})` : '(raw)');
                   yield {
                     type: 'canvas',
-                    doc: toolInput,
+                    doc,
                     id: block.id as string,
                     provider: this.name,
                   };

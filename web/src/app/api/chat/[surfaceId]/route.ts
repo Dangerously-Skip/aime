@@ -493,6 +493,21 @@ export async function POST(
         }
       }
 
+      // ── Canvas templates ──────────────────────────────────────────────
+      // Inject available canvas templates into the system prompt so the agent
+      // can pick a templated payload instead of authoring full A2UI JSON.
+      if (surfaceConfig.allowedTools?.includes('canvas')) {
+        const { buildCanvasTemplatesPrompt } = await import('@/lib/canvas/templates');
+        const templatesPrompt = buildCanvasTemplatesPrompt(surfaceId);
+        if (templatesPrompt) {
+          surfaceConfig.systemPrompt = `${
+            typeof surfaceConfig.systemPrompt === 'string'
+              ? surfaceConfig.systemPrompt
+              : JSON.stringify(surfaceConfig.systemPrompt)
+          }\n\n${templatesPrompt}`;
+        }
+      }
+
       // ── Security settings ──────────────────────────────────────────────
       // Filter Bash from allowedTools if disabled
       if (securitySettings?.disableBashTool && surfaceConfig.allowedTools) {

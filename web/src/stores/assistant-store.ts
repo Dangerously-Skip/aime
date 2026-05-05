@@ -44,6 +44,18 @@ export interface AssistantCard {
   timestamp: number;
   unread: boolean;
   pinned: boolean;
+  /**
+   * When set, this card is a dashboard widget that auto-refreshes by re-running
+   * `widget.regeneratePrompt` on the heartbeat schedule. Pinned widgets persist
+   * across sessions; the `lastRefreshedAt` timestamp gates re-firing.
+   */
+  widget?: {
+    refreshIntervalMs: number;
+    regeneratePrompt: string;
+    lastRefreshedAt?: number;
+    /** Optional surface to run the refresh against (default: 'assistant'). */
+    surface?: string;
+  };
 }
 
 // ── Activity Log ─────────────────────────────────────────────────────────────
@@ -77,12 +89,14 @@ interface AssistantActions {
   getOrder: (id: string) => StandingOrder | undefined;
 
   // Card feed
-  addCard: (card: Omit<AssistantCard, 'id' | 'timestamp' | 'unread' | 'pinned'>) => void;
+  addCard: (card: Omit<AssistantCard, 'id' | 'timestamp' | 'unread' | 'pinned'>) => string;
   dismissCard: (id: string) => void;
   pinCard: (id: string) => void;
   unpinCard: (id: string) => void;
   markAllRead: () => void;
   clearOldCards: (days: number) => void;
+  /** Replace a card's body in place (used by widget refresh and card streaming). */
+  updateCard: (id: string, updates: Partial<AssistantCard>) => void;
 
   // Activity log
   addActivity: (entry: Omit<ActivityEntry, 'id' | 'timestamp'>) => void;
@@ -176,12 +190,22 @@ export const useAssistantStore = create<AssistantStore>()(
 
       // ── Card feed ───────────────────────────────────────────────────────
 
-      addCard: (card) =>
+      addCard: (card) => {
+        const id = crypto.randomUUID();
+        // Widgets default to pinned so they persist as dashboard tiles.
+        const isWidget = !!card.widget;
         set((state) => ({
           cards: [
-            { ...card, id: crypto.randomUUID(), timestamp: Date.now(), unread: true, pinned: false },
+            { ...card, id, timestamp: Date.now(), unread: !isWidget, pinned: isWidget },
             ...state.cards,
           ],
+        }));
+        return id;
+      },
+
+      updateCard: (id, updates) =>
+        set((state) => ({
+          cards: state.cards.map((c) => (c.id === id ? { ...c, ...updates } : c)),
         })),
 
       dismissCard: (id) =>

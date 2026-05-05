@@ -1,10 +1,12 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Trash2, X, LayoutDashboard } from "lucide-react";
+import { ChevronLeft, ChevronRight, Trash2, X, LayoutDashboard, Pin, Check } from "lucide-react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
 import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
+import { useProjectStore } from "@/stores/project-store";
 
 interface CanvasPanelProps {
   open: boolean;
@@ -16,6 +18,10 @@ interface CanvasPanelProps {
   canGoBack: boolean;
   canGoForward: boolean;
   onAction?: (action: A2UIAction) => void;
+  /** Surface this panel is rendered in — captured on pin for context. */
+  surface?: string;
+  /** Conversation that produced the canvas — captured on pin for regenerate. */
+  conversationId?: string;
 }
 
 export function CanvasPanel({
@@ -28,8 +34,28 @@ export function CanvasPanel({
   canGoBack,
   canGoForward,
   onAction,
+  surface,
+  conversationId,
 }: CanvasPanelProps) {
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const pinCanvas = useProjectStore((s) => s.pinCanvas);
+  const [pinned, setPinned] = useState(false);
+
   if (!open) return null;
+
+  const handlePin = () => {
+    if (!doc || !activeProjectId) return;
+    pinCanvas(activeProjectId, {
+      id: crypto.randomUUID(),
+      name: doc.title || "Untitled canvas",
+      doc,
+      pinnedAt: Date.now(),
+      surface,
+      conversationId,
+    });
+    setPinned(true);
+    setTimeout(() => setPinned(false), 1500);
+  };
 
   return (
     <div className="flex flex-col w-[480px] border-l border-border bg-background shrink-0 h-full">
@@ -59,6 +85,19 @@ export function CanvasPanel({
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
+
+        {/* Pin to project — only when a project is active */}
+        {activeProjectId && doc && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={handlePin}
+            disabled={pinned}
+            title={pinned ? "Pinned" : "Pin to project"}
+          >
+            {pinned ? <Check className="h-4 w-4 text-success" /> : <Pin className="h-4 w-4" />}
+          </Button>
+        )}
 
         {/* Clear */}
         <Button

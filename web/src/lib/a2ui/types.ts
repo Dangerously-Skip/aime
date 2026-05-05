@@ -15,7 +15,8 @@ export type A2UIComponentType =
   | 'action-card'
   | 'todo'
   | 'approval-card'
-  | 'timeline';
+  | 'timeline'
+  | 'mermaid';
 
 // ── Column/Row types ──────────────────────────────────────────────────────────
 
@@ -225,6 +226,18 @@ export interface TimelineComponent {
   entries: TimelineEntry[];
 }
 
+// ── Mermaid types ────────────────────────────────────────────────────────────
+
+export interface MermaidComponent {
+  type: 'mermaid';
+  id: string;
+  title?: string;
+  /** Mermaid source (graph, flowchart, erDiagram, mindmap, sequenceDiagram, etc.) */
+  code: string;
+  /** Caption shown below the diagram */
+  caption?: string;
+}
+
 // ── Component union ──────────────────────────────────────────────────────────
 
 export type A2UIComponent =
@@ -239,7 +252,8 @@ export type A2UIComponent =
   | ActionCardComponent
   | TodoComponent
   | ApprovalCardComponent
-  | TimelineComponent;
+  | TimelineComponent
+  | MermaidComponent;
 
 // ── Canvas document ───────────────────────────────────────────────────────────
 
@@ -258,4 +272,11 @@ export type A2UIAction =
   | { type: 'todo-toggle'; componentId: string; itemId: string; done: boolean }
   | { type: 'todo-add'; componentId: string; text: string }
   | { type: 'todo-reorder'; componentId: string; itemIds: string[] }
-  | { type: 'approval'; componentId: string; decision: 'approve' | 'reject'; comment?: string };
+  | { type: 'approval'; componentId: string; decision: 'approve' | 'reject'; comment?: string }
+  /**
+   * Writeback action — invokes an MCP tool from a templated canvas.
+   * The router POSTs `{ tool, args }` to /api/canvas-action which dispatches
+   * the call against the active provisioned MCP servers, then optionally
+   * follows up with a `feedbackPrompt` to the chat agent.
+   */
+  | { type: 'tool-call'; componentId: string; tool: string; args: Record<string, unknown>; feedbackPrompt?: string };
