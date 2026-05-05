@@ -94,7 +94,9 @@ export function CanvasPanel({
       style={
         !expanded
           ? {
-              width: customWidth ? `${customWidth}px` : "480px",
+              // Default 720px so kanban-style canvases (~3 columns × 200px) fit
+              // without horizontal scroll. User can drag-resize wider/narrower.
+              width: customWidth ? `${customWidth}px` : "720px",
               // Hard cap so the panel can never crush sibling columns, even if
               // customWidth was somehow set too high.
               maxWidth: "calc(100% - 360px)",
