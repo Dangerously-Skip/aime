@@ -50,14 +50,14 @@ import {
   LayoutDashboard,
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
-import { CanvasPanel } from "@/components/shared/canvas-panel";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
 import { useCanvasStore } from "@/stores/canvas-store";
-import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
-import { dispatchCanvasToolCall } from "@/lib/canvas/dispatch";
+import type { A2UIDocument } from "@/lib/a2ui/types";
+import { CanvasOverlay } from "@/components/shared/canvas-overlay";
+import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import { useHeartbeat } from "@/hooks/use-heartbeat";
 import { useCron } from "@/hooks/use-cron";
 import {
@@ -677,14 +677,7 @@ export function CoworkSurface() {
   const clearSearchGroups = useCoworkStore((s) => s.clearSearchGroups);
   const [previewOpen, setPreviewOpen] = useState(false);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
-  const clearCanvas = useCanvasStore((s) => s.clearCanvas);
-  const goBackCanvas = useCanvasStore((s) => s.goBack);
-  const goForwardCanvas = useCanvasStore((s) => s.goForward);
   const setCanvasOpen = useCanvasStore((s) => s.setOpen);
-  const canvasDoc = useCanvasStore((s) => s.canvasDoc);
-  const canvasHistoryIndex = useCanvasStore((s) => s.historyIndex);
-  const canvasHistoryLength = useCanvasStore((s) => s.history.length);
-  const canvasOpen = useCanvasStore((s) => !!s.openSurfaces['cowork']);
   const handleFileAttach = useCallback(
     (file: AttachmentFile) => {
       setAttachments((prev) => [...prev, file]);
@@ -696,20 +689,9 @@ export function CoworkSurface() {
   const { isDragging, dropZoneProps } = useFileDrop(handleFileAttach);
   const currentChatId = useCoworkStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
-
-  // Clear the global canvas + close the panel when switching conversations,
-  // so a kanban from a previous chat doesn't leak into a new one. Per-chat
-  // canvas artifacts in the store stay (sidebar shows the right ones).
-  // Skip when chatId is empty — transient state, clearing causes layout cascades.
-  const lastChatIdRef = useRef<string>("");
-  useEffect(() => {
-    if (!chatId) return;
-    if (lastChatIdRef.current === chatId) return;
-    lastChatIdRef.current = chatId;
-    clearCanvas();
-    setCanvasOpen('cowork', false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId]);
+  // Canvas SSE handler — store mutations + telemetry centralised in the hook.
+  // Canvas-store lifecycle (clear on conversation change) is handled by <CanvasOverlay />.
+  const onCanvasEvent = useCanvasSseHandler('cowork', chatId);
   const messages = useCoworkStore(
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
@@ -1113,31 +1095,9 @@ export function CoworkSurface() {
           }
           break;
         }
-        case "canvas": {
-          // Agent pushed a canvas document — open the canvas panel + persist as artifact + inline chip
-          try {
-            const doc = event.doc as A2UIDocument;
-            if (doc && doc.components) {
-              pushCanvas(doc);
-              setCanvasOpen('cowork', true);
-              const canvasId = crypto.randomUUID();
-              const title = doc.title || 'Canvas';
-              if (chatId) {
-                useCoworkStore.getState().addCanvasArtifact(chatId, {
-                  id: canvasId,
-                  title,
-                  doc,
-                  createdAt: Date.now(),
-                });
-                useCoworkStore.getState().attachCanvasToLastAssistant(chatId, { id: canvasId, title, doc });
-              }
-              sendFeatureAdoptionEvent({ feature: 'canvas', surface: 'cowork' });
-            }
-          } catch (e) {
-            console.error('[Cowork] Canvas parse error:', e);
-          }
+        case "canvas":
+          onCanvasEvent(event as { doc?: unknown });
           break;
-        }
         case "cron_create": {
           // Route cron jobs to the standing order engine in the Assistant surface
           try {
@@ -1920,24 +1880,8 @@ export function CoworkSurface() {
             />
           )}
 
-          {/* Canvas panel */}
-          <CanvasPanel
-            open={canvasOpen}
-            doc={canvasDoc}
-            onClose={() => setCanvasOpen('cowork', false)}
-            onBack={goBackCanvas}
-            onForward={goForwardCanvas}
-            onClear={clearCanvas}
-            canGoBack={canvasHistoryIndex > 0}
-            canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
-            surface="cowork"
-            conversationId={chatId}
-            onAction={(action: A2UIAction) => {
-              if (action.type === 'tool-call') {
-                dispatchCanvasToolCall(action, { surfaceId: 'cowork' }).catch((err) => console.error('[canvas] tool-call failed:', err));
-              }
-            }}
-          />
+          {/* Canvas overlay — slides in over the chat content */}
+          <CanvasOverlay surfaceId="cowork" conversationId={chatId} />
         </div>
       )}
 

@@ -4,9 +4,17 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
+import type { A2UIDocument } from '@/lib/a2ui/types';
 
 export type ModelId = 'sonnet' | 'opus' | 'haiku';
 export type { SessionControls };
+
+export interface CanvasArtifact {
+  id: string;
+  title: string;
+  doc: A2UIDocument;
+  createdAt: number;
+}
 
 const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
@@ -68,6 +76,7 @@ interface ChatState {
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
   suggestions: Record<string, string[]>;
+  canvasArtifacts: Record<string, CanvasArtifact[]>;
 }
 
 interface ChatActions {
@@ -91,6 +100,8 @@ interface ChatActions {
   setStreamError: (e: string | null) => void;
   addSuggestion: (chatId: string, suggestion: string) => void;
   clearSuggestions: (chatId: string) => void;
+  addCanvasArtifact: (chatId: string, artifact: CanvasArtifact) => void;
+  removeCanvasArtifact: (chatId: string, artifactId: string) => void;
 }
 
 export type ChatStore = ChatState & ChatActions;
@@ -106,6 +117,7 @@ export const useChatStore = create<ChatStore>()(
       sessionControls: {},
       lastActivityAt: {},
       suggestions: {},
+      canvasArtifacts: {},
 
       addMessage: (chatId, message) =>
         set((state) => ({
@@ -286,6 +298,22 @@ export const useChatStore = create<ChatStore>()(
         set((state) => ({
           suggestions: { ...state.suggestions, [chatId]: [] },
         })),
+
+      addCanvasArtifact: (chatId, artifact) =>
+        set((state) => ({
+          canvasArtifacts: {
+            ...state.canvasArtifacts,
+            [chatId]: [...(state.canvasArtifacts[chatId] ?? []), artifact],
+          },
+        })),
+
+      removeCanvasArtifact: (chatId, artifactId) =>
+        set((state) => ({
+          canvasArtifacts: {
+            ...state.canvasArtifacts,
+            [chatId]: (state.canvasArtifacts[chatId] ?? []).filter((c) => c.id !== artifactId),
+          },
+        })),
     }),
     {
       name: 'nibcowork:chat',
@@ -295,6 +323,7 @@ export const useChatStore = create<ChatStore>()(
         model: state.model,
         currentChatId: state.currentChatId,
         sessionControls: state.sessionControls,
+        canvasArtifacts: state.canvasArtifacts,
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
