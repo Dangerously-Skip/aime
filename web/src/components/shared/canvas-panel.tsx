@@ -3,7 +3,6 @@
 import { ChevronLeft, ChevronRight, Trash2, X, LayoutDashboard, Pin, Check, Maximize2, Minimize2 } from "lucide-react";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
 import type { A2UIDocument, A2UIAction } from "@/lib/a2ui/types";
 import { useProjectStore } from "@/stores/project-store";
@@ -43,6 +42,17 @@ export function CanvasPanel({
   const [expanded, setExpanded] = useState(false);
   const [customWidth, setCustomWidth] = useState<number | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Reset scroll-to-top whenever the canvas doc changes — otherwise a
+  // newly-pushed canvas inherits the previous canvas's scroll position
+  // and may land mid-page (causing the "header is missing" optical illusion
+  // after surface/conversation switches).
+  useEffect(() => {
+    if (bodyRef.current) {
+      bodyRef.current.scrollTop = 0;
+    }
+  }, [doc]);
 
   // Clamp customWidth + auto-expand on narrow viewports.
   // Below MIN_SIDE_BY_SIDE the side-by-side layout doesn't fit, so we flip
@@ -213,8 +223,9 @@ export function CanvasPanel({
         </Button>
       </div>
 
-      {/* Body */}
-      <ScrollArea className="flex-1">
+      {/* Body — native scroll. Plain overflow-y-auto is the only thing that
+          survives display:none/block toggles cleanly across surface switches. */}
+      <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {doc ? (
           <A2UIDocumentRenderer doc={doc} onAction={onAction} />
         ) : (
@@ -224,7 +235,7 @@ export function CanvasPanel({
             <p className="text-xs mt-1">Ask the agent to "show a canvas with..."</p>
           </div>
         )}
-      </ScrollArea>
+      </div>
     </div>
   );
 }
