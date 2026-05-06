@@ -28,7 +28,11 @@ export function useCanvasSseHandler(surfaceId: SurfaceId, chatId: string) {
     (event: { doc?: unknown }) => {
       try {
         const doc = event.doc as A2UIDocument | undefined;
-        if (!doc || !doc.components) return;
+        console.log(`[${surfaceId}] canvas event received`, { hasDoc: !!doc, hasComponents: !!doc?.components, chatId });
+        if (!doc || !doc.components) {
+          console.warn(`[${surfaceId}] canvas event dropped — doc malformed`, doc);
+          return;
+        }
 
         pushCanvas(surfaceId, doc);
         setCanvasOpen(surfaceId, true);
@@ -47,6 +51,9 @@ export function useCanvasSseHandler(surfaceId: SurfaceId, chatId: string) {
             c.addCanvasArtifact(chatId, { ...payload, createdAt: Date.now() });
             c.attachCanvasToLastAssistant(chatId, payload);
           }
+          console.log(`[${surfaceId}] canvas chip attached + artifact saved`, { canvasId, title });
+        } else {
+          console.warn(`[${surfaceId}] canvas event fired but chatId is empty — chip won't attach`);
         }
 
         sendFeatureAdoptionEvent({ feature: 'canvas', surface: surfaceId });
