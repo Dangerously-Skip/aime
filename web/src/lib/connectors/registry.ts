@@ -281,6 +281,25 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     },
   },
 
+  // ── nib internal ───────────────────────────────────────────────────────────
+
+  {
+    id: 'jeff',
+    name: 'JEFF',
+    description: 'nib\'s code-writing AI agent — investigate bugs, add features, and open PRs across nib repos',
+    category: 'development',
+    auth: {
+      type: 'api_key',
+      envVarName: 'JEFF_API_KEY',
+      hint: 'Generate a key at JEFF UI → Settings → Connected Services → User API Keys → New API Key. Pick scopes: jobs:create, jobs:read, agents:read. Requires VPN — internal.invalid is internal-only.',
+    },
+    mcp: {
+      transport: 'http',
+      url: 'https://jeff-api.internal.invalid/api/v1/mcp',
+      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
+    },
+  },
+
   // ── Data ───────────────────────────────────────────────────────────────────
 
   {
