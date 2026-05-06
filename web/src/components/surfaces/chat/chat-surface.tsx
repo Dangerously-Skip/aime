@@ -898,20 +898,18 @@ export function ChatSurface() {
               <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
                 <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
-                <div className="ml-auto flex items-center gap-2">
-                  <span className="text-[10px] text-muted-foreground/60">{artifactFiles.length + canvasArtifacts.length}</span>
-                  {canvasHasDoc && (
-                    <button
-                      type="button"
-                      onClick={() => setCanvasOpen('chat', !canvasOpen)}
-                      className="text-muted-foreground hover:text-foreground transition-colors"
-                      title={canvasOpen ? 'Hide canvas' : 'Show canvas'}
-                    >
-                      {canvasOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                    </button>
-                  )}
-                </div>
+                <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
               </div>
+              {canvasHasDoc && (
+                <button
+                  type="button"
+                  onClick={() => setCanvasOpen('chat', !canvasOpen)}
+                  className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors border-b border-border/30"
+                >
+                  {canvasOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  <span>{canvasOpen ? 'Hide canvas' : 'Show canvas'}</span>
+                </button>
+              )}
               <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
                 {canvasArtifacts.length === 0 && artifactFiles.length === 0 && (
                   <div className="text-[11px] text-muted-foreground px-2.5 py-3 text-center leading-relaxed">
