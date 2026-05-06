@@ -11,7 +11,7 @@ import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File, FilePen, PanelRight, LayoutDashboard } from "lucide-react";
+import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File, FilePen, PanelRight, LayoutDashboard, Eye, EyeOff } from "lucide-react";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import type { Message } from "@/stores/chat-store";
@@ -96,6 +96,8 @@ export function ChatSurface() {
   const canvasArtifacts = useChatStore((s) => (chatId ? s.canvasArtifacts[chatId] : undefined) ?? EMPTY_CANVAS_ARTIFACTS);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const setCanvasOpen = useCanvasStore((s) => s.setOpen);
+  const canvasOpen = useCanvasStore((s) => !!s.bySurface['chat']?.open);
+  const canvasHasDoc = useCanvasStore((s) => !!s.bySurface['chat']?.doc);
 
   // Clear local artifact state on conversation change. Canvas-store lifecycle
   // is handled by <CanvasOverlay /> via its own useEffect.
@@ -897,6 +899,16 @@ export function ChatSurface() {
                 <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
                 <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
+                {canvasHasDoc && (
+                  <button
+                    type="button"
+                    onClick={() => setCanvasOpen('chat', !canvasOpen)}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                    title={canvasOpen ? 'Hide canvas' : 'Show canvas'}
+                  >
+                    {canvasOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                )}
               </div>
               <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
                 {canvasArtifacts.length === 0 && artifactFiles.length === 0 && (

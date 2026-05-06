@@ -48,6 +48,8 @@ import {
   Globe,
   ListChecks,
   LayoutDashboard,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
@@ -255,6 +257,23 @@ function openFile(path: string) {
   } else if (window.electronAPI?.openPath) {
     window.electronAPI.openPath(path);
   }
+}
+
+function CoworkCanvasToggle() {
+  const open = useCanvasStore((s) => !!s.bySurface['cowork']?.open);
+  const hasDoc = useCanvasStore((s) => !!s.bySurface['cowork']?.doc);
+  const setOpen = useCanvasStore((s) => s.setOpen);
+  if (!hasDoc) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen('cowork', !open)}
+      className="text-muted-foreground hover:text-foreground transition-colors"
+      title={open ? 'Hide canvas' : 'Show canvas'}
+    >
+      {open ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+    </button>
+  );
 }
 
 function SidebarCard({
@@ -609,6 +628,7 @@ function SidebarPanel({
                   <LayoutDashboard className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="flex-1 text-sm font-semibold">Canvases</span>
                   <span className="text-xs text-muted-foreground">{canvasArtifacts.length}</span>
+                  <CoworkCanvasToggle />
                 </div>
                 <div className="px-2 pb-2 space-y-1">
                   {canvasArtifacts.map((c) => (
