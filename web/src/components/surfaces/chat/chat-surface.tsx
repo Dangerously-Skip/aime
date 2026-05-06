@@ -889,43 +889,48 @@ export function ChatSurface() {
               </div>
             </div>
 
-            {/* Artifacts sidebar — files + canvases produced this session */}
-            {(artifactFiles.length > 0 || canvasArtifacts.length > 0) && (
-              <div className="w-64 shrink-0 border-l border-border bg-card/50 flex flex-col">
-                <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
-                  <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
-                  <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
-                </div>
-                <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
-                  {canvasArtifacts.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => { pushCanvas('chat', c.doc); setCanvasOpen('chat', true); }}
-                      className="w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-left hover:bg-muted transition-colors group"
-                      title={c.title}
-                    >
-                      <LayoutDashboard className="h-3.5 w-3.5 text-primary shrink-0" />
-                      <span className="truncate text-foreground/80 group-hover:text-foreground">{c.title}</span>
-                    </button>
-                  ))}
-                  {artifactFiles.map((filePath) => {
-                    const name = filePath.split("/").pop() || filePath;
-                    return (
-                      <button
-                        key={filePath}
-                        onClick={() => setPreviewPath(filePath)}
-                        className="w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-left hover:bg-muted transition-colors group"
-                        title={filePath}
-                      >
-                        <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="truncate text-foreground/80 group-hover:text-foreground">{name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+            {/* Artifacts sidebar — always visible during a conversation so
+                canvases are reliably findable. Shows empty state if nothing
+                has been produced yet. */}
+            <div className="w-64 shrink-0 border-l border-border bg-card/50 flex flex-col">
+              <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
+                <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
+                <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
               </div>
-            )}
+              <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
+                {canvasArtifacts.length === 0 && artifactFiles.length === 0 && (
+                  <div className="text-[11px] text-muted-foreground px-2.5 py-3 text-center leading-relaxed">
+                    Canvases and files the agent produces in this chat will appear here. Click any item to reopen it.
+                  </div>
+                )}
+                {canvasArtifacts.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => { pushCanvas('chat', c.doc); setCanvasOpen('chat', true); }}
+                    className="w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-left hover:bg-muted transition-colors group"
+                    title={c.title}
+                  >
+                    <LayoutDashboard className="h-3.5 w-3.5 text-primary shrink-0" />
+                    <span className="truncate text-foreground/80 group-hover:text-foreground">{c.title}</span>
+                  </button>
+                ))}
+                {artifactFiles.map((filePath) => {
+                  const name = filePath.split("/").pop() || filePath;
+                  return (
+                    <button
+                      key={filePath}
+                      onClick={() => setPreviewPath(filePath)}
+                      className="w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-left hover:bg-muted transition-colors group"
+                      title={filePath}
+                    >
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="truncate text-foreground/80 group-hover:text-foreground">{name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {/* Canvas overlay — slides in over the chat content */}
             <CanvasOverlay surfaceId="chat" conversationId={chatId} />
