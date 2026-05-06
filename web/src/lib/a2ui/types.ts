@@ -186,6 +186,16 @@ export interface ActionCardAction {
   actionId: string;
   label: string;
   variant?: 'primary' | 'secondary' | 'destructive';
+  /**
+   * Optional MCP tool to call directly via canvas action dispatch. When set,
+   * clicking emits a `tool-call` A2UIAction; otherwise it emits a plain
+   * `button-click` carrying the actionId.
+   */
+  tool?: string;
+  /** Args passed when `tool` is set. */
+  args?: Record<string, unknown>;
+  /** Optional human-readable feedback prompt for the agent after the call. */
+  feedbackPrompt?: string;
 }
 
 export interface ActionCardComponent {

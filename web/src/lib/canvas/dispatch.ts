@@ -17,10 +17,22 @@ export async function dispatchCanvasToolCall(
 ): Promise<string> {
   const { surfaceId = 'cowork', apiKey = null, cwd = null } = opts;
 
-  const argsBlob = JSON.stringify(action.args, null, 2);
-  const task = action.feedbackPrompt
-    ? `${action.feedbackPrompt}\n\nUse the \`${action.tool}\` tool with these arguments:\n\`\`\`json\n${argsBlob}\n\`\`\``
-    : `Call the \`${action.tool}\` tool with these arguments:\n\`\`\`json\n${argsBlob}\n\`\`\`\n\nReport the result in one sentence.`;
+  // Build the task. Three modes:
+  //   1. tool + args: call the tool exactly with args
+  //   2. tool + feedbackPrompt: call the tool, but the prompt steers what to do
+  //   3. feedbackPrompt only: pure agent task (e.g. "ask user what changes")
+  const hasTool = !!action.tool && action.tool.length > 0;
+  const argsBlob = hasTool ? JSON.stringify(action.args ?? {}, null, 2) : '';
+  let task: string;
+  if (hasTool && action.feedbackPrompt) {
+    task = `${action.feedbackPrompt}\n\nUse the \`${action.tool}\` tool with these arguments:\n\`\`\`json\n${argsBlob}\n\`\`\``;
+  } else if (hasTool) {
+    task = `Call the \`${action.tool}\` tool with these arguments:\n\`\`\`json\n${argsBlob}\n\`\`\`\n\nReport the result in one sentence.`;
+  } else if (action.feedbackPrompt) {
+    task = action.feedbackPrompt;
+  } else {
+    throw new Error('Canvas action has neither tool nor feedbackPrompt');
+  }
 
   const response = await fetch('/api/subagent', {
     method: 'POST',
