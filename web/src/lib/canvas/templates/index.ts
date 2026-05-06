@@ -8,6 +8,11 @@ import { githubPrTriageTemplate } from './github-pr-triage';
 import { apiExplorerTemplate } from './api-explorer';
 import { codeReviewTemplate } from './code-review';
 import { buildPipelineTemplate } from './build-pipeline';
+import { confluencePageTemplate } from './confluence-page';
+import { sprintPlanningTemplate } from './sprint-planning';
+import { decisionLogTemplate } from './decision-log';
+import { meetingActionsTemplate } from './meeting-actions';
+import { issueTriageTemplate } from './issue-triage';
 
 /** Registry of all known canvas templates. */
 export const CANVAS_TEMPLATES: CanvasTemplate[] = [
@@ -21,6 +26,11 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
   apiExplorerTemplate as unknown as CanvasTemplate,
   codeReviewTemplate as unknown as CanvasTemplate,
   buildPipelineTemplate as unknown as CanvasTemplate,
+  confluencePageTemplate as unknown as CanvasTemplate,
+  sprintPlanningTemplate as unknown as CanvasTemplate,
+  decisionLogTemplate as unknown as CanvasTemplate,
+  meetingActionsTemplate as unknown as CanvasTemplate,
+  issueTriageTemplate as unknown as CanvasTemplate,
 ];
 
 export function getCanvasTemplate(id: string): CanvasTemplate | undefined {

@@ -240,8 +240,8 @@ function KanbanRenderer({ component, onAction }: { component: KanbanComponent; o
                               key={a.actionId}
                               type="button"
                               onClick={() => {
-                                if (a.tool) {
-                                  onAction?.({ type: 'tool-call', componentId: component.id, tool: a.tool, args: a.args ?? {}, feedbackPrompt: a.feedbackPrompt });
+                                if (a.tool || a.feedbackPrompt) {
+                                  onAction?.({ type: 'tool-call', componentId: component.id, tool: a.tool ?? '', args: a.args ?? {}, feedbackPrompt: a.feedbackPrompt });
                                 } else {
                                   onAction?.({ type: 'button-click', componentId: component.id, actionId: a.actionId, payload: { cardId: card.id, ...a.args } });
                                 }
@@ -471,7 +471,16 @@ function ActionCardRenderer({ component, onAction }: { component: ActionCardComp
                 key={action.actionId}
                 label={action.label}
                 variant={action.variant || 'secondary'}
-                onClick={() => onAction?.({ type: 'button-click', componentId: component.id, actionId: action.actionId })}
+                onClick={() => {
+                  // Route through dispatch when action has either a tool OR
+                  // a feedbackPrompt — covers direct MCP calls AND
+                  // agent-orchestrated flows like "edit via agent".
+                  if (action.tool || action.feedbackPrompt) {
+                    onAction?.({ type: 'tool-call', componentId: component.id, tool: action.tool ?? '', args: action.args ?? {}, feedbackPrompt: action.feedbackPrompt });
+                  } else {
+                    onAction?.({ type: 'button-click', componentId: component.id, actionId: action.actionId });
+                  }
+                }}
               />
             ))}
           </div>
