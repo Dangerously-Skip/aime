@@ -11,7 +11,7 @@ import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File, FilePen, PanelRight, LayoutDashboard, Eye, EyeOff } from "lucide-react";
+import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File, FilePen, PanelRight, PanelRightClose, LayoutDashboard } from "lucide-react";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import type { Message } from "@/stores/chat-store";
@@ -96,8 +96,8 @@ export function ChatSurface() {
   const canvasArtifacts = useChatStore((s) => (chatId ? s.canvasArtifacts[chatId] : undefined) ?? EMPTY_CANVAS_ARTIFACTS);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const setCanvasOpen = useCanvasStore((s) => s.setOpen);
-  const canvasOpen = useCanvasStore((s) => !!s.bySurface['chat']?.open);
-  const canvasHasDoc = useCanvasStore((s) => !!s.bySurface['chat']?.doc);
+  // Local: collapse/expand the right Artifacts column
+  const [artifactsSidebarOpen, setArtifactsSidebarOpen] = useState(true);
 
   // Clear local artifact state on conversation change. Canvas-store lifecycle
   // is handled by <CanvasOverlay /> via its own useEffect.
@@ -891,25 +891,34 @@ export function ChatSurface() {
               </div>
             </div>
 
-            {/* Artifacts sidebar — always visible during a conversation so
-                canvases are reliably findable. Shows empty state if nothing
-                has been produced yet. */}
-            <div className="w-64 shrink-0 border-l border-border bg-card/50 flex flex-col">
-              <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
-                <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
-                <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
-              </div>
-              {canvasHasDoc && (
+            {/* Artifacts sidebar — collapsible. When collapsed, a 40px-wide
+                strip with just an expand button so canvases stay findable. */}
+            <div className={`shrink-0 border-l border-border bg-card/50 flex flex-col transition-all duration-200 ${artifactsSidebarOpen ? 'w-64' : 'w-10'}`}>
+              {!artifactsSidebarOpen ? (
                 <button
                   type="button"
-                  onClick={() => setCanvasOpen('chat', !canvasOpen)}
-                  className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors border-b border-border/30"
+                  onClick={() => setArtifactsSidebarOpen(true)}
+                  className="flex items-center justify-center py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                  title="Show artifacts"
                 >
-                  {canvasOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  <span>{canvasOpen ? 'Hide canvas' : 'Show canvas'}</span>
+                  <PanelRight className="h-4 w-4" />
                 </button>
+              ) : (
+                <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
+                  <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
+                  <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
+                  <button
+                    type="button"
+                    onClick={() => setArtifactsSidebarOpen(false)}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                    title="Hide artifacts"
+                  >
+                    <PanelRightClose className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               )}
+              {artifactsSidebarOpen && (
               <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
                 {canvasArtifacts.length === 0 && artifactFiles.length === 0 && (
                   <div className="text-[11px] text-muted-foreground px-2.5 py-3 text-center leading-relaxed">
@@ -942,6 +951,7 @@ export function ChatSurface() {
                   );
                 })}
               </div>
+              )}
             </div>
 
             {/* Canvas overlay — slides in over the chat content */}
