@@ -726,7 +726,14 @@ export async function POST(
             const result = await Promise.race([extractionPromise, timeoutPromise]);
             console.log('[EXTRACT] Success:', att.name, 'text length:', result.text.length, 'pages:', result.pageCount || 'n/a');
 
-            if (isToolSurface && result.text.length > 0) {
+            // Zero-text extraction is common for image-based PDFs (scanned
+            // boarding passes, photo PDFs, etc.). Treat as a failure so the
+            // agent gets the file path + a clear note it needs Read/OCR.
+            if (result.text.length === 0 && att.filePath) {
+              att.content = `[The file ${att.name} appears to be an image-based PDF (no extractable text layer — likely a scan or photo). The raw file is at: ${att.filePath} — use the Read tool to access it.]`;
+              att.extractedPath = att.filePath;
+              console.log('[EXTRACT] Empty result; falling back to Read tool path for', att.name);
+            } else if (isToolSurface && result.text.length > 0) {
               // Save to scratch dir for agent to Read/Grep
               const scratchDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'documents');
               eMkdir(scratchDir, { recursive: true });
@@ -737,9 +744,9 @@ export async function POST(
               att.content = ''; // Free memory — agent will use Read tool
               console.log('[EXTRACT] Saved to scratch:', extractedPath, '(' + result.text.length + ' chars)');
             } else {
-              // Chat surface: inline extracted text (first ~30k chars)
+              // Chat surface with non-empty text: inline (first ~30k chars)
               att.content = result.text.slice(0, 30000);
-              att.category = 'text' as typeof att.category; // Treat as text for prompt building
+              att.category = 'text' as typeof att.category;
               console.log('[EXTRACT] Inlined:', att.name, '(' + att.content.length + ' chars)');
             }
 
