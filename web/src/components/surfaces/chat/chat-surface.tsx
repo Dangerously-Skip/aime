@@ -898,17 +898,19 @@ export function ChatSurface() {
               <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
                 <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
-                <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
-                {canvasHasDoc && (
-                  <button
-                    type="button"
-                    onClick={() => setCanvasOpen('chat', !canvasOpen)}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                    title={canvasOpen ? 'Hide canvas' : 'Show canvas'}
-                  >
-                    {canvasOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
-                )}
+                <div className="ml-auto flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground/60">{artifactFiles.length + canvasArtifacts.length}</span>
+                  {canvasHasDoc && (
+                    <button
+                      type="button"
+                      onClick={() => setCanvasOpen('chat', !canvasOpen)}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      title={canvasOpen ? 'Hide canvas' : 'Show canvas'}
+                    >
+                      {canvasOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
                 {canvasArtifacts.length === 0 && artifactFiles.length === 0 && (
