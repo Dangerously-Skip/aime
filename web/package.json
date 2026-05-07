@@ -169,6 +169,7 @@
     "openai": "^6.32.0",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "^5.5.207",
+    "pino": "^9.5.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
@@ -191,6 +192,7 @@
     "electron-builder": "^26.8.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "pino-pretty": "^11.3.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "wait-on": "^9.0.4"
