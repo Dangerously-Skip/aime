@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CanvasPanel } from "./canvas-panel";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useAppStore } from "@/stores/app-store";
 import { dispatchCanvasToolCall } from "@/lib/canvas/dispatch";
-import type { A2UIAction } from "@/lib/a2ui/types";
+import { refreshCanvasDoc } from "@/lib/canvas/dispatch";
+import type { A2UIAction, A2UIDocument } from "@/lib/a2ui/types";
 
 interface CanvasOverlayProps {
   /** Surface this overlay belongs to. Drives store keys + dispatch surface. */
@@ -31,6 +32,8 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
   const goForwardStore = useCanvasStore((s) => s.goForward);
   const clearStore = useCanvasStore((s) => s.clearCanvas);
   const setOpenStore = useCanvasStore((s) => s.setOpen);
+  const pushCanvas = useCanvasStore((s) => s.pushCanvas);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   // Subscribe to activeSurface so we re-render when switching back; this
   // gives the panel a chance to recompute its layout (parent went from
   // display:none to display:block, which can leave absolute children in a
@@ -68,11 +71,33 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
       canGoForward={canvasHistoryIndex < canvasHistoryLength - 1}
       surface={surfaceId}
       conversationId={conversationId}
+      isRefreshing={isRefreshing}
       onAction={(action: A2UIAction) => {
         if (action.type === "tool-call") {
-          dispatchCanvasToolCall(action, { surfaceId }).catch((err) =>
-            console.error("[canvas] tool-call failed:", err),
-          );
+          // Snapshot the refreshPrompt before dispatching — `canvasDoc` is
+          // closed over here, so this stays correct even if state changes.
+          const refreshPrompt = canvasDoc?.refreshPrompt;
+          dispatchCanvasToolCall(action, { surfaceId })
+            .then(async () => {
+              if (!refreshPrompt) return;
+              setIsRefreshing(true);
+              try {
+                const fresh = await refreshCanvasDoc(refreshPrompt, { surfaceId });
+                if (fresh) {
+                  // Preserve refreshPrompt on the new doc so the next action
+                  // can refresh too (the agent should do this, but belt-and-braces).
+                  const next: A2UIDocument = fresh.refreshPrompt
+                    ? fresh
+                    : { ...fresh, refreshPrompt };
+                  pushCanvas(surfaceId, next);
+                }
+              } catch (err) {
+                console.error("[canvas] refresh failed:", err);
+              } finally {
+                setIsRefreshing(false);
+              }
+            })
+            .catch((err) => console.error("[canvas] tool-call failed:", err));
         }
       }}
     />

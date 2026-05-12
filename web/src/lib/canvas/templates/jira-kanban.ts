@@ -34,6 +34,14 @@ interface JiraKanbanInput {
   issues: JiraIssue[];
   /** Optional caption / context note rendered below the board. */
   caption?: string;
+  /**
+   * Optional natural-language prompt that the canvas can use to re-fetch
+   * itself after a writeback (status transition, comment, etc.). The agent
+   * should set this to something like:
+   *   "Re-fetch <JQL> from Jira and render the kanban again."
+   * If omitted, the canvas stays stale after actions.
+   */
+  refreshPrompt?: string;
 }
 
 function buildTransitionActions(
@@ -65,10 +73,12 @@ export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
     'First, identify which Atlassian MCP is available — common server names are `claude_ai_Atlassian` and `nib-mcp-atlassian` (the tool prefix is `mcp__<server>__<toolName>`). ' +
     'Use the *_searchJiraIssuesUsingJql tool from that server to fetch issues, group by status, and include each issue\'s allowed transitions via *_getTransitionsForJiraIssue. ' +
     'Pass the `transitionTool` field as the FULL MCP tool name for transitions (e.g. `mcp__nib-mcp-atlassian__transitionJiraIssue`). ' +
-    'If the Atlassian MCP requires a `cloudId` arg, fetch it via *_getAccessibleAtlassianResources and pass it in `baseToolArgs`.',
+    'If the Atlassian MCP requires a `cloudId` arg, fetch it via *_getAccessibleAtlassianResources and pass it in `baseToolArgs`. ' +
+    'ALWAYS pass `refreshPrompt` so the canvas can re-fetch itself after a transition without the user having to re-ask. ' +
+    'Example: `refreshPrompt: "Re-fetch open issues in PROM via the Atlassian MCP and render the jira_kanban canvas again with the same columns."`',
   inputShape:
-    '{ title: string, transitionTool: string (FULL MCP tool name, e.g. "mcp__nib-mcp-atlassian__transitionJiraIssue"), baseToolArgs?: { cloudId?: string, ... } (merged into each transition call), columns: string[] (status names in order), issues: { key, title, description?, status, priority?, labels?, url?, assignee?, transitions?: [{id, name}] }[], caption?: string }',
-  render: ({ title, transitionTool, baseToolArgs = {}, columns, issues, caption }) => {
+    '{ title: string, transitionTool: string (FULL MCP tool name, e.g. "mcp__nib-mcp-atlassian__transitionJiraIssue"), baseToolArgs?: { cloudId?: string, ... } (merged into each transition call), columns: string[] (status names in order), issues: { key, title, description?, status, priority?, labels?, url?, assignee?, transitions?: [{id, name}] }[], caption?: string, refreshPrompt?: string (NL prompt to re-render the canvas after a transition) }',
+  render: ({ title, transitionTool, baseToolArgs = {}, columns, issues, caption, refreshPrompt }) => {
     const safeIssues = Array.isArray(issues) ? issues : [];
     // Derive columns from issue statuses if the agent didn't supply them.
     const safeColumns = Array.isArray(columns) && columns.length > 0
@@ -100,6 +110,7 @@ export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
     return {
       version: '1',
       title: title || 'Jira backlog',
+      ...(refreshPrompt ? { refreshPrompt } : {}),
       components: [
         {
           type: 'kanban',

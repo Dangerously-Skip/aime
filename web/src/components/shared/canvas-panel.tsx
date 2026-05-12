@@ -21,6 +21,8 @@ interface CanvasPanelProps {
   surface?: string;
   /** Conversation that produced the canvas — captured on pin for regenerate. */
   conversationId?: string;
+  /** True while the canvas is fetching a refreshed doc after a writeback. */
+  isRefreshing?: boolean;
 }
 
 export function CanvasPanel({
@@ -35,6 +37,7 @@ export function CanvasPanel({
   onAction,
   surface,
   conversationId,
+  isRefreshing,
 }: CanvasPanelProps) {
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const pinCanvas = useProjectStore((s) => s.pinCanvas);
@@ -225,7 +228,15 @@ export function CanvasPanel({
 
       {/* Body — native scroll. Plain overflow-y-auto is the only thing that
           survives display:none/block toggles cleanly across surface switches. */}
-      <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+      <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative">
+        {isRefreshing && (
+          <div className="absolute inset-0 z-10 bg-background/60 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground bg-card border border-border rounded-md px-3 py-1.5 shadow-sm">
+              <span className="h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin" aria-hidden />
+              Refreshing…
+            </div>
+          </div>
+        )}
         {doc ? (
           <A2UIDocumentRenderer doc={doc} onAction={onAction} />
         ) : (

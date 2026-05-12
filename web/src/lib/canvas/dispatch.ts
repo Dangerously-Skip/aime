@@ -1,6 +1,6 @@
 'use client';
 
-import type { A2UIAction } from '@/lib/a2ui/types';
+import type { A2UIAction, A2UIDocument } from '@/lib/a2ui/types';
 
 /**
  * Dispatches a templated-canvas writeback action against a provisioned MCP
@@ -53,4 +53,45 @@ export async function dispatchCanvasToolCall(
   if (typeof data.text === 'string') return data.text;
   if (typeof data.output === 'string') return data.output;
   return JSON.stringify(data);
+}
+
+/**
+ * Re-run the canvas-generating prompt to refresh state after a writeback.
+ * Used by `canvas-overlay` when the current doc has `refreshPrompt` set.
+ *
+ * The subagent is instructed to emit a fresh A2UIDocument via the `canvas`
+ * tool; we pull it from the response's structured payload (preferred) or
+ * fall back to scanning text for a JSON block.
+ */
+export async function refreshCanvasDoc(
+  refreshPrompt: string,
+  opts: { surfaceId?: string; apiKey?: string | null; cwd?: string | null } = {},
+): Promise<A2UIDocument | null> {
+  const { surfaceId = 'cowork', apiKey = null, cwd = null } = opts;
+
+  const response = await fetch('/api/subagent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      parentChatId: 'canvas-refresh',
+      task: `${refreshPrompt}\n\nCall the \`canvas\` tool to render the result. Do not respond with prose — only call the canvas tool.`,
+      surfaceId,
+      apiKey: apiKey || undefined,
+      cwd: cwd || undefined,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Canvas refresh failed: ${response.status} ${response.statusText}`);
+  }
+  const data = await response.json();
+  // Preferred: subagent surfaces the canvas tool's input as structured data
+  if (data?.canvas && typeof data.canvas === 'object' && data.canvas.version === '1') {
+    return data.canvas as A2UIDocument;
+  }
+  if (Array.isArray(data?.canvasDocs) && data.canvasDocs.length > 0) {
+    const last = data.canvasDocs[data.canvasDocs.length - 1];
+    if (last?.version === '1') return last as A2UIDocument;
+  }
+  console.warn('[canvas] refresh subagent returned no canvas payload', data);
+  return null;
 }
