@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { CanvasPanel } from "./canvas-panel";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useAppStore } from "@/stores/app-store";
+import { useSettingsStore } from "@/stores/settings-store";
 import { dispatchCanvasToolCall } from "@/lib/canvas/dispatch";
 import { refreshCanvasDoc } from "@/lib/canvas/dispatch";
 import type { A2UIAction, A2UIDocument } from "@/lib/a2ui/types";
@@ -33,6 +34,7 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
   const clearStore = useCanvasStore((s) => s.clearCanvas);
   const setOpenStore = useCanvasStore((s) => s.setOpen);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
+  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
   const [isRefreshing, setIsRefreshing] = useState(false);
   // Subscribe to activeSurface so we re-render when switching back; this
   // gives the panel a chance to recompute its layout (parent went from
@@ -77,12 +79,12 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
           // Snapshot the refreshPrompt before dispatching — `canvasDoc` is
           // closed over here, so this stays correct even if state changes.
           const refreshPrompt = canvasDoc?.refreshPrompt;
-          dispatchCanvasToolCall(action, { surfaceId })
+          dispatchCanvasToolCall(action, { surfaceId, apiKey: nibGatewayApiKey })
             .then(async () => {
               if (!refreshPrompt) return;
               setIsRefreshing(true);
               try {
-                const fresh = await refreshCanvasDoc(refreshPrompt, { surfaceId });
+                const fresh = await refreshCanvasDoc(refreshPrompt, { surfaceId, apiKey: nibGatewayApiKey });
                 if (fresh) {
                   // Preserve refreshPrompt on the new doc so the next action
                   // can refresh too (the agent should do this, but belt-and-braces).
