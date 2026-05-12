@@ -1,6 +1,6 @@
 {
   "name": "quarry",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "productName": "Quarry",
   "private": true,
   "main": "main-web.js",
