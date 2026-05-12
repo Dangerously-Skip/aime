@@ -530,9 +530,8 @@ export class ClaudeProvider extends BaseProvider {
         ...safeEnv,
         ...(queryOptions.env as Record<string, string> || {}),
         ...getGatewayEnv(apiKey),
-        // Gateway LiteLLM doesn't support adaptive thinking or experimental
-        // beta features (e.g. context_management) — disable via CLI env vars
-        CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1',
+        // Adaptive thinking (output_config.effort) is now supported — see
+        // ai-studio PR #38 (LiteLLM backport of upstream PR #27074).
         CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
         // Verbose logging to stderr — captured by the Next.js server's
         // stderr handler in main-web.js and written to main.log. Without
