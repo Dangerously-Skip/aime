@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
     apiKey = null,
     cwd = null,
     agentName = null,
+    extraAllowedTools = null,
   } = body as {
     parentChatId?: string;
     task?: string;
@@ -42,6 +43,7 @@ export async function POST(req: NextRequest) {
     apiKey?: string | null;
     cwd?: string | null;
     agentName?: string | null;
+    extraAllowedTools?: string[] | null;
   };
 
   if (!task || typeof task !== 'string') {
@@ -89,7 +91,16 @@ export async function POST(req: NextRequest) {
       mcpServers: {},
       model: (model as string) || agentModel || surfaceConfig.model,
       surfaceId: surfaceId as string,
-      allowedTools: agentAllowedTools ?? surfaceConfig.allowedTools,
+      allowedTools: (() => {
+        const base = agentAllowedTools ?? surfaceConfig.allowedTools ?? [];
+        if (!extraAllowedTools || extraAllowedTools.length === 0) return base;
+        // Union (preserve order). Lets canvas writebacks call MCP tools that
+        // the surface doesn't normally expose (e.g. transitionJiraIssue from
+        // chat surface).
+        const seen = new Set(base);
+        const extra = extraAllowedTools.filter((t) => !seen.has(t));
+        return [...base, ...extra];
+      })(),
       maxTurns: Math.min(surfaceConfig.maxTurns ?? 10, 20), // cap sub-agent turns
       systemPrompt: agentSystemPrompt ?? surfaceConfig.systemPrompt,
       apiKey: (apiKey as string) || undefined,

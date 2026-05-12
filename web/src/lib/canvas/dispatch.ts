@@ -34,6 +34,10 @@ export async function dispatchCanvasToolCall(
     throw new Error('Canvas action has neither tool nor feedbackPrompt');
   }
 
+  // Allow the dispatched tool through even if the surface config doesn't normally
+  // expose it (e.g. transitionJiraIssue from chat surface).
+  const extraAllowedTools = hasTool ? [action.tool as string] : [];
+
   const response = await fetch('/api/subagent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -43,6 +47,7 @@ export async function dispatchCanvasToolCall(
       surfaceId,
       apiKey: apiKey || undefined,
       cwd: cwd || undefined,
+      extraAllowedTools,
     }),
   });
 
@@ -78,6 +83,20 @@ export async function refreshCanvasDoc(
       surfaceId,
       apiKey: apiKey || undefined,
       cwd: cwd || undefined,
+      // Refresh prompts often need MCP tools the surface doesn't expose
+      // (e.g. Atlassian + canvas from chat). We don't know which exactly,
+      // so request the union of canvas + common MCP-prefixed read tools.
+      // Granted MCPs from claude-provider are still gated by their own auth.
+      extraAllowedTools: [
+        'mcp__quarry__canvas',
+        // Atlassian read paths used by jira_kanban refresh
+        'mcp__nib-mcp-atlassian__searchJiraIssuesUsingJql',
+        'mcp__nib-mcp-atlassian__getTransitionsForJiraIssue',
+        'mcp__nib-mcp-atlassian__getAccessibleAtlassianResources',
+        'mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql',
+        'mcp__claude_ai_Atlassian__getTransitionsForJiraIssue',
+        'mcp__claude_ai_Atlassian__getAccessibleAtlassianResources',
+      ],
     }),
   });
   if (!response.ok) {

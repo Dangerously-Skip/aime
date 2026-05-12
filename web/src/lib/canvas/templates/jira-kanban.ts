@@ -162,6 +162,22 @@ export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
           type: 'kanban',
           id: 'board',
           title: title || 'Jira backlog',
+          // Fallback so every column accepts drops even if columnTransitions
+          // only covered some statuses. The agent figures out the transition
+          // id at dispatch time.
+          ...(transitionTool
+            ? {
+                fallbackDropAction: {
+                  tool: transitionTool,
+                  args: { ...baseToolArgs },
+                  feedbackPrompt:
+                    'Transition Jira issue {cardId} to the "{columnTitle}" column. ' +
+                    'Call the matching *_getTransitionsForJiraIssue tool first to find the correct transition id for this issue\'s workflow, then call the transition tool with that id. ' +
+                    'If no transition leads to "{columnTitle}" from the issue\'s current status, explain to the user. ' +
+                    'Report the result in one sentence.',
+                },
+              }
+            : {}),
           columns: safeColumns.map((status) => {
             const transitionId = columnTransitions?.[status];
             return {

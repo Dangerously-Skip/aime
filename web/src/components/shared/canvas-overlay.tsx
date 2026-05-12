@@ -79,12 +79,15 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
           // Snapshot the refreshPrompt before dispatching — `canvasDoc` is
           // closed over here, so this stays correct even if state changes.
           const refreshPrompt = canvasDoc?.refreshPrompt;
+          console.log("[canvas-overlay] tool-call fired", { tool: action.tool, hasRefreshPrompt: !!refreshPrompt, refreshPrompt, hasApiKey: !!nibGatewayApiKey, docHasRefreshPrompt: !!(canvasDoc as A2UIDocument | null)?.refreshPrompt });
           dispatchCanvasToolCall(action, { surfaceId, apiKey: nibGatewayApiKey })
-            .then(async () => {
+            .then(async (result) => {
+              console.log("[canvas-overlay] dispatch resolved", { resultPreview: String(result).slice(0, 120), willRefresh: !!refreshPrompt });
               if (!refreshPrompt) return;
               setIsRefreshing(true);
               try {
                 const fresh = await refreshCanvasDoc(refreshPrompt, { surfaceId, apiKey: nibGatewayApiKey });
+                console.log("[canvas-overlay] refresh returned", { hasFresh: !!fresh, components: fresh?.components?.length });
                 if (fresh) {
                   // Preserve refreshPrompt on the new doc so the next action
                   // can refresh too (the agent should do this, but belt-and-braces).

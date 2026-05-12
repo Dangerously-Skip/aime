@@ -165,6 +165,26 @@ export interface KanbanComponent {
   id: string;
   title?: string;
   columns: KanbanColumn[];
+  /**
+   * Fallback drop dispatch used when the user drops a card onto a column that
+   * has no per-column `dropAction`. Powers DnD for kanbans where the agent
+   * can't pre-compute a transition id for every column (different workflows
+   * per ticket type). The renderer fires a `tool-call` with `feedbackPrompt`
+   * — `{cardId}` and `{columnTitle}` placeholders are substituted at click time.
+   *
+   * Example for Jira:
+   *   tool: '' (no direct tool — the agent figures out the right transition)
+   *   feedbackPrompt: 'Transition Jira issue {cardId} to the "{columnTitle}"
+   *     column. Call getTransitionsForJiraIssue first to find the right id,
+   *     then transitionJiraIssue. After it succeeds, call the canvas tool
+   *     again with the refreshed kanban.'
+   */
+  fallbackDropAction?: {
+    tool?: string;
+    args?: Record<string, unknown>;
+    /** Supports `{cardId}` and `{columnTitle}` placeholders. */
+    feedbackPrompt: string;
+  };
 }
 
 export interface StatComponent {
