@@ -30,6 +30,7 @@ import { Badge } from '@/components/ui/badge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MermaidBlock } from '@/components/shared/mermaid-block';
+import { MessageSquare, ArrowRight, ExternalLink, Circle } from 'lucide-react';
 import {
   DndContext,
   closestCorners,
@@ -277,6 +278,28 @@ function KanbanActionButton({
     setOpen(false);
   }
 
+  // Render label with outline icons in place of common emoji / "→" prefixes
+  // so cards stay visually consistent. Falls back to the original label for
+  // unrecognised content.
+  const labelEl = (() => {
+    const lbl = action.label.trim();
+    // Comment-style action: emoji "💬" → MessageSquare icon (icon-only button)
+    if (lbl === '💬' || lbl.toLowerCase() === 'comment') {
+      return <MessageSquare className="h-3 w-3" strokeWidth={1.75} />;
+    }
+    // Transition: "→ In Progress" → ArrowRight icon + text
+    const transitionMatch = /^→\s*(.+)$/.exec(lbl);
+    if (transitionMatch) {
+      return (
+        <>
+          <ArrowRight className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+          <span>{transitionMatch[1]}</span>
+        </>
+      );
+    }
+    return lbl;
+  })();
+
   return (
     <span className="relative inline-block">
       <button
@@ -289,9 +312,10 @@ function KanbanActionButton({
             fire(action.args ?? {});
           }
         }}
-        className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${styles}`}
+        onPointerDown={(e) => e.stopPropagation()}
+        className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${styles}`}
       >
-        {action.label}
+        {labelEl}
       </button>
       {open && action.inputPrompt && (
         <div
@@ -355,24 +379,77 @@ function KanbanActionButton({
   );
 }
 
+/** Priority → dot colour (outline-only style; no fills, no emoji). */
+const PRIORITY_DOT_COLOR: Record<string, string> = {
+  high: 'text-destructive',
+  medium: 'text-amber-500',
+  low: 'text-muted-foreground/60',
+};
+
+/**
+ * Parse "PNUPB-584: Title here" → { key: "PNUPB-584", summary: "Title here" }.
+ * Falls back to (null, title) for non-key-prefixed cards.
+ */
+function splitCardTitle(title: string): { key: string | null; summary: string } {
+  const m = /^([A-Z][A-Z0-9_]*-\d+):\s+(.*)$/.exec(title);
+  if (!m) return { key: null, summary: title };
+  return { key: m[1], summary: m[2] };
+}
+
 function KanbanCardView({ card, componentId, onAction }: { card: KanbanComponent['columns'][number]['cards'][number]; componentId: string; onAction?: (action: A2UIAction) => void }) {
+  const { key, summary } = splitCardTitle(card.title);
+  const priorityColor = PRIORITY_DOT_COLOR[card.priority || ''] || 'text-transparent';
   return (
     <>
-      {card.url ? (
-        <a href={card.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-foreground hover:underline">
-          {card.title}
-        </a>
-      ) : (
-        <div className="text-sm font-medium text-foreground">{card.title}</div>
+      {/* Header row: key badge + priority dot + external-link icon */}
+      <div className="flex items-center gap-1.5 mb-1.5">
+        {key && (
+          <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-muted-foreground">
+            {key}
+          </span>
+        )}
+        {card.priority && (
+          <span
+            className={`inline-flex items-center gap-1 text-[10px] font-medium ${priorityColor}`}
+            title={`${card.priority} priority`}
+          >
+            <Circle className="h-2 w-2 fill-current" strokeWidth={0} />
+          </span>
+        )}
+        {card.url && (
+          <a
+            href={card.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="ml-auto text-muted-foreground/60 hover:text-foreground transition-colors"
+            title="Open in Jira"
+          >
+            <ExternalLink className="h-3 w-3" strokeWidth={1.5} />
+          </a>
+        )}
+      </div>
+      {/* Summary */}
+      <div className="text-[13px] font-medium text-foreground leading-snug">
+        {summary}
+      </div>
+      {card.description && (
+        <div className="mt-1 text-xs text-muted-foreground/80 leading-relaxed line-clamp-2">
+          {card.description}
+        </div>
       )}
-      {card.description && <div className="mt-1 text-xs text-muted-foreground leading-relaxed">{card.description}</div>}
       {card.labels && card.labels.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
-          {card.labels.map((l) => <PillBadge key={l}>{l}</PillBadge>)}
+          {card.labels.map((l) => (
+            <span key={l} className="text-[10px] px-1.5 py-0.5 rounded-md bg-muted/70 text-muted-foreground font-medium">
+              {l}
+            </span>
+          ))}
         </div>
       )}
       {card.actions && card.actions.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className="mt-2.5 flex flex-wrap gap-1 -mb-0.5">
           {card.actions.map((a) => (
             <KanbanActionButton
               key={a.actionId}
@@ -393,7 +470,8 @@ function DraggableCard({ card, componentId, onAction }: { card: KanbanComponent[
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
     transition,
-    opacity: isDragging ? 0.35 : 1,
+    opacity: isDragging ? 0.4 : 1,
+    boxShadow: isDragging ? '0 8px 16px rgba(0,0,0,0.12)' : undefined,
   };
   return (
     <div
@@ -401,7 +479,7 @@ function DraggableCard({ card, componentId, onAction }: { card: KanbanComponent[
       style={style}
       {...attributes}
       {...listeners}
-      className={`rounded-lg border border-border/50 bg-card p-3 shadow-sm border-l-2 cursor-grab active:cursor-grabbing ${PRIORITY_COLORS[card.priority || ''] || 'border-l-transparent'}`}
+      className={`group rounded-lg border bg-card p-2.5 shadow-sm hover:shadow-md hover:-translate-y-px hover:border-foreground/20 cursor-grab active:cursor-grabbing transition-all border-l-[3px] ${PRIORITY_COLORS[card.priority || ''] || 'border-l-border'} ${isDragging ? 'border-foreground/30' : 'border-border/50'}`}
     >
       <KanbanCardView card={card} componentId={componentId} onAction={onAction} />
     </div>
