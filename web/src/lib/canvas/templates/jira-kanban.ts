@@ -25,6 +25,12 @@ interface JiraKanbanInput {
    */
   transitionTool: string;
   /**
+   * Full MCP tool name for posting a comment to an issue. E.g.
+   * `mcp__claude_ai_Atlassian__addCommentToJiraIssue`. Optional — if absent
+   * no comment button is rendered.
+   */
+  commentTool?: string;
+  /**
    * Base args passed alongside per-issue transition args (e.g. `cloudId`).
    * Merged into each card's tool-call args.
    */
@@ -64,6 +70,32 @@ function buildTransitionActions(
   }));
 }
 
+function buildCommentAction(
+  issue: JiraIssue,
+  commentTool: string,
+  baseToolArgs: Record<string, unknown>,
+): KanbanCardAction {
+  return {
+    actionId: `comment-${issue.key}`,
+    label: '💬',
+    variant: 'secondary',
+    tool: commentTool,
+    args: {
+      ...baseToolArgs,
+      issueIdOrKey: issue.key,
+      // The popover fills in `commentBody` from user text.
+    },
+    inputPrompt: {
+      label: `Add comment to ${issue.key}`,
+      placeholder: 'Type your comment…',
+      argKey: 'commentBody',
+      multiline: true,
+      required: true,
+    },
+    feedbackPrompt: `Post the comment to Jira issue ${issue.key}.`,
+  };
+}
+
 export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
   id: 'jira_kanban',
   name: 'Jira backlog kanban',
@@ -73,12 +105,13 @@ export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
     'First, identify which Atlassian MCP is available — common server names are `claude_ai_Atlassian` and `nib-mcp-atlassian` (the tool prefix is `mcp__<server>__<toolName>`). ' +
     'Use the *_searchJiraIssuesUsingJql tool from that server to fetch issues, group by status, and include each issue\'s allowed transitions via *_getTransitionsForJiraIssue. ' +
     'Pass the `transitionTool` field as the FULL MCP tool name for transitions (e.g. `mcp__nib-mcp-atlassian__transitionJiraIssue`). ' +
+    'ALSO pass `commentTool` (e.g. `mcp__claude_ai_Atlassian__addCommentToJiraIssue`) so each card gets a 💬 button users can click to add a comment inline. ' +
     'If the Atlassian MCP requires a `cloudId` arg, fetch it via *_getAccessibleAtlassianResources and pass it in `baseToolArgs`. ' +
     'ALWAYS pass `refreshPrompt` so the canvas can re-fetch itself after a transition without the user having to re-ask. ' +
     'Example: `refreshPrompt: "Re-fetch open issues in PROM via the Atlassian MCP and render the jira_kanban canvas again with the same columns."`',
   inputShape:
-    '{ title: string, transitionTool: string (FULL MCP tool name, e.g. "mcp__nib-mcp-atlassian__transitionJiraIssue"), baseToolArgs?: { cloudId?: string, ... } (merged into each transition call), columns: string[] (status names in order), issues: { key, title, description?, status, priority?, labels?, url?, assignee?, transitions?: [{id, name}] }[], caption?: string, refreshPrompt?: string (NL prompt to re-render the canvas after a transition) }',
-  render: ({ title, transitionTool, baseToolArgs = {}, columns, issues, caption, refreshPrompt }) => {
+    '{ title: string, transitionTool: string (FULL MCP tool name for transitionJiraIssue), commentTool?: string (FULL MCP tool name for addCommentToJiraIssue), baseToolArgs?: { cloudId?: string, ... } (merged into each tool call), columns: string[] (status names in order), issues: { key, title, description?, status, priority?, labels?, url?, assignee?, transitions?: [{id, name}] }[], caption?: string, refreshPrompt?: string (NL prompt to re-render the canvas after a writeback) }',
+  render: ({ title, transitionTool, commentTool, baseToolArgs = {}, columns, issues, caption, refreshPrompt }) => {
     const safeIssues = Array.isArray(issues) ? issues : [];
     // Derive columns from issue statuses if the agent didn't supply them.
     const safeColumns = Array.isArray(columns) && columns.length > 0
@@ -129,9 +162,14 @@ export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
               ],
               priority: issue.priority,
               url: issue.url,
-              actions: transitionTool
-                ? buildTransitionActions(issue, transitionTool, baseToolArgs)
-                : [],
+              actions: [
+                ...(transitionTool
+                  ? buildTransitionActions(issue, transitionTool, baseToolArgs)
+                  : []),
+                ...(commentTool
+                  ? [buildCommentAction(issue, commentTool, baseToolArgs)]
+                  : []),
+              ],
             })),
           })),
         },

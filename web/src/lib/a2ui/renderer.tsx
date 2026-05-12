@@ -14,6 +14,7 @@ import type {
   TableComponent,
   ChartComponent,
   KanbanComponent,
+  KanbanCardAction,
   StatComponent,
   FormComponent,
   MarkdownComponent,
@@ -196,6 +197,147 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: 'border-l-muted-foreground',
 };
 
+/**
+ * Action button on a Kanban card. If the action has `inputPrompt` set, the
+ * click opens a popover with a text input; submitting merges the typed value
+ * into args under `argKey` (default "text") and dispatches the tool-call.
+ */
+function KanbanActionButton({
+  action,
+  componentId,
+  cardId,
+  onAction,
+}: {
+  action: KanbanCardAction;
+  componentId: string;
+  cardId: string;
+  onAction?: (a: A2UIAction) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [text, setText] = React.useState('');
+  const buttonRef = React.useRef<HTMLButtonElement>(null);
+  const popoverRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+      if (popoverRef.current?.contains(t) || buttonRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const styles = action.variant === 'primary'
+    ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+    : action.variant === 'destructive'
+      ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+      : 'bg-muted text-foreground hover:bg-muted/70 border border-border/40';
+
+  function fire(args: Record<string, unknown>) {
+    if (action.tool || action.feedbackPrompt) {
+      onAction?.({ type: 'tool-call', componentId, tool: action.tool ?? '', args, feedbackPrompt: action.feedbackPrompt });
+    } else {
+      onAction?.({ type: 'button-click', componentId, actionId: action.actionId, payload: { cardId, ...args } });
+    }
+  }
+
+  function handleSubmit() {
+    const trimmed = text.trim();
+    const required = action.inputPrompt?.required ?? true;
+    if (required && !trimmed) return;
+    const argKey = action.inputPrompt?.argKey ?? 'text';
+    fire({ ...(action.args ?? {}), [argKey]: trimmed });
+    setText('');
+    setOpen(false);
+  }
+
+  return (
+    <span className="relative inline-block">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => {
+          if (action.inputPrompt) {
+            setOpen((v) => !v);
+          } else {
+            fire(action.args ?? {});
+          }
+        }}
+        className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${styles}`}
+      >
+        {action.label}
+      </button>
+      {open && action.inputPrompt && (
+        <div
+          ref={popoverRef}
+          className="absolute z-50 left-0 top-full mt-1 w-64 rounded-md border border-border bg-popover p-2 shadow-md"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <label className="block text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-1">
+            {action.inputPrompt.label}
+          </label>
+          {action.inputPrompt.multiline ? (
+            <textarea
+              autoFocus
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+              }}
+              placeholder={action.inputPrompt.placeholder}
+              rows={3}
+              className="w-full text-xs rounded border border-border bg-background px-2 py-1 resize-y focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          ) : (
+            <input
+              autoFocus
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+              }}
+              placeholder={action.inputPrompt.placeholder}
+              className="w-full text-xs rounded border border-border bg-background px-2 py-1 focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          )}
+          <div className="mt-2 flex justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => { setText(''); setOpen(false); }}
+              className="rounded-md px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              className="rounded-md px-2 py-0.5 text-[11px] font-medium bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {action.label}
+            </button>
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
 function KanbanRenderer({ component, onAction }: { component: KanbanComponent; onAction?: (action: A2UIAction) => void }) {
   const columns = component.columns ?? [];
   return (
@@ -229,29 +371,15 @@ function KanbanRenderer({ component, onAction }: { component: KanbanComponent; o
                     )}
                     {card.actions && card.actions.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        {card.actions.map((a) => {
-                          const styles = a.variant === 'primary'
-                            ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                            : a.variant === 'destructive'
-                              ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                              : 'bg-muted text-foreground hover:bg-muted/70 border border-border/40';
-                          return (
-                            <button
-                              key={a.actionId}
-                              type="button"
-                              onClick={() => {
-                                if (a.tool || a.feedbackPrompt) {
-                                  onAction?.({ type: 'tool-call', componentId: component.id, tool: a.tool ?? '', args: a.args ?? {}, feedbackPrompt: a.feedbackPrompt });
-                                } else {
-                                  onAction?.({ type: 'button-click', componentId: component.id, actionId: a.actionId, payload: { cardId: card.id, ...a.args } });
-                                }
-                              }}
-                              className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${styles}`}
-                            >
-                              {a.label}
-                            </button>
-                          );
-                        })}
+                        {card.actions.map((a) => (
+                          <KanbanActionButton
+                            key={a.actionId}
+                            action={a}
+                            componentId={component.id}
+                            cardId={card.id}
+                            onAction={onAction}
+                          />
+                        ))}
                       </div>
                     )}
                   </div>
