@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { getProvider } from '@/lib/providers';
 import { getSurfaceConfig } from '@/lib/surfaces';
 import { loadAgents, readAgentSystemPrompt } from '@/lib/agents-parser';
+import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
 
 export const runtime = 'nodejs';
 
@@ -82,13 +83,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Load the same MCP servers the main chat route does — without this the
+    // spawned subagent has no OAuth-provisioned tools (Atlassian, GitHub,
+    // Slack, Confluence, etc.) and can't perform canvas writebacks.
+    const mcpServers = await loadProvisionedMcpServers();
+
     let output = '';
     const canvasDocs: unknown[] = [];
     for await (const chunk of provider.query({
       prompt: task,
       chatId: subagentId,
       userId: `subagent_${parentChatId ?? 'anon'}`,
-      mcpServers: {},
+      mcpServers,
       model: (model as string) || agentModel || surfaceConfig.model,
       surfaceId: surfaceId as string,
       allowedTools: (() => {

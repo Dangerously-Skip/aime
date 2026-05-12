@@ -440,7 +440,22 @@ function DroppableColumn({
 }
 
 function KanbanRenderer({ component, onAction }: { component: KanbanComponent; onAction?: (action: A2UIAction) => void }) {
-  const columns = component.columns ?? [];
+  // Coerce common alternate shapes from off-template canvas emissions:
+  //   columns with `name` instead of `title`, cards with `key` instead of `id`.
+  // Without this, React crashes with "Objects are not valid as a React child"
+  // when an undefined cell falls through to a child renderer.
+  const rawColumns = (component.columns ?? []) as unknown as Array<Record<string, unknown>>;
+  const columns = rawColumns.map((c, i) => {
+    const id = (c.id as string | undefined) ?? (c.name as string | undefined) ?? (c.title as string | undefined) ?? `col-${i}`;
+    const title = (c.title as string | undefined) ?? (c.name as string | undefined) ?? id;
+    const rawCards = Array.isArray(c.cards) ? (c.cards as Array<Record<string, unknown>>) : [];
+    const cards = rawCards.map((card, j) => ({
+      ...card,
+      id: (card.id as string | undefined) ?? (card.key as string | undefined) ?? `${id}-card-${j}`,
+      title: (card.title as string | undefined) ?? (card.summary as string | undefined) ?? (card.key as string | undefined) ?? 'Untitled',
+    })) as KanbanComponent['columns'][number]['cards'];
+    return { ...c, id, title, cards, dropAction: c.dropAction } as KanbanComponent['columns'][number];
+  });
   const sensors = useSensors(
     // Activation distance of 5px lets clicks (e.g. card title link, action buttons) work without
     // accidentally starting a drag. Drags begin only after pointer moves 5px while held.
