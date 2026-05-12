@@ -469,18 +469,36 @@ function KanbanRenderer({ component, onAction }: { component: KanbanComponent; o
     if (!fromColumnId || !overColumnId || fromColumnId === overColumnId) return;
 
     const targetCol = columns.find((c) => c.id === overColumnId);
-    if (!targetCol?.dropAction) {
-      console.warn('[canvas] kanban drop: destination column has no dropAction', overColumnId);
+    if (!targetCol) return;
+    if (targetCol.dropAction) {
+      const argKey = targetCol.dropAction.argKey ?? 'issueIdOrKey';
+      onAction?.({
+        type: 'tool-call',
+        componentId: component.id,
+        tool: targetCol.dropAction.tool,
+        args: { ...(targetCol.dropAction.args ?? {}), [argKey]: cardId },
+        feedbackPrompt: targetCol.dropAction.feedbackPrompt,
+      });
       return;
     }
-    const argKey = targetCol.dropAction.argKey ?? 'issueIdOrKey';
-    onAction?.({
-      type: 'tool-call',
-      componentId: component.id,
-      tool: targetCol.dropAction.tool,
-      args: { ...(targetCol.dropAction.args ?? {}), [argKey]: cardId },
-      feedbackPrompt: targetCol.dropAction.feedbackPrompt,
-    });
+    // No explicit dropAction for this column — fall back to the component-level
+    // generic action. Lets the agent transition any column even when transition
+    // ids aren't pre-computed for every column.
+    const fallback = component.fallbackDropAction;
+    if (fallback) {
+      const fp = (fallback.feedbackPrompt ?? '')
+        .replace(/\{cardId\}/g, cardId)
+        .replace(/\{columnTitle\}/g, targetCol.title);
+      onAction?.({
+        type: 'tool-call',
+        componentId: component.id,
+        tool: fallback.tool ?? '',
+        args: { ...(fallback.args ?? {}), issueIdOrKey: cardId, columnTitle: targetCol.title },
+        feedbackPrompt: fp,
+      });
+      return;
+    }
+    console.warn('[canvas] kanban drop: destination column has no dropAction and no fallbackDropAction', overColumnId);
   }
 
   return (
