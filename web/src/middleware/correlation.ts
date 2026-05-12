@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { withCorrelation, type CorrelationContext } from "../lib/logger.js";
+import { withCorrelation, type CorrelationContext } from "../lib/logger";
 
 /**
  * Wraps a Next.js App Router route handler so it runs inside a correlation
