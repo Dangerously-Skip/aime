@@ -292,6 +292,15 @@ export interface A2UIDocument {
   version: '1';
   title?: string;
   components: A2UIComponent[];
+  /**
+   * Optional prompt that re-renders this canvas after a tool-call action
+   * fires. The canvas-overlay runs this through /api/subagent and replaces
+   * the current doc with the result. Lets templates like jira_kanban show
+   * fresh state after a transition without the user having to re-ask.
+   *
+   * Example: "Re-fetch the PROM kanban from Jira and rebuild the canvas."
+   */
+  refreshPrompt?: string;
 }
 
 // ── Interaction types ─────────────────────────────────────────────────────────

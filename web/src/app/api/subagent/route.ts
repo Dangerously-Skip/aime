@@ -81,6 +81,7 @@ export async function POST(req: NextRequest) {
     }
 
     let output = '';
+    const canvasDocs: unknown[] = [];
     for await (const chunk of provider.query({
       prompt: task,
       chatId: subagentId,
@@ -96,15 +97,21 @@ export async function POST(req: NextRequest) {
     })) {
       if (chunk.type === 'text') {
         output += (chunk.content as string) || '';
+      } else if (chunk.type === 'canvas' && chunk.doc) {
+        // Used by the canvas auto-refresh path — the caller wants the
+        // resulting A2UIDocument, not just text.
+        canvasDocs.push(chunk.doc);
       }
     }
 
-    console.log('[SUBAGENT] Completed:', subagentId, '| output length:', output.length);
+    console.log('[SUBAGENT] Completed:', subagentId, '| output length:', output.length, '| canvas docs:', canvasDocs.length);
     return Response.json({
       ok: true,
       subagentId,
       parentChatId,
       output,
+      canvasDocs,
+      canvas: canvasDocs[canvasDocs.length - 1] ?? null,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
