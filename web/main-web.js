@@ -352,6 +352,19 @@ function createWindow(port) {
 
   mainWindow.loadURL(`http://localhost:${port}`);
 
+  // External http(s) links (target=_blank, window.open, shell.openExternal) open
+  // in the user's default browser rather than a detached Electron BrowserWindow.
+  // The user is almost always already signed in there (Jira/GitHub/Confluence/etc.),
+  // and detached Electron windows don't share their session. Webview contents
+  // inside preview-panel / browser-surface keep their own handler set elsewhere.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      shell.openExternal(url);
+      return { action: "deny" };
+    }
+    return { action: "allow" };
+  });
+
   if (process.env.NODE_ENV === "development") {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
