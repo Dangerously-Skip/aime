@@ -61,6 +61,22 @@ export interface KanbanCardAction {
   args?: Record<string, unknown>;
   /** Optional human-readable feedback prompt for the agent after the call. */
   feedbackPrompt?: string;
+  /**
+   * If set, clicking the action opens a popover with a text input rather than
+   * firing immediately. On submit, the user's text is merged into `args` under
+   * `argKey` (default: "text") and the tool-call is dispatched.
+   * Used for actions like "Comment" that need free-form text.
+   */
+  inputPrompt?: {
+    label: string;
+    placeholder?: string;
+    /** Field name in `args` to populate with the user's text. Default: "text". */
+    argKey?: string;
+    /** Render a `<textarea>` instead of single-line `<input>`. Default: false. */
+    multiline?: boolean;
+    /** Reject empty/whitespace submissions. Default: true. */
+    required?: boolean;
+  };
 }
 
 export interface KanbanCard {
