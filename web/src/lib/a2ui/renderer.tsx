@@ -444,27 +444,36 @@ function KanbanRenderer({ component, onAction }: { component: KanbanComponent; o
   //   columns with `name` instead of `title`, cards with `key` instead of `id`.
   // Without this, React crashes with "Objects are not valid as a React child"
   // when an undefined cell falls through to a child renderer.
-  const rawColumns = (component.columns ?? []) as unknown as Array<Record<string, unknown>>;
-  const columns = rawColumns.map((c, i) => {
-    const id = (c.id as string | undefined) ?? (c.name as string | undefined) ?? (c.title as string | undefined) ?? `col-${i}`;
-    const title = (c.title as string | undefined) ?? (c.name as string | undefined) ?? id;
-    const rawCards = Array.isArray(c.cards) ? (c.cards as Array<Record<string, unknown>>) : [];
-    const cards = rawCards.map((card, j) => ({
-      ...card,
-      id: (card.id as string | undefined) ?? (card.key as string | undefined) ?? `${id}-card-${j}`,
-      title: (card.title as string | undefined) ?? (card.summary as string | undefined) ?? (card.key as string | undefined) ?? 'Untitled',
-    })) as KanbanComponent['columns'][number]['cards'];
-    return { ...c, id, title, cards, dropAction: c.dropAction } as KanbanComponent['columns'][number];
-  });
+  const sourceColumns = React.useMemo(() => {
+    const rawColumns = (component.columns ?? []) as unknown as Array<Record<string, unknown>>;
+    return rawColumns.map((c, i) => {
+      const id = (c.id as string | undefined) ?? (c.name as string | undefined) ?? (c.title as string | undefined) ?? `col-${i}`;
+      const title = (c.title as string | undefined) ?? (c.name as string | undefined) ?? id;
+      const rawCards = Array.isArray(c.cards) ? (c.cards as Array<Record<string, unknown>>) : [];
+      const cards = rawCards.map((card, j) => ({
+        ...card,
+        id: (card.id as string | undefined) ?? (card.key as string | undefined) ?? `${id}-card-${j}`,
+        title: (card.title as string | undefined) ?? (card.summary as string | undefined) ?? (card.key as string | undefined) ?? 'Untitled',
+      })) as KanbanComponent['columns'][number]['cards'];
+      return { ...c, id, title, cards, dropAction: c.dropAction } as KanbanComponent['columns'][number];
+    });
+  }, [component.columns]);
+
+  // Optimistic local columns. Drops move cards immediately so the UI feels
+  // responsive; we sync back to the source on every `component.columns`
+  // change (canvas auto-refresh replaces the doc and the new state wins).
+  const [columns, setColumns] = React.useState(sourceColumns);
+  React.useEffect(() => {
+    setColumns(sourceColumns);
+  }, [sourceColumns]);
+
   const sensors = useSensors(
-    // Activation distance of 5px lets clicks (e.g. card title link, action buttons) work without
-    // accidentally starting a drag. Drags begin only after pointer moves 5px while held.
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  function findColumnIdOfCard(cardId: string): string | null {
-    for (const c of columns) {
+  function findColumnIdOfCard(cardId: string, cols: typeof columns): string | null {
+    for (const c of cols) {
       if ((c.cards ?? []).some((card) => card.id === cardId)) return c.id;
     }
     return null;
@@ -474,46 +483,71 @@ function KanbanRenderer({ component, onAction }: { component: KanbanComponent; o
     const { active, over } = event;
     if (!over) return;
     const cardId = String(active.id);
-    const fromColumnId = findColumnIdOfCard(cardId);
-    // `over.id` can be a column id (dropped on empty space) or another card id
-    // (dropped on a sibling). Resolve to a column id.
+    const fromColumnId = findColumnIdOfCard(cardId, columns);
     const overId = String(over.id);
     const overColumnId = columns.find((c) => c.id === overId)
       ? overId
-      : findColumnIdOfCard(overId);
+      : findColumnIdOfCard(overId, columns);
     if (!fromColumnId || !overColumnId || fromColumnId === overColumnId) return;
 
     const targetCol = columns.find((c) => c.id === overColumnId);
     if (!targetCol) return;
+
+    // Pick the dispatch (per-column dropAction first, then fallback)
+    let dispatch: A2UIAction | null = null;
     if (targetCol.dropAction) {
       const argKey = targetCol.dropAction.argKey ?? 'issueIdOrKey';
-      onAction?.({
+      dispatch = {
         type: 'tool-call',
         componentId: component.id,
         tool: targetCol.dropAction.tool,
         args: { ...(targetCol.dropAction.args ?? {}), [argKey]: cardId },
         feedbackPrompt: targetCol.dropAction.feedbackPrompt,
-      });
-      return;
-    }
-    // No explicit dropAction for this column — fall back to the component-level
-    // generic action. Lets the agent transition any column even when transition
-    // ids aren't pre-computed for every column.
-    const fallback = component.fallbackDropAction;
-    if (fallback) {
-      const fp = (fallback.feedbackPrompt ?? '')
+      };
+    } else if (component.fallbackDropAction) {
+      const fb = component.fallbackDropAction;
+      const fp = (fb.feedbackPrompt ?? '')
         .replace(/\{cardId\}/g, cardId)
         .replace(/\{columnTitle\}/g, targetCol.title);
-      onAction?.({
+      dispatch = {
         type: 'tool-call',
         componentId: component.id,
-        tool: fallback.tool ?? '',
-        args: { ...(fallback.args ?? {}), issueIdOrKey: cardId, columnTitle: targetCol.title },
+        tool: fb.tool ?? '',
+        args: { ...(fb.args ?? {}), issueIdOrKey: cardId, columnTitle: targetCol.title },
         feedbackPrompt: fp,
-      });
+      };
+    }
+
+    if (!dispatch) {
+      console.warn('[canvas] kanban drop: destination column has no dropAction and no fallbackDropAction', overColumnId);
       return;
     }
-    console.warn('[canvas] kanban drop: destination column has no dropAction and no fallbackDropAction', overColumnId);
+
+    // Optimistic move — visually relocate the card immediately. If the
+    // tool-call hangs or fails, the next refresh (or a manual re-prompt)
+    // will reconcile back to the source-of-truth.
+    setColumns((prev) => {
+      let cardToMove: (typeof prev)[number]['cards'][number] | undefined;
+      const next = prev.map((c) => {
+        if (c.id === fromColumnId) {
+          const filtered = (c.cards ?? []).filter((card) => {
+            if (card.id === cardId) {
+              cardToMove = card;
+              return false;
+            }
+            return true;
+          });
+          return { ...c, cards: filtered };
+        }
+        return c;
+      });
+      if (!cardToMove) return prev;
+      return next.map((c) =>
+        c.id === overColumnId ? { ...c, cards: [...(c.cards ?? []), cardToMove!] } : c,
+      );
+    });
+
+    onAction?.(dispatch);
   }
 
   return (
