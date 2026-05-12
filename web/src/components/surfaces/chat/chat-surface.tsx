@@ -928,7 +928,7 @@ export function ChatSurface() {
                 {canvasArtifacts.map((c) => (
                   <button
                     key={c.id}
-                    onClick={() => { pushCanvas('chat', c.doc); setCanvasOpen('chat', true); }}
+                    onClick={() => { pushCanvas('chat', c.doc, chatId || null); setCanvasOpen('chat', true); }}
                     className="w-full flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-left hover:bg-muted transition-colors group"
                     title={c.title}
                   >

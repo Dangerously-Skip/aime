@@ -34,7 +34,7 @@ export function useCanvasSseHandler(surfaceId: SurfaceId, chatId: string) {
           return;
         }
 
-        pushCanvas(surfaceId, doc);
+        pushCanvas(surfaceId, doc, chatId || null);
         setCanvasOpen(surfaceId, true);
 
         if (chatId) {
