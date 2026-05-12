@@ -95,6 +95,23 @@ export interface KanbanColumn {
   id: string;
   title: string;
   cards: KanbanCard[];
+  /**
+   * Optional spec for "drop a card onto this column" — used by drag-and-drop
+   * across columns. When a card is dropped here, the renderer fires the
+   * specified tool with `args` merged with `{ [argKey]: card.id }` (default
+   * argKey: "issueIdOrKey") so the agent can transition the issue without
+   * needing per-card buttons.
+   *
+   * For Jira: columns set `tool: "mcp__..._transitionJiraIssue"` and
+   * `argKey: "issueIdOrKey"`, with args including the destination transition
+   * `{ transition: { id: "..." } }`.
+   */
+  dropAction?: {
+    tool: string;
+    args?: Record<string, unknown>;
+    argKey?: string;
+    feedbackPrompt?: string;
+  };
 }
 
 // ── Stat types ────────────────────────────────────────────────────────────────

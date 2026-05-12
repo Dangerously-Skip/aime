@@ -30,6 +30,23 @@ import { Badge } from '@/components/ui/badge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MermaidBlock } from '@/components/shared/mermaid-block';
+import {
+  DndContext,
+  closestCorners,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 // ── Shared primitives ────────────────────────────────────────────────────────
 
@@ -338,57 +355,145 @@ function KanbanActionButton({
   );
 }
 
+function KanbanCardView({ card, componentId, onAction }: { card: KanbanComponent['columns'][number]['cards'][number]; componentId: string; onAction?: (action: A2UIAction) => void }) {
+  return (
+    <>
+      {card.url ? (
+        <a href={card.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-foreground hover:underline">
+          {card.title}
+        </a>
+      ) : (
+        <div className="text-sm font-medium text-foreground">{card.title}</div>
+      )}
+      {card.description && <div className="mt-1 text-xs text-muted-foreground leading-relaxed">{card.description}</div>}
+      {card.labels && card.labels.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {card.labels.map((l) => <PillBadge key={l}>{l}</PillBadge>)}
+        </div>
+      )}
+      {card.actions && card.actions.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {card.actions.map((a) => (
+            <KanbanActionButton
+              key={a.actionId}
+              action={a}
+              componentId={componentId}
+              cardId={card.id}
+              onAction={onAction}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function DraggableCard({ card, componentId, onAction }: { card: KanbanComponent['columns'][number]['cards'][number]; componentId: string; onAction?: (action: A2UIAction) => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id });
+  const style: React.CSSProperties = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+    opacity: isDragging ? 0.35 : 1,
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`rounded-lg border border-border/50 bg-card p-3 shadow-sm border-l-2 cursor-grab active:cursor-grabbing ${PRIORITY_COLORS[card.priority || ''] || 'border-l-transparent'}`}
+    >
+      <KanbanCardView card={card} componentId={componentId} onAction={onAction} />
+    </div>
+  );
+}
+
+function DroppableColumn({
+  col,
+  componentId,
+  onAction,
+}: {
+  col: KanbanComponent['columns'][number];
+  componentId: string;
+  onAction?: (a: A2UIAction) => void;
+}) {
+  const cards = col.cards ?? [];
+  const { setNodeRef, isOver } = useDroppable({ id: col.id, data: { columnId: col.id } });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`flex-shrink-0 w-52 rounded-md transition-colors ${isOver ? 'bg-primary/5 ring-1 ring-primary/30' : ''}`}
+    >
+      <div className="flex items-center gap-2 mb-3 px-1">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{col.title}</span>
+        <span className="text-[10px] bg-muted rounded-full px-1.5 py-0.5 text-muted-foreground">{cards.length}</span>
+      </div>
+      <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+        <div className="space-y-2 min-h-[40px] px-1 pb-1">
+          {cards.map((card) => (
+            <DraggableCard key={card.id} card={card} componentId={componentId} onAction={onAction} />
+          ))}
+        </div>
+      </SortableContext>
+    </div>
+  );
+}
+
 function KanbanRenderer({ component, onAction }: { component: KanbanComponent; onAction?: (action: A2UIAction) => void }) {
   const columns = component.columns ?? [];
+  const sensors = useSensors(
+    // Activation distance of 5px lets clicks (e.g. card title link, action buttons) work without
+    // accidentally starting a drag. Drags begin only after pointer moves 5px while held.
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  function findColumnIdOfCard(cardId: string): string | null {
+    for (const c of columns) {
+      if ((c.cards ?? []).some((card) => card.id === cardId)) return c.id;
+    }
+    return null;
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over) return;
+    const cardId = String(active.id);
+    const fromColumnId = findColumnIdOfCard(cardId);
+    // `over.id` can be a column id (dropped on empty space) or another card id
+    // (dropped on a sibling). Resolve to a column id.
+    const overId = String(over.id);
+    const overColumnId = columns.find((c) => c.id === overId)
+      ? overId
+      : findColumnIdOfCard(overId);
+    if (!fromColumnId || !overColumnId || fromColumnId === overColumnId) return;
+
+    const targetCol = columns.find((c) => c.id === overColumnId);
+    if (!targetCol?.dropAction) {
+      console.warn('[canvas] kanban drop: destination column has no dropAction', overColumnId);
+      return;
+    }
+    const argKey = targetCol.dropAction.argKey ?? 'issueIdOrKey';
+    onAction?.({
+      type: 'tool-call',
+      componentId: component.id,
+      tool: targetCol.dropAction.tool,
+      args: { ...(targetCol.dropAction.args ?? {}), [argKey]: cardId },
+      feedbackPrompt: targetCol.dropAction.feedbackPrompt,
+    });
+  }
+
   return (
     <div>
       <CardHeader title={component.title} />
       <CardBody>
-        <div className="flex gap-4 overflow-x-auto pb-2">
-          {columns.map((col) => {
-            const cards = col.cards ?? [];
-            return (
-            <div key={col.id} className="flex-shrink-0 w-52">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{col.title}</span>
-                <span className="text-[10px] bg-muted rounded-full px-1.5 py-0.5 text-muted-foreground">{cards.length}</span>
-              </div>
-              <div className="space-y-2">
-                {cards.map((card) => (
-                  <div key={card.id} className={`rounded-lg border border-border/50 bg-card p-3 shadow-sm border-l-2 ${PRIORITY_COLORS[card.priority || ''] || 'border-l-transparent'}`}>
-                    {card.url ? (
-                      <a href={card.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-foreground hover:underline">
-                        {card.title}
-                      </a>
-                    ) : (
-                      <div className="text-sm font-medium text-foreground">{card.title}</div>
-                    )}
-                    {card.description && <div className="mt-1 text-xs text-muted-foreground leading-relaxed">{card.description}</div>}
-                    {card.labels && card.labels.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {card.labels.map((l) => <PillBadge key={l}>{l}</PillBadge>)}
-                      </div>
-                    )}
-                    {card.actions && card.actions.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {card.actions.map((a) => (
-                          <KanbanActionButton
-                            key={a.actionId}
-                            action={a}
-                            componentId={component.id}
-                            cardId={card.id}
-                            onAction={onAction}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-            );
-          })}
-        </div>
+        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+          <div className="flex gap-4 overflow-x-auto pb-2">
+            {columns.map((col) => (
+              <DroppableColumn key={col.id} col={col} componentId={component.id} onAction={onAction} />
+            ))}
+          </div>
+        </DndContext>
       </CardBody>
     </div>
   );
