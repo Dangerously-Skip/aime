@@ -1,0 +1,152 @@
+/**
+ * Load + token-refresh provisioned MCP servers for SDK queries.
+ *
+ * Reads `~/.claude/.mcp.json` (Claude Code's config) and
+ * `~/.claude/.quarry-mcp.json` (Quarry's own OAuth-provisioned servers),
+ * refreshes any near-expired OAuth tokens, and returns the merged config in
+ * the shape the Claude Agent SDK expects.
+ *
+ * Extracted from the chat surface route so /api/subagent and any other
+ * server-spawning endpoint can load the same MCP set. Without this, spawned
+ * subagents have no MCP tools at all and can't perform canvas writebacks like
+ * Jira transitions / comments.
+ */
+
+async function readMcpConfigFile(configPath: string): Promise<Record<string, unknown>> {
+  try {
+    const { readFile } = await import('fs/promises');
+    const content = await readFile(configPath, 'utf-8');
+    const config = JSON.parse(content) as { mcpServers?: Record<string, unknown> };
+    if (!config.mcpServers) return {};
+    return Object.fromEntries(
+      Object.entries(config.mcpServers).map(([key, entry]) => {
+        const { _meta, transport, ...rest } = entry as Record<string, unknown>;
+        void _meta;
+        // SDK accepts 'stdio' | 'sse' | 'http' — translate streamable-http
+        const sdkType = transport === 'streamable-http' ? 'http' : transport || rest.type || 'stdio';
+        return [key, { type: sdkType, ...rest }];
+      }),
+    );
+  } catch {
+    return {};
+  }
+}
+
+async function refreshTokenIfNeeded(
+  serverKey: string,
+  meta: Record<string, unknown>,
+  configPath: string,
+): Promise<string | null> {
+  const { refreshToken, expiresAt, connectorId, mcpName, tokenEndpoint, clientId, clientSecret } = meta;
+  if (!refreshToken || !expiresAt) return null;
+  if (!connectorId && !mcpName) return null;
+
+  const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+  if (typeof expiresAt === 'number' && Date.now() < expiresAt - REFRESH_BUFFER_MS) {
+    return null;
+  }
+
+  const label = (connectorId || mcpName) as string;
+  console.log(`[Token Refresh] Token for ${label} is expired or near expiry, refreshing...`);
+
+  try {
+    const tokenParams = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken as string,
+    });
+
+    let url: string;
+    if (tokenEndpoint && clientId) {
+      url = tokenEndpoint as string;
+      tokenParams.set('client_id', clientId as string);
+      if (clientSecret) tokenParams.set('client_secret', clientSecret as string);
+    } else {
+      const { CONNECTOR_MAP } = await import('@/lib/connectors/registry');
+      const { getCredentials } = await import('@/lib/connectors/credentials');
+      const connector = CONNECTOR_MAP[connectorId as string];
+      if (!connector?.auth?.tokenUrl) return null;
+      const credentials = getCredentials(connectorId as string);
+      if (!credentials?.clientId) return null;
+      if (!credentials.publicClient && !credentials.clientSecret) return null;
+      url = connector.auth.tokenUrl;
+      tokenParams.set('client_id', credentials.clientId);
+      if (!credentials.publicClient) {
+        tokenParams.set('client_secret', credentials.clientSecret);
+      }
+      if (credentials.publicClient && connector.auth.scopes?.length) {
+        tokenParams.set('scope', connector.auth.scopes.join(' '));
+      }
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: tokenParams.toString(),
+    });
+    if (!res.ok) {
+      console.error(`[Token Refresh] Failed for ${label}: ${res.status}`);
+      return null;
+    }
+    const data = await res.json();
+    const newAccessToken = data.access_token;
+    if (!newAccessToken) return null;
+
+    const { readFile, writeFile } = await import('fs/promises');
+    const raw = await readFile(configPath, 'utf-8');
+    const config = JSON.parse(raw) as { mcpServers?: Record<string, Record<string, unknown>> };
+    const entry = config.mcpServers?.[serverKey];
+    if (entry) {
+      if (entry.env && typeof entry.env === 'object') {
+        const envObj = entry.env as Record<string, string>;
+        for (const key of Object.keys(envObj)) {
+          if (key.includes('TOKEN') || key.includes('ACCESS')) envObj[key] = newAccessToken;
+        }
+      }
+      if (entry.headers && typeof entry.headers === 'object') {
+        const headerObj = entry.headers as Record<string, string>;
+        if (headerObj['Authorization']) {
+          const prefix = headerObj['Authorization'].startsWith('Bearer ') ? 'Bearer ' : '';
+          headerObj['Authorization'] = `${prefix}${newAccessToken}`;
+        }
+      }
+      if (entry._meta && typeof entry._meta === 'object') {
+        const metaObj = entry._meta as Record<string, unknown>;
+        metaObj.expiresAt = data.expires_in ? Date.now() + data.expires_in * 1000 : undefined;
+        if (data.refresh_token) metaObj.refreshToken = data.refresh_token;
+      }
+      await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+      console.log(`[Token Refresh] Updated ${label} token in MCP config`);
+    }
+    return newAccessToken;
+  } catch (err) {
+    console.error(`[Token Refresh] Error refreshing ${label}:`, err);
+    return null;
+  }
+}
+
+export async function loadProvisionedMcpServers(): Promise<Record<string, unknown>> {
+  const { join } = await import('path');
+  const { homedir } = await import('os');
+  const claudeDir = join(homedir(), '.claude');
+  const quarryConfigPath = join(claudeDir, '.quarry-mcp.json');
+
+  try {
+    const { readFile } = await import('fs/promises');
+    const raw = await readFile(quarryConfigPath, 'utf-8');
+    const config = JSON.parse(raw) as { mcpServers?: Record<string, Record<string, unknown>> };
+    if (config.mcpServers) {
+      for (const [key, entry] of Object.entries(config.mcpServers)) {
+        const meta = entry._meta as Record<string, unknown> | undefined;
+        if (meta) await refreshTokenIfNeeded(key, meta, quarryConfigPath);
+      }
+    }
+  } catch {
+    // Config doesn't exist or is invalid — fine
+  }
+
+  const [claudeCodeServers, quarryServers] = await Promise.all([
+    readMcpConfigFile(join(claudeDir, '.mcp.json')),
+    readMcpConfigFile(join(claudeDir, '.quarry-mcp.json')),
+  ]);
+  return { ...claudeCodeServers, ...quarryServers };
+}
