@@ -37,6 +37,16 @@ interface JiraKanbanInput {
   baseToolArgs?: Record<string, unknown>;
   /** Column order: e.g. ["To Do", "In Progress", "In Review", "Done"]. */
   columns: string[];
+  /**
+   * Map of column (status) name → transition id that lands a card in that
+   * column. Powers drag-and-drop: dragging a card onto a column fires the
+   * matching transition. If omitted, DnD is disabled (button clicks still work).
+   *
+   * Note: transition ids can vary per workflow even for the same status name.
+   * The agent should pick the most-common-id for each column based on the
+   * fetched transitions across the issues it's rendering.
+   */
+  columnTransitions?: Record<string, string>;
   issues: JiraIssue[];
   /** Optional caption / context note rendered below the board. */
   caption?: string;
@@ -108,10 +118,13 @@ export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
     'ALSO pass `commentTool` (e.g. `mcp__claude_ai_Atlassian__addCommentToJiraIssue`) so each card gets a 💬 button users can click to add a comment inline. ' +
     'If the Atlassian MCP requires a `cloudId` arg, fetch it via *_getAccessibleAtlassianResources and pass it in `baseToolArgs`. ' +
     'ALWAYS pass `refreshPrompt` so the canvas can re-fetch itself after a transition without the user having to re-ask. ' +
-    'Example: `refreshPrompt: "Re-fetch open issues in PROM via the Atlassian MCP and render the jira_kanban canvas again with the same columns."`',
+    'Example: `refreshPrompt: "Re-fetch open issues in PROM via the Atlassian MCP and render the jira_kanban canvas again with the same columns."`. ' +
+    'ALSO pass `columnTransitions` — a map of column name → transition id — to enable drag-and-drop. ' +
+    'For each column, pick the most-common transition id from your fetched transitions whose name matches that column. ' +
+    'Example: `columnTransitions: { "To Do": "11", "In Progress": "21", "In Review": "31", "Done": "41" }`. Without this map, DnD is silently disabled (button clicks still work).',
   inputShape:
-    '{ title: string, transitionTool: string (FULL MCP tool name for transitionJiraIssue), commentTool?: string (FULL MCP tool name for addCommentToJiraIssue), baseToolArgs?: { cloudId?: string, ... } (merged into each tool call), columns: string[] (status names in order), issues: { key, title, description?, status, priority?, labels?, url?, assignee?, transitions?: [{id, name}] }[], caption?: string, refreshPrompt?: string (NL prompt to re-render the canvas after a writeback) }',
-  render: ({ title, transitionTool, commentTool, baseToolArgs = {}, columns, issues, caption, refreshPrompt }) => {
+    '{ title: string, transitionTool: string (FULL MCP tool name for transitionJiraIssue), commentTool?: string (FULL MCP tool name for addCommentToJiraIssue), baseToolArgs?: { cloudId?: string, ... } (merged into each tool call), columns: string[] (status names in order), columnTransitions?: { [columnName]: transitionId } (enables DnD), issues: { key, title, description?, status, priority?, labels?, url?, assignee?, transitions?: [{id, name}] }[], caption?: string, refreshPrompt?: string (NL prompt to re-render the canvas after a writeback) }',
+  render: ({ title, transitionTool, commentTool, baseToolArgs = {}, columns, columnTransitions, issues, caption, refreshPrompt }) => {
     const safeIssues = Array.isArray(issues) ? issues : [];
     // Derive columns from issue statuses if the agent didn't supply them.
     const safeColumns = Array.isArray(columns) && columns.length > 0
@@ -149,29 +162,43 @@ export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
           type: 'kanban',
           id: 'board',
           title: title || 'Jira backlog',
-          columns: safeColumns.map((status) => ({
-            id: status,
-            title: status,
-            cards: (byStatus.get(status) ?? []).map((issue) => ({
-              id: issue.key,
-              title: `${issue.key}: ${issue.title}`,
-              description: issue.description,
-              labels: [
-                ...(issue.assignee ? [`@${issue.assignee}`] : []),
-                ...(issue.labels ?? []),
-              ],
-              priority: issue.priority,
-              url: issue.url,
-              actions: [
-                ...(transitionTool
-                  ? buildTransitionActions(issue, transitionTool, baseToolArgs)
-                  : []),
-                ...(commentTool
-                  ? [buildCommentAction(issue, commentTool, baseToolArgs)]
-                  : []),
-              ],
-            })),
-          })),
+          columns: safeColumns.map((status) => {
+            const transitionId = columnTransitions?.[status];
+            return {
+              id: status,
+              title: status,
+              cards: (byStatus.get(status) ?? []).map((issue) => ({
+                id: issue.key,
+                title: `${issue.key}: ${issue.title}`,
+                description: issue.description,
+                labels: [
+                  ...(issue.assignee ? [`@${issue.assignee}`] : []),
+                  ...(issue.labels ?? []),
+                ],
+                priority: issue.priority,
+                url: issue.url,
+                actions: [
+                  ...(transitionTool
+                    ? buildTransitionActions(issue, transitionTool, baseToolArgs)
+                    : []),
+                  ...(commentTool
+                    ? [buildCommentAction(issue, commentTool, baseToolArgs)]
+                    : []),
+                ],
+              })),
+              // Drop-onto-column → fire the transition that lands a card here.
+              ...(transitionTool && transitionId
+                ? {
+                    dropAction: {
+                      tool: transitionTool,
+                      args: { ...baseToolArgs, transition: { id: transitionId } },
+                      argKey: 'issueIdOrKey',
+                      feedbackPrompt: `Move the dropped Jira issue to "${status}".`,
+                    },
+                  }
+                : {}),
+            };
+          }),
         },
         ...(caption
           ? [
