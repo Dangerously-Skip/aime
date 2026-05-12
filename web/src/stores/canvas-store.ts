@@ -13,6 +13,12 @@ interface SurfaceCanvasState {
   history: A2UIDocument[];
   historyIndex: number;
   open: boolean;
+  /**
+   * Conversation that produced the current `doc`. canvas-overlay reads this
+   * and refuses to render if it doesn't match its current conversationId —
+   * stops canvases from a previous chat bleeding into a freshly-opened one.
+   */
+  conversationId: string | null;
 }
 
 interface CanvasState {
@@ -20,7 +26,7 @@ interface CanvasState {
 }
 
 interface CanvasActions {
-  pushCanvas: (surfaceId: string, doc: A2UIDocument) => void;
+  pushCanvas: (surfaceId: string, doc: A2UIDocument, conversationId?: string | null) => void;
   clearCanvas: (surfaceId: string) => void;
   goBack: (surfaceId: string) => void;
   goForward: (surfaceId: string) => void;
@@ -42,6 +48,7 @@ const EMPTY_SURFACE: SurfaceCanvasState = {
   history: [],
   historyIndex: -1,
   open: false,
+  conversationId: null,
 };
 
 function ensureSurface(state: CanvasState, surfaceId: string): SurfaceCanvasState {
@@ -51,10 +58,14 @@ function ensureSurface(state: CanvasState, surfaceId: string): SurfaceCanvasStat
 export const useCanvasStore = create<CanvasStore>()((set, get) => ({
   bySurface: {},
 
-  pushCanvas: (surfaceId, doc) =>
+  pushCanvas: (surfaceId, doc, conversationId = null) =>
     set((state) => {
       const prev = ensureSurface(state, surfaceId);
-      const newHistory = [...prev.history.slice(0, prev.historyIndex + 1), doc];
+      // If the conversation changed, drop the prior history — it belonged to a
+      // different chat and shouldn't be navigable via back/forward.
+      const sameConversation = !conversationId || prev.conversationId === conversationId || prev.conversationId === null;
+      const baseHistory = sameConversation ? prev.history.slice(0, prev.historyIndex + 1) : [];
+      const newHistory = [...baseHistory, doc];
       return {
         bySurface: {
           ...state.bySurface,
@@ -63,6 +74,7 @@ export const useCanvasStore = create<CanvasStore>()((set, get) => ({
             doc,
             history: newHistory,
             historyIndex: newHistory.length - 1,
+            conversationId: conversationId ?? prev.conversationId,
           },
         },
       };

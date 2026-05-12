@@ -1828,7 +1828,7 @@ export function CoworkSurface() {
             open={sidebarOpen}
             onToggle={() => setSidebarOpen((prev) => !prev)}
             onCanvasClick={(c) => {
-              pushCanvas('cowork', c.doc);
+              pushCanvas('cowork', c.doc, chatId || null);
               setCanvasOpen('cowork', true);
             }}
             onCanvasRemove={(id) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { CanvasPanel } from "./canvas-panel";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useAppStore } from "@/stores/app-store";
@@ -22,13 +22,18 @@ interface CanvasOverlayProps {
  * and call `useCanvasSseHandler` from their SSE switch.
  */
 export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps) {
-  // Per-surface state: each surface has its own current doc, history,
-  // and open flag. Switching surfaces no longer leaks canvases.
+  // Per-surface state. The store also stamps each canvas with the conversation
+  // that produced it; we gate rendering on that ID to stop bleed-through when
+  // switching chats — the previous mount-ref guard missed this on
+  // surface-switch / remount sequences.
   const surfaceState = useCanvasStore((s) => s.bySurface[surfaceId]);
-  const canvasDoc = surfaceState?.doc ?? null;
-  const canvasOpen = !!surfaceState?.open;
-  const canvasHistoryIndex = surfaceState?.historyIndex ?? -1;
-  const canvasHistoryLength = surfaceState?.history.length ?? 0;
+  const docMatches = !!surfaceState?.doc
+    && (surfaceState.conversationId === null
+      || surfaceState.conversationId === conversationId);
+  const canvasDoc = docMatches ? (surfaceState?.doc ?? null) : null;
+  const canvasOpen = docMatches && !!surfaceState?.open;
+  const canvasHistoryIndex = docMatches ? (surfaceState?.historyIndex ?? -1) : -1;
+  const canvasHistoryLength = docMatches ? (surfaceState?.history.length ?? 0) : 0;
   const goBackStore = useCanvasStore((s) => s.goBack);
   const goForwardStore = useCanvasStore((s) => s.goForward);
   const clearStore = useCanvasStore((s) => s.clearCanvas);
@@ -36,30 +41,9 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  // Subscribe to activeSurface so we re-render when switching back; this
-  // gives the panel a chance to recompute its layout (parent went from
-  // display:none to display:block, which can leave absolute children in a
-  // stale layout state if nothing re-renders).
+  // Subscribe to activeSurface so we re-render when switching back.
   const activeSurface = useAppStore((s) => s.activeSurface);
   void activeSurface;
-
-  // Close + clear when conversation changes within this surface, so the
-  // previous conversation's canvas doesn't leak. Guarded with a ref so
-  // transient empty conversation IDs (during mount churn / resize) don't
-  // trash state.
-  const lastIdRef = useRef<string>("");
-  useEffect(() => {
-    if (!conversationId) return;
-    if (lastIdRef.current === conversationId) return;
-    const isFirstSetting = lastIdRef.current === "";
-    lastIdRef.current = conversationId;
-    // Don't clear on the very first mount — there's no previous conversation
-    // to leak from, and clearing here would close a canvas the agent just
-    // streamed.
-    if (isFirstSetting) return;
-    clearStore(surfaceId);
-    setOpenStore(surfaceId, false);
-  }, [conversationId, surfaceId, clearStore, setOpenStore]);
 
   return (
     <CanvasPanel
@@ -94,7 +78,7 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
                   const next: A2UIDocument = fresh.refreshPrompt
                     ? fresh
                     : { ...fresh, refreshPrompt };
-                  pushCanvas(surfaceId, next);
+                  pushCanvas(surfaceId, next, conversationId || null);
                 }
               } catch (err) {
                 console.error("[canvas] refresh failed:", err);
