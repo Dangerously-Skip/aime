@@ -92,10 +92,6 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
       : null);
   const chatSlot = slots?.chat ?? <ChatPlaceholder onClose={() => setVisible("chat", false)} />;
 
-  // Persist-buster: bump when DEFAULT_WORKSPACE_LAYOUT sizes change so
-  // react-resizable-panels invalidates stale per-group layouts in localStorage.
-  const groupVersion = "v2";
-
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
       {/* Branch header strip */}
@@ -110,7 +106,7 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
 
       {/* Main horizontal split: chat (hero, left) | IDE column (right) */}
       <div className="flex-1 min-h-0">
-        <Group orientation="horizontal" id={`code-ws-${groupVersion}-${workspace ?? "none"}-main`}>
+        <Group orientation="horizontal" >
           {layout.visible.chat && (
             <>
               <Panel
@@ -127,7 +123,7 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
 
           {/* IDE column: tree | (tabs + viewer / terminal) */}
           <Panel minSize={30}>
-            <Group orientation="horizontal" id={`code-ws-${groupVersion}-${workspace ?? "none"}-ide`}>
+            <Group orientation="horizontal">
               {layout.visible.tree && (
                 <>
                   <Panel
@@ -143,7 +139,7 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
               )}
 
               <Panel minSize={30}>
-                <Group orientation="vertical" id={`code-ws-${groupVersion}-${workspace ?? "none"}-v`}>
+                <Group orientation="vertical">
                   <Panel minSize={20}>
                     <div className="flex flex-col h-full min-h-0 px-0.5">
                       {tabsSlot}
