@@ -67,6 +67,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gitBranches: (cwd) => ipcRenderer.invoke("git:branches", cwd),
   gitLog: (cwd, opts) => ipcRenderer.invoke("git:log", cwd, opts),
   gitBlame: (cwd, path) => ipcRenderer.invoke("git:blame", cwd, path),
+  gitPush: (cwd, branch) => ipcRenderer.invoke("git:push", cwd, branch),
+  openExternal: (url) => ipcRenderer.invoke("open-external", url),
 
   // PTY
   ptyOpen: (opts) => ipcRenderer.invoke("pty:open", opts),

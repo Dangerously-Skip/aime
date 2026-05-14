@@ -1163,24 +1163,24 @@ ipcMain.handle("fs:watch-start", async (_event, _path) => null);
 ipcMain.handle("fs:watch-stop", async (_event, _watchId) => undefined);
 
 // ──────────────────────────────────────────────────────────────────────
-// Git — Agent B (Phase 2)
+// Git — shared `runGit` helper used by Agent B (status/diff) and Agent C
+// (branches/log/blame/push) handlers below.
 //
-// `runGit` mirrors the TypeScript helper at
-// `web/src/lib/code-workspace/git-ops.ts`. Kept inline here because
-// main-web.js is plain Node (CJS) and can't `require` a `.ts` file.
-// Keep the two in sync if either signature changes.
+// Binary-safe: stdout returned as Buffer so callers like
+// `git status --porcelain -z` and binary-file diffs don't get utf-8
+// mangled. Throws on non-zero exit; tolerant callers wrap via runGitSafe.
+//
+// Mirrors the TypeScript helper at
+// `web/src/lib/code-workspace/git-ops.ts` (kept inline because main-web.js
+// is plain Node CJS and can't `require` a `.ts` file).
 // ──────────────────────────────────────────────────────────────────────
 
 const { spawn } = require("child_process");
 
 /**
- * Spawn `git <args>` in `cwd`. Throws if the cwd doesn't exist or git
- * exits non-zero. Returns the raw stdout buffer so binary-safe callers
- * (status --porcelain -z, diff with binary files, etc.) can parse it.
- *
  * @param {string} cwd
  * @param {string[]} args
- * @param {{ timeoutMs?: number }} [opts]
+ * @param {{ timeoutMs?: number; maxBufferBytes?: number }} [opts]
  * @returns {Promise<{ stdout: Buffer, stderr: string, code: number }>}
  */
 function runGit(cwd, args, opts = {}) {
@@ -1191,6 +1191,7 @@ function runGit(cwd, args, opts = {}) {
     return Promise.reject(new Error(`runGit: cwd does not exist: ${cwd}`));
   }
   const timeoutMs = opts.timeoutMs ?? 10_000;
+  const maxBufferBytes = opts.maxBufferBytes ?? 16 * 1024 * 1024;
 
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, {
@@ -1200,7 +1201,24 @@ function runGit(cwd, args, opts = {}) {
     });
     const stdoutChunks = [];
     const stderrChunks = [];
-    child.stdout.on("data", (b) => stdoutChunks.push(b));
+    let stdoutBytes = 0;
+    let truncated = false;
+    child.stdout.on("data", (b) => {
+      if (stdoutBytes + b.length > maxBufferBytes) {
+        if (!truncated) {
+          const remaining = Math.max(0, maxBufferBytes - stdoutBytes);
+          if (remaining > 0) {
+            stdoutChunks.push(b.slice(0, remaining));
+            stdoutBytes += remaining;
+          }
+          truncated = true;
+          try { child.kill("SIGTERM"); } catch {}
+        }
+        return;
+      }
+      stdoutChunks.push(b);
+      stdoutBytes += b.length;
+    });
     child.stderr.on("data", (b) => stderrChunks.push(b));
     const timer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch {}
@@ -1221,6 +1239,20 @@ function runGit(cwd, args, opts = {}) {
       resolve({ stdout, stderr, code: code ?? 0 });
     });
   });
+}
+
+/**
+ * Tolerant wrapper used by Agent C's handlers. Never throws — returns
+ * `{ ok, stdout (utf-8 string), stderr, code }` so callers can handle
+ * "not a repo" / "no commits" without try/catch.
+ */
+async function runGitSafe(cwd, args, opts) {
+  try {
+    const { stdout, stderr, code } = await runGit(cwd, args, opts);
+    return { ok: true, stdout: stdout.toString("utf-8"), stderr, code };
+  } catch (err) {
+    return { ok: false, stdout: "", stderr: err && err.message ? err.message : String(err), code: -1 };
+  }
 }
 
 async function runGitText(cwd, args, opts) {
@@ -1440,14 +1472,143 @@ ipcMain.handle("git:diff", async (_event, cwd, opts) => {
     return "";
   }
 });
-// Agent C fills in
-ipcMain.handle("git:branches", async (_event, _cwd) => []);
-ipcMain.handle("git:log", async (_event, _cwd, _opts) => []);
-ipcMain.handle("git:blame", async (_event, _cwd, _path) => []);
-// Agent C fills in
-ipcMain.handle("git:branches", async (_event, _cwd) => []);
-ipcMain.handle("git:log", async (_event, _cwd, _opts) => []);
-ipcMain.handle("git:blame", async (_event, _cwd, _path) => []);
+
+// ── Agent C: git:branches / git:log / git:blame / git:push ────────────
+// Uses runGitSafe (the tolerant wrapper above) so "not a repo" / "no commits"
+// degrade gracefully without try/catch.
+
+ipcMain.handle("git:branches", async (_event, cwd) => {
+  if (!cwd) return [];
+  const { ok, stdout } = await runGitSafe(cwd, [
+    "for-each-ref",
+    "--sort=-committerdate",
+    "--format=%(refname:short)",
+    "refs/heads",
+    "refs/remotes",
+  ]);
+  if (!ok) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of stdout.split("\n")) {
+    const name = raw.trim();
+    if (!name) continue;
+    if (name === "origin/HEAD" || name.endsWith("/HEAD")) continue;
+    const base = name.replace(/^origin\//, "");
+    if (seen.has(base)) continue;
+    seen.add(base);
+    out.push(name);
+  }
+  return out;
+});
+
+ipcMain.handle("git:log", async (_event, cwd, opts) => {
+  if (!cwd) return [];
+  const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
+  const SEP = "\x1f"; // ASCII US — separates fields
+  const REC = "\x1e"; // ASCII RS — separates records
+  const args = [
+    "log",
+    `-${limit}`,
+    `--pretty=format:%H${SEP}%h${SEP}%an${SEP}%aI${SEP}%s${SEP}%b${REC}`,
+  ];
+  if (opts?.path) {
+    args.push("--follow", "--", opts.path);
+  }
+  const { ok, stdout } = await runGitSafe(cwd, args);
+  if (!ok) return [];
+  const commits = [];
+  for (const record of stdout.split(REC)) {
+    const trimmed = record.replace(/^\n+/, "");
+    if (!trimmed) continue;
+    const parts = trimmed.split(SEP);
+    if (parts.length < 5) continue;
+    const [hash, shortHash, author, date, subject, body = ""] = parts;
+    commits.push({
+      hash,
+      shortHash,
+      author,
+      date,
+      subject,
+      body: body.trim() || undefined,
+    });
+  }
+  return commits;
+});
+
+ipcMain.handle("git:blame", async (_event, cwd, filePath) => {
+  if (!cwd || !filePath) return [];
+  const { ok, stdout } = await runGitSafe(cwd, [
+    "blame",
+    "--porcelain",
+    "--",
+    filePath,
+  ]);
+  if (!ok) return [];
+  const meta = new Map();
+  const out = [];
+  const lines = stdout.split("\n");
+  let curHash = "";
+  let curAuthor = "";
+  let curDate = "";
+  let lineNumber = 0;
+  for (let i = 0; i < lines.length && out.length < 5000; i++) {
+    const line = lines[i];
+    if (!line.length) continue;
+    if (line.startsWith("\t")) {
+      out.push({
+        hash: curHash.slice(0, 8),
+        author: curAuthor || "unknown",
+        date: curDate ? new Date(parseInt(curDate, 10) * 1000).toISOString().slice(0, 10) : "",
+        lineNumber: lineNumber++,
+        content: line.slice(1),
+      });
+      continue;
+    }
+    const m = line.match(/^([0-9a-f]{40}) (\d+) (\d+)( \d+)?$/);
+    if (m) {
+      curHash = m[1];
+      lineNumber = parseInt(m[3], 10);
+      const cached = meta.get(curHash);
+      if (cached) {
+        curAuthor = cached.author;
+        curDate = cached.date;
+      } else {
+        curAuthor = "";
+        curDate = "";
+      }
+      continue;
+    }
+    if (line.startsWith("author ")) {
+      curAuthor = line.slice("author ".length);
+      meta.set(curHash, { ...(meta.get(curHash) || {}), author: curAuthor });
+    } else if (line.startsWith("author-time ")) {
+      curDate = line.slice("author-time ".length);
+      meta.set(curHash, { ...(meta.get(curHash) || {}), date: curDate });
+    }
+  }
+  return out;
+});
+
+ipcMain.handle("git:push", async (_event, cwd, branch) => {
+  if (!cwd || !branch) return { ok: false, message: "cwd + branch required" };
+  const { ok, stderr, stdout } = await runGitSafe(cwd, ["push", "-u", "origin", branch], {
+    timeoutMs: 60000,
+  });
+  return {
+    ok,
+    message: ok ? (stdout || `Pushed ${branch} to origin`) : (stderr || stdout || "push failed").trim(),
+  };
+});
+
+// Open an external URL in the user's default browser. The renderer needs this
+// for the "Create PR" flow → open the PR URL after creation. Tightly scoped to
+// http(s) only; anything else is rejected.
+ipcMain.handle("open-external", async (_event, url) => {
+  if (typeof url !== "string") return { ok: false };
+  if (!/^https?:\/\//i.test(url)) return { ok: false };
+  await shell.openExternal(url);
+  return { ok: true };
+});
 
 // PTY — Agent D fills in
 ipcMain.handle("pty:open", async (_event, _opts) => null);
