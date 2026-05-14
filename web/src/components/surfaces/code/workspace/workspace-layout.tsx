@@ -90,14 +90,36 @@ function TreeRegion(props: IDockviewPanelProps<WorkspaceContext>) {
 function ViewerRegion(props: IDockviewPanelProps<WorkspaceContext>) {
   const { workspace, historyOpen, setHistoryOpen, slots } = safeCtx(props.params);
   if (slots.viewer) return <div className="dv-region-body">{slots.viewer}</div>;
+  // Editor "home" tab — shown when no file is open. Click a file in the
+  // tree to spawn a `file:` tab; that tab takes over rendering.
   return (
     <div className="dv-region-body flex flex-col h-full min-h-0">
-      <div className="shrink-0">{slots.tabs ?? <TabStrip workspace={workspace} />}</div>
       <div className="flex-1 min-h-0">
         {historyOpen
           ? <GitHistory workspace={workspace} onClose={() => setHistoryOpen(false)} />
           : <ViewerPane workspace={workspace} />}
       </div>
+    </div>
+  );
+}
+
+/** File viewer panel — one per open file. dockview owns the tab; we
+ *  fetch + render the contents via the shared file-renderers. */
+interface FilePanelParams extends WorkspaceContext {
+  filePath: string;
+}
+function FileRegion(props: IDockviewPanelProps<FilePanelParams>) {
+  const { workspace, filePath } = safeCtx(props.params) as FilePanelParams;
+  if (!workspace || !filePath) {
+    return (
+      <div className="dv-region-body p-4 text-xs text-muted-foreground">
+        No file path.
+      </div>
+    );
+  }
+  return (
+    <div className="dv-region-body">
+      <ViewerPane workspace={workspace} forcedPath={filePath} />
     </div>
   );
 }
@@ -153,6 +175,7 @@ const COMPONENTS = {
   viewer: ViewerRegion,
   terminal: TerminalRegion,
   diff: DiffRegion,
+  file: FileRegion,
 } as const;
 
 // Default layout is built via `api.addPanel` (not fromJSON) so params are
@@ -242,8 +265,9 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
       console.error("[ide] default-layout build failed", err);
     }
 
-    // Expose a window-scoped API so the file tree / branch header can
-    // request diff tabs without prop drilling.
+    // Window-scoped API so the file tree / branch header / toolbar can
+    // request panels without prop drilling.
+
     (window as unknown as Record<string, unknown>).__ideOpenDiff = (
       filePath: string,
       opts?: { fromRef?: string; toRef?: string },
@@ -260,6 +284,39 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
         title: filePath.split("/").pop() ?? filePath,
         params: { ...ctx, filePath, fromRef: opts?.fromRef, toRef: opts?.toRef } as unknown as Record<string, unknown>,
         position: { referencePanel: "viewer", direction: "within" },
+      });
+    };
+
+    /** Open a file as a tab in the editor group. Dedupes by path — clicking
+     *  a file that's already open just focuses the existing tab. */
+    (window as unknown as Record<string, unknown>).__ideOpenFile = (filePath: string) => {
+      const id = `file:${filePath}`;
+      const existing = event.api.getPanel(id);
+      if (existing) {
+        existing.api.setActive();
+        return;
+      }
+      event.api.addPanel({
+        id,
+        component: "file",
+        title: filePath.split("/").pop() ?? filePath,
+        params: { ...ctx, filePath } as unknown as Record<string, unknown>,
+        position: { referencePanel: "viewer", direction: "within" },
+      });
+    };
+
+    /** Open a new terminal panel. Each instance gets a unique id so
+     *  multiple terminals can coexist as tabs. */
+    let nextTerminalIndex = 1;
+    (window as unknown as Record<string, unknown>).__ideOpenTerminal = () => {
+      const id = `terminal-${Date.now()}`;
+      const ref = event.api.getPanel("viewer") ? "viewer" : event.api.panels[0]?.id;
+      event.api.addPanel({
+        id,
+        component: "terminal",
+        title: `Terminal ${nextTerminalIndex++}`,
+        params: ctx as unknown as Record<string, unknown>,
+        position: ref ? { referencePanel: ref, direction: "below" } : undefined,
       });
     };
   }
