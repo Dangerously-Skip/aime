@@ -27,6 +27,8 @@ interface RowData {
   onPin: (node: FsNode) => void;
   /** path → git status flag ("M"/"A"/"D"/"U"/"R"). */
   gitFlags: Record<string, "M" | "A" | "D" | "U" | "R">;
+  /** Folder paths whose descendants contain changes — renders a dot. */
+  changedFolders: Set<string>;
   onDiffClick: (node: FsNode) => void;
 }
 
@@ -38,6 +40,7 @@ function Row({
   onActivate,
   onPin,
   gitFlags,
+  changedFolders,
   onDiffClick,
 }: RowComponentProps<RowData>) {
   const item = flatNodes[index];
@@ -53,6 +56,7 @@ function Row({
         onActivate={onActivate}
         onPin={onPin}
         gitFlag={gitFlags[item.node.path]}
+        folderHasChanges={item.node.type === "dir" && changedFolders.has(item.node.path)}
         onDiffClick={onDiffClick}
       />
     </div>
@@ -72,13 +76,16 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
   const { status: gitStatus } = useGitStatus(workspace);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Build a path → status-flag lookup the tree row can render.
-  const gitFlags = useMemo<Record<string, "M" | "A" | "D" | "U" | "R">>(() => {
-    if (!gitStatus || !workspace) return {};
-    const out: Record<string, "M" | "A" | "D" | "U" | "R"> = {};
+  // Build a path → status-flag lookup the tree row can render. Also build a
+  // Set of every ancestor folder so the tree can bubble a small dot up to
+  // parent directories (VS Code style — "something inside me changed").
+  const { gitFlags, changedFolders } = useMemo(() => {
+    const flags: Record<string, "M" | "A" | "D" | "U" | "R"> = {};
+    const folders = new Set<string>();
+    if (!gitStatus || !workspace) return { gitFlags: flags, changedFolders: folders };
+    const root = workspace.replace(/\/+$/, "");
     for (const f of gitStatus.files) {
-      // Tree paths are absolute; git returns workspace-relative.
-      const abs = `${workspace.replace(/\/+$/, "")}/${f.path}`;
+      const abs = `${root}/${f.path}`;
       const flag =
         f.status === "modified" ? "M" :
         f.status === "added" ? "A" :
@@ -87,9 +94,20 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
         f.status === "renamed" ? "R" :
         f.status === "staged" ? "M" :
         f.status === "conflicted" ? "U" : null;
-      if (flag) out[abs] = flag;
+      if (!flag) continue;
+      flags[abs] = flag;
+      // Walk ancestors and mark them. Stop at the workspace root so we
+      // don't bubble past the IDE boundary.
+      let cur = abs;
+      while (cur.length > root.length) {
+        const i = cur.lastIndexOf("/");
+        if (i <= 0) break;
+        cur = cur.slice(0, i);
+        if (cur.length <= root.length) break;
+        folders.add(cur);
+      }
     }
-    return out;
+    return { gitFlags: flags, changedFolders: folders };
   }, [gitStatus, workspace]);
 
   // Click → open as a dockview tab in the editor group. The window-scoped
@@ -141,10 +159,11 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
       onActivate: handleActivate,
       onPin: handlePin,
       gitFlags,
+      changedFolders,
       onDiffClick: openDiff,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tree.flatNodes, tree.toggleExpand, workspace, gitFlags],
+    [tree.flatNodes, tree.toggleExpand, workspace, gitFlags, changedFolders],
   );
 
   const shouldVirtualize = tree.flatNodes.length >= VIRTUALIZE_THRESHOLD;
@@ -218,6 +237,7 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
             onActivate={handleActivate}
             onPin={handlePin}
             gitFlag={gitFlags[item.node.path]}
+            folderHasChanges={item.node.type === "dir" && changedFolders.has(item.node.path)}
             onDiffClick={openDiff}
           />
         ))}
