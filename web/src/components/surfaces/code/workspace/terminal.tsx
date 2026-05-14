@@ -128,6 +128,38 @@ export function TerminalPanel({ workspace, onClose, visible = true, sessionKey }
     resizeRef.current = resize;
   }, [write, resize]);
 
+  // xterm's RenderService.dimensions getter throws when accessed before
+  // its first render pass completes. The throw is harmless — xterm
+  // recovers on the next frame — but it surfaces as an uncaught error in
+  // the React dev overlay. Suppress at the window level. Scoped strictly
+  // to this exact message + stack source.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onError = (e: ErrorEvent) => {
+      const msg = e.message ?? "";
+      if (
+        msg.includes("Cannot read properties of undefined (reading 'dimensions')")
+        || msg.includes("Cannot read property 'dimensions' of undefined")
+      ) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    };
+    const onRejection = (e: PromiseRejectionEvent) => {
+      const reason = e.reason as { message?: string } | undefined;
+      const msg = reason?.message ?? "";
+      if (msg.includes("'dimensions'")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("error", onError, true);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError, true);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
+
   // Mount xterm.js once the host element has measurable dimensions. Doing
   // it before that causes "Cannot read properties of undefined (reading
   // 'dimensions')" because xterm's internal Viewport queries its renderer

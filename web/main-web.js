@@ -1188,6 +1188,7 @@ ipcMain.handle("fs:walk", async (_event, dirPath, opts) => {
     console.warn(`[fs:walk] ${expanded}:`, result.error);
     return [];
   }
+  console.log(`[fs:walk] ${expanded} → ${result.nodes.length} entries`);
   return result.nodes;
 });
 
