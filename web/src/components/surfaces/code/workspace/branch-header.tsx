@@ -7,6 +7,7 @@ import {
   FolderOpen,
   GitBranch,
   GitCommit as CommitIcon,
+  GitCompare,
   GitPullRequestArrow,
   History,
   Loader2,
@@ -271,6 +272,30 @@ export function BranchHeader({
         <History className="h-3.5 w-3.5" strokeWidth={1.75} />
         <span>History</span>
       </button>
+
+      {/* Review N — open a diff tab for every modified file */}
+      {(status?.files.length ?? 0) > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window === "undefined" || !status) return;
+            const openDiff = (window as unknown as Record<string, unknown>).__ideOpenDiff as
+              | ((p: string) => void)
+              | undefined;
+            if (!openDiff || !workspace) return;
+            const root = workspace.replace(/\/+$/, "");
+            for (const f of status.files) {
+              if (f.status === "deleted") continue; // diffing a deleted file is awkward
+              openDiff(`${root}/${f.path}`);
+            }
+          }}
+          className="h-7 inline-flex items-center gap-1.5 rounded-md px-2.5 text-xs border border-border/60 bg-card hover:bg-muted/60 hover:border-border transition-colors"
+          title={`Open a diff tab for each of the ${status?.files.length} changed file(s)`}
+        >
+          <GitCompare className="h-3.5 w-3.5" strokeWidth={1.75} />
+          <span>Review {status?.files.length}</span>
+        </button>
+      )}
 
       {/* Create PR */}
       <button

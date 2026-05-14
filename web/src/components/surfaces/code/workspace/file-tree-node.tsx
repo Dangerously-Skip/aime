@@ -27,6 +27,8 @@ interface FileTreeNodeProps {
   onPin: (node: FsNode) => void;
   /** Optional git status flag — drives the M/A/D badge on the right edge. */
   gitFlag?: "M" | "A" | "D" | "U" | "R";
+  /** True when a directory contains changed descendants (renders a dot). */
+  folderHasChanges?: boolean;
   /** Click the diff badge → open diff tab instead of file. */
   onDiffClick?: (node: FsNode) => void;
 }
@@ -72,6 +74,7 @@ export function FileTreeNode({
   onActivate,
   onPin,
   gitFlag,
+  folderHasChanges,
   onDiffClick,
 }: FileTreeNodeProps) {
   const isDir = node.type === "dir";
@@ -121,6 +124,13 @@ export function FileTreeNode({
       <span className="truncate flex-1 text-foreground/90 group-hover:text-foreground">
         {node.name}
       </span>
+      {isDir && folderHasChanges && (
+        <span
+          className="ml-1 inline-flex h-2 w-2 rounded-full bg-amber-500/80 shrink-0"
+          aria-label="Folder contains uncommitted changes"
+          title="Contains uncommitted changes"
+        />
+      )}
       {!isDir && gitFlag && (
         <span
           role="button"
