@@ -4,19 +4,20 @@ import { type ReactNode, useState } from "react";
 import { Group, Panel, Separator, type PanelSize } from "react-resizable-panels";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { PanelToolbar } from "./panel-toolbar";
-import { TerminalPlaceholder, ChatPlaceholder } from "./placeholders";
+import { ChatPlaceholder } from "./placeholders";
 import { BranchHeader } from "./branch-header";
 import { GitHistory } from "./git-history";
 import { FileTree } from "./file-tree";
 import { TabStrip } from "./tab-strip";
 import { ViewerPane } from "./viewer-pane";
+import { TerminalPanel } from "./terminal";
 
 /**
  * Master workspace layout for the IDE mode of the Code surface.
  *
- * Six toggleable, resizable regions. Wave 2 agents have replaced their
- * placeholder slots with real components. Callers can still override any
- * slot via the `slots` prop.
+ * Six toggleable, resizable regions. Wave 2 agents have integrated their
+ * real components into the slots. Callers can still override any slot via
+ * the `slots` prop.
  */
 
 interface WorkspaceLayoutProps {
@@ -42,7 +43,6 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
   const [historyOpen, setHistoryOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string | null>(null);
 
-  // Resolve each slot — caller's component, or the real default
   const branchSlot =
     slots?.branch ?? (
       <BranchHeader
@@ -57,13 +57,20 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
   const treeSlot = slots?.tree ?? <FileTree workspace={workspace} onClose={() => setVisible("tree", false)} />;
   const tabsSlot = slots?.tabs ?? <TabStrip workspace={workspace} />;
   // When the default branch header opens History, swap the viewer for
-  // the GitHistory pane. Caller-supplied viewer slots stay untouched.
+  // the GitHistory pane.
   const viewerSlot =
     slots?.viewer
     ?? (historyOpen
       ? <GitHistory workspace={workspace} onClose={() => setHistoryOpen(false)} />
       : <ViewerPane workspace={workspace} />);
-  const terminalSlot = slots?.terminal ?? <TerminalPlaceholder onClose={() => setVisible("terminal", false)} />;
+  const terminalSlot =
+    slots?.terminal ?? (
+      <TerminalPanel
+        workspace={workspace}
+        visible={layout.visible.terminal}
+        onClose={() => setVisible("terminal", false)}
+      />
+    );
   const chatSlot = slots?.chat ?? <ChatPlaceholder onClose={() => setVisible("chat", false)} />;
 
   return (
