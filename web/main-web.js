@@ -1165,10 +1165,199 @@ ipcMain.handle("fs:watch-stop", async (_event, _watchId) => undefined);
 // Git — Agent B fills in
 ipcMain.handle("git:status", async (_event, _cwd) => null);
 ipcMain.handle("git:diff", async (_event, _cwd, _opts) => "");
-// Agent C fills in
-ipcMain.handle("git:branches", async (_event, _cwd) => []);
-ipcMain.handle("git:log", async (_event, _cwd, _opts) => []);
-ipcMain.handle("git:blame", async (_event, _cwd, _path) => []);
+
+// ── Agent C: git:branches / git:log / git:blame / git:push ────────────
+const { spawn } = require("child_process");
+
+/**
+ * Run a git command in cwd and return its stdout. Resolves to '' on failure.
+ * `maxBufferBytes` caps the captured output so a runaway log or blame doesn't
+ * blow up the main process — git itself keeps streaming, we just stop reading.
+ */
+function runGit(cwd, args, { maxBufferBytes = 16 * 1024 * 1024, timeoutMs = 15000 } = {}) {
+  return new Promise((resolve) => {
+    let stdout = Buffer.alloc(0);
+    let stderr = "";
+    let killed = false;
+    let proc;
+    try {
+      proc = spawn("git", args, { cwd: expandHome(cwd), env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    } catch (err) {
+      resolve({ ok: false, stdout: "", stderr: String(err && err.message), code: -1 });
+      return;
+    }
+    const timer = setTimeout(() => {
+      killed = true;
+      try { proc.kill("SIGKILL"); } catch {}
+    }, timeoutMs);
+    proc.stdout.on("data", (chunk) => {
+      if (stdout.length + chunk.length > maxBufferBytes) {
+        const remaining = maxBufferBytes - stdout.length;
+        if (remaining > 0) stdout = Buffer.concat([stdout, chunk.slice(0, remaining)]);
+        try { proc.kill("SIGTERM"); } catch {}
+        return;
+      }
+      stdout = Buffer.concat([stdout, chunk]);
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf-8");
+    });
+    proc.on("error", () => {
+      clearTimeout(timer);
+      resolve({ ok: false, stdout: "", stderr: "git not found", code: -1 });
+    });
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({
+        ok: !killed && code === 0,
+        stdout: stdout.toString("utf-8"),
+        stderr,
+        code: killed ? -1 : code,
+      });
+    });
+  });
+}
+
+ipcMain.handle("git:branches", async (_event, cwd) => {
+  if (!cwd) return [];
+  const { ok, stdout } = await runGit(cwd, [
+    "for-each-ref",
+    "--sort=-committerdate",
+    "--format=%(refname:short)",
+    "refs/heads",
+    "refs/remotes",
+  ]);
+  if (!ok) return [];
+  // De-dupe: if both `main` and `origin/main` exist, keep the first occurrence
+  // (which is the most-recently-committed-to). Skip the origin/HEAD pointer.
+  const seen = new Set();
+  const out = [];
+  for (const raw of stdout.split("\n")) {
+    const name = raw.trim();
+    if (!name) continue;
+    if (name === "origin/HEAD" || name.endsWith("/HEAD")) continue;
+    const base = name.replace(/^origin\//, "");
+    if (seen.has(base)) continue;
+    seen.add(base);
+    out.push(name);
+  }
+  return out;
+});
+
+ipcMain.handle("git:log", async (_event, cwd, opts) => {
+  if (!cwd) return [];
+  const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
+  // Use a tab+unit-separator-ish delimiter so commit messages with tabs don't
+  // break the parse.  is the ASCII unit separator.
+  const SEP = "";
+  const REC = "";
+  const args = [
+    "log",
+    `-${limit}`,
+    `--pretty=format:%H${SEP}%h${SEP}%an${SEP}%aI${SEP}%s${SEP}%b${REC}`,
+  ];
+  if (opts?.path) {
+    args.push("--follow", "--", opts.path);
+  }
+  const { ok, stdout } = await runGit(cwd, args);
+  if (!ok) return [];
+  const commits = [];
+  for (const record of stdout.split(REC)) {
+    const trimmed = record.replace(/^\n+/, "");
+    if (!trimmed) continue;
+    const parts = trimmed.split(SEP);
+    if (parts.length < 5) continue;
+    const [hash, shortHash, author, date, subject, body = ""] = parts;
+    commits.push({
+      hash,
+      shortHash,
+      author,
+      date,
+      subject,
+      body: body.trim() || undefined,
+    });
+  }
+  return commits;
+});
+
+ipcMain.handle("git:blame", async (_event, cwd, filePath) => {
+  if (!cwd || !filePath) return [];
+  const { ok, stdout } = await runGit(cwd, [
+    "blame",
+    "--porcelain",
+    "--",
+    filePath,
+  ]);
+  if (!ok) return [];
+  // Porcelain format: header lines per hunk, then content lines prefixed with \t.
+  // We track the current commit's author/date and emit one BlameLine per content line.
+  const meta = new Map(); // hash -> { author, date }
+  const out = [];
+  const lines = stdout.split("\n");
+  let curHash = "";
+  let curAuthor = "";
+  let curDate = "";
+  let lineNumber = 0;
+  for (let i = 0; i < lines.length && out.length < 5000; i++) {
+    const line = lines[i];
+    if (!line.length) continue;
+    if (line.startsWith("\t")) {
+      // Content line — emit
+      out.push({
+        hash: curHash.slice(0, 8),
+        author: curAuthor || "unknown",
+        date: curDate ? new Date(parseInt(curDate, 10) * 1000).toISOString().slice(0, 10) : "",
+        lineNumber: lineNumber++,
+        content: line.slice(1),
+      });
+      continue;
+    }
+    // Header line. First entry per hunk is "<hash> <orig-line> <final-line> <count>".
+    const m = line.match(/^([0-9a-f]{40}) (\d+) (\d+)( \d+)?$/);
+    if (m) {
+      curHash = m[1];
+      lineNumber = parseInt(m[3], 10);
+      const cached = meta.get(curHash);
+      if (cached) {
+        curAuthor = cached.author;
+        curDate = cached.date;
+      } else {
+        curAuthor = "";
+        curDate = "";
+      }
+      continue;
+    }
+    if (line.startsWith("author ")) {
+      curAuthor = line.slice("author ".length);
+      meta.set(curHash, { ...(meta.get(curHash) || {}), author: curAuthor });
+    } else if (line.startsWith("author-time ")) {
+      curDate = line.slice("author-time ".length);
+      meta.set(curHash, { ...(meta.get(curHash) || {}), date: curDate });
+    }
+  }
+  return out;
+});
+
+ipcMain.handle("git:push", async (_event, cwd, branch) => {
+  if (!cwd || !branch) return { ok: false, message: "cwd + branch required" };
+  const { ok, stderr, stdout } = await runGit(cwd, ["push", "-u", "origin", branch], {
+    timeoutMs: 60000,
+  });
+  return {
+    ok,
+    message: ok ? (stdout || `Pushed ${branch} to origin`) : (stderr || stdout || "push failed").trim(),
+  };
+});
+
+// Open an external URL in the user's default browser. The renderer needs this
+// for the "Create PR" flow → open the PR URL after creation. Tightly scoped to
+// http(s) only; anything else is rejected.
+ipcMain.handle("open-external", async (_event, url) => {
+  if (typeof url !== "string") return { ok: false };
+  if (!/^https?:\/\//i.test(url)) return { ok: false };
+  await shell.openExternal(url);
+  return { ok: true };
+});
 
 // PTY — Agent D fills in
 ipcMain.handle("pty:open", async (_event, _opts) => null);

@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { Group, Panel, Separator, type PanelSize } from "react-resizable-panels";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { PanelToolbar } from "./panel-toolbar";
@@ -10,8 +10,9 @@ import {
   ViewerPlaceholder,
   TerminalPlaceholder,
   ChatPlaceholder,
-  BranchHeaderPlaceholder,
 } from "./placeholders";
+import { BranchHeader } from "./branch-header";
+import { GitHistory } from "./git-history";
 
 /**
  * Master workspace layout for the IDE mode of the Code surface.
@@ -23,6 +24,8 @@ import {
 
 interface WorkspaceLayoutProps {
   workspace: string | null;
+  /** Folder picker callback used by the default branch header. */
+  onFolderChange?: (folder: string | null) => void;
   /**
    * Slot overrides — Wave 2 agents pass their real components here so the
    * layout stays in one place. Falling back to placeholders when a slot
@@ -38,14 +41,33 @@ interface WorkspaceLayoutProps {
   }>;
 }
 
-export function WorkspaceLayout({ workspace, slots }: WorkspaceLayoutProps) {
+export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceLayoutProps) {
   const { layout, setSize, setVisible } = useCodeWorkspace(workspace);
 
+  // Phase 3 — branch-header default slot owns the history toggle + base-branch
+  // override state. Agents passing their own `slots.branch` are free to manage
+  // these themselves; this state only drives the default header + viewer.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [baseBranch, setBaseBranch] = useState<string | null>(null);
+
   // Resolve each slot — caller's component, or our placeholder
-  const branchSlot = slots?.branch ?? <BranchHeaderPlaceholder />;
+  const branchSlot =
+    slots?.branch ?? (
+      <BranchHeader
+        workspace={workspace}
+        onFolderChange={onFolderChange ?? (() => {})}
+        historyOpen={historyOpen}
+        onToggleHistory={() => setHistoryOpen((v) => !v)}
+        baseBranch={baseBranch}
+        onBaseBranchChange={setBaseBranch}
+      />
+    );
   const treeSlot = slots?.tree ?? <TreePlaceholder onClose={() => setVisible("tree", false)} />;
   const tabsSlot = slots?.tabs ?? <TabsPlaceholder />;
-  const viewerSlot = slots?.viewer ?? <ViewerPlaceholder />;
+  // When the default branch header opens History, swap the viewer body for
+  // the GitHistory pane. Caller-supplied viewer slots stay untouched.
+  const viewerSlot = slots?.viewer
+    ?? (historyOpen ? <GitHistory workspace={workspace} onClose={() => setHistoryOpen(false)} /> : <ViewerPlaceholder />);
   const terminalSlot = slots?.terminal ?? <TerminalPlaceholder onClose={() => setVisible("terminal", false)} />;
   const chatSlot = slots?.chat ?? <ChatPlaceholder onClose={() => setVisible("chat", false)} />;
 
