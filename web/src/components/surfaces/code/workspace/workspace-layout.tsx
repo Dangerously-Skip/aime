@@ -53,8 +53,22 @@ interface WorkspaceContext {
 // dockview hands each registered component a props object; we read the
 // workspace context via `params` set in addPanel.
 
+// Defensive param read — first render may not have updateParameters run yet.
+function safeCtx(p: Partial<WorkspaceContext> | undefined): WorkspaceContext {
+  return {
+    workspace: p?.workspace ?? null,
+    setVisible: p?.setVisible ?? (() => {}),
+    historyOpen: p?.historyOpen ?? false,
+    setHistoryOpen: p?.setHistoryOpen ?? (() => {}),
+    baseBranch: p?.baseBranch ?? null,
+    setBaseBranch: p?.setBaseBranch ?? (() => {}),
+    onFolderChange: p?.onFolderChange ?? (() => {}),
+    slots: p?.slots ?? {},
+  };
+}
+
 function ChatRegion(props: IDockviewPanelProps<WorkspaceContext>) {
-  const { slots } = props.params;
+  const { slots } = safeCtx(props.params);
   return (
     <div className="dv-region-body">
       {slots.chat ?? (
@@ -67,12 +81,12 @@ function ChatRegion(props: IDockviewPanelProps<WorkspaceContext>) {
 }
 
 function TreeRegion(props: IDockviewPanelProps<WorkspaceContext>) {
-  const { workspace, slots } = props.params;
+  const { workspace, slots } = safeCtx(props.params);
   return <div className="dv-region-body">{slots.tree ?? <FileTree workspace={workspace} />}</div>;
 }
 
 function ViewerRegion(props: IDockviewPanelProps<WorkspaceContext>) {
-  const { workspace, historyOpen, setHistoryOpen, slots } = props.params;
+  const { workspace, historyOpen, setHistoryOpen, slots } = safeCtx(props.params);
   if (slots.viewer) return <div className="dv-region-body">{slots.viewer}</div>;
   return (
     <div className="dv-region-body flex flex-col h-full min-h-0">
@@ -87,11 +101,13 @@ function ViewerRegion(props: IDockviewPanelProps<WorkspaceContext>) {
 }
 
 function TerminalRegion(props: IDockviewPanelProps<WorkspaceContext>) {
-  const { workspace, slots } = props.params;
+  const { workspace, slots } = safeCtx(props.params);
   if (slots.terminal) return <div className="dv-region-body">{slots.terminal}</div>;
   return (
     <div className="dv-region-body">
-      <TerminalPanel workspace={workspace} visible />
+      {workspace ? <TerminalPanel workspace={workspace} visible /> : (
+        <div className="p-4 text-xs text-muted-foreground">Open a folder first.</div>
+      )}
     </div>
   );
 }
@@ -137,52 +153,8 @@ const COMPONENTS = {
   diff: DiffRegion,
 } as const;
 
-// ── Default layout ──────────────────────────────────────────────────────
-// Chat hero on the left at ~40%; tree as a narrow rail; viewer dominant; terminal
-// stacks below viewer (hidden by default — user toggles via the panel toolbar).
-
-function buildDefaultLayout(): unknown {
-  return {
-    grid: {
-      orientation: "HORIZONTAL",
-      height: 1000,
-      width: 1600,
-      root: {
-        type: "branch",
-        size: 1600,
-        data: [
-          {
-            type: "leaf",
-            size: 640, // ~40% chat
-            data: { views: ["chat"], activeView: "chat", id: "chat-region" },
-          },
-          {
-            type: "branch",
-            size: 960,
-            data: [
-              {
-                type: "leaf",
-                size: 220, // tree rail
-                data: { views: ["tree"], activeView: "tree", id: "tree-region" },
-              },
-              {
-                type: "leaf",
-                size: 740, // viewer
-                data: { views: ["viewer"], activeView: "viewer", id: "viewer-region" },
-              },
-            ],
-          },
-        ],
-      },
-    },
-    panels: {
-      chat:    { id: "chat",     contentComponent: "chat",     title: "Chat" },
-      tree:    { id: "tree",     contentComponent: "tree",     title: "Files" },
-      viewer:  { id: "viewer",   contentComponent: "viewer",   title: "Editor" },
-    },
-    activeGroup: "chat-region",
-  };
-}
+// Default layout is built via `api.addPanel` (not fromJSON) so params are
+// wired at creation — see `onReady` below.
 
 // ────────────────────────────────────────────────────────────────────────
 
@@ -220,16 +192,37 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
 
   function onReady(event: DockviewReadyEvent) {
     apiRef.current = event.api;
+
+    // Build the default layout panel-by-panel so each panel's `params`
+    // is set at creation time (fromJSON skips params).
+    const paramsObj = ctx as unknown as Record<string, unknown>;
     try {
-      event.api.fromJSON(buildDefaultLayout() as never);
+      const chatPanel = event.api.addPanel({
+        id: "chat",
+        component: "chat",
+        title: "Chat",
+        params: paramsObj,
+      });
+      event.api.addPanel({
+        id: "viewer",
+        component: "viewer",
+        title: "Editor",
+        params: paramsObj,
+        position: { referencePanel: chatPanel.id, direction: "right" },
+      });
+      event.api.addPanel({
+        id: "tree",
+        component: "tree",
+        title: "Files",
+        params: paramsObj,
+        position: { referencePanel: "viewer", direction: "left" },
+      });
     } catch (err) {
-      console.error("[ide] failed to apply default layout", err);
+      console.error("[ide] default-layout build failed", err);
     }
-    for (const panel of event.api.panels) {
-      panel.api.updateParameters(ctx as unknown as Record<string, unknown>);
-    }
+
     // Expose a window-scoped API so the file tree / branch header can
-    // request diff tabs without prop drilling through dockview's params.
+    // request diff tabs without prop drilling.
     (window as unknown as Record<string, unknown>).__ideOpenDiff = (
       filePath: string,
       opts?: { fromRef?: string; toRef?: string },
