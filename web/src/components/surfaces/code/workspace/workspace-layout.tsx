@@ -109,7 +109,11 @@ interface FilePanelParams extends WorkspaceContext {
   filePath: string;
 }
 function FileRegion(props: IDockviewPanelProps<FilePanelParams>) {
-  const { workspace, filePath } = safeCtx(props.params) as FilePanelParams;
+  // Important: don't run params through safeCtx — it'd drop filePath
+  // (the shim only knows WorkspaceContext fields). Read directly.
+  const params = (props.params ?? {}) as Partial<FilePanelParams>;
+  const workspace = params.workspace ?? null;
+  const filePath = params.filePath;
   if (!workspace || !filePath) {
     return (
       <div className="dv-region-body p-4 text-xs text-muted-foreground">
@@ -127,9 +131,13 @@ function FileRegion(props: IDockviewPanelProps<FilePanelParams>) {
 function TerminalRegion(props: IDockviewPanelProps<WorkspaceContext>) {
   const { workspace, slots } = safeCtx(props.params);
   if (slots.terminal) return <div className="dv-region-body">{slots.terminal}</div>;
+  // sessionKey = panel id → each terminal panel gets its own PTY (without
+  // this, two `terminal-*` panels share one shell and show identical output).
   return (
     <div className="dv-region-body">
-      {workspace ? <TerminalPanel workspace={workspace} visible /> : (
+      {workspace ? (
+        <TerminalPanel workspace={workspace} sessionKey={props.api.id} visible />
+      ) : (
         <div className="p-4 text-xs text-muted-foreground">Open a folder first.</div>
       )}
     </div>
@@ -148,8 +156,12 @@ interface DiffPanelParams extends WorkspaceContext {
 }
 
 function DiffRegion(props: IDockviewPanelProps<DiffPanelParams>) {
-  const { workspace, filePath, fromRef, toRef } = props.params;
-  if (!workspace) {
+  // Same as FileRegion — read params directly so filePath / fromRef /
+  // toRef survive the dockview panel-mount race.
+  const params = (props.params ?? {}) as Partial<DiffPanelParams>;
+  const workspace = params.workspace ?? null;
+  const filePath = params.filePath ?? "";
+  if (!workspace || !filePath) {
     return (
       <div className="dv-region-body p-4 text-xs text-muted-foreground">
         No workspace selected.
@@ -161,8 +173,8 @@ function DiffRegion(props: IDockviewPanelProps<DiffPanelParams>) {
       <DiffViewer
         workspace={workspace}
         filePath={filePath}
-        fromRef={fromRef}
-        toRef={toRef}
+        fromRef={params.fromRef}
+        toRef={params.toRef}
         onClose={() => props.api.close()}
       />
     </div>

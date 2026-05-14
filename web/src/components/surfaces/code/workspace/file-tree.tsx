@@ -8,6 +8,7 @@ import { FileTreeFilter } from "./file-tree-filter";
 import { FileTreeNode } from "./file-tree-node";
 import { useFileTree, type FlatNode } from "@/hooks/use-file-tree";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
+import { useGitStatus } from "@/hooks/use-git-status";
 import type { FsNode } from "@/lib/code-workspace/types";
 
 const ROW_HEIGHT = 22;
@@ -24,6 +25,9 @@ interface RowData {
   onToggle: (path: string) => void;
   onActivate: (node: FsNode, evt: { meta: boolean; shift: boolean; alt: boolean }) => void;
   onPin: (node: FsNode) => void;
+  /** path → git status flag ("M"/"A"/"D"/"U"/"R"). */
+  gitFlags: Record<string, "M" | "A" | "D" | "U" | "R">;
+  onDiffClick: (node: FsNode) => void;
 }
 
 function Row({
@@ -33,6 +37,8 @@ function Row({
   onToggle,
   onActivate,
   onPin,
+  gitFlags,
+  onDiffClick,
 }: RowComponentProps<RowData>) {
   const item = flatNodes[index];
   if (!item) return null;
@@ -46,6 +52,8 @@ function Row({
         onToggleExpand={onToggle}
         onActivate={onActivate}
         onPin={onPin}
+        gitFlag={gitFlags[item.node.path]}
+        onDiffClick={onDiffClick}
       />
     </div>
   );
@@ -61,7 +69,28 @@ function Row({
 export function FileTree({ workspace, onClose }: FileTreeProps) {
   const tree = useFileTree(workspace);
   const { openTab } = useCodeWorkspace(workspace);
+  const { status: gitStatus } = useGitStatus(workspace);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Build a path → status-flag lookup the tree row can render.
+  const gitFlags = useMemo<Record<string, "M" | "A" | "D" | "U" | "R">>(() => {
+    if (!gitStatus || !workspace) return {};
+    const out: Record<string, "M" | "A" | "D" | "U" | "R"> = {};
+    for (const f of gitStatus.files) {
+      // Tree paths are absolute; git returns workspace-relative.
+      const abs = `${workspace.replace(/\/+$/, "")}/${f.path}`;
+      const flag =
+        f.status === "modified" ? "M" :
+        f.status === "added" ? "A" :
+        f.status === "deleted" ? "D" :
+        f.status === "untracked" ? "U" :
+        f.status === "renamed" ? "R" :
+        f.status === "staged" ? "M" :
+        f.status === "conflicted" ? "U" : null;
+      if (flag) out[abs] = flag;
+    }
+    return out;
+  }, [gitStatus, workspace]);
 
   // Click → open as a dockview tab in the editor group. The window-scoped
   // __ideOpenFile / __ideOpenDiff helpers (registered by
@@ -111,9 +140,11 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
       onToggle: tree.toggleExpand,
       onActivate: handleActivate,
       onPin: handlePin,
+      gitFlags,
+      onDiffClick: openDiff,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tree.flatNodes, tree.toggleExpand, workspace],
+    [tree.flatNodes, tree.toggleExpand, workspace, gitFlags],
   );
 
   const shouldVirtualize = tree.flatNodes.length >= VIRTUALIZE_THRESHOLD;
@@ -186,6 +217,8 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
             onToggleExpand={tree.toggleExpand}
             onActivate={handleActivate}
             onPin={handlePin}
+            gitFlag={gitFlags[item.node.path]}
+            onDiffClick={openDiff}
           />
         ))}
       </div>
