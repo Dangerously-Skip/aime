@@ -149,3 +149,4 @@ temp/
 # Claude Code per-user permission grants + scheduled-task lockfile (runtime)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+.claude/worktrees/

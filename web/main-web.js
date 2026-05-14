@@ -8,6 +8,7 @@ const path = require("path");
 const fs = require("fs");
 const net = require("net");
 const setupHandler = require("./setup-handler");
+const ptyManager = require("./src/lib/code-workspace/pty-manager");
 
 // Bash-produced artifact paths often contain a literal `~` (e.g. the nib-ppt
 // generate_presentation.sh script writes to `~/foo.pptx`). Node fs APIs do not
@@ -939,6 +940,12 @@ app.on("before-quit", async (event) => {
   // finishes, dropping the queued events with it.
   event.preventDefault();
   isQuitting = true;
+  // Tear down any live PTYs so child shells don't linger after Quarry exits.
+  try {
+    ptyManager.closeAll();
+  } catch (err) {
+    console.warn("[pty] closeAll on quit failed:", err?.message);
+  }
   try {
     await sendLifecycleEvent('close');
   } catch {}
@@ -1139,4 +1146,608 @@ ipcMain.handle("open-connector-auth-window", async (_event, url, callbackPath) =
 
     authWindow.loadURL(url);
   });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// IDE workspace — Wave 1 stubs.
+//
+// Wave 2 agents replace these handlers with real implementations:
+//   - Agent A (Phase 1): fs:walk, fs:read, fs:watch-start, fs:watch-stop,
+//     fs:change broadcast
+//   - Agent B (Phase 2): git:status, git:diff
+//   - Agent C (Phase 3): git:branches, git:log, git:blame
+//   - Agent D (Phase 4): pty:open, pty:input, pty:resize, pty:close,
+//     pty:output/exit broadcasts
+//
+// Each stub returns a safe default so the renderer doesn't crash if the
+// real implementation hasn't landed.
+// ──────────────────────────────────────────────────────────────────────
+
+// ── Filesystem (Agent A / Phase 1) ────────────────────────────────────
+//
+// Walks directories one level at a time, reads files as utf-8 (binary
+// detection returns null), and runs a chokidar watcher per workspace.
+// fs:change events are broadcast to every BrowserWindow so multiple
+// renderer subscribers can listen in.
+const codeWorkspaceFs = require("./lib/code-workspace-fs");
+
+ipcMain.handle("fs:walk", async (_event, dirPath, opts) => {
+  if (!dirPath || typeof dirPath !== "string") return [];
+  const expanded = expandHome(dirPath);
+  // The first call from the renderer is always at the workspace root, so
+  // we treat the requested path as the gitignore boundary for that call.
+  // For deeper expansions the renderer still passes the original root via
+  // opts.workspaceRoot if needed; default to the requested path.
+  const root = (opts && typeof opts.workspaceRoot === "string")
+    ? expandHome(opts.workspaceRoot)
+    : expanded;
+  const result = codeWorkspaceFs.walkOne(root, expanded, {
+    respectGitignore: opts?.respectGitignore !== false,
+  });
+  if (result.error) {
+    console.warn(`[fs:walk] ${expanded}:`, result.error);
+    return [];
+  }
+  return result.nodes;
+});
+
+ipcMain.handle("fs:read", async (_event, filePath) => {
+  if (!filePath || typeof filePath !== "string") return null;
+  const expanded = expandHome(filePath);
+  const result = codeWorkspaceFs.readFileSafe(expanded);
+  if (result.error) {
+    console.warn(`[fs:read] ${expanded}:`, result.error);
+    return null;
+  }
+  if (result.binary) {
+    return { content: "", encoding: "binary", binary: true, size: result.size ?? 0 };
+  }
+  return { content: result.content, encoding: result.encoding, size: result.size };
+});
+
+// Active watchers keyed by their generated id.
+const fsWatchers = new Map();
+let nextWatchId = 1;
+// Lazy ESM import of chokidar 5 from CJS main.
+let _chokidarPromise = null;
+function loadChokidar() {
+  if (!_chokidarPromise) _chokidarPromise = import("chokidar");
+  return _chokidarPromise;
+}
+
+function broadcastFsChange(payload) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      try { win.webContents.send("fs:change", payload); } catch {}
+    }
+  }
+}
+
+ipcMain.handle("fs:watch-start", async (_event, watchPath) => {
+  if (!watchPath || typeof watchPath !== "string") return null;
+  const expanded = expandHome(watchPath);
+  let chokidar;
+  try {
+    chokidar = await loadChokidar();
+  } catch (err) {
+    console.warn("[fs:watch-start] chokidar import failed:", err && err.message);
+    return null;
+  }
+
+  const watchId = `w${nextWatchId++}`;
+  let debounceTimer = null;
+  let pending = [];
+  const flush = () => {
+    const batch = pending;
+    pending = [];
+    debounceTimer = null;
+    for (const evt of batch) broadcastFsChange(evt);
+  };
+  const emit = (kind, changedPath) => {
+    pending.push({ watchId, path: changedPath, kind });
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(flush, 150);
+  };
+
+  let watcher;
+  try {
+    watcher = chokidar.watch(expanded, {
+      ignored: (p) =>
+        /(^|[\\/])(\.git|node_modules|\.next|dist|\.DS_Store)([\\/]|$)/.test(p),
+      ignoreInitial: true,
+      persistent: true,
+      awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
+      depth: 99,
+    });
+  } catch (err) {
+    console.warn(`[fs:watch-start] ${expanded}:`, err && err.message);
+    return null;
+  }
+
+  watcher
+    .on("add", (p) => emit("add", p))
+    .on("change", (p) => emit("change", p))
+    .on("unlink", (p) => emit("delete", p))
+    .on("addDir", (p) => emit("add", p))
+    .on("unlinkDir", (p) => emit("delete", p))
+    .on("error", (err) => console.warn(`[fs:watch ${watchId}]`, err && err.message));
+
+  fsWatchers.set(watchId, watcher);
+  return watchId;
+});
+
+ipcMain.handle("fs:watch-stop", async (_event, watchId) => {
+  const watcher = fsWatchers.get(watchId);
+  if (!watcher) return;
+  fsWatchers.delete(watchId);
+  try { await watcher.close(); } catch {}
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Git — shared `runGit` helper used by Agent B (status/diff) and Agent C
+// (branches/log/blame/push) handlers below.
+//
+// Binary-safe: stdout returned as Buffer so callers like
+// `git status --porcelain -z` and binary-file diffs don't get utf-8
+// mangled. Throws on non-zero exit; tolerant callers wrap via runGitSafe.
+//
+// Mirrors the TypeScript helper at
+// `web/src/lib/code-workspace/git-ops.ts` (kept inline because main-web.js
+// is plain Node CJS and can't `require` a `.ts` file).
+// ──────────────────────────────────────────────────────────────────────
+
+const { spawn } = require("child_process");
+
+/**
+ * @param {string} cwd
+ * @param {string[]} args
+ * @param {{ timeoutMs?: number; maxBufferBytes?: number }} [opts]
+ * @returns {Promise<{ stdout: Buffer, stderr: string, code: number }>}
+ */
+function runGit(cwd, args, opts = {}) {
+  if (!cwd || typeof cwd !== "string") {
+    return Promise.reject(new Error("runGit: cwd is required"));
+  }
+  if (!fs.existsSync(cwd)) {
+    return Promise.reject(new Error(`runGit: cwd does not exist: ${cwd}`));
+  }
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const maxBufferBytes = opts.maxBufferBytes ?? 16 * 1024 * 1024;
+
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+    });
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let stdoutBytes = 0;
+    let truncated = false;
+    child.stdout.on("data", (b) => {
+      if (stdoutBytes + b.length > maxBufferBytes) {
+        if (!truncated) {
+          const remaining = Math.max(0, maxBufferBytes - stdoutBytes);
+          if (remaining > 0) {
+            stdoutChunks.push(b.slice(0, remaining));
+            stdoutBytes += remaining;
+          }
+          truncated = true;
+          try { child.kill("SIGTERM"); } catch {}
+        }
+        return;
+      }
+      stdoutChunks.push(b);
+      stdoutBytes += b.length;
+    });
+    child.stderr.on("data", (b) => stderrChunks.push(b));
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      reject(new Error(`runGit: timed out after ${timeoutMs}ms — git ${args.join(" ")}`));
+    }, timeoutMs);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const stdout = Buffer.concat(stdoutChunks);
+      const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+      if (code !== 0) {
+        reject(new Error(`git ${args.join(" ")} (exit ${code}): ${stderr.trim() || "no stderr"}`));
+        return;
+      }
+      resolve({ stdout, stderr, code: code ?? 0 });
+    });
+  });
+}
+
+/**
+ * Tolerant wrapper used by Agent C's handlers. Never throws — returns
+ * `{ ok, stdout (utf-8 string), stderr, code }` so callers can handle
+ * "not a repo" / "no commits" without try/catch.
+ */
+async function runGitSafe(cwd, args, opts) {
+  try {
+    const { stdout, stderr, code } = await runGit(cwd, args, opts);
+    return { ok: true, stdout: stdout.toString("utf-8"), stderr, code };
+  } catch (err) {
+    return { ok: false, stdout: "", stderr: err && err.message ? err.message : String(err), code: -1 };
+  }
+}
+
+async function runGitText(cwd, args, opts) {
+  const { stdout } = await runGit(cwd, args, opts);
+  return stdout.toString("utf-8");
+}
+
+/**
+ * Parse `git status --porcelain=v1 -z` output into structured entries.
+ * The `-z` format is: `XY <path>\0` (renames are `XY <new>\0<old>\0`).
+ * X is the index status, Y is the worktree status.
+ */
+function parsePorcelainZ(buf) {
+  const text = buf.toString("utf-8");
+  const records = text.split("\0");
+  const out = [];
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    if (!r) continue;
+    if (r.length < 3) continue;
+    const x = r[0];
+    const y = r[1];
+    const path = r.slice(3);
+    // Renames carry the old path in the next NUL chunk; skip it so we don't
+    // try to parse "old name" as a fresh entry.
+    let isRename = false;
+    if (x === "R" || y === "R" || x === "C" || y === "C") {
+      isRename = true;
+      i++; // consume old-name field
+    }
+    out.push({ x, y, path, isRename });
+  }
+  return out;
+}
+
+/** Map porcelain X/Y to our GitFileStatus enum. */
+function statusFromPorcelain(x, y) {
+  if (x === "?" && y === "?") return "untracked";
+  if (x === "U" || y === "U" || (x === "A" && y === "A") || (x === "D" && y === "D")) {
+    return "conflicted";
+  }
+  if (x === "R" || y === "R") return "renamed";
+  // Index has a change → staged. Worktree-only changes are "modified" /
+  // "added" / "deleted".
+  if (x !== " " && x !== "?") {
+    if (x === "A") return "added";
+    if (x === "D") return "deleted";
+    return "staged";
+  }
+  if (y === "M") return "modified";
+  if (y === "A") return "added";
+  if (y === "D") return "deleted";
+  return "modified";
+}
+
+// `git:status` — Wave 2 (Agent B)
+//
+// Caches the most recent result per cwd for 500ms — Agent A's file watcher
+// fires rapidly during npm installs / bulk edits and we don't want to
+// thrash git on every event.
+const _gitStatusCache = new Map(); // cwd → { result, expiresAt, inflight }
+
+ipcMain.handle("git:status", async (_event, cwd) => {
+  if (!cwd) return null;
+  const now = Date.now();
+  const cached = _gitStatusCache.get(cwd);
+  if (cached && cached.expiresAt > now) {
+    if (cached.inflight) return cached.inflight; // share inflight promise
+    return cached.result;
+  }
+
+  const work = (async () => {
+    // Branch name. `--abbrev-ref HEAD` returns "HEAD" if detached.
+    let branch = "";
+    try {
+      branch = (await runGitText(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+    } catch {
+      // Not a git repo, or git command failed
+      return null;
+    }
+
+    // Upstream (may not exist for un-pushed branches)
+    let upstream = null;
+    try {
+      upstream = (
+        await runGitText(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "HEAD@{upstream}"])
+      ).trim();
+    } catch {
+      upstream = null;
+    }
+
+    // Base ref for ahead/behind. Prefer the upstream; fall back to
+    // `origin/HEAD` when there's no upstream set.
+    let baseRef = upstream;
+    if (!baseRef) {
+      try {
+        baseRef = (await runGitText(cwd, ["rev-parse", "--abbrev-ref", "origin/HEAD"])).trim();
+        if (baseRef === "origin/HEAD" || baseRef.startsWith("HEAD") || !baseRef) baseRef = null;
+      } catch {
+        baseRef = null;
+      }
+    }
+
+    // Ahead / behind. `--left-right --count base..HEAD` prints
+    // "<behind>\t<ahead>" — behind is commits in base not in HEAD.
+    let ahead = 0;
+    let behind = 0;
+    if (baseRef) {
+      try {
+        const counts = (
+          await runGitText(cwd, ["rev-list", "--left-right", "--count", `${baseRef}...HEAD`])
+        ).trim();
+        const parts = counts.split(/\s+/);
+        if (parts.length === 2) {
+          behind = parseInt(parts[0], 10) || 0;
+          ahead = parseInt(parts[1], 10) || 0;
+        }
+      } catch {
+        // ignore — leave 0/0
+      }
+    }
+
+    // File list via porcelain -z (binary-safe).
+    let entries = [];
+    try {
+      const { stdout } = await runGit(cwd, ["status", "--porcelain=v1", "-z"]);
+      entries = parsePorcelainZ(stdout);
+    } catch {
+      entries = [];
+    }
+
+    // Per-file numstat for additions/deletions on tracked changes.
+    // `git diff --numstat` covers worktree-vs-HEAD; binary files appear as
+    // "- - <path>".
+    const numstat = new Map(); // path → { additions, deletions }
+    try {
+      const text = await runGitText(cwd, ["diff", "--numstat", "HEAD"]);
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+        const m = line.match(/^(\S+)\s+(\S+)\s+(.+)$/);
+        if (!m) continue;
+        const adds = m[1] === "-" ? undefined : parseInt(m[1], 10);
+        const dels = m[2] === "-" ? undefined : parseInt(m[2], 10);
+        numstat.set(m[3], { additions: adds, deletions: dels });
+      }
+    } catch {
+      // No HEAD yet (fresh repo) — skip numstat silently.
+    }
+
+    const files = entries.map((e) => {
+      const status = statusFromPorcelain(e.x, e.y);
+      const ns = numstat.get(e.path);
+      return {
+        path: e.path,
+        status,
+        additions: ns?.additions,
+        deletions: ns?.deletions,
+      };
+    });
+
+    return {
+      branch: branch || "HEAD",
+      baseBranch: baseRef,
+      ahead,
+      behind,
+      files,
+    };
+  })();
+
+  // Share the inflight promise to dedupe concurrent callers
+  _gitStatusCache.set(cwd, { inflight: work, expiresAt: now + 500, result: null });
+  try {
+    const result = await work;
+    _gitStatusCache.set(cwd, { inflight: null, result, expiresAt: Date.now() + 500 });
+    return result;
+  } catch (err) {
+    // On failure clear the cache so the next call retries
+    _gitStatusCache.delete(cwd);
+    console.warn("[git:status] failed:", err.message);
+    return null;
+  }
+});
+
+// `git:diff` — Wave 2 (Agent B)
+//
+// Args:
+//   - opts.fromRef / opts.toRef: refs to diff between. If both omitted,
+//     defaults to working-tree vs HEAD.
+//   - opts.path: scope to a single file.
+// Returns the raw unified diff string. Empty string when there's no diff.
+ipcMain.handle("git:diff", async (_event, cwd, opts) => {
+  if (!cwd) return "";
+  const o = opts || {};
+  const args = ["diff", "--no-color"];
+
+  if (o.fromRef && o.toRef) {
+    // Two-ref diff
+    args.push(`${o.fromRef}..${o.toRef}`);
+  } else if (o.fromRef && !o.toRef) {
+    // From ref → working tree
+    args.push(o.fromRef);
+  } else if (!o.fromRef && o.toRef) {
+    // HEAD → ref (committed only — keeps semantics predictable)
+    args.push(`HEAD..${o.toRef}`);
+  }
+  // Else: no refs → default working-tree-vs-HEAD ("git diff" with no
+  // refs already does this).
+
+  if (o.path) {
+    args.push("--", o.path);
+  }
+
+  try {
+    return await runGitText(cwd, args, { timeoutMs: 15_000 });
+  } catch (err) {
+    console.warn("[git:diff] failed:", err.message);
+    return "";
+  }
+});
+
+// ── Agent C: git:branches / git:log / git:blame / git:push ────────────
+// Uses runGitSafe (the tolerant wrapper above) so "not a repo" / "no commits"
+// degrade gracefully without try/catch.
+
+ipcMain.handle("git:branches", async (_event, cwd) => {
+  if (!cwd) return [];
+  const { ok, stdout } = await runGitSafe(cwd, [
+    "for-each-ref",
+    "--sort=-committerdate",
+    "--format=%(refname:short)",
+    "refs/heads",
+    "refs/remotes",
+  ]);
+  if (!ok) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of stdout.split("\n")) {
+    const name = raw.trim();
+    if (!name) continue;
+    if (name === "origin/HEAD" || name.endsWith("/HEAD")) continue;
+    const base = name.replace(/^origin\//, "");
+    if (seen.has(base)) continue;
+    seen.add(base);
+    out.push(name);
+  }
+  return out;
+});
+
+ipcMain.handle("git:log", async (_event, cwd, opts) => {
+  if (!cwd) return [];
+  const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
+  const SEP = "\x1f"; // ASCII US — separates fields
+  const REC = "\x1e"; // ASCII RS — separates records
+  const args = [
+    "log",
+    `-${limit}`,
+    `--pretty=format:%H${SEP}%h${SEP}%an${SEP}%aI${SEP}%s${SEP}%b${REC}`,
+  ];
+  if (opts?.path) {
+    args.push("--follow", "--", opts.path);
+  }
+  const { ok, stdout } = await runGitSafe(cwd, args);
+  if (!ok) return [];
+  const commits = [];
+  for (const record of stdout.split(REC)) {
+    const trimmed = record.replace(/^\n+/, "");
+    if (!trimmed) continue;
+    const parts = trimmed.split(SEP);
+    if (parts.length < 5) continue;
+    const [hash, shortHash, author, date, subject, body = ""] = parts;
+    commits.push({
+      hash,
+      shortHash,
+      author,
+      date,
+      subject,
+      body: body.trim() || undefined,
+    });
+  }
+  return commits;
+});
+
+ipcMain.handle("git:blame", async (_event, cwd, filePath) => {
+  if (!cwd || !filePath) return [];
+  const { ok, stdout } = await runGitSafe(cwd, [
+    "blame",
+    "--porcelain",
+    "--",
+    filePath,
+  ]);
+  if (!ok) return [];
+  const meta = new Map();
+  const out = [];
+  const lines = stdout.split("\n");
+  let curHash = "";
+  let curAuthor = "";
+  let curDate = "";
+  let lineNumber = 0;
+  for (let i = 0; i < lines.length && out.length < 5000; i++) {
+    const line = lines[i];
+    if (!line.length) continue;
+    if (line.startsWith("\t")) {
+      out.push({
+        hash: curHash.slice(0, 8),
+        author: curAuthor || "unknown",
+        date: curDate ? new Date(parseInt(curDate, 10) * 1000).toISOString().slice(0, 10) : "",
+        lineNumber: lineNumber++,
+        content: line.slice(1),
+      });
+      continue;
+    }
+    const m = line.match(/^([0-9a-f]{40}) (\d+) (\d+)( \d+)?$/);
+    if (m) {
+      curHash = m[1];
+      lineNumber = parseInt(m[3], 10);
+      const cached = meta.get(curHash);
+      if (cached) {
+        curAuthor = cached.author;
+        curDate = cached.date;
+      } else {
+        curAuthor = "";
+        curDate = "";
+      }
+      continue;
+    }
+    if (line.startsWith("author ")) {
+      curAuthor = line.slice("author ".length);
+      meta.set(curHash, { ...(meta.get(curHash) || {}), author: curAuthor });
+    } else if (line.startsWith("author-time ")) {
+      curDate = line.slice("author-time ".length);
+      meta.set(curHash, { ...(meta.get(curHash) || {}), date: curDate });
+    }
+  }
+  return out;
+});
+
+ipcMain.handle("git:push", async (_event, cwd, branch) => {
+  if (!cwd || !branch) return { ok: false, message: "cwd + branch required" };
+  const { ok, stderr, stdout } = await runGitSafe(cwd, ["push", "-u", "origin", branch], {
+    timeoutMs: 60000,
+  });
+  return {
+    ok,
+    message: ok ? (stdout || `Pushed ${branch} to origin`) : (stderr || stdout || "push failed").trim(),
+  };
+});
+
+// Open an external URL in the user's default browser. The renderer needs this
+// for the "Create PR" flow → open the PR URL after creation. Tightly scoped to
+// http(s) only; anything else is rejected.
+ipcMain.handle("open-external", async (_event, url) => {
+  if (typeof url !== "string") return { ok: false };
+  if (!/^https?:\/\//i.test(url)) return { ok: false };
+  await shell.openExternal(url);
+  return { ok: true };
+});
+
+// PTY — backed by src/lib/code-workspace/pty-manager.js (node-pty + xterm.js).
+// pty-manager broadcasts pty:output / pty:exit events to every BrowserWindow
+// itself; the handlers below just plumb the renderer-initiated lifecycle calls.
+ipcMain.handle("pty:open", async (_event, opts) => {
+  try {
+    return ptyManager.open(opts || {});
+  } catch (err) {
+    console.error("[ipc] pty:open failed:", err);
+    return null;
+  }
+});
+ipcMain.handle("pty:input", async (_event, id, data) => {
+  ptyManager.write(id, data);
+});
+ipcMain.handle("pty:resize", async (_event, id, cols, rows) => {
+  ptyManager.resize(id, cols, rows);
+});
+ipcMain.handle("pty:close", async (_event, id) => {
+  ptyManager.close(id);
 });

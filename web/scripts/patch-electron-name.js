@@ -17,6 +17,29 @@ const electronDir = path.join(__dirname, '..', 'node_modules', 'electron', 'dist
 const oldApp = path.join(electronDir, 'Electron.app');
 const newApp = path.join(electronDir, `${APP_NAME}.app`);
 
+// node-pty's spawn-helper binary sometimes loses its executable bit when
+// extracted from the npm tarball. Without +x, `pty.fork` fails with
+// `posix_spawnp failed` and the terminal panel can't open. Fix it here so
+// every fresh install has a working PTY out of the box.
+function fixNodePtySpawnHelper() {
+  if (process.platform === 'win32') return;
+  const prebuilds = path.join(__dirname, '..', 'node_modules', 'node-pty', 'prebuilds');
+  if (!fs.existsSync(prebuilds)) return;
+  for (const variant of fs.readdirSync(prebuilds)) {
+    const helper = path.join(prebuilds, variant, 'spawn-helper');
+    try {
+      const st = fs.statSync(helper);
+      if ((st.mode & 0o111) === 0) {
+        fs.chmodSync(helper, st.mode | 0o755);
+        console.log(`Marked node-pty spawn-helper executable: ${variant}`);
+      }
+    } catch {
+      // not present on this platform — skip
+    }
+  }
+}
+fixNodePtySpawnHelper();
+
 // Only run on macOS
 if (process.platform !== 'darwin') {
   console.log('Skipping Electron rename (not macOS)');
