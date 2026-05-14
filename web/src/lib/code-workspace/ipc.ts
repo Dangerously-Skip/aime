@@ -31,6 +31,8 @@ type ElectronBridge = {
   gitBranches?: (cwd: string) => Promise<string[]>;
   gitLog?: (cwd: string, opts?: { path?: string; limit?: number }) => Promise<GitCommit[]>;
   gitBlame?: (cwd: string, path: string) => Promise<BlameLine[]>;
+  gitPush?: (cwd: string, branch: string) => Promise<{ ok: boolean; message: string }>;
+  openExternal?: (url: string) => Promise<{ ok: boolean }>;
 
   // PTY
   ptyOpen?: (opts: { cwd: string; cols: number; rows: number }) => Promise<PtySession>;
@@ -99,6 +101,20 @@ export async function getGitLog(
 
 export async function getGitBlame(cwd: string, path: string): Promise<BlameLine[]> {
   return (await bridge().gitBlame?.(cwd, path)) ?? [];
+}
+
+export async function pushGitBranch(cwd: string, branch: string): Promise<{ ok: boolean; message: string }> {
+  return (
+    (await bridge().gitPush?.(cwd, branch)) ?? {
+      ok: false,
+      message: "Electron bridge unavailable",
+    }
+  );
+}
+
+export async function openExternalUrl(url: string): Promise<boolean> {
+  const res = await bridge().openExternal?.(url);
+  return !!res?.ok;
 }
 
 // ── PTY ────────────────────────────────────────────────────────────────────

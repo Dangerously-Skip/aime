@@ -2,8 +2,6 @@
 
 import {
   FolderTree,
-  GitBranch,
-  GitCommit,
   Terminal,
   FileText,
   MessageSquare,
@@ -66,16 +64,3 @@ export function ChatPlaceholder({ onClose }: { onClose?: () => void }) {
   );
 }
 
-export function BranchHeaderPlaceholder() {
-  return (
-    <div className="flex items-center h-10 px-3 border-b border-border/40 bg-muted/20 gap-2">
-      <GitBranch className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={1.75} />
-      <span className="text-xs font-medium text-foreground/80">main</span>
-      <span className="text-xs text-muted-foreground">←</span>
-      <span className="text-xs font-mono text-muted-foreground">no branch</span>
-      <div className="flex-1" />
-      <GitCommit className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={1.75} />
-      <span className="text-xs text-muted-foreground">history — Phase 3</span>
-    </div>
-  );
-}
