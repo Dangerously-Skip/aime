@@ -10,6 +10,9 @@ import { getExt, MAX_AUTO_LOAD_BYTES } from "@/lib/code-workspace/fs-tree";
 
 interface ViewerPaneProps {
   workspace: string | null;
+  /** Direct path override — when set, ignore the store's activeTab and
+   *  render this file (used by per-file dockview tabs). */
+  forcedPath?: string;
 }
 
 interface FileLoadState {
@@ -37,7 +40,7 @@ const EMPTY_LOAD: FileLoadState = {
  * pipeline by extension; diff tabs are stubbed (Phase 2 / Agent B owns
  * diff rendering).
  */
-export function ViewerPane({ workspace }: ViewerPaneProps) {
+export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
   const { activeTab } = useCodeWorkspace(workspace);
   const [load, setLoad] = useState<FileLoadState>(EMPTY_LOAD);
 
@@ -48,7 +51,9 @@ export function ViewerPane({ workspace }: ViewerPaneProps) {
   };
   const [overrideLarge, setOverrideLarge] = useState(false);
 
-  const path = activeTab?.kind === "file" ? activeTab.path : null;
+  // `forcedPath` (from a per-file dockview tab) wins. Falls back to the
+  // store's activeTab when used in the legacy single-pane mode.
+  const path = forcedPath ?? (activeTab?.kind === "file" ? activeTab.path : null);
   const ext = useMemo(() => (path ? getExt(path) : ""), [path]);
   const name = useMemo(() => {
     if (!path) return "";

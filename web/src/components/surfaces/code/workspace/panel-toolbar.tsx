@@ -6,6 +6,7 @@ import {
   PanelRight,
   PanelBottom,
   RotateCcw,
+  Plus,
 } from "lucide-react";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import type { PanelSlot } from "@/lib/code-workspace/types";
@@ -69,6 +70,20 @@ export function PanelToolbar({ workspace }: PanelToolbarProps) {
         aria-pressed={layout.visible.chat}
       >
         <PanelRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (typeof window === "undefined") return;
+          const open = (window as unknown as Record<string, unknown>).__ideOpenTerminal as
+            | (() => void)
+            | undefined;
+          open?.();
+        }}
+        className="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+        title="New terminal"
+      >
+        <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
       </button>
       <button
         type="button"

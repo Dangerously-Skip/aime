@@ -63,22 +63,33 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
   const { openTab } = useCodeWorkspace(workspace);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // Click → open as a dockview tab in the editor group. The window-scoped
+  // __ideOpenFile helper (registered by WorkspaceLayout.onReady) handles
+  // dedupe — clicking a file that's already open just focuses its tab.
+  // We also keep the store's openTab in sync so the legacy TabStrip view
+  // (if anyone still mounts it) reflects the active tab.
+  const openInEditor = (node: FsNode, pinned: boolean) => {
+    if (node.type !== "file") return;
+    if (typeof window !== "undefined") {
+      const open = (window as unknown as Record<string, unknown>).__ideOpenFile as
+        | ((path: string) => void)
+        | undefined;
+      open?.(node.path);
+    }
+    openTab({ id: node.path, kind: "file", path: node.path, pinned });
+  };
+
   const handleActivate = (
     node: FsNode,
     evt: { meta: boolean; shift: boolean },
   ) => {
     if (node.type !== "file") return;
-    // Cmd-click → open as additional pinned tab (don't replace preview).
-    if (evt.meta) {
-      openTab({ id: node.path, kind: "file", path: node.path, pinned: true });
-      return;
-    }
-    openTab({ id: node.path, kind: "file", path: node.path, pinned: false });
+    // Cmd-click → pinned (won't be replaced by the next preview click).
+    openInEditor(node, evt.meta);
   };
 
   const handlePin = (node: FsNode) => {
-    if (node.type !== "file") return;
-    openTab({ id: node.path, kind: "file", path: node.path, pinned: true });
+    openInEditor(node, true);
   };
 
   const rowData = useMemo<RowData>(
