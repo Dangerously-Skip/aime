@@ -31,6 +31,13 @@ export interface WorkspaceLayout {
   openTabs: WorkspaceTab[];
   /** Tab ID currently active. */
   activeTabId: string | null;
+  /**
+   * Opaque snapshot of dockview's layout (`api.toJSON()` output). We treat
+   * it as a black box and pass it back to `api.fromJSON()` on mount. Null
+   * when the user has never customised the layout — we fall back to the
+   * default build path in workspace-layout's onReady.
+   */
+  dockviewLayout?: unknown;
 }
 
 export interface WorkspaceTab {

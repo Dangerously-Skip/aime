@@ -7,6 +7,7 @@ import {
   PanelBottom,
   RotateCcw,
   Plus,
+  HelpCircle,
 } from "lucide-react";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import type { PanelSlot } from "@/lib/code-workspace/types";
@@ -84,6 +85,18 @@ export function PanelToolbar({ workspace }: PanelToolbarProps) {
         title="New terminal"
       >
         <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (typeof window === "undefined") return;
+          // Dispatch a synthetic `?` so the global KeybindHelp listener picks it up.
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
+        }}
+        className="h-7 w-7 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+        title="Keyboard shortcuts (?)"
+      >
+        <HelpCircle className="h-3.5 w-3.5" strokeWidth={1.75} />
       </button>
       <button
         type="button"

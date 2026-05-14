@@ -18,6 +18,8 @@ import { FileTree } from "./file-tree";
 import { TabStrip } from "./tab-strip";
 import { ViewerPane } from "./viewer-pane";
 import { DiffViewer } from "./diff-viewer";
+import { StatusBar } from "./status-bar";
+import { KeybindHelp } from "./keybind-help";
 import dynamic from "next/dynamic";
 import "dockview/dist/styles/dockview.css";
 import "./workspace-dockview.css";
@@ -227,9 +229,12 @@ function useDockviewTheme(): DockviewTheme {
 }
 
 export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: WorkspaceLayoutProps) {
-  const { layout } = useCodeWorkspace(workspace);
+  const { layout, setDockviewLayout } = useCodeWorkspace(workspace);
   const apiRef = useRef<DockviewApi | null>(null);
   const dockviewTheme = useDockviewTheme();
+  // Snapshot saving is debounced — dockview fires lots of micro-events
+  // during a single drag (sash, panel-move, focus, etc.).
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string | null>(null);
@@ -249,33 +254,76 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
   function onReady(event: DockviewReadyEvent) {
     apiRef.current = event.api;
 
-    // Build the default layout panel-by-panel so each panel's `params`
-    // is set at creation time (fromJSON skips params).
+    // Restore saved snapshot if we have one. fromJSON discards params,
+    // so we stamp them back onto every panel afterwards.
     const paramsObj = ctx as unknown as Record<string, unknown>;
-    try {
-      const chatPanel = event.api.addPanel({
-        id: "chat",
-        component: "chat",
-        title: "Chat",
-        params: paramsObj,
-      });
-      event.api.addPanel({
-        id: "viewer",
-        component: "viewer",
-        title: "Editor",
-        params: paramsObj,
-        position: { referencePanel: chatPanel.id, direction: "right" },
-      });
-      event.api.addPanel({
-        id: "tree",
-        component: "tree",
-        title: "Files",
-        params: paramsObj,
-        position: { referencePanel: "viewer", direction: "left" },
-      });
-    } catch (err) {
-      console.error("[ide] default-layout build failed", err);
+    const saved = layout.dockviewLayout;
+    let restored = false;
+    if (saved && typeof saved === "object") {
+      try {
+        event.api.fromJSON(saved as never);
+        restored = true;
+        for (const panel of event.api.panels) {
+          // Carry forward any per-panel params we know about (filePath /
+          // refs for file + diff tabs are baked into their id so they
+          // can be re-derived).
+          const id = panel.api.id;
+          let extra: Record<string, unknown> = {};
+          if (id.startsWith("file:")) {
+            extra = { filePath: id.slice("file:".length) };
+          } else if (id.startsWith("diff:")) {
+            extra = { filePath: id.slice("diff:".length) };
+          }
+          panel.api.updateParameters({ ...paramsObj, ...extra });
+        }
+      } catch (err) {
+        console.warn("[ide] failed to restore saved layout — falling back to default", err);
+        restored = false;
+      }
     }
+    if (!restored) {
+      try {
+        const chatPanel = event.api.addPanel({
+          id: "chat",
+          component: "chat",
+          title: "Chat",
+          params: paramsObj,
+        });
+        event.api.addPanel({
+          id: "viewer",
+          component: "viewer",
+          title: "Editor",
+          params: paramsObj,
+          position: { referencePanel: chatPanel.id, direction: "right" },
+        });
+        event.api.addPanel({
+          id: "tree",
+          component: "tree",
+          title: "Files",
+          params: paramsObj,
+          position: { referencePanel: "viewer", direction: "left" },
+        });
+      } catch (err) {
+        console.error("[ide] default-layout build failed", err);
+      }
+    }
+
+    // Persist on any layout change — panel move, resize, add, remove,
+    // activeTab change. Debounce so a single drag doesn't fire 30 writes.
+    const persist = () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        try {
+          setDockviewLayout(event.api.toJSON());
+        } catch (err) {
+          console.warn("[ide] toJSON snapshot failed", err);
+        }
+      }, 300);
+    };
+    event.api.onDidLayoutChange(persist);
+    event.api.onDidAddPanel(persist);
+    event.api.onDidRemovePanel(persist);
+    event.api.onDidActivePanelChange(persist);
 
     // Window-scoped API so the file tree / branch header / toolbar can
     // request panels without prop drilling.
@@ -290,11 +338,16 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
         existing.api.setActive();
         return;
       }
+      // When the user hasn't passed an explicit ref, use the branch
+      // picker's current selection as the base. Falls back to working-tree
+      // vs HEAD when both are absent.
+      const fromRef = opts?.fromRef ?? ctx.baseBranch ?? undefined;
+      const toRef = opts?.toRef;
       event.api.addPanel({
         id,
         component: "diff",
         title: filePath.split("/").pop() ?? filePath,
-        params: { ...ctx, filePath, fromRef: opts?.fromRef, toRef: opts?.toRef } as unknown as Record<string, unknown>,
+        params: { ...ctx, filePath, fromRef, toRef } as unknown as Record<string, unknown>,
         position: { referencePanel: "viewer", direction: "within" },
       });
     };
@@ -333,12 +386,20 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
     };
   }
 
-  // Push ctx changes (historyOpen, slots…) to every panel
+  // Push ctx changes (historyOpen, slots, baseBranch…) to every panel.
+  // updateParameters MERGES rather than replaces, so existing per-panel
+  // fields (filePath / fromRef / toRef on file + diff tabs) survive.
   useEffect(() => {
     const api = apiRef.current;
     if (!api) return;
     for (const panel of api.panels) {
       panel.api.updateParameters(ctx as unknown as Record<string, unknown>);
+    }
+    // For diff tabs that weren't given an explicit fromRef, also push
+    // the new baseBranch so they can re-fetch when the picker changes.
+    for (const panel of api.panels) {
+      if (!panel.api.id.startsWith("diff:")) continue;
+      panel.api.updateParameters({ fromRef: baseBranch ?? undefined });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyOpen, slots, workspace, baseBranch]);
@@ -393,6 +454,8 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
           singleTabMode="default"
         />
       </div>
+      <StatusBar workspace={workspace} />
+      <KeybindHelp />
     </div>
   );
 }

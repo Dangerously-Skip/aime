@@ -32,6 +32,8 @@ interface CodeWorkspaceActions {
   setActiveTab: (workspace: string, tabId: string | null) => void;
   pinTab: (workspace: string, tabId: string) => void;
   resetLayout: (workspace: string) => void;
+  /** Persist the dockview JSON snapshot for a workspace. */
+  setDockviewLayout: (workspace: string, layout: unknown) => void;
 }
 
 export type CodeWorkspaceStore = CodeWorkspaceState & CodeWorkspaceActions;
@@ -173,12 +175,22 @@ export const useCodeWorkspaceStore = create<CodeWorkspaceStore>()(
         set((s) => ({
           byWorkspace: { ...s.byWorkspace, [ws]: DEFAULT_WORKSPACE_LAYOUT },
         })),
+
+      setDockviewLayout: (ws, layout) =>
+        set((s) => {
+          const prev = ensure(s, ws);
+          return {
+            byWorkspace: {
+              ...s.byWorkspace,
+              [ws]: { ...prev, dockviewLayout: layout },
+            },
+          };
+        }),
     }),
     {
       name: 'quarry:code-workspace',
-      // v2: chatWidth added, chat moved to left hero slot. Stale v1 layouts
-      // have invalid panel sums and crash react-resizable-panels.
-      version: 2,
+      // v3: adds dockviewLayout (opaque api.toJSON snapshot).
+      version: 3,
       migrate: () => ({ byWorkspace: {} }),
     },
   ),

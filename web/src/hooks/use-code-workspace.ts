@@ -21,6 +21,7 @@ export function useCodeWorkspace(workspace: string | null) {
   const _setActiveTab = useCodeWorkspaceStore((s) => s.setActiveTab);
   const _pinTab = useCodeWorkspaceStore((s) => s.pinTab);
   const _resetLayout = useCodeWorkspaceStore((s) => s.resetLayout);
+  const _setDockviewLayout = useCodeWorkspaceStore((s) => s.setDockviewLayout);
 
   const setVisible = useCallback(
     (slot: PanelSlot, visible: boolean) => _setVisible(key, slot, visible),
@@ -45,6 +46,10 @@ export function useCodeWorkspace(workspace: string | null) {
   );
   const pinTab = useCallback((tabId: string) => _pinTab(key, tabId), [key, _pinTab]);
   const resetLayout = useCallback(() => _resetLayout(key), [key, _resetLayout]);
+  const setDockviewLayout = useCallback(
+    (layout: unknown) => _setDockviewLayout(key, layout),
+    [key, _setDockviewLayout],
+  );
 
   return {
     layout,
@@ -58,5 +63,6 @@ export function useCodeWorkspace(workspace: string | null) {
     setActiveTab,
     pinTab,
     resetLayout,
+    setDockviewLayout,
   };
 }
