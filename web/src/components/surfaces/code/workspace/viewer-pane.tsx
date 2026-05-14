@@ -163,7 +163,7 @@ export function ViewerPane({ workspace }: ViewerPaneProps) {
 
   const Renderer = getRenderer(ext);
   return (
-    <div className="h-full overflow-auto">
+    <div className="file-viewer-body h-full overflow-auto px-3.5 py-3">
       <Renderer
         content={load.content}
         encoding={load.encoding}

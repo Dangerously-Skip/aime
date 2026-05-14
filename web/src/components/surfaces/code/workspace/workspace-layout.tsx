@@ -4,9 +4,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   DockviewReact,
   themeAbyssSpaced,
+  themeLightSpaced,
   type DockviewApi,
   type DockviewReadyEvent,
   type IDockviewPanelProps,
+  type DockviewTheme,
 } from "dockview";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { PanelToolbar } from "./panel-toolbar";
@@ -171,9 +173,28 @@ interface WorkspaceLayoutProps {
   }>;
 }
 
+/**
+ * Watches <html> classList for `.dark` / `.emma` and returns the matching
+ * dockview theme. Reactive — re-renders when the user flips Quarry's theme.
+ */
+function useDockviewTheme(): DockviewTheme {
+  const [isDark, setIsDark] = useState(false);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const html = document.documentElement;
+    const compute = () => setIsDark(html.classList.contains("dark"));
+    compute();
+    const obs = new MutationObserver(compute);
+    obs.observe(html, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return isDark ? themeAbyssSpaced : themeLightSpaced;
+}
+
 export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: WorkspaceLayoutProps) {
   const { layout } = useCodeWorkspace(workspace);
   const apiRef = useRef<DockviewApi | null>(null);
+  const dockviewTheme = useDockviewTheme();
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string | null>(null);
@@ -297,7 +318,7 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
       <div className="flex-1 min-h-0 relative">
         <DockviewReact
           components={COMPONENTS}
-          theme={themeAbyssSpaced}
+          theme={dockviewTheme}
           onReady={onReady}
           disableFloatingGroups={false}
           singleTabMode="default"
