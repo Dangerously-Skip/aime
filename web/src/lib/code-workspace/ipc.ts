@@ -21,6 +21,7 @@ type ElectronBridge = {
   // Filesystem
   fsWalk?: (path: string, opts?: { depth?: number; respectGitignore?: boolean }) => Promise<FsNode[]>;
   fsRead?: (path: string) => Promise<{ content: string; encoding: string } | null>;
+  fsWrite?: (path: string, content: string) => Promise<{ ok: boolean; error?: string }>;
   fsWatchStart?: (path: string) => Promise<string>;
   fsWatchStop?: (watchId: string) => Promise<void>;
   onFsChange?: (cb: (evt: { watchId: string; path: string; kind: 'add' | 'change' | 'delete' }) => void) => () => void;
@@ -59,6 +60,15 @@ export async function walkFs(
 
 export async function readFile(path: string): Promise<{ content: string; encoding: string } | null> {
   return (await bridge().fsRead?.(path)) ?? null;
+}
+
+export async function writeFile(path: string, content: string): Promise<{ ok: boolean; error?: string }> {
+  return (
+    (await bridge().fsWrite?.(path, content)) ?? {
+      ok: false,
+      error: "Electron bridge unavailable",
+    }
+  );
 }
 
 export async function watchPath(path: string): Promise<string | null> {

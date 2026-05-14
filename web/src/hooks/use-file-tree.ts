@@ -103,15 +103,16 @@ export function useFileTree(workspace: string | null): UseFileTreeResult {
 
   const toggleExpand = useCallback(
     async (path: string) => {
-      let willExpand = false;
+      // Decide intent OUTSIDE the state updater. React Strict Mode invokes
+      // setState updaters twice in dev — if we mutate a closure variable
+      // inside the updater, the second pass corrupts our intent (we end up
+      // loading children for a folder whose `expanded` flag was toggled
+      // off, so the UI never shows them).
+      const willExpand = !expanded.has(path);
       setExpanded((prev) => {
         const next = new Set(prev);
-        if (next.has(path)) {
-          next.delete(path);
-        } else {
-          next.add(path);
-          willExpand = true;
-        }
+        if (willExpand) next.add(path);
+        else next.delete(path);
         return next;
       });
       if (!willExpand) return;
@@ -122,8 +123,6 @@ export function useFileTree(workspace: string | null): UseFileTreeResult {
           depth: 1,
           respectGitignore: !showHidden,
         });
-        // eslint-disable-next-line no-console
-        console.log("[file-tree] expand", path, "→", kids.length, "children");
         setChildrenByPath((prev) => ({ ...prev, [path]: kids }));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -135,7 +134,7 @@ export function useFileTree(workspace: string | null): UseFileTreeResult {
         });
       }
     },
-    [childrenByPath, showHidden],
+    [childrenByPath, expanded, showHidden],
   );
 
   // Initial load + reload when showHidden flips.

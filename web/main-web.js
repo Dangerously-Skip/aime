@@ -1188,7 +1188,6 @@ ipcMain.handle("fs:walk", async (_event, dirPath, opts) => {
     console.warn(`[fs:walk] ${expanded}:`, result.error);
     return [];
   }
-  console.log(`[fs:walk] ${expanded} → ${result.nodes.length} entries`);
   return result.nodes;
 });
 
@@ -1204,6 +1203,18 @@ ipcMain.handle("fs:read", async (_event, filePath) => {
     return { content: "", encoding: "binary", binary: true, size: result.size ?? 0 };
   }
   return { content: result.content, encoding: result.encoding, size: result.size };
+});
+
+ipcMain.handle("fs:write", async (_event, filePath, content) => {
+  if (!filePath || typeof filePath !== "string") {
+    return { ok: false, error: "Invalid path." };
+  }
+  const expanded = expandHome(filePath);
+  const result = codeWorkspaceFs.writeFileSafe(expanded, content);
+  if (!result.ok) {
+    console.warn(`[fs:write] ${expanded}:`, result.error);
+  }
+  return result;
 });
 
 // Active watchers keyed by their generated id.

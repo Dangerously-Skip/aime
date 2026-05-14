@@ -246,7 +246,7 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
   })();
 
   return (
-    <PanelShell icon={FolderTree} title="Files" onClose={onClose}>
+    <PanelShell>
       <div className="flex flex-col h-full min-h-0">
         <FileTreeFilter
           value={tree.filter}

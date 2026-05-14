@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   DockviewReact,
+  DockviewDefaultTab,
   themeAbyssSpaced,
   themeLightSpaced,
   type DockviewApi,
   type DockviewReadyEvent,
   type IDockviewPanelProps,
+  type IDockviewPanelHeaderProps,
   type DockviewTheme,
 } from "dockview";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
@@ -196,6 +198,14 @@ const COMPONENTS = {
   file: FileRegion,
 } as const;
 
+// Chat is always available — render its tab with the close action hidden.
+function ChatTab(props: IDockviewPanelHeaderProps) {
+  return <DockviewDefaultTab {...props} hideClose />;
+}
+const TAB_COMPONENTS = {
+  "chat-tab": ChatTab,
+};
+
 // Default layout is built via `api.addPanel` (not fromJSON) so params are
 // wired at creation — see `onReady` below.
 
@@ -233,7 +243,7 @@ function useDockviewTheme(): DockviewTheme {
 }
 
 export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: WorkspaceLayoutProps) {
-  const { layout, setDockviewLayout } = useCodeWorkspace(workspace);
+  const { layout, setDockviewLayout, setVisible } = useCodeWorkspace(workspace);
   const apiRef = useRef<DockviewApi | null>(null);
   const dockviewTheme = useDockviewTheme();
   // Snapshot saving is debounced — dockview fires lots of micro-events
@@ -290,6 +300,7 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
         const chatPanel = event.api.addPanel({
           id: "chat",
           component: "chat",
+          tabComponent: "chat-tab",
           title: "Chat",
           params: paramsObj,
         });
@@ -344,6 +355,25 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
     event.api.onDidAddPanel(persist);
     event.api.onDidRemovePanel(persist);
     event.api.onDidActivePanelChange(persist);
+
+    // Mirror tab-close → store visibility, so the Panels dropdown
+    // reflects what's actually mounted. Without this, closing a panel
+    // via its X leaves `visible: true` in the store and the menu still
+    // shows the check — clicking the menu entry then no-ops.
+    event.api.onDidRemovePanel((panel) => {
+      const id = panel.api.id;
+      if (id === "viewer") setVisible("viewer", false);
+      else if (id === "terminal") setVisible("terminal", false);
+      else if (id === "tree") setVisible("tree", false);
+      else if (id === "chat") setVisible("chat", false);
+    });
+    event.api.onDidAddPanel((panel) => {
+      const id = panel.api.id;
+      if (id === "viewer") setVisible("viewer", true);
+      else if (id === "terminal") setVisible("terminal", true);
+      else if (id === "tree") setVisible("tree", true);
+      else if (id === "chat") setVisible("chat", true);
+    });
 
     // Window-scoped API so the file tree / branch header / toolbar can
     // request panels without prop drilling.
@@ -460,6 +490,70 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout.visible.terminal]);
 
+  // Add / remove the editor (viewer) panel reactively
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const existing = api.getPanel("viewer");
+    if (layout.visible.viewer && !existing) {
+      // Anchor next to the chat panel if possible, else the first panel.
+      const ref = api.getPanel("chat") ? "chat" : api.panels[0]?.api.id;
+      api.addPanel({
+        id: "viewer",
+        component: "viewer",
+        title: "Editor",
+        params: ctx as unknown as Record<string, unknown>,
+        position: ref ? { referencePanel: ref, direction: "right" } : undefined,
+      });
+    } else if (!layout.visible.viewer && existing) {
+      existing.api.close();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout.visible.viewer]);
+
+  // Add / remove the Files (tree) panel reactively
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const existing = api.getPanel("tree");
+    if (layout.visible.tree && !existing) {
+      // Slot next to chat → otherwise next to whatever's first.
+      const ref = api.getPanel("chat") ? "chat" : api.panels[0]?.api.id;
+      api.addPanel({
+        id: "tree",
+        component: "tree",
+        title: "Files",
+        params: ctx as unknown as Record<string, unknown>,
+        position: ref ? { referencePanel: ref, direction: "right" } : undefined,
+      });
+    } else if (!layout.visible.tree && existing) {
+      existing.api.close();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout.visible.tree]);
+
+  // Add / remove the Chat panel reactively. (The chat tab has no close X —
+  // its only toggle path is the Panels dropdown.)
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const existing = api.getPanel("chat");
+    if (layout.visible.chat && !existing) {
+      const ref = api.panels[0]?.api.id;
+      api.addPanel({
+        id: "chat",
+        component: "chat",
+        tabComponent: "chat-tab",
+        title: "Chat",
+        params: ctx as unknown as Record<string, unknown>,
+        position: ref ? { referencePanel: ref, direction: "left" } : undefined,
+      });
+    } else if (!layout.visible.chat && existing) {
+      existing.api.close();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout.visible.chat]);
+
   const branchSlot =
     slots.branch ?? (
       <BranchHeader
@@ -485,6 +579,7 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
       <div className="flex-1 min-h-0 relative">
         <DockviewReact
           components={COMPONENTS}
+          tabComponents={TAB_COMPONENTS}
           theme={dockviewTheme}
           onReady={onReady}
           disableFloatingGroups={false}

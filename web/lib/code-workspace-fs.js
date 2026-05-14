@@ -149,8 +149,30 @@ function readFileSafe(filePath) {
   };
 }
 
+/**
+ * Writes a text file. Refuses to overwrite anything that currently looks
+ * binary on disk — protects images / archives from being clobbered with
+ * UTF-8 text by an editor that misread the kind. Returns { ok, error }.
+ */
+function writeFileSafe(filePath, content) {
+  const abs = path.resolve(filePath);
+  try {
+    if (fs.existsSync(abs)) {
+      const existing = fs.readFileSync(abs);
+      if (looksBinary(existing)) {
+        return { ok: false, error: "Refusing to overwrite binary file as text." };
+      }
+    }
+    fs.writeFileSync(abs, String(content ?? ""), "utf-8");
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+}
+
 module.exports = {
   walkOne,
   readFileSafe,
+  writeFileSafe,
   HARD_IGNORE_DIRS,
 };

@@ -8,6 +8,7 @@ import {
   Terminal as TerminalIcon,
   FolderTree,
   MessageSquare,
+  FileText,
   Check,
   HelpCircle,
   Plus,
@@ -58,6 +59,9 @@ export function PanelToolbar({ workspace }: PanelToolbarProps) {
         } else if (key === "\\") {
           e.preventDefault();
           togglePanel("chat");
+        } else if (key === "e") {
+          e.preventDefault();
+          togglePanel("viewer");
         }
       }
     }
@@ -66,13 +70,14 @@ export function PanelToolbar({ workspace }: PanelToolbarProps) {
   }, [togglePanel]);
 
   const items: Array<{
-    key: "chat" | "tree" | "terminal";
+    key: "chat" | "tree" | "viewer" | "terminal";
     label: string;
     icon: typeof Eye;
     kbd: string;
   }> = [
     { key: "chat", label: "Chat", icon: MessageSquare, kbd: "⌘\\" },
     { key: "tree", label: "Files", icon: FolderTree, kbd: "⌘B" },
+    { key: "viewer", label: "Editor", icon: FileText, kbd: "⌘E" },
     { key: "terminal", label: "Terminal", icon: TerminalIcon, kbd: "⌘J" },
   ];
 
