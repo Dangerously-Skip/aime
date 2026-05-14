@@ -124,10 +124,10 @@ export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
     chat: true,
   },
   sizes: {
-    chatWidth: 40,      // chat dominates the left half
-    leftWidth: 18,      // file tree column to the right of chat
+    chatWidth: 38,      // chat is the hero — leftmost, dominant
+    leftWidth: 20,      // file tree column to the right of chat
     rightWidth: 30,     // legacy — kept for back-compat
-    terminalHeight: 25,
+    terminalHeight: 30,
   },
   openTabs: [],
   activeTabId: null,
