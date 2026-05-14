@@ -20,6 +20,7 @@ import { ViewerPane } from "./viewer-pane";
 import { DiffViewer } from "./diff-viewer";
 import { StatusBar } from "./status-bar";
 import { KeybindHelp } from "./keybind-help";
+import { XtermErrorBoundary } from "./xterm-error-boundary";
 import dynamic from "next/dynamic";
 import "dockview/dist/styles/dockview.css";
 import "./workspace-dockview.css";
@@ -135,10 +136,13 @@ function TerminalRegion(props: IDockviewPanelProps<WorkspaceContext>) {
   if (slots.terminal) return <div className="dv-region-body">{slots.terminal}</div>;
   // sessionKey = panel id → each terminal panel gets its own PTY (without
   // this, two `terminal-*` panels share one shell and show identical output).
+  // ErrorBoundary swallows xterm's harmless first-render "dimensions" throw.
   return (
     <div className="dv-region-body">
       {workspace ? (
-        <TerminalPanel workspace={workspace} sessionKey={props.api.id} visible />
+        <XtermErrorBoundary>
+          <TerminalPanel workspace={workspace} sessionKey={props.api.id} visible />
+        </XtermErrorBoundary>
       ) : (
         <div className="p-4 text-xs text-muted-foreground">Open a folder first.</div>
       )}
