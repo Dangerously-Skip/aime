@@ -1,0 +1,220 @@
+/* ─────────────────────────────────────────────────────────────────────
+ * IDE workspace — dockview theme override (Claude Code aesthetic).
+ *
+ * Goals:
+ *   - Rounded panel chrome (8px corners) so each region feels like a
+ *     widget you can move around, not a wall of dividers.
+ *   - Soft, low-contrast borders. No harsh black strokes.
+ *   - Subtle elevation: each panel has a 1px ring + 1px shadow.
+ *   - Tab strip looks like Claude Code's: pill-shaped active tab,
+ *     muted inactives, no underline.
+ *   - Drag overlay: rounded, semi-transparent.
+ *
+ * Layered on top of dockview's `themeAbyssSpaced` base.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/* Override dockview's own abyss/light palette FIRST — these variables are
+   the source of the purple/blue accent (rgb(91,30,207) was the original
+   `--dv-color-abyss-accent`). All downstream theme variables resolve
+   against these, so killing them at the source is the cleanest fix. */
+.dockview-theme-abyss-spaced.dv-workspace,
+.dockview-theme-light-spaced.dv-workspace,
+.dv-workspace.dockview-theme-abyss-spaced,
+.dv-workspace.dockview-theme-light-spaced,
+.dv-workspace {
+  /* Dockview palette overrides (force `accent` to Quarry's amber). */
+  --dv-color-abyss-dark: hsl(var(--card));
+  --dv-color-abyss: hsl(var(--card));
+  --dv-color-abyss-light: hsl(var(--muted));
+  --dv-color-abyss-lighter: hsl(var(--background));
+  --dv-color-abyss-accent: hsl(var(--primary));
+  --dv-color-abyss-primary-text: hsl(var(--foreground));
+  --dv-color-abyss-secondary-text: hsl(var(--muted-foreground));
+  --dv-color-gh-light-canvas-subtle: hsl(var(--card));
+
+  /* Panel surface */
+  --dv-tabs-and-actions-container-background-color: hsl(var(--card));
+  --dv-group-view-background-color: hsl(var(--card));
+  --dv-tabs-container-scrollbar-color: hsl(var(--border));
+  --dv-separator-border: hsl(var(--border));
+  --dv-paneview-active-outline-color: hsl(var(--primary));
+
+  /* Active tab background → clean pill */
+  --dv-activegroup-visiblepanel-tab-background-color: hsl(var(--background));
+  --dv-activegroup-visiblepanel-tab-color: hsl(var(--foreground));
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-visiblepanel-tab-background-color: hsl(var(--card));
+  --dv-inactivegroup-visiblepanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground) / 0.7);
+
+  --dv-drag-over-background-color: hsl(var(--primary) / 0.10);
+  --dv-drag-over-border-color: hsl(var(--primary) / 0.6);
+  --dv-tab-divider-color: transparent;
+  --dv-tab-close-icon: hsl(var(--muted-foreground));
+  --dv-active-sash-color: hsl(var(--primary));
+  --dv-sash-color: transparent;
+
+  /* Selected / active accents */
+  --dv-activegroup-visiblepanel-tab-border-color: hsl(var(--primary));
+  --dv-activegroup-hiddenpanel-tab-border-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-border-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-border-color: transparent;
+
+  --dv-floating-box-shadow: 0 18px 48px hsl(0 0% 0% / 0.3);
+
+  /* Group action buttons */
+  --dv-activegroup-action-color: hsl(var(--muted-foreground));
+  --dv-activegroup-action-hover-color: hsl(var(--foreground));
+  --dv-inactivegroup-action-color: hsl(var(--muted-foreground) / 0.7);
+  --dv-inactivegroup-action-hover-color: hsl(var(--foreground));
+
+  --dv-background-color: hsl(var(--background));
+}
+
+/* Outer dockview surface — give the whole IDE column a hint of inset. */
+.dv-workspace .dv-dockview {
+  background: hsl(var(--background));
+  padding: 6px;
+  gap: 6px;
+}
+
+/* Each panel group becomes a rounded "widget". This is the main visual
+   shift from a typical IDE — boundaries feel like cards, not walls. */
+.dv-workspace .groupview {
+  border-radius: 10px;
+  border: 1px solid hsl(var(--border) / 0.6);
+  background: hsl(var(--card));
+  box-shadow:
+    0 1px 0 hsl(var(--border) / 0.3),
+    0 1px 3px hsl(var(--foreground) / 0.04);
+  overflow: hidden;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.dv-workspace .groupview.dv-active-group {
+  border-color: hsl(var(--border));
+  box-shadow:
+    0 1px 0 hsl(var(--border) / 0.5),
+    0 2px 6px hsl(var(--foreground) / 0.06);
+}
+
+/* Tabs bar — pill-style. Less chrome, more breathing room. */
+.dv-workspace .tabs-container {
+  background: transparent;
+  padding: 6px 6px 0 6px;
+  gap: 4px;
+  min-height: 34px;
+}
+
+.dv-workspace .tab {
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  user-select: none;
+}
+
+.dv-workspace .tab.dv-active-tab {
+  border-color: hsl(var(--border) / 0.6);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.dv-workspace .tab:hover:not(.dv-active-tab) {
+  background: hsl(var(--muted) / 0.4);
+  color: hsl(var(--foreground));
+}
+
+.dv-workspace .tab .dv-default-tab-action {
+  margin-left: 6px;
+  opacity: 0.5;
+  transition: opacity 120ms ease;
+}
+
+.dv-workspace .tab:hover .dv-default-tab-action,
+.dv-workspace .tab.dv-active-tab .dv-default-tab-action {
+  opacity: 1;
+}
+
+/* Region body — let our component content fill the rounded card. */
+.dv-region-body {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Viewer + diff panes get LHS padding so content doesn't hug the rounded
+   panel edge. Tab strip stays flush; only the rendered file body inherits. */
+.dv-region-body .file-viewer-body,
+.dv-region-body .diff-viewer-body,
+.dv-region-body .markdown-body,
+.dv-region-body .prose {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+/* Splitter between groups — barely visible until hovered. */
+.dv-workspace .dv-sash {
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.dv-workspace .dv-sash:hover,
+.dv-workspace .dv-sash.dv-sash-active {
+  background: hsl(var(--primary) / 0.35);
+}
+
+/* Drop overlay during drag — soft rounded highlight, not a hard rectangle. */
+.dv-workspace .dv-drop-target .dv-drop-target-anchor {
+  border-radius: 10px;
+  border: 1.5px dashed hsl(var(--primary) / 0.55);
+  background: hsl(var(--primary) / 0.08);
+  backdrop-filter: blur(2px);
+}
+
+/* Floating panel chrome (popout) — match the inset look. */
+.dv-workspace .dv-floating-window {
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 18px 48px hsl(var(--foreground) / 0.18);
+}
+
+/* Anywhere dockview uses its built-in blue/purple accent — convert to
+   Quarry primary. Includes drop-line indicator and tab-bar underline. */
+.dv-workspace .dv-active-tab,
+.dv-workspace .tab.dv-active-tab {
+  box-shadow: inset 0 -2px 0 hsl(var(--primary) / 0.85);
+}
+.dv-workspace .dv-drop-target-line,
+.dv-workspace .dv-drop-target-indicator-active {
+  background: hsl(var(--primary)) !important;
+}
+.dv-workspace .dv-resize-container::after {
+  background: hsl(var(--primary) / 0.5);
+}
+
+/* Branch header bar above the dock — softer + rounded bottom feel. */
+.dv-branch-bar {
+  padding: 4px 6px 0 6px;
+}
+
+/* Tab close button: keep it understated until hover. */
+.dv-workspace .dv-default-tab-action {
+  border-radius: 4px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dv-workspace .dv-default-tab-action:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
