@@ -22,7 +22,7 @@ interface FileTreeProps {
 interface RowData {
   flatNodes: FlatNode[];
   onToggle: (path: string) => void;
-  onActivate: (node: FsNode, evt: { meta: boolean; shift: boolean }) => void;
+  onActivate: (node: FsNode, evt: { meta: boolean; shift: boolean; alt: boolean }) => void;
   onPin: (node: FsNode) => void;
 }
 
@@ -64,11 +64,10 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Click → open as a dockview tab in the editor group. The window-scoped
-  // __ideOpenFile helper (registered by WorkspaceLayout.onReady) handles
-  // dedupe — clicking a file that's already open just focuses its tab.
-  // We also keep the store's openTab in sync so the legacy TabStrip view
-  // (if anyone still mounts it) reflects the active tab.
-  const openInEditor = (node: FsNode, pinned: boolean) => {
+  // __ideOpenFile / __ideOpenDiff helpers (registered by
+  // WorkspaceLayout.onReady) handle dedupe — clicking a file that's
+  // already open just focuses the existing tab.
+  const openInEditor = (node: FsNode) => {
     if (node.type !== "file") return;
     if (typeof window !== "undefined") {
       const open = (window as unknown as Record<string, unknown>).__ideOpenFile as
@@ -76,20 +75,34 @@ export function FileTree({ workspace, onClose }: FileTreeProps) {
         | undefined;
       open?.(node.path);
     }
-    openTab({ id: node.path, kind: "file", path: node.path, pinned });
+    openTab({ id: node.path, kind: "file", path: node.path, pinned: false });
+  };
+
+  const openDiff = (node: FsNode) => {
+    if (node.type !== "file") return;
+    if (typeof window !== "undefined") {
+      const open = (window as unknown as Record<string, unknown>).__ideOpenDiff as
+        | ((path: string) => void)
+        | undefined;
+      open?.(node.path);
+    }
   };
 
   const handleActivate = (
     node: FsNode,
-    evt: { meta: boolean; shift: boolean },
+    evt: { meta: boolean; shift: boolean; alt: boolean },
   ) => {
     if (node.type !== "file") return;
-    // Cmd-click → pinned (won't be replaced by the next preview click).
-    openInEditor(node, evt.meta);
+    // Alt/Option-click → open as diff (working-tree vs HEAD).
+    if (evt.alt) {
+      openDiff(node);
+      return;
+    }
+    openInEditor(node);
   };
 
   const handlePin = (node: FsNode) => {
-    openInEditor(node, true);
+    openInEditor(node);
   };
 
   const rowData = useMemo<RowData>(
