@@ -28,7 +28,8 @@ export function useCodeWorkspace(workspace: string | null) {
   );
   const togglePanel = useCallback((slot: PanelSlot) => _togglePanel(key, slot), [key, _togglePanel]);
   const setSize = useCallback(
-    (size: 'leftWidth' | 'rightWidth' | 'terminalHeight', value: number) => _setSize(key, size, value),
+    (size: 'chatWidth' | 'leftWidth' | 'rightWidth' | 'terminalHeight', value: number) =>
+      _setSize(key, size, value),
     [key, _setSize],
   );
   const assignSlot = useCallback(
