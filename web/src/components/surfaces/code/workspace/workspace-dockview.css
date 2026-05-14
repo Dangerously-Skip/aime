@@ -14,8 +14,10 @@
  * ──────────────────────────────────────────────────────────────────── */
 
 .dv-workspace {
-  /* Soft panel surface — slightly lighter than the page bg to feel
-     "raised". Uses Quarry's existing tokens. */
+  /* All blues/purples that ship with dockview's themes get overridden
+     here to Quarry's `--primary` (warm amber). Anything that says
+     "accent" or "highlight" in the upstream theme variable list maps
+     to --primary. */
   --dv-tabs-and-actions-container-background-color: hsl(var(--card));
   --dv-group-view-background-color: hsl(var(--card));
   --dv-tabs-container-scrollbar-color: hsl(var(--border));
@@ -32,10 +34,27 @@
   --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
   --dv-inactivegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground) / 0.7);
 
-  --dv-drag-over-background-color: hsl(var(--primary) / 0.08);
-  --dv-drag-over-border-color: hsl(var(--primary) / 0.5);
+  /* Drag / drop indicator — was purple from upstream. */
+  --dv-drag-over-background-color: hsl(var(--primary) / 0.10);
+  --dv-drag-over-border-color: hsl(var(--primary) / 0.6);
   --dv-tab-divider-color: transparent;
   --dv-tab-close-icon: hsl(var(--muted-foreground));
+
+  /* Selected / active accents that upstream paints blue or purple. */
+  --dv-activegroup-visiblepanel-tab-border-color: hsl(var(--primary));
+  --dv-activegroup-hiddenpanel-tab-border-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-border-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-border-color: transparent;
+  --dv-floating-box-shadow: 0 18px 48px hsl(0 0% 0% / 0.35);
+
+  /* Group action buttons (popout / maximize / close) — outline tone. */
+  --dv-activegroup-action-color: hsl(var(--muted-foreground));
+  --dv-activegroup-action-hover-color: hsl(var(--foreground));
+  --dv-inactivegroup-action-color: hsl(var(--muted-foreground) / 0.7);
+  --dv-inactivegroup-action-hover-color: hsl(var(--foreground));
+
+  /* Watermark / empty group bg. */
+  --dv-background-color: hsl(var(--background));
 }
 
 /* Outer dockview surface — give the whole IDE column a hint of inset. */
@@ -148,6 +167,20 @@
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 18px 48px hsl(var(--foreground) / 0.18);
+}
+
+/* Anywhere dockview uses its built-in blue/purple accent — convert to
+   Quarry primary. Includes drop-line indicator and tab-bar underline. */
+.dv-workspace .dv-active-tab,
+.dv-workspace .tab.dv-active-tab {
+  box-shadow: inset 0 -2px 0 hsl(var(--primary) / 0.85);
+}
+.dv-workspace .dv-drop-target-line,
+.dv-workspace .dv-drop-target-indicator-active {
+  background: hsl(var(--primary)) !important;
+}
+.dv-workspace .dv-resize-container::after {
+  background: hsl(var(--primary) / 0.5);
 }
 
 /* Branch header bar above the dock — softer + rounded bottom feel. */

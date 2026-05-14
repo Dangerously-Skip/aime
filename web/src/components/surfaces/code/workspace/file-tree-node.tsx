@@ -23,7 +23,7 @@ interface FileTreeNodeProps {
   expanded: boolean;
   loading?: boolean;
   onToggleExpand: (path: string) => void;
-  onActivate: (node: FsNode, evt: { meta: boolean; shift: boolean }) => void;
+  onActivate: (node: FsNode, evt: { meta: boolean; shift: boolean; alt: boolean }) => void;
   onPin: (node: FsNode) => void;
 }
 
@@ -68,7 +68,11 @@ export function FileTreeNode({
       onToggleExpand(node.path);
       return;
     }
-    onActivate(node, { meta: e.metaKey || e.ctrlKey, shift: e.shiftKey });
+    onActivate(node, {
+      meta: e.metaKey || e.ctrlKey,
+      shift: e.shiftKey,
+      alt: e.altKey,
+    });
   }
 
   function handleDoubleClick() {
