@@ -314,7 +314,23 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => {
         try {
-          setDockviewLayout(event.api.toJSON());
+          // Strip non-serialisable params (JSX slots, fns, refs) before
+          // the Zustand persist middleware tries to JSON.stringify the
+          // whole store. dockview will re-receive params on restore via
+          // updateParameters in onReady.
+          const raw = event.api.toJSON() as unknown;
+          const snapshot = raw as {
+            panels?: Record<string, { params?: unknown } & Record<string, unknown>>;
+          };
+          if (snapshot.panels) {
+            for (const id of Object.keys(snapshot.panels)) {
+              const p = snapshot.panels[id];
+              if (p && typeof p === "object" && "params" in p) {
+                delete p.params;
+              }
+            }
+          }
+          setDockviewLayout(snapshot);
         } catch (err) {
           console.warn("[ide] toJSON snapshot failed", err);
         }
@@ -328,6 +344,22 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
     // Window-scoped API so the file tree / branch header / toolbar can
     // request panels without prop drilling.
 
+    /**
+     * Pick a safe referencePanel for addPanel — the user can close or drag
+     * away `viewer`, so walk a fallback chain instead of hard-referencing it.
+     */
+    function editorRef(): string | undefined {
+      const api = event.api;
+      if (api.getPanel("viewer")) return "viewer";
+      const filePanel = api.panels.find((p) => p.api.id.startsWith("file:"));
+      if (filePanel) return filePanel.api.id;
+      const diffPanel = api.panels.find((p) => p.api.id.startsWith("diff:"));
+      if (diffPanel) return diffPanel.api.id;
+      const active = api.activePanel;
+      if (active) return active.api.id;
+      return api.panels[0]?.api.id;
+    }
+
     (window as unknown as Record<string, unknown>).__ideOpenDiff = (
       filePath: string,
       opts?: { fromRef?: string; toRef?: string },
@@ -338,22 +370,18 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
         existing.api.setActive();
         return;
       }
-      // When the user hasn't passed an explicit ref, use the branch
-      // picker's current selection as the base. Falls back to working-tree
-      // vs HEAD when both are absent.
       const fromRef = opts?.fromRef ?? ctx.baseBranch ?? undefined;
       const toRef = opts?.toRef;
+      const ref = editorRef();
       event.api.addPanel({
         id,
         component: "diff",
         title: filePath.split("/").pop() ?? filePath,
         params: { ...ctx, filePath, fromRef, toRef } as unknown as Record<string, unknown>,
-        position: { referencePanel: "viewer", direction: "within" },
+        position: ref ? { referencePanel: ref, direction: "within" } : undefined,
       });
     };
 
-    /** Open a file as a tab in the editor group. Dedupes by path — clicking
-     *  a file that's already open just focuses the existing tab. */
     (window as unknown as Record<string, unknown>).__ideOpenFile = (filePath: string) => {
       const id = `file:${filePath}`;
       const existing = event.api.getPanel(id);
@@ -361,21 +389,20 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
         existing.api.setActive();
         return;
       }
+      const ref = editorRef();
       event.api.addPanel({
         id,
         component: "file",
         title: filePath.split("/").pop() ?? filePath,
         params: { ...ctx, filePath } as unknown as Record<string, unknown>,
-        position: { referencePanel: "viewer", direction: "within" },
+        position: ref ? { referencePanel: ref, direction: "within" } : undefined,
       });
     };
 
-    /** Open a new terminal panel. Each instance gets a unique id so
-     *  multiple terminals can coexist as tabs. */
     let nextTerminalIndex = 1;
     (window as unknown as Record<string, unknown>).__ideOpenTerminal = () => {
       const id = `terminal-${Date.now()}`;
-      const ref = event.api.getPanel("viewer") ? "viewer" : event.api.panels[0]?.id;
+      const ref = editorRef();
       event.api.addPanel({
         id,
         component: "terminal",
@@ -410,12 +437,18 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
     if (!api) return;
     const existing = api.getPanel("terminal");
     if (layout.visible.terminal && !existing) {
+      // Same fallback chain as __ideOpenTerminal — viewer may not exist.
+      const viewerExists = api.getPanel("viewer");
+      const fileLike = api.panels.find(
+        (p) => p.api.id.startsWith("file:") || p.api.id.startsWith("diff:"),
+      );
+      const ref = viewerExists ? "viewer" : fileLike?.api.id ?? api.activePanel?.api.id ?? api.panels[0]?.api.id;
       api.addPanel({
         id: "terminal",
         component: "terminal",
         title: "Terminal",
         params: ctx as unknown as Record<string, unknown>,
-        position: { referencePanel: "viewer", direction: "below" },
+        position: ref ? { referencePanel: ref, direction: "below" } : undefined,
       });
     } else if (!layout.visible.terminal && existing) {
       existing.api.close();
