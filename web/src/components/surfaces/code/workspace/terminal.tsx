@@ -165,6 +165,7 @@ export function TerminalPanel({ workspace, onClose, visible = true, sessionKey }
       term.onResize(({ cols, rows }) => { resizeRef.current?.(cols, rows).catch(() => {}); });
       // Defer fit to next frame so xterm's render service has settled.
       requestAnimationFrame(() => {
+        if (!host || host.clientWidth < 16 || host.clientHeight < 16) return;
         try { fit.fit(); } catch { /* ignore */ }
       });
       xtermRef.current = term;
@@ -176,6 +177,7 @@ export function TerminalPanel({ workspace, onClose, visible = true, sessionKey }
     init();
 
     const ro = new ResizeObserver(() => {
+      if (!host || host.clientWidth < 16 || host.clientHeight < 16) return;
       if (!xtermRef.current) {
         init();
       } else {
@@ -222,12 +224,16 @@ export function TerminalPanel({ workspace, onClose, visible = true, sessionKey }
 
   // Once the PTY session exists, sync our current dimensions to it (the PTY
   // was opened with the initial 80x24 default; xterm-addon-fit knows the
-  // truth now that the host is laid out).
+  // truth now that the host is laid out). Guard on host size — if the panel
+  // is mounted but not visible yet, xterm's RenderService.dimensions is
+  // undefined and fit() throws.
   useEffect(() => {
     if (!session) return;
     const t = xtermRef.current;
     const fit = fitRef.current;
-    if (!t || !fit) return;
+    const host = hostRef.current;
+    if (!t || !fit || !host) return;
+    if (host.clientWidth < 16 || host.clientHeight < 16) return;
     try {
       fit.fit();
       resizeRef.current?.(t.cols, t.rows).catch(() => {});
