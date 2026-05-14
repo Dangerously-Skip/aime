@@ -5,13 +5,13 @@ import { Group, Panel, Separator, type PanelSize } from "react-resizable-panels"
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { PanelToolbar } from "./panel-toolbar";
 import {
-  TreePlaceholder,
-  TabsPlaceholder,
-  ViewerPlaceholder,
   TerminalPlaceholder,
   ChatPlaceholder,
   BranchHeaderPlaceholder,
 } from "./placeholders";
+import { FileTree } from "./file-tree";
+import { TabStrip } from "./tab-strip";
+import { ViewerPane } from "./viewer-pane";
 
 /**
  * Master workspace layout for the IDE mode of the Code surface.
@@ -41,11 +41,13 @@ interface WorkspaceLayoutProps {
 export function WorkspaceLayout({ workspace, slots }: WorkspaceLayoutProps) {
   const { layout, setSize, setVisible } = useCodeWorkspace(workspace);
 
-  // Resolve each slot — caller's component, or our placeholder
+  // Resolve each slot — caller's component, or our default for that slot.
+  // Phase 1 (Agent A) defaults the tree/tabs/viewer to real components so
+  // the workspace works end-to-end the moment it mounts.
   const branchSlot = slots?.branch ?? <BranchHeaderPlaceholder />;
-  const treeSlot = slots?.tree ?? <TreePlaceholder onClose={() => setVisible("tree", false)} />;
-  const tabsSlot = slots?.tabs ?? <TabsPlaceholder />;
-  const viewerSlot = slots?.viewer ?? <ViewerPlaceholder />;
+  const treeSlot = slots?.tree ?? <FileTree workspace={workspace} onClose={() => setVisible("tree", false)} />;
+  const tabsSlot = slots?.tabs ?? <TabStrip workspace={workspace} />;
+  const viewerSlot = slots?.viewer ?? <ViewerPane workspace={workspace} />;
   const terminalSlot = slots?.terminal ?? <TerminalPlaceholder onClose={() => setVisible("terminal", false)} />;
   const chatSlot = slots?.chat ?? <ChatPlaceholder onClose={() => setVisible("chat", false)} />;
 
