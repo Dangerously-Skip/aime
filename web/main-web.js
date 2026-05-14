@@ -1162,9 +1162,288 @@ ipcMain.handle("fs:read", async (_event, _path) => null);
 ipcMain.handle("fs:watch-start", async (_event, _path) => null);
 ipcMain.handle("fs:watch-stop", async (_event, _watchId) => undefined);
 
-// Git — Agent B fills in
-ipcMain.handle("git:status", async (_event, _cwd) => null);
-ipcMain.handle("git:diff", async (_event, _cwd, _opts) => "");
+// ──────────────────────────────────────────────────────────────────────
+// Git — Agent B (Phase 2)
+//
+// `runGit` mirrors the TypeScript helper at
+// `web/src/lib/code-workspace/git-ops.ts`. Kept inline here because
+// main-web.js is plain Node (CJS) and can't `require` a `.ts` file.
+// Keep the two in sync if either signature changes.
+// ──────────────────────────────────────────────────────────────────────
+
+const { spawn } = require("child_process");
+
+/**
+ * Spawn `git <args>` in `cwd`. Throws if the cwd doesn't exist or git
+ * exits non-zero. Returns the raw stdout buffer so binary-safe callers
+ * (status --porcelain -z, diff with binary files, etc.) can parse it.
+ *
+ * @param {string} cwd
+ * @param {string[]} args
+ * @param {{ timeoutMs?: number }} [opts]
+ * @returns {Promise<{ stdout: Buffer, stderr: string, code: number }>}
+ */
+function runGit(cwd, args, opts = {}) {
+  if (!cwd || typeof cwd !== "string") {
+    return Promise.reject(new Error("runGit: cwd is required"));
+  }
+  if (!fs.existsSync(cwd)) {
+    return Promise.reject(new Error(`runGit: cwd does not exist: ${cwd}`));
+  }
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
+    });
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    child.stdout.on("data", (b) => stdoutChunks.push(b));
+    child.stderr.on("data", (b) => stderrChunks.push(b));
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      reject(new Error(`runGit: timed out after ${timeoutMs}ms — git ${args.join(" ")}`));
+    }, timeoutMs);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const stdout = Buffer.concat(stdoutChunks);
+      const stderr = Buffer.concat(stderrChunks).toString("utf-8");
+      if (code !== 0) {
+        reject(new Error(`git ${args.join(" ")} (exit ${code}): ${stderr.trim() || "no stderr"}`));
+        return;
+      }
+      resolve({ stdout, stderr, code: code ?? 0 });
+    });
+  });
+}
+
+async function runGitText(cwd, args, opts) {
+  const { stdout } = await runGit(cwd, args, opts);
+  return stdout.toString("utf-8");
+}
+
+/**
+ * Parse `git status --porcelain=v1 -z` output into structured entries.
+ * The `-z` format is: `XY <path>\0` (renames are `XY <new>\0<old>\0`).
+ * X is the index status, Y is the worktree status.
+ */
+function parsePorcelainZ(buf) {
+  const text = buf.toString("utf-8");
+  const records = text.split("\0");
+  const out = [];
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    if (!r) continue;
+    if (r.length < 3) continue;
+    const x = r[0];
+    const y = r[1];
+    const path = r.slice(3);
+    // Renames carry the old path in the next NUL chunk; skip it so we don't
+    // try to parse "old name" as a fresh entry.
+    let isRename = false;
+    if (x === "R" || y === "R" || x === "C" || y === "C") {
+      isRename = true;
+      i++; // consume old-name field
+    }
+    out.push({ x, y, path, isRename });
+  }
+  return out;
+}
+
+/** Map porcelain X/Y to our GitFileStatus enum. */
+function statusFromPorcelain(x, y) {
+  if (x === "?" && y === "?") return "untracked";
+  if (x === "U" || y === "U" || (x === "A" && y === "A") || (x === "D" && y === "D")) {
+    return "conflicted";
+  }
+  if (x === "R" || y === "R") return "renamed";
+  // Index has a change → staged. Worktree-only changes are "modified" /
+  // "added" / "deleted".
+  if (x !== " " && x !== "?") {
+    if (x === "A") return "added";
+    if (x === "D") return "deleted";
+    return "staged";
+  }
+  if (y === "M") return "modified";
+  if (y === "A") return "added";
+  if (y === "D") return "deleted";
+  return "modified";
+}
+
+// `git:status` — Wave 2 (Agent B)
+//
+// Caches the most recent result per cwd for 500ms — Agent A's file watcher
+// fires rapidly during npm installs / bulk edits and we don't want to
+// thrash git on every event.
+const _gitStatusCache = new Map(); // cwd → { result, expiresAt, inflight }
+
+ipcMain.handle("git:status", async (_event, cwd) => {
+  if (!cwd) return null;
+  const now = Date.now();
+  const cached = _gitStatusCache.get(cwd);
+  if (cached && cached.expiresAt > now) {
+    if (cached.inflight) return cached.inflight; // share inflight promise
+    return cached.result;
+  }
+
+  const work = (async () => {
+    // Branch name. `--abbrev-ref HEAD` returns "HEAD" if detached.
+    let branch = "";
+    try {
+      branch = (await runGitText(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+    } catch {
+      // Not a git repo, or git command failed
+      return null;
+    }
+
+    // Upstream (may not exist for un-pushed branches)
+    let upstream = null;
+    try {
+      upstream = (
+        await runGitText(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "HEAD@{upstream}"])
+      ).trim();
+    } catch {
+      upstream = null;
+    }
+
+    // Base ref for ahead/behind. Prefer the upstream; fall back to
+    // `origin/HEAD` when there's no upstream set.
+    let baseRef = upstream;
+    if (!baseRef) {
+      try {
+        baseRef = (await runGitText(cwd, ["rev-parse", "--abbrev-ref", "origin/HEAD"])).trim();
+        if (baseRef === "origin/HEAD" || baseRef.startsWith("HEAD") || !baseRef) baseRef = null;
+      } catch {
+        baseRef = null;
+      }
+    }
+
+    // Ahead / behind. `--left-right --count base..HEAD` prints
+    // "<behind>\t<ahead>" — behind is commits in base not in HEAD.
+    let ahead = 0;
+    let behind = 0;
+    if (baseRef) {
+      try {
+        const counts = (
+          await runGitText(cwd, ["rev-list", "--left-right", "--count", `${baseRef}...HEAD`])
+        ).trim();
+        const parts = counts.split(/\s+/);
+        if (parts.length === 2) {
+          behind = parseInt(parts[0], 10) || 0;
+          ahead = parseInt(parts[1], 10) || 0;
+        }
+      } catch {
+        // ignore — leave 0/0
+      }
+    }
+
+    // File list via porcelain -z (binary-safe).
+    let entries = [];
+    try {
+      const { stdout } = await runGit(cwd, ["status", "--porcelain=v1", "-z"]);
+      entries = parsePorcelainZ(stdout);
+    } catch {
+      entries = [];
+    }
+
+    // Per-file numstat for additions/deletions on tracked changes.
+    // `git diff --numstat` covers worktree-vs-HEAD; binary files appear as
+    // "- - <path>".
+    const numstat = new Map(); // path → { additions, deletions }
+    try {
+      const text = await runGitText(cwd, ["diff", "--numstat", "HEAD"]);
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+        const m = line.match(/^(\S+)\s+(\S+)\s+(.+)$/);
+        if (!m) continue;
+        const adds = m[1] === "-" ? undefined : parseInt(m[1], 10);
+        const dels = m[2] === "-" ? undefined : parseInt(m[2], 10);
+        numstat.set(m[3], { additions: adds, deletions: dels });
+      }
+    } catch {
+      // No HEAD yet (fresh repo) — skip numstat silently.
+    }
+
+    const files = entries.map((e) => {
+      const status = statusFromPorcelain(e.x, e.y);
+      const ns = numstat.get(e.path);
+      return {
+        path: e.path,
+        status,
+        additions: ns?.additions,
+        deletions: ns?.deletions,
+      };
+    });
+
+    return {
+      branch: branch || "HEAD",
+      baseBranch: baseRef,
+      ahead,
+      behind,
+      files,
+    };
+  })();
+
+  // Share the inflight promise to dedupe concurrent callers
+  _gitStatusCache.set(cwd, { inflight: work, expiresAt: now + 500, result: null });
+  try {
+    const result = await work;
+    _gitStatusCache.set(cwd, { inflight: null, result, expiresAt: Date.now() + 500 });
+    return result;
+  } catch (err) {
+    // On failure clear the cache so the next call retries
+    _gitStatusCache.delete(cwd);
+    console.warn("[git:status] failed:", err.message);
+    return null;
+  }
+});
+
+// `git:diff` — Wave 2 (Agent B)
+//
+// Args:
+//   - opts.fromRef / opts.toRef: refs to diff between. If both omitted,
+//     defaults to working-tree vs HEAD.
+//   - opts.path: scope to a single file.
+// Returns the raw unified diff string. Empty string when there's no diff.
+ipcMain.handle("git:diff", async (_event, cwd, opts) => {
+  if (!cwd) return "";
+  const o = opts || {};
+  const args = ["diff", "--no-color"];
+
+  if (o.fromRef && o.toRef) {
+    // Two-ref diff
+    args.push(`${o.fromRef}..${o.toRef}`);
+  } else if (o.fromRef && !o.toRef) {
+    // From ref → working tree
+    args.push(o.fromRef);
+  } else if (!o.fromRef && o.toRef) {
+    // HEAD → ref (committed only — keeps semantics predictable)
+    args.push(`HEAD..${o.toRef}`);
+  }
+  // Else: no refs → default working-tree-vs-HEAD ("git diff" with no
+  // refs already does this).
+
+  if (o.path) {
+    args.push("--", o.path);
+  }
+
+  try {
+    return await runGitText(cwd, args, { timeoutMs: 15_000 });
+  } catch (err) {
+    console.warn("[git:diff] failed:", err.message);
+    return "";
+  }
+});
+// Agent C fills in
+ipcMain.handle("git:branches", async (_event, _cwd) => []);
+ipcMain.handle("git:log", async (_event, _cwd, _opts) => []);
+ipcMain.handle("git:blame", async (_event, _cwd, _path) => []);
 // Agent C fills in
 ipcMain.handle("git:branches", async (_event, _cwd) => []);
 ipcMain.handle("git:log", async (_event, _cwd, _opts) => []);
