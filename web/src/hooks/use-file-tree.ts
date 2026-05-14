@@ -122,6 +122,8 @@ export function useFileTree(workspace: string | null): UseFileTreeResult {
           depth: 1,
           respectGitignore: !showHidden,
         });
+        // eslint-disable-next-line no-console
+        console.log("[file-tree] expand", path, "→", kids.length, "children");
         setChildrenByPath((prev) => ({ ...prev, [path]: kids }));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
