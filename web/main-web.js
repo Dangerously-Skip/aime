@@ -1140,3 +1140,38 @@ ipcMain.handle("open-connector-auth-window", async (_event, url, callbackPath) =
     authWindow.loadURL(url);
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// IDE workspace — Wave 1 stubs.
+//
+// Wave 2 agents replace these handlers with real implementations:
+//   - Agent A (Phase 1): fs:walk, fs:read, fs:watch-start, fs:watch-stop,
+//     fs:change broadcast
+//   - Agent B (Phase 2): git:status, git:diff
+//   - Agent C (Phase 3): git:branches, git:log, git:blame
+//   - Agent D (Phase 4): pty:open, pty:input, pty:resize, pty:close,
+//     pty:output/exit broadcasts
+//
+// Each stub returns a safe default so the renderer doesn't crash if the
+// real implementation hasn't landed.
+// ──────────────────────────────────────────────────────────────────────
+
+// Filesystem — Agent A fills in
+ipcMain.handle("fs:walk", async (_event, _path, _opts) => []);
+ipcMain.handle("fs:read", async (_event, _path) => null);
+ipcMain.handle("fs:watch-start", async (_event, _path) => null);
+ipcMain.handle("fs:watch-stop", async (_event, _watchId) => undefined);
+
+// Git — Agent B fills in
+ipcMain.handle("git:status", async (_event, _cwd) => null);
+ipcMain.handle("git:diff", async (_event, _cwd, _opts) => "");
+// Agent C fills in
+ipcMain.handle("git:branches", async (_event, _cwd) => []);
+ipcMain.handle("git:log", async (_event, _cwd, _opts) => []);
+ipcMain.handle("git:blame", async (_event, _cwd, _path) => []);
+
+// PTY — Agent D fills in
+ipcMain.handle("pty:open", async (_event, _opts) => null);
+ipcMain.handle("pty:input", async (_event, _id, _data) => undefined);
+ipcMain.handle("pty:resize", async (_event, _id, _cols, _rows) => undefined);
+ipcMain.handle("pty:close", async (_event, _id) => undefined);
