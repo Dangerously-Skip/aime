@@ -1,19 +1,16 @@
 "use client";
 
-import { MessageSquare } from "lucide-react";
 import { PanelShell } from "./panel-shell";
 
 /**
- * Slot placeholders for any Wave 2 phase not yet integrated.
- *
- * After Wave 3 merge: only the Chat slot still uses a placeholder — the
- * Code-surface composer is wired through the slot prop by code-surface.tsx.
- * Tree / tabs / viewer / branch / terminal all have real implementations.
+ * Slot placeholder for the Chat surface when the code-surface composer
+ * isn't wired through the `chat` slot prop (legacy paths only — Wave 3
+ * code-surface always passes a real composer).
  */
 
-export function ChatPlaceholder({ onClose }: { onClose?: () => void }) {
+export function ChatPlaceholder() {
   return (
-    <PanelShell icon={MessageSquare} title="Chat" onClose={onClose}>
+    <PanelShell>
       <div className="p-3 text-xs text-muted-foreground">
         Code-surface chat composer mounts here via the `chat` slot prop.
       </div>

@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Filesystem
   fsWalk: (path, opts) => ipcRenderer.invoke("fs:walk", path, opts),
   fsRead: (path) => ipcRenderer.invoke("fs:read", path),
+  fsWrite: (path, content) => ipcRenderer.invoke("fs:write", path, content),
   fsWatchStart: (path) => ipcRenderer.invoke("fs:watch-start", path),
   fsWatchStop: (watchId) => ipcRenderer.invoke("fs:watch-stop", watchId),
   onFsChange: (callback) => {

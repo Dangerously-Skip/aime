@@ -189,8 +189,9 @@ export const useCodeWorkspaceStore = create<CodeWorkspaceStore>()(
     }),
     {
       name: 'quarry:code-workspace',
-      // v3: adds dockviewLayout (opaque api.toJSON snapshot).
-      version: 3,
+      // v4: chat tab now uses the `chat-tab` tabComponent (hideClose);
+      //     wipe stored layouts so new chat panels regenerate with it.
+      version: 4,
       migrate: () => ({ byWorkspace: {} }),
     },
   ),

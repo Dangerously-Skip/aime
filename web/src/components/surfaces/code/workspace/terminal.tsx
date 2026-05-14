@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { Terminal as TerminalIcon } from "lucide-react";
 import { Terminal as XTerm, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { WebLinksAddon } from "xterm-addon-web-links";
@@ -307,7 +306,7 @@ export function TerminalPanel({ workspace, onClose, visible = true, sessionKey }
   };
 
   return (
-    <PanelShell icon={TerminalIcon} title="Terminal" onClose={onClose}>
+    <PanelShell>
       <div
         ref={hostRef}
         onContextMenu={contextMenu}

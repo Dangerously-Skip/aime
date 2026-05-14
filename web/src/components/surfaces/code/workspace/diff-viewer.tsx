@@ -322,21 +322,13 @@ export function DiffViewer({
   );
 
   return (
-    <PanelShell
-      icon={FileDiff}
-      title=""
-      actions={headerActions}
-      onClose={onClose}
-    >
-      {/* Custom title row — PanelShell's `title` prop only takes a string,
-          so we render our own inside the body to keep the file path + stats
-          on one line. */}
+    <PanelShell floatingActions={headerActions}>
       <div
         ref={containerRef}
         tabIndex={0}
         className="h-full flex flex-col min-h-0 outline-none"
       >
-        <div className="flex items-center gap-2 px-2 h-7 border-b border-border/40 bg-muted/20 shrink-0 min-w-0">
+        <div className="flex items-center gap-2 px-2 h-7 shrink-0 min-w-0">
           {title}
         </div>
         <div className="flex-1 min-h-0 overflow-auto">
