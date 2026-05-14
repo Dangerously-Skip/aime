@@ -4,33 +4,26 @@ import { type ReactNode, useState } from "react";
 import { Group, Panel, Separator, type PanelSize } from "react-resizable-panels";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { PanelToolbar } from "./panel-toolbar";
-import {
-  TreePlaceholder,
-  TabsPlaceholder,
-  ViewerPlaceholder,
-  TerminalPlaceholder,
-  ChatPlaceholder,
-} from "./placeholders";
+import { TerminalPlaceholder, ChatPlaceholder } from "./placeholders";
 import { BranchHeader } from "./branch-header";
 import { GitHistory } from "./git-history";
+import { FileTree } from "./file-tree";
+import { TabStrip } from "./tab-strip";
+import { ViewerPane } from "./viewer-pane";
 
 /**
  * Master workspace layout for the IDE mode of the Code surface.
  *
- * Six toggleable, resizable regions. Wave 2 agents replace the placeholder
- * components below one-for-one. The layout state (visibility, sizes, slot
- * assignments) is persisted per workspace via `useCodeWorkspace`.
+ * Six toggleable, resizable regions. Wave 2 agents have replaced their
+ * placeholder slots with real components. Callers can still override any
+ * slot via the `slots` prop.
  */
 
 interface WorkspaceLayoutProps {
   workspace: string | null;
   /** Folder picker callback used by the default branch header. */
   onFolderChange?: (folder: string | null) => void;
-  /**
-   * Slot overrides — Wave 2 agents pass their real components here so the
-   * layout stays in one place. Falling back to placeholders when a slot
-   * isn't yet implemented.
-   */
+  /** Slot overrides; defaults to the integrated real components. */
   slots?: Partial<{
     branch: ReactNode;
     tree: ReactNode;
@@ -44,13 +37,12 @@ interface WorkspaceLayoutProps {
 export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceLayoutProps) {
   const { layout, setSize, setVisible } = useCodeWorkspace(workspace);
 
-  // Phase 3 — branch-header default slot owns the history toggle + base-branch
-  // override state. Agents passing their own `slots.branch` are free to manage
-  // these themselves; this state only drives the default header + viewer.
+  // Branch-header default slot owns the history toggle + base-branch
+  // override. Slot overrides are free to manage these themselves.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string | null>(null);
 
-  // Resolve each slot — caller's component, or our placeholder
+  // Resolve each slot — caller's component, or the real default
   const branchSlot =
     slots?.branch ?? (
       <BranchHeader
@@ -62,12 +54,15 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
         onBaseBranchChange={setBaseBranch}
       />
     );
-  const treeSlot = slots?.tree ?? <TreePlaceholder onClose={() => setVisible("tree", false)} />;
-  const tabsSlot = slots?.tabs ?? <TabsPlaceholder />;
-  // When the default branch header opens History, swap the viewer body for
+  const treeSlot = slots?.tree ?? <FileTree workspace={workspace} onClose={() => setVisible("tree", false)} />;
+  const tabsSlot = slots?.tabs ?? <TabStrip workspace={workspace} />;
+  // When the default branch header opens History, swap the viewer for
   // the GitHistory pane. Caller-supplied viewer slots stay untouched.
-  const viewerSlot = slots?.viewer
-    ?? (historyOpen ? <GitHistory workspace={workspace} onClose={() => setHistoryOpen(false)} /> : <ViewerPlaceholder />);
+  const viewerSlot =
+    slots?.viewer
+    ?? (historyOpen
+      ? <GitHistory workspace={workspace} onClose={() => setHistoryOpen(false)} />
+      : <ViewerPane workspace={workspace} />);
   const terminalSlot = slots?.terminal ?? <TerminalPlaceholder onClose={() => setVisible("terminal", false)} />;
   const chatSlot = slots?.chat ?? <ChatPlaceholder onClose={() => setVisible("chat", false)} />;
 
