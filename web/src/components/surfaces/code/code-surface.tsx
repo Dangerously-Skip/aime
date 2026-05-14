@@ -62,6 +62,7 @@ import { ListChecks } from "lucide-react";
 import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
 import { getSlashSuggestions, parseSlashCommand, applySlashCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
 import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
+import { WorkspaceLayout } from "./workspace/workspace-layout";
 
 const EMPTY_MESSAGES: Message[] = [];
 
@@ -1185,114 +1186,121 @@ export function CodeSurface() {
           </div>
         </div>
       ) : (
-        /* ── Active state: messages + bottom input ── */
-        <>
-          {/* Continue in Surface handoff (when project is active) */}
-          {currentProjectId && !isStreaming && messages.length > 0 && (
-            <div className="flex items-center gap-2 px-6 py-1.5 border-b border-border/50">
-              <span className="text-xs text-muted-foreground">Continue in:</span>
-              <ContinueInSurface
-                currentSurface="code"
-                projectId={currentProjectId}
-                conversationId={chatId}
-              />
-            </div>
-          )}
-
-          {/* Preview chip header */}
-          {previewUrl && (
-            <div className="flex items-center gap-2 px-6 py-1.5 border-b border-border/50">
-              <button
-                type="button"
-                onClick={() => setPreviewOpen((prev) => !prev)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs text-primary hover:bg-primary/10 transition-colors animate-in fade-in slide-in-from-left-2 duration-300"
-              >
-                <Globe className="h-3 w-3" />
-                <span>Preview</span>
-                <span className="text-primary/70 font-mono truncate max-w-[200px]">
-                  {previewUrl.replace(/^https?:\/\//, "")}
-                </span>
-              </button>
-            </div>
-          )}
-
-          <div className="flex flex-1 min-h-0">
-            {/* Messages + input column */}
-            <div className="flex flex-1 flex-col min-w-0">
-              <div
-                className="flex-1 min-h-0 overflow-y-auto px-6 py-4"
-                onScroll={(e) => {
-                  const el = e.currentTarget;
-                  const scrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight >= 50;
-                  setUserScrolledUp(scrolledUp);
-                  userScrolledUpRef.current = scrolledUp;
-                }}
-              >
-                <div ref={contentRef} className="max-w-3xl mx-auto relative">
-                  <TerminalOutput
-                    messages={messages as TerminalMessage[]}
-                    onQuestionAnswered={handleQuestionAnswered}
-                    onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }}
-                    endRef={endRef}
-                  />
-                </div>
-                {userScrolledUp && (
-                  <button
-                    onClick={() => {
-                      setUserScrolledUp(false);
-                      userScrolledUpRef.current = false;
-                      endRef.current?.scrollIntoView({ behavior: "smooth" });
-                    }}
-                    className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-primary/90 text-primary-foreground px-3 py-1.5 text-xs shadow-lg hover:bg-primary transition-colors"
-                  >
-                    Scroll to bottom
-                  </button>
+        /* ── Active state: workspace layout (tree + viewer + chat slot) ── */
+        <WorkspaceLayout
+          workspace={folder}
+          slots={{
+            chat: (
+              <div className="flex flex-col h-full min-h-0">
+                {/* Continue in Surface handoff (when project is active) */}
+                {currentProjectId && !isStreaming && messages.length > 0 && (
+                  <div className="flex items-center gap-2 px-4 py-1.5 border-b border-border/50 shrink-0">
+                    <span className="text-xs text-muted-foreground">Continue in:</span>
+                    <ContinueInSurface
+                      currentSurface="code"
+                      projectId={currentProjectId}
+                      conversationId={chatId}
+                    />
+                  </div>
                 )}
-              </div>
 
-              <div className="px-6 pb-4 pt-2">
-                <div className="max-w-3xl mx-auto">
-                  <CodeInput
-                    value={inputValue}
-                    onChange={setInputValue}
-                    onSubmit={handleSubmit}
-                    onAbort={abort}
-                    isStreaming={isStreaming}
-                    permissionMode={permissionMode}
-                    onPermissionModeChange={setPermissionMode}
-                    model={model}
-                    onModelChange={setModel}
-                    placeholder="Describe a task..."
-                    rows={1}
-                    minHeight="min-h-[36px]"
-                    attachments={attachments}
-                    onAttachmentAdd={handleAttachmentAdd}
-                    onAttachmentRemove={handleAttachmentRemove}
-                    currentProjectId={currentProjectId}
-                    onAddToProject={(pid) => assignToProject(chatId, pid)}
-                    onNewProject={() => setSidebarMode("projects")}
-                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                    onVoiceTranscript={handleVoiceTranscript}
-                    planButton={planButton}
-                  />
-                  <BottomBar folder={folder} onFolderChange={handleFolderChange} />
+                {/* Preview chip header */}
+                {previewUrl && (
+                  <div className="flex items-center gap-2 px-4 py-1.5 border-b border-border/50 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewOpen((prev) => !prev)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs text-primary hover:bg-primary/10 transition-colors animate-in fade-in slide-in-from-left-2 duration-300"
+                    >
+                      <Globe className="h-3 w-3" />
+                      <span>Preview</span>
+                      <span className="text-primary/70 font-mono truncate max-w-[200px]">
+                        {previewUrl.replace(/^https?:\/\//, "")}
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex flex-1 min-h-0">
+                  {/* Messages + input column */}
+                  <div className="flex flex-1 flex-col min-w-0">
+                    <div
+                      className="flex-1 min-h-0 overflow-y-auto px-4 py-4"
+                      onScroll={(e) => {
+                        const el = e.currentTarget;
+                        const scrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight >= 50;
+                        setUserScrolledUp(scrolledUp);
+                        userScrolledUpRef.current = scrolledUp;
+                      }}
+                    >
+                      <div ref={contentRef} className="max-w-3xl mx-auto relative">
+                        <TerminalOutput
+                          messages={messages as TerminalMessage[]}
+                          onQuestionAnswered={handleQuestionAnswered}
+                          onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }}
+                          endRef={endRef}
+                        />
+                      </div>
+                      {userScrolledUp && (
+                        <button
+                          onClick={() => {
+                            setUserScrolledUp(false);
+                            userScrolledUpRef.current = false;
+                            endRef.current?.scrollIntoView({ behavior: "smooth" });
+                          }}
+                          className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-primary/90 text-primary-foreground px-3 py-1.5 text-xs shadow-lg hover:bg-primary transition-colors"
+                        >
+                          Scroll to bottom
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="px-4 pb-3 pt-2 shrink-0">
+                      <div className="max-w-3xl mx-auto">
+                        <CodeInput
+                          value={inputValue}
+                          onChange={setInputValue}
+                          onSubmit={handleSubmit}
+                          onAbort={abort}
+                          isStreaming={isStreaming}
+                          permissionMode={permissionMode}
+                          onPermissionModeChange={setPermissionMode}
+                          model={model}
+                          onModelChange={setModel}
+                          placeholder="Describe a task..."
+                          rows={1}
+                          minHeight="min-h-[36px]"
+                          attachments={attachments}
+                          onAttachmentAdd={handleAttachmentAdd}
+                          onAttachmentRemove={handleAttachmentRemove}
+                          currentProjectId={currentProjectId}
+                          onAddToProject={(pid) => assignToProject(chatId, pid)}
+                          onNewProject={() => setSidebarMode("projects")}
+                          projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
+                          onVoiceTranscript={handleVoiceTranscript}
+                          planButton={planButton}
+                        />
+                        <BottomBar folder={folder} onFolderChange={handleFolderChange} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Preview panel */}
+                  {previewUrl && (
+                    <PreviewPanel
+                      url={previewUrl}
+                      open={previewOpen}
+                      onClose={() => setPreviewOpen(false)}
+                      refreshKey={refreshKey}
+                      onWebviewReady={(ref) => { previewWebviewRef.current = ref as WebviewRef | null; }}
+                      onConsoleMessage={(level, message) => { consoleBufferRef.current.push(level, message); }}
+                    />
+                  )}
                 </div>
               </div>
-            </div>
-
-            {/* Preview panel */}
-            {previewUrl && (
-              <PreviewPanel
-                url={previewUrl}
-                open={previewOpen}
-                onClose={() => setPreviewOpen(false)}
-                refreshKey={refreshKey}
-                onWebviewReady={(ref) => { previewWebviewRef.current = ref as WebviewRef | null; }}
-                onConsoleMessage={(level, message) => { consoleBufferRef.current.push(level, message); }}
-              />
-            )}
-          </div>
-        </>
+            ),
+          }}
+        />
       )}
 
       {/* Plan sheet */}

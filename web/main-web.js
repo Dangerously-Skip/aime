@@ -1156,11 +1156,125 @@ ipcMain.handle("open-connector-auth-window", async (_event, url, callbackPath) =
 // real implementation hasn't landed.
 // ──────────────────────────────────────────────────────────────────────
 
-// Filesystem — Agent A fills in
-ipcMain.handle("fs:walk", async (_event, _path, _opts) => []);
-ipcMain.handle("fs:read", async (_event, _path) => null);
-ipcMain.handle("fs:watch-start", async (_event, _path) => null);
-ipcMain.handle("fs:watch-stop", async (_event, _watchId) => undefined);
+// ── Filesystem (Agent A / Phase 1) ────────────────────────────────────
+//
+// Walks directories one level at a time, reads files as utf-8 (binary
+// detection returns null), and runs a chokidar watcher per workspace.
+// fs:change events are broadcast to every BrowserWindow so multiple
+// renderer subscribers can listen in.
+const codeWorkspaceFs = require("./lib/code-workspace-fs");
+
+ipcMain.handle("fs:walk", async (_event, dirPath, opts) => {
+  if (!dirPath || typeof dirPath !== "string") return [];
+  const expanded = expandHome(dirPath);
+  // The first call from the renderer is always at the workspace root, so
+  // we treat the requested path as the gitignore boundary for that call.
+  // For deeper expansions the renderer still passes the original root via
+  // opts.workspaceRoot if needed; default to the requested path.
+  const root = (opts && typeof opts.workspaceRoot === "string")
+    ? expandHome(opts.workspaceRoot)
+    : expanded;
+  const result = codeWorkspaceFs.walkOne(root, expanded, {
+    respectGitignore: opts?.respectGitignore !== false,
+  });
+  if (result.error) {
+    console.warn(`[fs:walk] ${expanded}:`, result.error);
+    return [];
+  }
+  return result.nodes;
+});
+
+ipcMain.handle("fs:read", async (_event, filePath) => {
+  if (!filePath || typeof filePath !== "string") return null;
+  const expanded = expandHome(filePath);
+  const result = codeWorkspaceFs.readFileSafe(expanded);
+  if (result.error) {
+    console.warn(`[fs:read] ${expanded}:`, result.error);
+    return null;
+  }
+  if (result.binary) {
+    return { content: "", encoding: "binary", binary: true, size: result.size ?? 0 };
+  }
+  return { content: result.content, encoding: result.encoding, size: result.size };
+});
+
+// Active watchers keyed by their generated id.
+const fsWatchers = new Map();
+let nextWatchId = 1;
+// Lazy ESM import of chokidar 5 from CJS main.
+let _chokidarPromise = null;
+function loadChokidar() {
+  if (!_chokidarPromise) _chokidarPromise = import("chokidar");
+  return _chokidarPromise;
+}
+
+function broadcastFsChange(payload) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      try { win.webContents.send("fs:change", payload); } catch {}
+    }
+  }
+}
+
+ipcMain.handle("fs:watch-start", async (_event, watchPath) => {
+  if (!watchPath || typeof watchPath !== "string") return null;
+  const expanded = expandHome(watchPath);
+  let chokidar;
+  try {
+    chokidar = await loadChokidar();
+  } catch (err) {
+    console.warn("[fs:watch-start] chokidar import failed:", err && err.message);
+    return null;
+  }
+
+  const watchId = `w${nextWatchId++}`;
+  let debounceTimer = null;
+  let pending = [];
+  const flush = () => {
+    const batch = pending;
+    pending = [];
+    debounceTimer = null;
+    for (const evt of batch) broadcastFsChange(evt);
+  };
+  const emit = (kind, changedPath) => {
+    pending.push({ watchId, path: changedPath, kind });
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(flush, 150);
+  };
+
+  let watcher;
+  try {
+    watcher = chokidar.watch(expanded, {
+      ignored: (p) =>
+        /(^|[\\/])(\.git|node_modules|\.next|dist|\.DS_Store)([\\/]|$)/.test(p),
+      ignoreInitial: true,
+      persistent: true,
+      awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
+      depth: 99,
+    });
+  } catch (err) {
+    console.warn(`[fs:watch-start] ${expanded}:`, err && err.message);
+    return null;
+  }
+
+  watcher
+    .on("add", (p) => emit("add", p))
+    .on("change", (p) => emit("change", p))
+    .on("unlink", (p) => emit("delete", p))
+    .on("addDir", (p) => emit("add", p))
+    .on("unlinkDir", (p) => emit("delete", p))
+    .on("error", (err) => console.warn(`[fs:watch ${watchId}]`, err && err.message));
+
+  fsWatchers.set(watchId, watcher);
+  return watchId;
+});
+
+ipcMain.handle("fs:watch-stop", async (_event, watchId) => {
+  const watcher = fsWatchers.get(watchId);
+  if (!watcher) return;
+  fsWatchers.delete(watchId);
+  try { await watcher.close(); } catch {}
+});
 
 // ──────────────────────────────────────────────────────────────────────
 // Git — shared `runGit` helper used by Agent B (status/diff) and Agent C
