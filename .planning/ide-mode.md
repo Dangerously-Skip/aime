@@ -331,13 +331,129 @@ store) until Phase 5 lands.
 
 ---
 
-## Decisions needed from you
+## Decisions (locked 2026-05-14)
 
-Before any Phase 0 work starts:
+- [x] **No feature flag.** Build directly on `IDEMode` branch; merge to
+      master when integrated. Replaces the current Code surface in one cut.
+- [x] **Terminal IS in v1.** Phase 4 is included, not deferred.
+- [x] **Tab persistence: yes**, per workspace, survives launches.
+- [x] **Chat at 30% side rail default**, remembered per workspace.
+- [x] **Bottom bar collapses.** `FolderPicker` → branch header, `EditorPicker`
+      → kebab on branch header + right-click in tree.
+- [x] **No multi-folder workspaces** in v1.
+- [x] **Git history view IS in v1** — extends Phase 3 (commits list + blame).
+- [x] **Chat composer stays the hero.** Rich composer preserved (attachments,
+      voice, scratch-space). Panels are reorderable so the user can collapse
+      / reshuffle other regions to make room when they want the composer big.
 
-- [ ] Confirm we're shipping behind a feature flag during build-out
-- [ ] Decide on terminal (yes / defer / no)
-- [ ] Decide on tab persistence (yes / per-session)
-- [ ] Decide on chat-pane default (full / 30% side / configurable)
-- [ ] Confirm bottom-bar collapse plan (lose FolderPicker + EditorPicker
-      from bottom, move to branch header + tree context menu)
+## Reorderable panels (added requirement)
+
+Beyond the resize/toggle support already in the plan, every non-fixed region
+can be **moved into a different slot** at runtime:
+
+- Drag a panel header onto another region's edge → swap or stack
+- Stacked panels show as tabs at the top of the merged region
+- Layout-reset action restores defaults
+
+Implementation: `react-resizable-panels` covers resize + toggle. For
+drag-to-rearrange we add a thin layer that swaps named panel slots in the
+persisted layout state. No DnD library beyond `@dnd-kit` (already installed
+for kanban).
+
+## Swarm execution plan
+
+Wave-based, multi-agent. Each agent works in its own git worktree so we
+don't step on `node_modules`, branch state, or each other's files. Each
+returns a branch ready to merge into `IDEMode`.
+
+### Wave 1 — Phase 0 chassis (sequential, ~1 day)
+
+I build this. It defines every interface the parallel phases plug into:
+
+- `workspace-layout.tsx` with named panel slots: `branch`, `tree`, `tabs`,
+  `viewer`, `terminal`, `chat`
+- Resize + toggle + drag-to-rearrange scaffold (empty placeholder content
+  per slot)
+- `settings-store.codeWorkspaceLayout` schema covering visibility, sizes,
+  slot positions, open tabs
+- IPC channels declared in `preload-web.js` (empty handlers in
+  `main-web.js` for the parallel phases to fill):
+  - `fs:walk`, `fs:read`, `fs:watch-start`, `fs:watch-stop`
+  - `git:status`, `git:diff`, `git:branches`, `git:log`, `git:blame`
+  - `pty:open`, `pty:input`, `pty:resize`, `pty:close`, `pty:output`
+- Hook stubs:
+  - `useFileTree`, `useGitStatus`, `useGitLog`, `usePty`, `useCodeWorkspace`
+- Phase 0 ends with a Code surface that opens with empty panels, all
+  toggle/resize/drag wired, persistence working.
+
+Once Wave 1 is committed to `IDEMode`, Wave 2 fans out.
+
+### Wave 2 — Phases 1–4 in parallel (4 agents, ~3 days wall clock)
+
+Each agent gets an isolated worktree, a clear task brief, and a target
+branch. Conflicts minimised because each phase owns a disjoint set of
+files thanks to the slot/hook boundaries Wave 1 established.
+
+| Agent | Branch | Owns | Touches |
+|---|---|---|---|
+| **A: Tree + viewer** | `feat/ide-phase-1-tree-viewer` | `file-tree.tsx`, `file-tree-node.tsx`, `file-tree-filter.tsx`, `tab-strip.tsx`, `viewer-pane.tsx`, `fs-tree.ts`, `file-watcher.ts`, `use-file-tree.ts` | fills `fs:*` IPC handlers; fills tree + viewer slots |
+| **B: Git + diff** | `feat/ide-phase-2-git-diff` | `diff-viewer.tsx`, `git-ops.ts`, `use-git-status.ts` | fills `git:status` / `git:diff` IPC handlers; renders diff tabs |
+| **C: Branch + history** | `feat/ide-phase-3-branch-history` | `branch-header.tsx`, `branch-picker.tsx`, `git-history.tsx`, `blame-view.tsx`, `use-git-log.ts` | fills `git:branches` / `git:log` / `git:blame` handlers; relocates FolderPicker + EditorPicker; wires Create PR via GitHub MCP |
+| **D: Terminal** | `feat/ide-phase-4-terminal` | `terminal.tsx`, `pty-client.ts`, main-process pty manager | fills `pty:*` IPC handlers; node-pty + electron-builder unpacked asar config; xterm.js mount |
+
+**Coordination rules for the agents**:
+1. Worktree-isolated; never edit files outside their owned list except
+   `package.json` / lockfile (for new deps).
+2. New IPC handlers fill the empty implementations Wave 1 declared — they
+   don't add new channels (avoids preload drift).
+3. New settings-store fields go under the existing `codeWorkspaceLayout`
+   object — no top-level new keys.
+4. All four push their branch when done; integration is Wave 3.
+
+### Wave 3 — Merge + integrate (sequential, ~0.5 day)
+
+I drive this. Merge order:
+
+1. `feat/ide-phase-2-git-diff` (smallest surface area)
+2. `feat/ide-phase-3-branch-history` (depends on git-ops from #2)
+3. `feat/ide-phase-1-tree-viewer` (largest UI surface; merges into
+   workspace-layout)
+4. `feat/ide-phase-4-terminal` (independent, lowest conflict risk last)
+
+Conflicts expected in `code-surface.tsx`, `package.json`,
+`preload-web.js`, `main-web.js` — but small and obvious. Worktree pushes
+mean I can resolve linearly without breaking any agent's working state.
+
+End-to-end smoke after each merge:
+- Open Code surface → all panels visible
+- Walk tree → file opens in viewer
+- Modified file → diff opens
+- Drag panel header → re-arrange works
+- Branch picker → Create PR fires
+- Terminal opens → can run a command
+
+### Wave 4 — Phase 5 polish (sequential, ~1 day)
+
+Single agent (probably me). Empty states, errors, keybinds, accessibility,
+telemetry. Then merge `IDEMode` to master with a v1.7.0 release.
+
+## Wall-clock estimate
+
+| Wave | Work | Days |
+|---|---|---|
+| 1 | Chassis (sequential) | 1 |
+| 2 | Phases 1–4 in parallel | 3 (wall clock) |
+| 3 | Merge + integrate | 0.5 |
+| 4 | Polish + release | 1 |
+| **Total** | | **~5.5 days wall clock** (~9 days of effort across 4 agents) |
+
+Wall-clock save vs serial: ~3.5 days.
+
+## Risks added by the swarm approach
+
+| Risk | Mitigation |
+|---|---|
+| Two agents add the same npm dep, lockfile conflicts | Wave 1 pre-installs all deps in a placeholder commit |
+| Agent A writes to a slot Agent B also touches | Slot/hook ownership table above — strict |
+| One agent's branch breaks the typecheck others depend on | Each branch must `npm run typecheck` clean before push |
+| Time-zone of dependency hell during merge | Merge in dependency order (see Wave 3); typecheck after each |
