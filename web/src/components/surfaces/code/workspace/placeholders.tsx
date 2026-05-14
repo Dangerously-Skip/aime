@@ -4,7 +4,6 @@ import {
   FolderTree,
   GitBranch,
   GitCommit,
-  Terminal,
   FileText,
   MessageSquare,
 } from "lucide-react";
@@ -46,15 +45,8 @@ export function ViewerPlaceholder() {
   );
 }
 
-export function TerminalPlaceholder({ onClose }: { onClose?: () => void }) {
-  return (
-    <PanelShell icon={Terminal} title="Terminal" onClose={onClose}>
-      <div className="p-3 text-xs text-muted-foreground font-mono">
-        $ <span className="opacity-50">terminal — coming via Phase 4 (Agent D)</span>
-      </div>
-    </PanelShell>
-  );
-}
+// TerminalPlaceholder removed — Phase 4 ships the real `TerminalPanel`
+// (web/src/components/surfaces/code/workspace/terminal.tsx).
 
 export function ChatPlaceholder({ onClose }: { onClose?: () => void }) {
   return (

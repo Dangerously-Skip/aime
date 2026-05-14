@@ -8,10 +8,10 @@ import {
   TreePlaceholder,
   TabsPlaceholder,
   ViewerPlaceholder,
-  TerminalPlaceholder,
   ChatPlaceholder,
   BranchHeaderPlaceholder,
 } from "./placeholders";
+import { TerminalPanel } from "./terminal";
 
 /**
  * Master workspace layout for the IDE mode of the Code surface.
@@ -46,7 +46,13 @@ export function WorkspaceLayout({ workspace, slots }: WorkspaceLayoutProps) {
   const treeSlot = slots?.tree ?? <TreePlaceholder onClose={() => setVisible("tree", false)} />;
   const tabsSlot = slots?.tabs ?? <TabsPlaceholder />;
   const viewerSlot = slots?.viewer ?? <ViewerPlaceholder />;
-  const terminalSlot = slots?.terminal ?? <TerminalPlaceholder onClose={() => setVisible("terminal", false)} />;
+  const terminalSlot = slots?.terminal ?? (
+    <TerminalPanel
+      workspace={workspace}
+      visible={layout.visible.terminal}
+      onClose={() => setVisible("terminal", false)}
+    />
+  );
   const chatSlot = slots?.chat ?? <ChatPlaceholder onClose={() => setVisible("chat", false)} />;
 
   return (
