@@ -176,7 +176,10 @@ export const useCodeWorkspaceStore = create<CodeWorkspaceStore>()(
     }),
     {
       name: 'quarry:code-workspace',
-      version: 1,
+      // v2: chatWidth added, chat moved to left hero slot. Stale v1 layouts
+      // have invalid panel sums and crash react-resizable-panels.
+      version: 2,
+      migrate: () => ({ byWorkspace: {} }),
     },
   ),
 );

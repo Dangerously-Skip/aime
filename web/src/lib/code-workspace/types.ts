@@ -18,8 +18,13 @@ export interface WorkspaceLayout {
   visible: Record<PanelSlot, boolean>;
   /** Region sizes as percentages. */
   sizes: {
+    /** Chat (left hero) width as %. */
+    chatWidth: number;
+    /** File tree column width as %. */
     leftWidth: number;
+    /** Legacy right-rail width — kept for back-compat. */
     rightWidth: number;
+    /** Terminal panel height as % of the centre column. */
     terminalHeight: number;
   };
   /** Open tabs in the viewer region. */
@@ -104,11 +109,11 @@ export interface PtySession {
 export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
   slotAssignments: {
     branch: 'top',
-    tree: 'left',
+    chat: 'left',         // hero, leftmost
+    tree: 'center-top',   // file tree sits to the right of chat
     tabs: 'center-top',
     viewer: 'center-top',
     terminal: 'center-bottom',
-    chat: 'right',
   },
   visible: {
     branch: true,
@@ -119,8 +124,9 @@ export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
     chat: true,
   },
   sizes: {
-    leftWidth: 18,
-    rightWidth: 30,
+    chatWidth: 40,      // chat dominates the left half
+    leftWidth: 18,      // file tree column to the right of chat
+    rightWidth: 30,     // legacy — kept for back-compat
     terminalHeight: 25,
   },
   openTabs: [],

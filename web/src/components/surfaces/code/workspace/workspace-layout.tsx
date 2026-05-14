@@ -10,14 +10,31 @@ import { GitHistory } from "./git-history";
 import { FileTree } from "./file-tree";
 import { TabStrip } from "./tab-strip";
 import { ViewerPane } from "./viewer-pane";
-import { TerminalPanel } from "./terminal";
+import dynamic from "next/dynamic";
+
+// xterm.js references `self` at module load — defer to the client.
+const TerminalPanel = dynamic(
+  () => import("./terminal").then((m) => m.TerminalPanel),
+  { ssr: false },
+);
 
 /**
- * Master workspace layout for the IDE mode of the Code surface.
+ * Master workspace layout — chat on the LEFT as the hero, IDE tools on the
+ * right. Every region is toggleable + resizable; sizes persist per workspace.
  *
- * Six toggleable, resizable regions. Wave 2 agents have integrated their
- * real components into the slots. Callers can still override any slot via
- * the `slots` prop.
+ * Layout, top-down:
+ *
+ *   ┌─────────────────────────────────────────────────────────────────┐
+ *   │  Branch header                                  [panel toggles] │
+ *   ├──────────────────┬──────────────────────────────────────────────┤
+ *   │                  │  ┌────┬─────────────────────────┐            │
+ *   │                  │  │    │  tabs                   │            │
+ *   │  Chat (hero)     │  │tree│  ─────────────────────  │            │
+ *   │                  │  │    │  viewer  /  diff        │            │
+ *   │                  │  │    │  ─────────────────────  │            │
+ *   │                  │  │    │  terminal (toggle)      │            │
+ *   │                  │  └────┴─────────────────────────┘            │
+ *   └──────────────────┴──────────────────────────────────────────────┘
  */
 
 interface WorkspaceLayoutProps {
@@ -38,8 +55,7 @@ interface WorkspaceLayoutProps {
 export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceLayoutProps) {
   const { layout, setSize, setVisible } = useCodeWorkspace(workspace);
 
-  // Branch-header default slot owns the history toggle + base-branch
-  // override. Slot overrides are free to manage these themselves.
+  // Branch-header default slot owns the history toggle + base-branch override.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string | null>(null);
 
@@ -56,22 +72,29 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
     );
   const treeSlot = slots?.tree ?? <FileTree workspace={workspace} onClose={() => setVisible("tree", false)} />;
   const tabsSlot = slots?.tabs ?? <TabStrip workspace={workspace} />;
-  // When the default branch header opens History, swap the viewer for
-  // the GitHistory pane.
   const viewerSlot =
     slots?.viewer
     ?? (historyOpen
       ? <GitHistory workspace={workspace} onClose={() => setHistoryOpen(false)} />
       : <ViewerPane workspace={workspace} />);
+  // Only mount TerminalPanel when visible — xterm initialises a DOM-coupled
+  // renderer at mount and gets cranky if the host element has 0 dimensions.
   const terminalSlot =
-    slots?.terminal ?? (
-      <TerminalPanel
-        workspace={workspace}
-        visible={layout.visible.terminal}
-        onClose={() => setVisible("terminal", false)}
-      />
-    );
+    slots?.terminal
+    ?? (layout.visible.terminal
+      ? (
+        <TerminalPanel
+          workspace={workspace}
+          visible={layout.visible.terminal}
+          onClose={() => setVisible("terminal", false)}
+        />
+      )
+      : null);
   const chatSlot = slots?.chat ?? <ChatPlaceholder onClose={() => setVisible("chat", false)} />;
+
+  // Persist-buster: bump when DEFAULT_WORKSPACE_LAYOUT sizes change so
+  // react-resizable-panels invalidates stale per-group layouts in localStorage.
+  const groupVersion = "v2";
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
@@ -85,61 +108,65 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots }: WorkspaceL
         </div>
       )}
 
-      {/* Main 3-column grid: tree | center | chat */}
+      {/* Main horizontal split: chat (hero, left) | IDE column (right) */}
       <div className="flex-1 min-h-0">
-        <Group orientation="horizontal" id={`code-ws-${workspace ?? "none"}-h`}>
-          {layout.visible.tree && (
-            <>
-              <Panel
-                defaultSize={layout.sizes.leftWidth}
-                minSize={12}
-                maxSize={40}
-                onResize={(s: PanelSize) => setSize("leftWidth", s.asPercentage)}
-              >
-                <div className="h-full p-1 pr-0.5">{treeSlot}</div>
-              </Panel>
-              <Separator className="w-1 hover:bg-primary/30 transition-colors" />
-            </>
-          )}
-
-          {/* Center: tabs + viewer split vertically against terminal */}
-          <Panel minSize={30}>
-            <Group orientation="vertical" id={`code-ws-${workspace ?? "none"}-v`}>
-              <Panel minSize={20}>
-                <div className="flex flex-col h-full min-h-0 px-0.5">
-                  {tabsSlot}
-                  <div className="flex-1 min-h-0">{viewerSlot}</div>
-                </div>
-              </Panel>
-              {layout.visible.terminal && (
-                <>
-                  <Separator className="h-1 hover:bg-primary/30 transition-colors" />
-                  <Panel
-                    defaultSize={layout.sizes.terminalHeight}
-                    minSize={10}
-                    maxSize={70}
-                    onResize={(s: PanelSize) => setSize("terminalHeight", s.asPercentage)}
-                  >
-                    <div className="h-full p-1 pt-0.5">{terminalSlot}</div>
-                  </Panel>
-                </>
-              )}
-            </Group>
-          </Panel>
-
+        <Group orientation="horizontal" id={`code-ws-${groupVersion}-${workspace ?? "none"}-main`}>
           {layout.visible.chat && (
             <>
-              <Separator className="w-1 hover:bg-primary/30 transition-colors" />
               <Panel
-                defaultSize={layout.sizes.rightWidth}
-                minSize={20}
-                maxSize={60}
-                onResize={(s: PanelSize) => setSize("rightWidth", s.asPercentage)}
+                defaultSize={layout.sizes.chatWidth}
+                minSize={25}
+                maxSize={70}
+                onResize={(s: PanelSize) => setSize("chatWidth", s.asPercentage)}
               >
-                <div className="h-full p-1 pl-0.5">{chatSlot}</div>
+                <div className="h-full p-1 pr-0.5">{chatSlot}</div>
               </Panel>
+              <Separator className="w-1 hover:bg-primary/30 transition-colors" />
             </>
           )}
+
+          {/* IDE column: tree | (tabs + viewer / terminal) */}
+          <Panel minSize={30}>
+            <Group orientation="horizontal" id={`code-ws-${groupVersion}-${workspace ?? "none"}-ide`}>
+              {layout.visible.tree && (
+                <>
+                  <Panel
+                    defaultSize={layout.sizes.leftWidth}
+                    minSize={12}
+                    maxSize={40}
+                    onResize={(s: PanelSize) => setSize("leftWidth", s.asPercentage)}
+                  >
+                    <div className="h-full p-1">{treeSlot}</div>
+                  </Panel>
+                  <Separator className="w-1 hover:bg-primary/30 transition-colors" />
+                </>
+              )}
+
+              <Panel minSize={30}>
+                <Group orientation="vertical" id={`code-ws-${groupVersion}-${workspace ?? "none"}-v`}>
+                  <Panel minSize={20}>
+                    <div className="flex flex-col h-full min-h-0 px-0.5">
+                      {tabsSlot}
+                      <div className="flex-1 min-h-0">{viewerSlot}</div>
+                    </div>
+                  </Panel>
+                  {layout.visible.terminal && terminalSlot && (
+                    <>
+                      <Separator className="h-1 hover:bg-primary/30 transition-colors" />
+                      <Panel
+                        defaultSize={layout.sizes.terminalHeight}
+                        minSize={10}
+                        maxSize={70}
+                        onResize={(s: PanelSize) => setSize("terminalHeight", s.asPercentage)}
+                      >
+                        <div className="h-full p-1 pt-0.5">{terminalSlot}</div>
+                      </Panel>
+                    </>
+                  )}
+                </Group>
+              </Panel>
+            </Group>
+          </Panel>
         </Group>
       </div>
     </div>
