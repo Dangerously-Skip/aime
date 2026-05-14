@@ -32,6 +32,12 @@ interface TerminalPanelProps {
   onClose?: () => void;
   /** Tells the hook to refresh the last-visible stamp. Defaults to true. */
   visible?: boolean;
+  /**
+   * Optional unique key to separate multiple terminals on the same
+   * workspace. Without it, two terminal panels share one PTY (and show
+   * identical output). Pass the dockview panel id.
+   */
+  sessionKey?: string;
 }
 
 /** Read a CSS variable from documentElement, fall back to `def`. */
@@ -98,7 +104,7 @@ function deriveTheme(): ITheme {
   };
 }
 
-export function TerminalPanel({ workspace, onClose, visible = true }: TerminalPanelProps) {
+export function TerminalPanel({ workspace, onClose, visible = true, sessionKey }: TerminalPanelProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -112,6 +118,7 @@ export function TerminalPanel({ workspace, onClose, visible = true }: TerminalPa
     cols: initialCols,
     rows: initialRows,
     visible,
+    sessionKey,
   });
 
   // Keep stable refs into the latest write/resize closures so the xterm

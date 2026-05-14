@@ -13,18 +13,33 @@
  * Layered on top of dockview's `themeAbyssSpaced` base.
  * ──────────────────────────────────────────────────────────────────── */
 
+/* Override dockview's own abyss/light palette FIRST — these variables are
+   the source of the purple/blue accent (rgb(91,30,207) was the original
+   `--dv-color-abyss-accent`). All downstream theme variables resolve
+   against these, so killing them at the source is the cleanest fix. */
+.dockview-theme-abyss-spaced.dv-workspace,
+.dockview-theme-light-spaced.dv-workspace,
+.dv-workspace.dockview-theme-abyss-spaced,
+.dv-workspace.dockview-theme-light-spaced,
 .dv-workspace {
-  /* All blues/purples that ship with dockview's themes get overridden
-     here to Quarry's `--primary` (warm amber). Anything that says
-     "accent" or "highlight" in the upstream theme variable list maps
-     to --primary. */
+  /* Dockview palette overrides (force `accent` to Quarry's amber). */
+  --dv-color-abyss-dark: hsl(var(--card));
+  --dv-color-abyss: hsl(var(--card));
+  --dv-color-abyss-light: hsl(var(--muted));
+  --dv-color-abyss-lighter: hsl(var(--background));
+  --dv-color-abyss-accent: hsl(var(--primary));
+  --dv-color-abyss-primary-text: hsl(var(--foreground));
+  --dv-color-abyss-secondary-text: hsl(var(--muted-foreground));
+  --dv-color-gh-light-canvas-subtle: hsl(var(--card));
+
+  /* Panel surface */
   --dv-tabs-and-actions-container-background-color: hsl(var(--card));
   --dv-group-view-background-color: hsl(var(--card));
   --dv-tabs-container-scrollbar-color: hsl(var(--border));
   --dv-separator-border: hsl(var(--border));
   --dv-paneview-active-outline-color: hsl(var(--primary));
 
-  /* Active tab background → a clean pill */
+  /* Active tab background → clean pill */
   --dv-activegroup-visiblepanel-tab-background-color: hsl(var(--background));
   --dv-activegroup-visiblepanel-tab-color: hsl(var(--foreground));
   --dv-activegroup-hiddenpanel-tab-background-color: transparent;
@@ -34,26 +49,27 @@
   --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
   --dv-inactivegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground) / 0.7);
 
-  /* Drag / drop indicator — was purple from upstream. */
   --dv-drag-over-background-color: hsl(var(--primary) / 0.10);
   --dv-drag-over-border-color: hsl(var(--primary) / 0.6);
   --dv-tab-divider-color: transparent;
   --dv-tab-close-icon: hsl(var(--muted-foreground));
+  --dv-active-sash-color: hsl(var(--primary));
+  --dv-sash-color: transparent;
 
-  /* Selected / active accents that upstream paints blue or purple. */
+  /* Selected / active accents */
   --dv-activegroup-visiblepanel-tab-border-color: hsl(var(--primary));
   --dv-activegroup-hiddenpanel-tab-border-color: transparent;
   --dv-inactivegroup-visiblepanel-tab-border-color: transparent;
   --dv-inactivegroup-hiddenpanel-tab-border-color: transparent;
-  --dv-floating-box-shadow: 0 18px 48px hsl(0 0% 0% / 0.35);
 
-  /* Group action buttons (popout / maximize / close) — outline tone. */
+  --dv-floating-box-shadow: 0 18px 48px hsl(0 0% 0% / 0.3);
+
+  /* Group action buttons */
   --dv-activegroup-action-color: hsl(var(--muted-foreground));
   --dv-activegroup-action-hover-color: hsl(var(--foreground));
   --dv-inactivegroup-action-color: hsl(var(--muted-foreground) / 0.7);
   --dv-inactivegroup-action-hover-color: hsl(var(--foreground));
 
-  /* Watermark / empty group bg. */
   --dv-background-color: hsl(var(--background));
 }
 

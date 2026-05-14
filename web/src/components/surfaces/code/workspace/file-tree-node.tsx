@@ -25,6 +25,10 @@ interface FileTreeNodeProps {
   onToggleExpand: (path: string) => void;
   onActivate: (node: FsNode, evt: { meta: boolean; shift: boolean; alt: boolean }) => void;
   onPin: (node: FsNode) => void;
+  /** Optional git status flag — drives the M/A/D badge on the right edge. */
+  gitFlag?: "M" | "A" | "D" | "U" | "R";
+  /** Click the diff badge → open diff tab instead of file. */
+  onDiffClick?: (node: FsNode) => void;
 }
 
 /** Best-effort icon for a file extension. Falls back to generic FileIcon. */
@@ -51,6 +55,14 @@ function fileIconFor(name: string) {
  * One row of the file tree. The parent owns expand/collapse state and child
  * resolution — this component is a pure presentation node + click handler.
  */
+const GIT_FLAG_COLOR: Record<string, string> = {
+  M: "text-amber-500",
+  A: "text-emerald-500",
+  D: "text-destructive",
+  U: "text-orange-500",
+  R: "text-sky-500",
+};
+
 export function FileTreeNode({
   node,
   depth,
@@ -59,6 +71,8 @@ export function FileTreeNode({
   onToggleExpand,
   onActivate,
   onPin,
+  gitFlag,
+  onDiffClick,
 }: FileTreeNodeProps) {
   const isDir = node.type === "dir";
   const Icon = isDir ? (expanded ? FolderOpen : Folder) : fileIconFor(node.name);
@@ -107,6 +121,33 @@ export function FileTreeNode({
       <span className="truncate flex-1 text-foreground/90 group-hover:text-foreground">
         {node.name}
       </span>
+      {!isDir && gitFlag && (
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDiffClick?.(node);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              onDiffClick?.(node);
+            }
+          }}
+          title={`${
+            gitFlag === "M" ? "Modified" :
+            gitFlag === "A" ? "Added" :
+            gitFlag === "D" ? "Deleted" :
+            gitFlag === "U" ? "Untracked" :
+            gitFlag === "R" ? "Renamed" : "Changed"
+          } — click to view diff`}
+          className={`ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded px-1 text-[10px] font-mono font-semibold cursor-pointer hover:bg-muted ${GIT_FLAG_COLOR[gitFlag] ?? "text-muted-foreground"}`}
+        >
+          {gitFlag}
+        </span>
+      )}
     </button>
   );
 }
