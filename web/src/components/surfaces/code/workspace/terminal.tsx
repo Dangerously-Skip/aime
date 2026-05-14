@@ -121,73 +121,75 @@ export function TerminalPanel({ workspace, onClose, visible = true }: TerminalPa
     resizeRef.current = resize;
   }, [write, resize]);
 
-  // Mount xterm.js exactly once per host element.
+  // Mount xterm.js once the host element has measurable dimensions. Doing
+  // it before that causes "Cannot read properties of undefined (reading
+  // 'dimensions')" because xterm's internal Viewport queries its renderer
+  // size synchronously on open() and silently corrupts state if there's
+  // nothing to measure.
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || xtermRef.current) return;
+    if (!host) return;
+    let disposed = false;
 
-    const term = new XTerm({
-      fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
-      lineHeight: 1.2,
-      cursorBlink: true,
-      cursorStyle: "block",
-      scrollback: 5000,
-      allowProposedApi: true,
-      theme: deriveTheme(),
-    });
-    const fit = new FitAddon();
-    const links = new WebLinksAddon((evt, uri) => {
-      evt.preventDefault();
-      if (typeof window !== "undefined") {
-        try {
-          window.open(uri, "_blank", "noopener");
-        } catch {
-          // ignore
+    const init = () => {
+      if (disposed || xtermRef.current) return;
+      if (host.clientWidth < 16 || host.clientHeight < 16) return; // try again on next resize
+      const term = new XTerm({
+        fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+        fontSize: 13,
+        lineHeight: 1.2,
+        cursorBlink: true,
+        cursorStyle: "block",
+        scrollback: 5000,
+        allowProposedApi: true,
+        theme: deriveTheme(),
+      });
+      const fit = new FitAddon();
+      const links = new WebLinksAddon((evt, uri) => {
+        evt.preventDefault();
+        if (typeof window !== "undefined") {
+          try { window.open(uri, "_blank", "noopener"); } catch { /* ignore */ }
         }
+      });
+      term.loadAddon(fit);
+      term.loadAddon(links);
+      term.open(host);
+      term.onData((data) => { writeRef.current?.(data).catch(() => {}); });
+      term.onResize(({ cols, rows }) => { resizeRef.current?.(cols, rows).catch(() => {}); });
+      // Defer fit to next frame so xterm's render service has settled.
+      requestAnimationFrame(() => {
+        try { fit.fit(); } catch { /* ignore */ }
+      });
+      xtermRef.current = term;
+      fitRef.current = fit;
+      linksRef.current = links;
+    };
+
+    // Try once now; if size is zero, the ResizeObserver below picks it up.
+    init();
+
+    const ro = new ResizeObserver(() => {
+      if (!xtermRef.current) {
+        init();
+      } else {
+        try { fitRef.current?.fit(); } catch { /* ignore */ }
       }
     });
-    term.loadAddon(fit);
-    term.loadAddon(links);
-    term.open(host);
-
-    // Pipe keystrokes into the PTY.
-    term.onData((data) => {
-      writeRef.current?.(data).catch(() => {});
-    });
-    // xterm fires onResize when fit() decides new dimensions. Forward to PTY.
-    term.onResize(({ cols, rows }) => {
-      resizeRef.current?.(cols, rows).catch(() => {});
-    });
-
-    // First fit. Wrap in a frame so the host has its actual size.
-    requestAnimationFrame(() => {
-      try { fit.fit(); } catch { /* host not laid out yet */ }
-    });
-
-    xtermRef.current = term;
-    fitRef.current = fit;
-    linksRef.current = links;
+    ro.observe(host);
 
     return () => {
-      try { term.dispose(); } catch { /* already disposed */ }
-      try { fit.dispose(); } catch { /* ignore */ }
-      try { links.dispose(); } catch { /* ignore */ }
+      disposed = true;
+      ro.disconnect();
+      const term = xtermRef.current;
+      const fit = fitRef.current;
+      const links = linksRef.current;
+      try { term?.dispose(); } catch { /* already disposed */ }
+      try { fit?.dispose(); } catch { /* ignore */ }
+      try { links?.dispose(); } catch { /* ignore */ }
       xtermRef.current = null;
       fitRef.current = null;
       linksRef.current = null;
     };
-  }, []);
-
-  // Resize on container changes.
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    const ro = new ResizeObserver(() => {
-      try { fitRef.current?.fit(); } catch { /* ignore */ }
-    });
-    ro.observe(host);
-    return () => ro.disconnect();
   }, []);
 
   // Theme follow: re-derive when documentElement's class changes (light/dark).

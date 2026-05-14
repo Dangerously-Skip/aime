@@ -114,6 +114,16 @@
   overflow: hidden;
 }
 
+/* Viewer + diff panes get LHS padding so content doesn't hug the rounded
+   panel edge. Tab strip stays flush; only the rendered file body inherits. */
+.dv-region-body .file-viewer-body,
+.dv-region-body .diff-viewer-body,
+.dv-region-body .markdown-body,
+.dv-region-body .prose {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
 /* Splitter between groups — barely visible until hovered. */
 .dv-workspace .dv-sash {
   background: transparent;
