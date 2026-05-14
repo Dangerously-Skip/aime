@@ -81,6 +81,8 @@ export function FileTreeNode({
   const Icon = isDir ? (expanded ? FolderOpen : Folder) : fileIconFor(node.name);
 
   function handleClick(e: MouseEvent<HTMLButtonElement>) {
+    // eslint-disable-next-line no-console
+    console.log("[file-tree-node] click", node.type, node.path);
     if (isDir) {
       onToggleExpand(node.path);
       return;
