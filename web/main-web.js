@@ -8,6 +8,7 @@ const path = require("path");
 const fs = require("fs");
 const net = require("net");
 const setupHandler = require("./setup-handler");
+const ptyManager = require("./src/lib/code-workspace/pty-manager");
 
 // Bash-produced artifact paths often contain a literal `~` (e.g. the nib-ppt
 // generate_presentation.sh script writes to `~/foo.pptx`). Node fs APIs do not
@@ -939,6 +940,12 @@ app.on("before-quit", async (event) => {
   // finishes, dropping the queued events with it.
   event.preventDefault();
   isQuitting = true;
+  // Tear down any live PTYs so child shells don't linger after Quarry exits.
+  try {
+    ptyManager.closeAll();
+  } catch (err) {
+    console.warn("[pty] closeAll on quit failed:", err?.message);
+  }
   try {
     await sendLifecycleEvent('close');
   } catch {}
@@ -1170,8 +1177,23 @@ ipcMain.handle("git:branches", async (_event, _cwd) => []);
 ipcMain.handle("git:log", async (_event, _cwd, _opts) => []);
 ipcMain.handle("git:blame", async (_event, _cwd, _path) => []);
 
-// PTY — Agent D fills in
-ipcMain.handle("pty:open", async (_event, _opts) => null);
-ipcMain.handle("pty:input", async (_event, _id, _data) => undefined);
-ipcMain.handle("pty:resize", async (_event, _id, _cols, _rows) => undefined);
-ipcMain.handle("pty:close", async (_event, _id) => undefined);
+// PTY — backed by src/lib/code-workspace/pty-manager.js (node-pty + xterm.js).
+// pty-manager broadcasts pty:output / pty:exit events to every BrowserWindow
+// itself; the handlers below just plumb the renderer-initiated lifecycle calls.
+ipcMain.handle("pty:open", async (_event, opts) => {
+  try {
+    return ptyManager.open(opts || {});
+  } catch (err) {
+    console.error("[ipc] pty:open failed:", err);
+    return null;
+  }
+});
+ipcMain.handle("pty:input", async (_event, id, data) => {
+  ptyManager.write(id, data);
+});
+ipcMain.handle("pty:resize", async (_event, id, cols, rows) => {
+  ptyManager.resize(id, cols, rows);
+});
+ipcMain.handle("pty:close", async (_event, id) => {
+  ptyManager.close(id);
+});

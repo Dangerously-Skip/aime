@@ -21,11 +21,15 @@
   "build": {
     "appId": "com.nib.quarry",
     "productName": "Quarry",
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
     "files": [
       "main-web.js",
       "preload-web.js",
       "setup-window.html",
       "setup-handler.js",
+      "src/lib/code-workspace/pty-manager.js",
       "public/**/*",
       "src/config/teams.json"
     ],
