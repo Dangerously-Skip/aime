@@ -20,7 +20,7 @@ Run `npm run typecheck` and `npm test` before commits and ships — CI (`.github
 
 ### Testing
 
-Unit tests use Vitest (`web/vitest.config.ts`, node environment, `@/` alias). Test files live next to the code they test (`*.test.ts`). Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import.
+Unit tests use Vitest (`web/vitest.config.ts`, node environment, `@/` alias). Test files live next to the code they test (`*.test.ts`). Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming, memory retriever/dedup, and store actions (conversation, cowork, assistant, context-bus, memory).
 
 ## Architecture
 
