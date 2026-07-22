@@ -48,12 +48,15 @@ function buildIdlePrompt(): string {
 export function useHeartbeat(
   onFire: (prompt: string) => void
 ): { resetIdleTimer: () => void } {
-  const heartbeatModes = useSettingsStore((s) => s.heartbeatModes);
-
   // Tracks which day-scoped modes have already fired (e.g. 'morning:Thu Mar 20 2026')
   const firedRef = useRef<Set<string>>(new Set());
   // Minutes since last user activity for idle nudge
   const idleMinutesRef = useRef(0);
+  // Latest onFire in a ref so the tick handler registers exactly once —
+  // re-registering leaked ipcRenderer listeners (no unsubscribe in older
+  // preloads), duplicating heartbeat firings.
+  const onFireRef = useRef(onFire);
+  onFireRef.current = onFire;
 
   const resetIdleTimer = useCallback(() => {
     idleMinutesRef.current = 0;
@@ -68,7 +71,10 @@ export function useHeartbeat(
       const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
       const dateKey = now.toDateString();
 
+      // Read settings at tick time — no stale closure, no re-register
+      const { heartbeatModes } = useSettingsStore.getState();
       const { morning, evening, idle } = heartbeatModes;
+      const onFire = onFireRef.current;
 
       // Morning briefing — fires once at configured time each day
       if (morning.enabled && morning.time === hhmm) {
@@ -100,9 +106,11 @@ export function useHeartbeat(
       }
     };
 
-    api.onMinuteTick(handler);
-    // Note: Electron ipcRenderer.on accumulates listeners; acceptable for a singleton hook.
-  }, [heartbeatModes, onFire]);
+    const unsubscribe = api.onMinuteTick(handler);
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
 
   return { resetIdleTimer };
 }

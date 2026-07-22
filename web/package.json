@@ -18,7 +18,8 @@
     "setup:mcp": "node scripts/setup-mcp-servers.js",
     "dist": "next build && electron-builder --mac",
     "dist:win": "next build && electron-builder --win",
-    "dist:linux": "next build && electron-builder --linux"
+    "dist:linux": "next build && electron-builder --linux",
+    "test:e2e": "playwright test"
   },
   "build": {
     "appId": "com.nib.quarry",
@@ -202,7 +203,9 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19",
@@ -212,6 +215,7 @@
     "electron-builder": "^26.8.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "jsdom": "^29.1.1",
     "pino-pretty": "^11.3.0",
     "tailwindcss": "^4",
     "typescript": "^5",

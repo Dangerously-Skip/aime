@@ -42,7 +42,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("open-settings", () => callback());
   },
   onMinuteTick: (callback) => {
-    ipcRenderer.on("minute:tick", (_event, ts) => callback(ts));
+    const listener = (_event, ts) => callback(ts);
+    ipcRenderer.on("minute:tick", listener);
+    return () => ipcRenderer.removeListener("minute:tick", listener);
   },
 
   // ── IDE workspace IPC ────────────────────────────────────────────────

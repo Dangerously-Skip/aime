@@ -20,7 +20,9 @@ Run `npm run typecheck` and `npm test` before commits and ships — CI (`.github
 
 ### Testing
 
-Unit tests use Vitest (`web/vitest.config.ts`, node environment, `@/` alias). Test files live next to the code they test (`*.test.ts`). Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming, memory retriever/dedup, and store actions (conversation, cowork, assistant, context-bus, memory).
+Unit tests use Vitest (`web/vitest.config.ts`, node environment by default, `@/` alias). Test files live next to the code they test (`*.test.ts`); React hook/component tests use jsdom via a `// @vitest-environment jsdom` pragma and Testing Library. E2E smoke tests use Playwright (`web/playwright.config.ts`, specs in `web/e2e/`, boots `next dev` on port 3100): `npm run test:e2e`.
+
+Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming (server + client hook), memory retriever/dedup, store actions (conversation, cowork, assistant, context-bus, memory), minute-tick hooks (cron, heartbeat), API routes (cron, webhooks CRUD + trigger), and browser-boot smoke E2E.
 
 ## Architecture
 
