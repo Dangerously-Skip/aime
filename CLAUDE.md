@@ -11,10 +11,16 @@ Quarry is an Electron desktop AI workspace powered by the Claude Agent SDK. Buil
 ```bash
 cd web && npm run electron:dev   # Start Next.js dev server + Electron
 cd web && npm run typecheck      # Run tsc --noEmit (run before shipping)
+cd web && npm test               # Run unit tests (Vitest)
+cd web && npm run test:watch     # Vitest watch mode
 cd web && npm run dist           # Build macOS app (next build + electron-builder)
 ```
 
-No test suite or linter is configured. `npm run typecheck` is the only type-safety gate — run it before commits and ships.
+Run `npm run typecheck` and `npm test` before commits and ships — CI (`.github/workflows/ci.yml`) enforces both on every push/PR. `tsc --noEmit` requires `web/src/config/teams.json` locally: `cp src/config/teams.example.json src/config/teams.json` (gitignored).
+
+### Testing
+
+Unit tests use Vitest (`web/vitest.config.ts`, node environment, `@/` alias). Test files live next to the code they test (`*.test.ts`). Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import.
 
 ## Architecture
 
