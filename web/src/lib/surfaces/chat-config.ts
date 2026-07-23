@@ -1,5 +1,6 @@
 import type { SurfaceConfig } from './index';
 import { PPT_PROMPT } from './shared/ppt-prompt';
+import { APP_NAME } from '@/config/branding';
 
 export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -10,7 +11,7 @@ export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       'mcp__nib-web-search__web_search',
     ],
     permissionMode: 'bypassPermissions',
-    systemPrompt: `You are Quarry, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.
+    systemPrompt: `You are ${APP_NAME}, an AI assistant.
 
 ## Tone & Formatting
 - Be warm, direct, and concise. Lead with the answer, then explain if needed.

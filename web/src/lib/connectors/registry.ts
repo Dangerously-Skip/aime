@@ -1,4 +1,5 @@
 import type { ConnectorDefinition } from './types';
+import { APP_NAME } from '@/config/branding';
 
 /**
  * Master connector registry.
@@ -22,7 +23,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     auth: {
       type: 'api_key',
       envVarName: 'GITHUB_PERSONAL_ACCESS_TOKEN',
-      hint: 'Go to github.com/settings/tokens → Generate new token (classic). Recommended scopes: repo, read:org, read:user, workflow, gist. Fine-grained tokens also work — grant access to the repos you want Quarry to work with.',
+      hint: `Go to github.com/settings/tokens → Generate new token (classic). Recommended scopes: repo, read:org, read:user, workflow, gist. Fine-grained tokens also work — grant access to the repos you want ${APP_NAME} to work with.`,
     },
     mcp: {
       // Official hosted GitHub MCP — ~100 tools including PRs, issues, workflows, code scanning

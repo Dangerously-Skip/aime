@@ -1,5 +1,6 @@
 "use client";
 
+import { APP_NAME } from "@/config/branding";
 import { useAppStore } from "@/stores/app-store";
 import { SkillDetail } from "./skill-detail";
 import { ConnectorDetail } from "./connector-detail";
@@ -19,13 +20,13 @@ const LANDING_ROWS = [
   {
     icon: Zap,
     title: "Create new skills",
-    description: "Teach Quarry your processes, team norms, and expertise",
+    description: `Teach ${APP_NAME} your processes, team norms, and expertise`,
     section: "skills" as const,
   },
   {
     icon: Puzzle,
     title: "Browse plugins",
-    description: "Tailor Quarry to a specific subject",
+    description: `Tailor ${APP_NAME} to a specific subject`,
     section: "browse-marketplace" as const,
   },
   {
@@ -54,7 +55,7 @@ function LandingPage() {
             <Briefcase className="h-8 w-8" strokeWidth={1.25} />
           </div>
           <p className="text-sm text-muted-foreground">
-            Customize and manage the context and tools you are giving Quarry.
+            Customize and manage the context and tools you are giving {APP_NAME}.
           </p>
         </div>
 

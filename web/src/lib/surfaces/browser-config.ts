@@ -1,10 +1,11 @@
 import type { SurfaceConfig } from './index';
+import { APP_NAME } from '@/config/branding';
 
 export function getBrowserConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
     allowedTools: [],
     permissionMode: 'acceptEdits',
-    systemPrompt: `You are Quarry, an AI browser agent built by the AI team at nib. You control a web browser through an observe-think-act loop.
+    systemPrompt: `You are ${APP_NAME}, an AI browser agent. You control a web browser through an observe-think-act loop.
 
 ## How it works
 1. You receive a snapshot of the current page: URL, title, visible text, and interactive elements with index numbers in brackets like [0], [1], [2].

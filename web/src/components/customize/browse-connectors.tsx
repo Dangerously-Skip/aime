@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { APP_NAME } from "@/config/branding";
 import { useAppStore } from "@/stores/app-store";
 import { useConnectorStore } from "@/stores/connector-store";
 import { CONNECTOR_REGISTRY, CONNECTOR_MAP } from "@/lib/connectors/registry";
@@ -266,7 +267,7 @@ export function BrowseConnectors() {
           // this flow defers auth to first tool use in chat.
           setMcpSelfAuthNotice({
             name: connector.name,
-            hint: connector.auth.hint || 'Next: open a chat and ask Quarry to use this service. You\'ll be prompted to sign in the first time it needs access.',
+            hint: connector.auth.hint || `Next: open a chat and ask ${APP_NAME} to use this service. You'll be prompted to sign in the first time it needs access.`,
           });
         } catch (err) {
           console.error(`mcp-self-auth provision failed for ${connector.id}:`, err);
@@ -369,7 +370,7 @@ export function BrowseConnectors() {
               throw new Error(
                 `${connector.name} requires a pre-registered Azure AD app. ` +
                 `Ask IT to register an app (redirect URI: http://localhost:3000/api/connectors/oauth/callback) ` +
-                `and set ${connector.auth.fallbackClientIdEnv} in the Quarry config.`
+                `and set ${connector.auth.fallbackClientIdEnv} in the ${APP_NAME} config.`
               );
             }
             throw err;
