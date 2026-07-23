@@ -226,7 +226,7 @@ interface WorkspaceLayoutProps {
 
 /**
  * Watches <html> classList for `.dark` / `.emma` and returns the matching
- * dockview theme. Reactive — re-renders when the user flips Quarry's theme.
+ * dockview theme. Reactive — re-renders when the user flips the app theme.
  */
 function useDockviewTheme(): DockviewTheme {
   const [isDark, setIsDark] = useState(false);

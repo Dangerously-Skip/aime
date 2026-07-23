@@ -28,7 +28,7 @@ test.describe('API', () => {
 test.describe('App boot', () => {
   test('first run shows the onboarding wizard', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByText('Welcome to Cowork')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Welcome to AIME')).toBeVisible({ timeout: 30_000 });
   });
 
   test('completed onboarding boots into the app shell', async ({ page }) => {

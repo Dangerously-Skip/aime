@@ -1,5 +1,6 @@
 import type { CanvasTemplate } from './types';
 import type { KanbanCardAction } from '@/lib/a2ui/types';
+import { APP_NAME } from '@/config/branding';
 
 interface PullRequest {
   /** Repo owner. */
@@ -64,7 +65,7 @@ function buildActions(pr: PullRequest, toolPrefix: string): KanbanCardAction[] {
       label: '✓ Approve',
       variant: 'primary',
       tool: `${toolPrefix}create_and_submit_pull_request_review`,
-      args: { ...baseArgs, event: 'APPROVE', body: 'Approved via Quarry canvas.' },
+      args: { ...baseArgs, event: 'APPROVE', body: `Approved via ${APP_NAME} canvas.` },
       feedbackPrompt: `Approve PR #${pr.number} in ${pr.owner}/${pr.repo}.`,
     });
   }
@@ -74,7 +75,7 @@ function buildActions(pr: PullRequest, toolPrefix: string): KanbanCardAction[] {
       label: '✗ Request changes',
       variant: 'destructive',
       tool: `${toolPrefix}create_and_submit_pull_request_review`,
-      args: { ...baseArgs, event: 'REQUEST_CHANGES', body: 'Changes requested via Quarry canvas.' },
+      args: { ...baseArgs, event: 'REQUEST_CHANGES', body: `Changes requested via ${APP_NAME} canvas.` },
       feedbackPrompt: `Request changes on PR #${pr.number} in ${pr.owner}/${pr.repo}. Ask the user what changes to request before submitting.`,
     });
   }

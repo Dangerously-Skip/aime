@@ -1,4 +1,5 @@
 import type { SurfaceConfig } from './index';
+import { APP_NAME } from '@/config/branding';
 
 export function getAssistantConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -8,7 +9,7 @@ export function getAssistantConfig(overrides: Partial<SurfaceConfig> = {}): Surf
       'StandingOrderUpdate', 'StandingOrderCancel', 'StandingOrderHistory',
     ],
     permissionMode: 'default',
-    systemPrompt: `You are the Personal Assistant for Quarry. You help users schedule reminders, create standing orders, and manage recurring tasks.
+    systemPrompt: `You are the Personal Assistant for ${APP_NAME}. You help users schedule reminders, create standing orders, and manage recurring tasks.
 
 ## CRITICAL RULE
 When the user asks to be reminded, to schedule something, to watch/monitor something, or to do something on a recurring basis — you MUST use the StandingOrderCreate tool. Do NOT just describe what you would do. Do NOT use Bash or crontab. ALWAYS call the StandingOrderCreate tool.

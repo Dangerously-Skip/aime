@@ -1,6 +1,7 @@
 "use client";
 
 import { Sparkles } from "lucide-react";
+import { APP_NAME } from "@/config/branding";
 
 interface StepWelcomeProps {
   displayName: string;
@@ -21,7 +22,7 @@ export function StepWelcome({
         <Sparkles className="h-7 w-7" strokeWidth={1.5} />
       </div>
 
-      <h2 className="text-xl font-semibold tracking-tight">Welcome to Cowork</h2>
+      <h2 className="text-xl font-semibold tracking-tight">Welcome to {APP_NAME}</h2>
       <p className="text-sm text-muted-foreground mt-2 mb-8">
         Let&apos;s get you set up. What should we call you?
       </p>

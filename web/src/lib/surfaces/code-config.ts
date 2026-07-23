@@ -1,4 +1,5 @@
 import type { SurfaceConfig } from './index';
+import { APP_NAME } from '@/config/branding';
 
 export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -13,7 +14,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: `You are Quarry, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.
+      append: `You are ${APP_NAME}, an AI assistant.
 Do not use emojis in your responses. Keep output clean, professional, and text-only.
 Prefer prose over bullet points in conversational responses.
 
