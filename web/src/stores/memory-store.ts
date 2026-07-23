@@ -176,7 +176,7 @@ export const useMemoryStore = create<MemoryStore>()(
       },
     }),
     {
-      name: 'nibcowork:memories',
+      name: 'aime:memories',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

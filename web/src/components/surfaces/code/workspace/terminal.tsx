@@ -47,7 +47,7 @@ function readCssVar(name: string, def: string): string {
 }
 
 /**
- * Most Quarry CSS vars use the OKLCH/HSL function syntax which xterm.js can't
+ * Most of the app's CSS vars use the OKLCH/HSL function syntax which xterm.js can't
  * render — it needs concrete hex/rgb strings. We sample the computed colour
  * by writing a hidden element and reading its computed style.
  */
@@ -68,7 +68,7 @@ function resolveColor(cssExpr: string, fallback: string): string {
 }
 
 function deriveTheme(): ITheme {
-  // Quarry's CSS variables are colour expressions (oklch / hsl). Pipe each
+  // The app's CSS variables are colour expressions (oklch / hsl). Pipe each
   // through the probe so xterm.js gets a literal rgb() string.
   const bg = resolveColor(`var(--background, #0a0a0a)`, "#0a0a0a");
   const fg = resolveColor(`var(--foreground, #fafafa)`, "#fafafa");

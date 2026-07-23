@@ -272,7 +272,7 @@ export function ToolCallCard({
           })()}
 
           {/* Artifact preview chip for Bash tools that produced a file
-              (e.g. nib-ppt's generate_presentation.sh writing a .pptx).
+              (e.g. the ppt plugin's generate_presentation.sh writing a .pptx).
               Falls through to onArtifactClick like Write/Edit do. */}
           {name === "Bash" && status === "complete" && onArtifactClick && (() => {
             const bashPath = detectBashArtifactPath(input);

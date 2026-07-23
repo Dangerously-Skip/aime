@@ -74,7 +74,7 @@ export const useAppStore = create<AppStore>()(
       setHeartbeatPanelOpen: (open) => set({ heartbeatPanelOpen: open }),
     }),
     {
-      name: 'nibcowork:app',
+      name: 'aime:app',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       partialize: (state) => {

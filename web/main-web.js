@@ -23,8 +23,23 @@ function expandHome(p) {
 
 // --- File Logger ---
 // Captures console output to a rotating log file for diagnostics.
+// Migrate Electron userData from the pre-rename "Quarry" install (session
+// partitions incl. renderer localStorage, logs, caches). Must run before
+// anything touches userData. Best-effort same-volume rename.
+try {
+  const appData = app.getPath("appData");
+  const legacyUserData = path.join(appData, "Quarry");
+  const newUserData = path.join(appData, "AIME");
+  if (!fs.existsSync(newUserData) && fs.existsSync(legacyUserData)) {
+    fs.renameSync(legacyUserData, newUserData);
+    console.log("[AIME] Migrated userData from", legacyUserData);
+  }
+} catch (err) {
+  console.warn("[AIME] userData migration skipped:", err.message);
+}
+
 const LOG_DIR = path.join(app.getPath("userData"), "logs");
-const LOG_FILE = path.join(LOG_DIR, "quarry.log");
+const LOG_FILE = path.join(LOG_DIR, "aime.log");
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB — rotate when exceeded
 
 function ensureLogDir() {
@@ -35,7 +50,7 @@ function rotateLogIfNeeded() {
   try {
     const stat = fs.statSync(LOG_FILE);
     if (stat.size > MAX_LOG_SIZE) {
-      const rotated = path.join(LOG_DIR, "quarry.log.1");
+      const rotated = path.join(LOG_DIR, "aime.log.1");
       fs.renameSync(LOG_FILE, rotated);
     }
   } catch {}
@@ -98,16 +113,11 @@ function waitForPort(port, timeout = 60000) {
   });
 }
 
-// --- nib analytics config ---
-// Reads ~/.claude/nib-analytics.conf — shared with the nib Claude Code CLI hook.
-// Used both as a runtime override for ANALYTICS_API_URL (set on the Next.js
-// child env below) and as the renderer-side identity source via IPC.
-const ANALYTICS_API_URL_DEFAULT =
-  "https://ompkko4b72.execute-api.ap-southeast-2.amazonaws.com/kaos";
-const ANALYTICS_AWS_REGION_DEFAULT = "ap-southeast-2";
-
-function readNibAnalyticsConf() {
-  const conf = path.join(os.homedir(), ".claude", "nib-analytics.conf");
+// --- Analytics config (opt-in) ---
+// Telemetry is disabled unless ANALYTICS_API_URL is set in the environment
+// (or ~/.claude/analytics.conf for packaged installs). No default endpoint.
+function readAnalyticsConf() {
+  const conf = path.join(os.homedir(), ".claude", "analytics.conf");
   const result = {};
   try {
     const text = fs.readFileSync(conf, "utf-8");
@@ -279,7 +289,7 @@ function buildAppMenu() {
                 ? [{ label: updateStatusLabel, enabled: false }]
                 : []),
               { type: "separator" },
-              { label: "About Quarry", click: () => app.showAboutPanel?.() },
+              { label: "About AIME", click: () => app.showAboutPanel?.() },
             ],
           },
         ]),
@@ -329,7 +339,7 @@ console.error = (...args) => {
   _origConsoleError.apply(console, args);
 };
 
-app.setName("Quarry");
+app.setName("AIME");
 
 let mainWindow;
 
@@ -339,7 +349,7 @@ function createWindow(port) {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: "Quarry",
+    title: "AIME",
     titleBarStyle: "hiddenInset",
     icon: path.join(__dirname, "public", "app-icon.png"),
     webPreferences: {
@@ -347,7 +357,7 @@ function createWindow(port) {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
-      partition: "persist:quarry",
+      partition: "persist:quarry", // KEEP: renaming would orphan renderer localStorage (conversations/settings) stored in this on-disk partition
     },
   });
 
@@ -402,7 +412,7 @@ if (autoUpdater) {
       .showMessageBox(mainWindow, {
         type: "info",
         title: "Update Ready",
-        message: `Quarry ${info.version} is ready to install`,
+        message: `AIME ${info.version} is ready to install`,
         detail: "Restart now to apply the update, or install it the next time you quit.",
         buttons: ["Restart Now", "Later"],
         defaultId: 0,
@@ -432,7 +442,7 @@ function sendLifecycleEvent(action) {
       event_type: 'app_lifecycle',
       timestamp: new Date().toISOString(),
       identity: {
-        app: 'quarry',
+        app: 'aime',
         app_version: pkg.version ?? '1.0.0',
         platform: process.platform,
         hostname: os.hostname(),
@@ -492,7 +502,7 @@ function migrateMcpConfig() {
     if (servers["nib-mcp-miro"]?.url === "https://mcp.miro.com/mcp") {
       servers["nib-mcp-miro"].url = "https://mcp.miro.com/";
       changed = true;
-      console.log("[Quarry] Migrated Miro MCP URL (/mcp -> /)");
+      console.log("[AIME] Migrated Miro MCP URL (/mcp -> /)");
     }
 
     // Fix AWS — switch from non-existent npm package to AWS Labs' Python MCP via uvx
@@ -501,19 +511,19 @@ function migrateMcpConfig() {
       aws.command = "uvx";
       aws.args = ["awslabs.core-mcp-server@latest"];
       changed = true;
-      console.log("[Quarry] Migrated AWS MCP to awslabs.core-mcp-server via uvx");
+      console.log("[AIME] Migrated AWS MCP to awslabs.core-mcp-server via uvx");
     }
 
     if (changed) {
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
     }
   } catch (err) {
-    console.warn("[Quarry] MCP config migration failed:", err.message);
+    console.warn("[AIME] MCP config migration failed:", err.message);
   }
 }
 
 /**
- * Copy bundled Quarry skills plugin to ~/.claude/plugins/quarry-skills so the
+ * Copy the bundled AIME skills plugin to ~/.claude/plugins/quarry-skills so the
  * Agent SDK picks them up. Runs on every app start so updates ship with releases.
  * Skipped silently if the source doesn't exist (e.g. local dev without bundled resources).
  */
@@ -522,36 +532,40 @@ function installBundledSkills() {
     const fs = require("fs");
     const path = require("path");
     const srcDir = app.isPackaged
-      ? path.join(process.resourcesPath, "quarry-skills")
-      : path.join(__dirname, "resources", "quarry-skills");
+      ? path.join(process.resourcesPath, "aime-skills")
+      : path.join(__dirname, "resources", "aime-skills");
 
     if (!fs.existsSync(srcDir)) return;
 
-    const destDir = path.join(os.homedir(), ".claude", "plugins", "quarry-skills");
+    const destDir = path.join(os.homedir(), ".claude", "plugins", "aime-skills");
+    // Remove the pre-rename plugin dir so the SDK plugin scan does not load duplicates
+    fs.rmSync(path.join(os.homedir(), ".claude", "plugins", "quarry-skills"), { recursive: true, force: true });
     fs.mkdirSync(path.dirname(destDir), { recursive: true });
 
     // Remove and recopy so updates land every launch
     fs.rmSync(destDir, { recursive: true, force: true });
     fs.cpSync(srcDir, destDir, { recursive: true });
-    console.log("[Quarry] Installed bundled skills at:", destDir);
+    console.log("[AIME] Installed bundled skills at:", destDir);
   } catch (err) {
-    console.warn("[Quarry] Failed to install bundled skills:", err.message);
+    console.warn("[AIME] Failed to install bundled skills:", err.message);
   }
 }
 
 /**
- * Copy the bundled nib-ppt plugin to ~/.claude/plugins/nib-ppt/ so its
+ * Copy the bundled ppt plugin to ~/.claude/plugins/ppt/ so its
  * SKILL.md (installed separately into ~/.claude/skills/) can resolve the
  * generate_presentation.sh script reference. Mirrors installBundledSkills.
  */
-function installNibPptPlugin() {
+function installPptPlugin() {
   try {
     const srcDir = app.isPackaged
-      ? path.join(process.resourcesPath, "nib-ppt-plugin")
-      : path.join(__dirname, "resources", "nib-ppt-plugin");
+      ? path.join(process.resourcesPath, "ppt-plugin")
+      : path.join(__dirname, "resources", "ppt-plugin");
     if (!fs.existsSync(srcDir)) return;
 
-    const destDir = path.join(os.homedir(), ".claude", "plugins", "nib-ppt");
+    const destDir = path.join(os.homedir(), ".claude", "plugins", "ppt");
+    // Remove the pre-rename plugin dir so the SDK plugin scan does not load duplicates
+    fs.rmSync(path.join(os.homedir(), ".claude", "plugins", "nib-ppt"), { recursive: true, force: true });
     fs.mkdirSync(path.dirname(destDir), { recursive: true });
     fs.rmSync(destDir, { recursive: true, force: true });
     fs.cpSync(srcDir, destDir, { recursive: true });
@@ -561,9 +575,9 @@ function installNibPptPlugin() {
       const script = path.join(destDir, "generate_presentation.sh");
       if (fs.existsSync(script)) fs.chmodSync(script, 0o755);
     }
-    console.log("[Quarry] Installed nib-ppt plugin at:", destDir);
+    console.log("[AIME] Installed ppt plugin at:", destDir);
   } catch (err) {
-    console.warn("[Quarry] Failed to install nib-ppt plugin:", err.message);
+    console.warn("[AIME] Failed to install ppt plugin:", err.message);
   }
 }
 
@@ -587,7 +601,7 @@ async function ensureSetup() {
       minimizable: false,
       maximizable: false,
       fullscreenable: false,
-      title: "Setting up Quarry",
+      title: "Setting up AIME",
       webPreferences: { nodeIntegration: true, contextIsolation: false },
     });
     win.loadFile(path.join(__dirname, "setup-window.html"));
@@ -611,7 +625,7 @@ async function ensureSetup() {
         .runSetup(onProgress)
         .then(() => finish(true))
         .catch((err) => {
-          console.error("[Quarry] Setup failed:", err);
+          console.error("[AIME] Setup failed:", err);
           if (!win.isDestroyed()) {
             win.webContents.send("setup:error", err.message || String(err));
           }
@@ -647,17 +661,17 @@ function triggerBundledSkillInstall(port) {
     },
     (res) => {
       res.resume();
-      res.on("end", () => console.log("[Quarry] Bundled-skills install:", res.statusCode));
+      res.on("end", () => console.log("[AIME] Bundled-skills install:", res.statusCode));
     }
   );
-  req.on("error", (err) => console.warn("[Quarry] Bundled-skills install failed:", err.message));
+  req.on("error", (err) => console.warn("[AIME] Bundled-skills install failed:", err.message));
   req.end();
 }
 
 app.whenReady().then(async () => {
   migrateMcpConfig();
   installBundledSkills();
-  installNibPptPlugin();
+  installPptPlugin();
   await ensureSetup();
 
   // Determine the port: dev-with-port.js sets PORT in env; for packaged builds we find one here.
@@ -732,7 +746,7 @@ app.whenReady().then(async () => {
     // "Native CLI binary for darwin-arm64 not found". Keeping cli.js inside
     // its own npm package directory fixes both macOS and Windows in one go.
     const sdkSrcPath = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js');
-    const sdkMarkerPath = path.join(app.getPath('userData'), '.quarry-sdk-path');
+    const sdkMarkerPath = path.join(app.getPath('userData'), '.aime-sdk-path');
     const sdkCliPath = fs.existsSync(sdkSrcPath) ? sdkSrcPath : '';
     if (!sdkCliPath) {
       console.warn('[Quarry] Claude SDK cli.js not found at:', sdkSrcPath);
@@ -758,8 +772,8 @@ app.whenReady().then(async () => {
     // First-launch-installed Python + Playwright. If setup was skipped,
     // these paths simply don't exist and skill scripts fall through to
     // whatever's on the user's PATH (or fail gracefully).
-    const quarryPython = setupHandler.pythonExe();
-    const quarryPythonAvailable = fs.existsSync(quarryPython);
+    const managedPython = setupHandler.pythonExe();
+    const managedPythonAvailable = fs.existsSync(managedPython);
     const pythonBinDir = process.platform === 'win32'
       ? setupHandler.PYTHON_DIR
       : path.join(setupHandler.PYTHON_DIR, 'bin');
@@ -768,17 +782,14 @@ app.whenReady().then(async () => {
       : null;
 
     // Resolve analytics endpoint with precedence:
-    //   1. nib-analytics.conf `endpoint=` (per-user override, lets one binary
-    //      target different AWS accounts without a rebuild)
-    //   2. Hardcoded kaos default (covers a fresh install with no nib setup)
-    // process.env.ANALYTICS_API_URL is intentionally NOT used as a layer here:
-    // .env.local is dev-only and was the source of the silent-discard bug
-    // where packaged builds had ANALYTICS_API_URL='' and sendEvents bailed.
-    const nibConf = readNibAnalyticsConf();
-    // Normalise: nib-managed conf bakes the full path in (`…/kaos/v1/events`),
+    //   1. ~/.claude/analytics.conf `endpoint=` (per-user override)
+    //   2. ANALYTICS_API_URL from the process env
+    // No built-in default — telemetry is opt-in and off otherwise.
+    const analyticsConf = readAnalyticsConf();
+    // Normalise: managed confs may bake the full path in (`…/v1/events`),
     // but analytics-client appends `/v1/events` itself. Strip a trailing
     // `/v1/events` so we don't end up POSTing to `…/v1/events/v1/events` (404).
-    const rawEndpoint = (nibConf.endpoint || '').replace(/\/+$/, '');
+    const rawEndpoint = (analyticsConf.endpoint || process.env.ANALYTICS_API_URL || '').replace(/\/+$/, '');
     const normalisedEndpoint = rawEndpoint.replace(/\/v1\/events$/, '');
 
     const child = utilityProcess.fork(serverScript, [], {
@@ -788,14 +799,16 @@ app.whenReady().then(async () => {
         PORT: String(port),
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
-        ANALYTICS_API_URL: normalisedEndpoint || ANALYTICS_API_URL_DEFAULT,
-        ANALYTICS_AWS_REGION: nibConf.region || ANALYTICS_AWS_REGION_DEFAULT,
-        QUARRY_RESOURCES_PATH: process.resourcesPath,
-        QUARRY_USER_DATA_DIR: app.getPath('userData'),
-        ...(sdkCliPath ? { QUARRY_SDK_CLI_PATH: sdkCliPath } : {}),
+        ...(normalisedEndpoint ? { ANALYTICS_API_URL: normalisedEndpoint } : {}),
+        ...(analyticsConf.region || process.env.ANALYTICS_AWS_REGION
+          ? { ANALYTICS_AWS_REGION: analyticsConf.region || process.env.ANALYTICS_AWS_REGION }
+          : {}),
+        AIME_RESOURCES_PATH: process.resourcesPath,
+        AIME_USER_DATA_DIR: app.getPath('userData'),
+        ...(sdkCliPath ? { AIME_SDK_CLI_PATH: sdkCliPath } : {}),
         ...(gitBashPath ? { CLAUDE_CODE_GIT_BASH_PATH: gitBashPath } : {}),
-        ...(quarryPythonAvailable ? {
-          QUARRY_PYTHON: quarryPython,
+        ...(managedPythonAvailable ? {
+          AIME_PYTHON: managedPython,
           PLAYWRIGHT_BROWSERS_PATH: setupHandler.PLAYWRIGHT_DIR,
         } : {}),
         // Point the SDK's config dir to Quarry's own directory so it doesn't
@@ -807,12 +820,12 @@ app.whenReady().then(async () => {
         // PortableGit's bash dir (Windows only) before the user's PATH.
         PATH: (process.platform === 'win32'
           ? [
-              ...(quarryPythonAvailable ? [pythonBinDir, pythonScriptsDir] : []),
+              ...(managedPythonAvailable ? [pythonBinDir, pythonScriptsDir] : []),
               ...(gitBashPath ? [path.dirname(gitBashPath)] : []),
               process.env.PATH,
             ]
           : [
-              ...(quarryPythonAvailable ? [pythonBinDir] : []),
+              ...(managedPythonAvailable ? [pythonBinDir] : []),
               '/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin',
               process.env.PATH,
             ]
@@ -983,8 +996,8 @@ ipcMain.on("get-app-version", (event) => {
   event.returnValue = app.getVersion();
 });
 
-ipcMain.on("get-nib-analytics-config", (event) => {
-  event.returnValue = readNibAnalyticsConf();
+ipcMain.on("get-analytics-config", (event) => {
+  event.returnValue = readAnalyticsConf();
 });
 
 ipcMain.handle("open-path", async (_event, filePath) => {

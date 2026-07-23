@@ -3,11 +3,12 @@ export const runtime = 'nodejs';
 import { rm, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import { getMcpConfigPath, getMcpClientsPath } from '@/lib/app-paths';
 
 const QUARRY_DIR = join(homedir(), '.claude');
 const PLUGINS_DIR = join(QUARRY_DIR, 'plugins');
-const MCP_CONFIG_FILE = join(QUARRY_DIR, '.quarry-mcp.json');
-const MCP_CLIENTS_FILE = join(QUARRY_DIR, '.quarry-mcp-clients.json');
+const MCP_CONFIG_FILE = getMcpConfigPath();
+const MCP_CLIENTS_FILE = getMcpClientsPath();
 
 /**
  * POST /api/mcp/uninstall
@@ -35,6 +36,9 @@ export async function POST(request: Request) {
     try {
       const config = JSON.parse(await readFile(MCP_CONFIG_FILE, 'utf-8'));
       if (config.mcpServers) {
+        delete config.mcpServers[`aime-mcp-${name}`];
+        delete config.mcpServers[`aime-connector-${name}`];
+        // Legacy pre-rename prefixes
         delete config.mcpServers[`nib-mcp-${name}`];
         delete config.mcpServers[`nib-connector-${name}`];
         await writeFile(MCP_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');

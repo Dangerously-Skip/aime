@@ -58,7 +58,7 @@ export function BranchHeader({
 }: BranchHeaderProps) {
   const { status } = useGitStatus(workspace);
   const { resetLayout } = useCodeWorkspace(workspace);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const { showNotification } = useElectron();
 
   const [creatingPr, setCreatingPr] = useState(false);
@@ -141,7 +141,7 @@ export function BranchHeader({
           task,
           surfaceId: "code",
           cwd: workspace,
-          apiKey: nibGatewayApiKey || undefined,
+          apiKey: anthropicApiKey || undefined,
           extraAllowedTools: ["mcp__github__create_pull_request"],
         }),
       });
@@ -168,7 +168,7 @@ export function BranchHeader({
     } finally {
       setCreatingPr(false);
     }
-  }, [workspace, status?.branch, effectiveBase, creatingPr, nibGatewayApiKey, showNotification]);
+  }, [workspace, status?.branch, effectiveBase, creatingPr, anthropicApiKey, showNotification]);
 
   const handleOpenInFinder = useCallback(() => {
     if (!workspace || typeof window === "undefined") return;

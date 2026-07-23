@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { DATA_DIR_NAME } from '@/config/branding';
 
 // Module-level cache so the home dir is resolved once and all hooks
 // immediately return a synchronous path on subsequent renders.
@@ -8,7 +9,7 @@ let cachedHomeDir: string | null = null;
 
 /**
  * Provides a scratch directory path for Cowork when no user folder is selected.
- * Path: ~/.quarry/scratch/{conversationId}/
+ * Path: ~/<DATA_DIR_NAME>/scratch/{conversationId}/
  *
  * The path is computed synchronously from a cached homeDir so it's available
  * on the very first render after the initial async lookup. This prevents a
@@ -18,7 +19,7 @@ let cachedHomeDir: string | null = null;
 export function useScratchDir(conversationId: string): string | null {
   const [scratchDir, setScratchDir] = useState<string | null>(() => {
     if (!conversationId || !cachedHomeDir) return null;
-    return `${cachedHomeDir}/.quarry/scratch/${conversationId}`;
+    return `${cachedHomeDir}/${DATA_DIR_NAME}/scratch/${conversationId}`;
   });
   const ensuredRef = useRef<string | null>(null);
 
@@ -38,7 +39,7 @@ export function useScratchDir(conversationId: string): string | null {
 
     // If we already have a cached homeDir, compute path synchronously
     if (cachedHomeDir) {
-      const path = `${cachedHomeDir}/.quarry/scratch/${conversationId}`;
+      const path = `${cachedHomeDir}/${DATA_DIR_NAME}/scratch/${conversationId}`;
       setScratchDir(path);
       // Ensure dir exists in the background (fire-and-forget)
       if (ensuredRef.current !== path) {
@@ -52,7 +53,7 @@ export function useScratchDir(conversationId: string): string | null {
     api.getHomeDir().then((homeDir) => {
       if (cancelled) return;
       cachedHomeDir = homeDir;
-      const path = `${homeDir}/.quarry/scratch/${conversationId}`;
+      const path = `${homeDir}/${DATA_DIR_NAME}/scratch/${conversationId}`;
       setScratchDir(path);
       ensuredRef.current = path;
       api.ensureDir(path).catch(() => {});

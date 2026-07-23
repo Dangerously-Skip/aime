@@ -28,11 +28,16 @@ jobs:
         working-directory: web
         run: npm install --no-save --force @anthropic-ai/claude-agent-sdk-darwin-arm64@0.2.116
 
-      - name: Create teams.json
+      - name: Create teams.json (secret or empty example)
         working-directory: web
-        run: echo '${{ secrets.TEAMS_JSON }}' > src/config/teams.json
+        run: |
+          if [ -n '${{ secrets.TEAMS_JSON }}' ]; then
+            echo '${{ secrets.TEAMS_JSON }}' > src/config/teams.json
+          else
+            cp src/config/teams.example.json src/config/teams.json
+          fi
 
-      - name: Create .env
+      - name: Create .env (optional secret)
         working-directory: web
         run: echo '${{ secrets.DOT_ENV }}' > .env
 
@@ -46,6 +51,7 @@ jobs:
 
       - name: Build macOS artifacts
         working-directory: web
+        # Signing/notarization is skipped when the Apple secrets are not set.
         env:
           CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
@@ -108,12 +114,19 @@ jobs:
           if (-not (Test-Path "$x64Out\bin\bash.exe")) { throw "x64 bash.exe missing after extract" }
           if (-not (Test-Path "$armOut\bin\bash.exe")) { throw "arm64 bash.exe missing after extract" }
 
-      - name: Create teams.json
+      - name: Create teams.json (secret or empty example)
         working-directory: web
-        run: echo '${{ secrets.TEAMS_JSON }}' > src/config/teams.json
+        shell: bash
+        run: |
+          if [ -n '${{ secrets.TEAMS_JSON }}' ]; then
+            echo '${{ secrets.TEAMS_JSON }}' > src/config/teams.json
+          else
+            cp src/config/teams.example.json src/config/teams.json
+          fi
 
-      - name: Create .env
+      - name: Create .env (optional secret)
         working-directory: web
+        shell: bash
         run: echo '${{ secrets.DOT_ENV }}' > .env
 
       - name: Build Next.js
@@ -130,7 +143,7 @@ jobs:
       - name: Strip per-arch entries from latest.yml
         # electron-builder produces three Windows installers (x64, arm64,
         # universal) and writes all three into latest.yml's `files` list +
-        # `path` field. We only upload the universal `Quarry-Setup-X.Y.Z.exe`
+        # `path` field. We only upload the universal `AIME-Setup-X.Y.Z.exe`
         # to the GitHub Release, so latest.yml's references to the per-arch
         # filenames 404 in production and break electron-updater on arm64.
         # Rewrite latest.yml to reference only the universal entry.
@@ -138,8 +151,8 @@ jobs:
         shell: pwsh
         run: |
           $yml = Get-Content -Raw -Path "dist/latest.yml"
-          # Match the universal entry: `Quarry-Setup-<version>.exe` (no -x64 / -arm64 suffix)
-          if ($yml -match '(?s)- url: (Quarry-Setup-[\d.]+\.exe)\s+sha512: ([^\r\n]+)\s+size: (\d+)') {
+          # Match the universal entry: `AIME-Setup-<version>.exe` (no -x64 / -arm64 suffix)
+          if ($yml -match '(?s)- url: (AIME-Setup-[\d.]+\.exe)\s+sha512: ([^\r\n]+)\s+size: (\d+)') {
             $url = $Matches[1]; $sha = $Matches[2]; $size = $Matches[3]
             $version = (Get-Content -Raw -Path "package.json" | ConvertFrom-Json).version
             $releaseDate = if ($yml -match "releaseDate:\s*'([^']+)'") { $Matches[1] } else { (Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ") }
@@ -156,7 +169,7 @@ jobs:
             Set-Content -Path "dist/latest.yml" -Value $lines
             Get-Content "dist/latest.yml"
           } else {
-            throw "Could not find universal Quarry-Setup-*.exe entry in latest.yml"
+            throw "Could not find universal AIME-Setup-*.exe entry in latest.yml"
           }
 
       - name: Upload Windows artifacts
@@ -188,22 +201,5 @@ jobs:
           body: |
             ## Install
 
-            Download from the internal releases page (VPN required):
-            https://quarry.internal.invalid
-
-            Existing installs will auto-update when connected to VPN.
-
-      - name: Trigger Buildkite promote-release
-        env:
-          BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
-        run: |
-          curl -s -X POST "https://api.buildkite.com/v2/organizations/nib-health-funds-ltd/pipelines/quarry-promote-release/builds" \
-            -H "Authorization: Bearer ${BUILDKITE_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "commit": "HEAD",
-              "branch": "master",
-              "message": "Promote release ${{ github.ref_name }}",
-              "env": {"RELEASE_TAG": "${{ github.ref_name }}"}
-            }'
-          echo "Buildkite promote-release triggered for ${{ github.ref_name }}"
+            Download the installer for your platform from the assets below.
+            Existing installs auto-update from GitHub Releases.

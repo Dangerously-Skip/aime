@@ -46,7 +46,7 @@ const EXT_TO_LANG: Record<string, string> = {
  *
  * Loads highlight.js for the matching language (or auto-detects), injects the
  * appropriate light/dark theme stylesheet at first render, and re-highlights
- * on content change. Theme follows Quarry's `<html class="dark">` toggle.
+ * on content change. Theme follows the app's `<html class="dark">` toggle.
  */
 export function CodeRenderer({ content, ext }: CodeRendererProps) {
   const lang = EXT_TO_LANG[ext] || "";

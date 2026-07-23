@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { APP_NAME } from '@/config/branding';
 
 const SEARXNG_URL = process.env.SEARXNG_INSTANCES || 'https://ai-studio-searxng.internal.invalid';
 
@@ -13,7 +14,7 @@ export async function POST(req: NextRequest) {
       headers: {
         'Accept': 'application/json',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Quarry/1.0',
+        'User-Agent': `${APP_NAME}/1.0`,
       },
       body: new URLSearchParams({
         q: query,

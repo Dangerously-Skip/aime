@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { APP_NAME } from "@/config/branding";
 import { useAppStore } from "@/stores/app-store";
 import { useConnectorStore } from "@/stores/connector-store";
 import { CONNECTOR_REGISTRY, CONNECTOR_MAP } from "@/lib/connectors/registry";
@@ -86,7 +87,7 @@ export function BrowseConnectors() {
 
   const { plugins: marketplacePlugins, loading: mpLoading } = useMarketplace();
 
-  // Hydrate connector state from .quarry-mcp.json on mount. This reflects
+  // Hydrate connector state from the provisioned MCP config on mount. This reflects
   // MCPs connected via the marketplace (plugin install) or external means.
   useEffect(() => {
     let cancelled = false;
@@ -135,18 +136,18 @@ export function BrowseConnectors() {
           const setupHint =
             'One-time setup — run in Snowsight (any role you have create privileges in):\n\n' +
             '-- 1. Create an MCP server exposing raw SQL:\n' +
-            'CREATE DATABASE IF NOT EXISTS QUARRY_MCP;\n' +
-            'CREATE SCHEMA IF NOT EXISTS QUARRY_MCP.MCP;\n' +
-            'CREATE OR REPLACE MCP SERVER QUARRY_MCP.MCP.quarry FROM SPECIFICATION $$\n' +
+            'CREATE DATABASE IF NOT EXISTS AIME_MCP;\n' +
+            'CREATE SCHEMA IF NOT EXISTS AIME_MCP.MCP;\n' +
+            'CREATE OR REPLACE MCP SERVER AIME_MCP.MCP.aime FROM SPECIFICATION $$\n' +
             'tools:\n' +
             '  - name: "run_sql"\n' +
             '    type: "SYSTEM_EXECUTE_SQL"\n' +
             '    title: "Run SQL"\n' +
             '    description: "Execute arbitrary SQL."\n' +
             '$$;\n\n' +
-            '-- 2. Generate a PAT (replace ROLE with your preferred role, e.g. NIB_BI_ANALYSTS):\n' +
-            'ALTER USER IF EXISTS CURRENT_USER() ADD PROGRAMMATIC ACCESS TOKEN quarry_mcp\n' +
-            "  ROLE_RESTRICTION = 'NIB_BI_ANALYSTS' DAYS_TO_EXPIRY = 90;\n\n" +
+            '-- 2. Generate a PAT (replace ROLE with your preferred role, e.g. ANALYST):\n' +
+            'ALTER USER IF EXISTS CURRENT_USER() ADD PROGRAMMATIC ACCESS TOKEN aime_mcp\n' +
+            "  ROLE_RESTRICTION = 'ANALYST' DAYS_TO_EXPIRY = 90;\n\n" +
             '-- Copy token_secret from the output — you\'ll paste it on the next screen.';
 
           const mcpUrl = await promptText(
@@ -154,7 +155,7 @@ export function BrowseConnectors() {
             {
               title: 'Connect Snowflake',
               label: 'MCP server URL',
-              placeholder: 'https://ZY31549-LY01550.snowflakecomputing.com/api/v2/databases/QUARRY_MCP/schemas/MCP/mcp-servers/quarry',
+              placeholder: 'https://ZY31549-LY01550.snowflakecomputing.com/api/v2/databases/AIME_MCP/schemas/MCP/mcp-servers/aime',
               inputType: 'text',
               buttonText: 'Next',
             }
@@ -266,7 +267,7 @@ export function BrowseConnectors() {
           // this flow defers auth to first tool use in chat.
           setMcpSelfAuthNotice({
             name: connector.name,
-            hint: connector.auth.hint || 'Next: open a chat and ask Quarry to use this service. You\'ll be prompted to sign in the first time it needs access.',
+            hint: connector.auth.hint || `Next: open a chat and ask ${APP_NAME} to use this service. You'll be prompted to sign in the first time it needs access.`,
           });
         } catch (err) {
           console.error(`mcp-self-auth provision failed for ${connector.id}:`, err);
@@ -369,7 +370,7 @@ export function BrowseConnectors() {
               throw new Error(
                 `${connector.name} requires a pre-registered Azure AD app. ` +
                 `Ask IT to register an app (redirect URI: http://localhost:3000/api/connectors/oauth/callback) ` +
-                `and set ${connector.auth.fallbackClientIdEnv} in the Quarry config.`
+                `and set ${connector.auth.fallbackClientIdEnv} in the ${APP_NAME} config.`
               );
             }
             throw err;
@@ -377,8 +378,8 @@ export function BrowseConnectors() {
           const expiresAt = result.expiresIn
             ? Date.now() + result.expiresIn * 1000
             : undefined;
-          // The /api/mcp/oauth/exchange endpoint already wrote to .quarry-mcp.json
-          // as `nib-mcp-<id>`. We store token metadata in the client store too so
+          // The /api/mcp/oauth/exchange endpoint already wrote to the provisioned MCP config
+          // as `aime-mcp-<id>`. We store token metadata in the client store too so
           // the UI reflects authenticated state.
           setTokenMeta(connector.id, {
             accessToken: result.accessToken,
@@ -525,7 +526,7 @@ export function BrowseConnectors() {
       setEnabled(connectorId, false);
       clearToken(connectorId);
 
-      // For mcp-oauth connectors, the entry is written as `nib-mcp-<id>` by the
+      // For mcp-oauth connectors, the entry is written as `aime-mcp-<id>` by the
       // exchange endpoint. Use the MCP uninstall path which cleans up both the
       // MCP config entry and the stored DCR registration.
       if (connector?.auth.type === 'mcp-oauth') {

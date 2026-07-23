@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("update-state", (_event, data) => callback(data));
   },
   getAppVersion: () => ipcRenderer.sendSync("get-app-version"),
-  getNibAnalyticsConfig: () => ipcRenderer.sendSync("get-nib-analytics-config"),
+  getAnalyticsConfig: () => ipcRenderer.sendSync("get-analytics-config"),
   getPlatform: () => process.platform,
   getHostname: () => require("os").hostname(),
   checkForUpdates: () => ipcRenderer.send("check-for-updates"),
@@ -42,7 +42,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("open-settings", () => callback());
   },
   onMinuteTick: (callback) => {
-    ipcRenderer.on("minute:tick", (_event, ts) => callback(ts));
+    const listener = (_event, ts) => callback(ts);
+    ipcRenderer.on("minute:tick", listener);
+    return () => ipcRenderer.removeListener("minute:tick", listener);
   },
 
   // ── IDE workspace IPC ────────────────────────────────────────────────

@@ -24,7 +24,8 @@ interface ElectronAPI {
   checkForUpdates: () => void;
   installUpdate: () => void;
   onOpenSettings: (callback: () => void) => void;
-  onMinuteTick?: (callback: (ts: number) => void) => void;
+  /** Subscribes to the minute heartbeat. Returns an unsubscribe function (older preloads returned void). */
+  onMinuteTick?: (callback: (ts: number) => void) => (() => void) | void;
 }
 
 declare global {

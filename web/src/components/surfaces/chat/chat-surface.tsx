@@ -147,7 +147,7 @@ export function ChatSurface() {
   );
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const toolProfile = useSettingsStore((s) => s.toolProfile);
   const setSessionControlsInStore = useChatStore((s) => s.setSessionControls);
   const addSuggestion = useChatStore((s) => s.addSuggestion);
@@ -335,7 +335,7 @@ export function ChatSurface() {
       const doneId = getChatId();
       completeRunningTools(doneId);
       stopStreaming(doneId);
-      // Detect binary artifacts from Bash tool calls (e.g. nib-ppt .pptx output)
+      // Detect binary artifacts from Bash tool calls (e.g. ppt plugin .pptx output)
       if (doneId) {
         const msgs = useChatStore.getState().messages[doneId] ?? [];
         for (const msg of msgs) {
@@ -478,7 +478,7 @@ export function ChatSurface() {
         webSearch: currentWebSearch || undefined,
         projectInstructions: projectInstructions || undefined,
         projectKnowledge: projectKnowledge || undefined,
-        apiKey: nibGatewayApiKey || undefined,
+        apiKey: anthropicApiKey || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
         crossSurfaceContext: crossSurfaceContext || undefined,

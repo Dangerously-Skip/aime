@@ -72,8 +72,8 @@ export async function extractPdf(buffer: Buffer): Promise<ExtractionResult> {
   // Next.js standalone prunes node_modules and doesn't trace dynamic imports.
   // We copy pdfjs-dist via extraResources, so resolve the absolute path first.
   let pdfjsLib: typeof import('pdfjs-dist/legacy/build/pdf.mjs');
-  const resourcesPdfjsPath = process.env['QUARRY_RESOURCES_PATH']
-    ? path.join(process.env['QUARRY_RESOURCES_PATH'], '.next', 'standalone', 'web', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.mjs')
+  const resourcesPdfjsPath = process.env['AIME_RESOURCES_PATH']
+    ? path.join(process.env['AIME_RESOURCES_PATH'], '.next', 'standalone', 'web', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.mjs')
     : null;
 
   if (resourcesPdfjsPath && fs.existsSync(resourcesPdfjsPath)) {

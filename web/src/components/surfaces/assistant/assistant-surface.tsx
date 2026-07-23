@@ -456,7 +456,7 @@ export function AssistantSurface() {
   const cards = useAssistantStore((s) => s.cards);
   const addCard = useAssistantStore((s) => s.addCard);
   const addOrder = useAssistantStore((s) => s.addOrder);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
 
   // Hydrate store on mount
   useEffect(() => {
@@ -481,10 +481,16 @@ export function AssistantSurface() {
   // One-time migration of existing cron jobs to standing orders
   useEffect(() => {
     if (!hydrated) return;
-    const migrationKey = 'nibcowork:cron-migrated';
-    if (typeof localStorage !== 'undefined' && !localStorage.getItem(migrationKey)) {
+    const migrationKey = 'aime:cron-migrated';
+    const legacyMigrationKey = 'nibcowork:cron-migrated';
+    if (
+      typeof localStorage !== 'undefined' &&
+      !localStorage.getItem(migrationKey) &&
+      !localStorage.getItem(legacyMigrationKey)
+    ) {
       try {
-        const cronRaw = localStorage.getItem('nibcowork:cron');
+        // Check the current key first, then the pre-rename legacy key
+        const cronRaw = localStorage.getItem('aime:cron') ?? localStorage.getItem('nibcowork:cron');
         if (cronRaw) {
           const cronData = JSON.parse(cronRaw);
           const jobs = cronData?.state?.jobs;
@@ -522,7 +528,7 @@ export function AssistantSurface() {
           message: prompt,
           chatId,
           model: 'sonnet',
-          apiKey: nibGatewayApiKey || undefined,
+          apiKey: anthropicApiKey || undefined,
         }),
         signal: controller.signal,
       });
@@ -606,7 +612,7 @@ export function AssistantSurface() {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [inputValue, isStreaming, nibGatewayApiKey, addCard]);
+  }, [inputValue, isStreaming, anthropicApiKey, addCard]);
 
   const handleAbort = useCallback(() => {
     abortRef.current?.abort();

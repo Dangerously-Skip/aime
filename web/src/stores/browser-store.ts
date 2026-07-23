@@ -270,7 +270,7 @@ export const useBrowserStore = create<BrowserStore>()(
       clearPendingContext: () => set({ pendingContext: [] }),
     }),
     {
-      name: 'nibcowork:browser',
+      name: 'aime:browser',
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,

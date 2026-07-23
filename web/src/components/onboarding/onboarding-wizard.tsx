@@ -42,10 +42,10 @@ export function OnboardingWizard() {
       settingsStore.setTeamId(teamId);
       const team = getTeamById(teamId);
       if (team) {
-        settingsStore.setNibGatewayApiKey(team.key);
+        settingsStore.setAnthropicApiKey(team.key);
       }
     } else if (manualApiKey.trim()) {
-      settingsStore.setNibGatewayApiKey(manualApiKey.trim());
+      settingsStore.setAnthropicApiKey(manualApiKey.trim());
     }
 
     settingsStore.setOnboardingComplete(true);
@@ -70,10 +70,10 @@ export function OnboardingWizard() {
       settingsStore.setTeamId(teamId);
       const team = getTeamById(teamId);
       if (team) {
-        settingsStore.setNibGatewayApiKey(team.key);
+        settingsStore.setAnthropicApiKey(team.key);
       }
     } else if (manualApiKey.trim()) {
-      settingsStore.setNibGatewayApiKey(manualApiKey.trim());
+      settingsStore.setAnthropicApiKey(manualApiKey.trim());
     }
     next();
   }, [teamId, manualApiKey, settingsStore, next]);

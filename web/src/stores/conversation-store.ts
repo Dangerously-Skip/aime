@@ -152,10 +152,11 @@ export const useConversationStore = create<ConversationStore>()(
           const current = state.navigationHistory[state.navigationIndex];
           if (current === id) return { activeId: id };
           const truncated = state.navigationHistory.slice(0, state.navigationIndex + 1);
+          const history = [...truncated, id].slice(-50);
           return {
             activeId: id,
-            navigationHistory: [...truncated, id].slice(-50),
-            navigationIndex: truncated.length,
+            navigationHistory: history,
+            navigationIndex: history.length - 1,
           };
         }),
 
@@ -177,7 +178,7 @@ export const useConversationStore = create<ConversationStore>()(
       canGoForward: () => get().navigationIndex < get().navigationHistory.length - 1,
     }),
     {
-      name: 'nibcowork:conversations',
+      name: 'aime:conversations',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

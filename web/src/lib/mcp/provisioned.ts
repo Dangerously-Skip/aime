@@ -1,8 +1,8 @@
 /**
  * Load + token-refresh provisioned MCP servers for SDK queries.
  *
- * Reads `~/.claude/.mcp.json` (Claude Code's config) and
- * `~/.claude/.quarry-mcp.json` (Quarry's own OAuth-provisioned servers),
+ * Reads `~/.claude/.mcp.json` (Claude Code's config) and the app's own
+ * OAuth-provisioned MCP config (see app-paths — legacy names migrate),
  * refreshes any near-expired OAuth tokens, and returns the merged config in
  * the shape the Claude Agent SDK expects.
  *
@@ -127,26 +127,27 @@ async function refreshTokenIfNeeded(
 export async function loadProvisionedMcpServers(): Promise<Record<string, unknown>> {
   const { join } = await import('path');
   const { homedir } = await import('os');
+  const { getMcpConfigPath } = await import('@/lib/app-paths');
   const claudeDir = join(homedir(), '.claude');
-  const quarryConfigPath = join(claudeDir, '.quarry-mcp.json');
+  const appConfigPath = getMcpConfigPath();
 
   try {
     const { readFile } = await import('fs/promises');
-    const raw = await readFile(quarryConfigPath, 'utf-8');
+    const raw = await readFile(appConfigPath, 'utf-8');
     const config = JSON.parse(raw) as { mcpServers?: Record<string, Record<string, unknown>> };
     if (config.mcpServers) {
       for (const [key, entry] of Object.entries(config.mcpServers)) {
         const meta = entry._meta as Record<string, unknown> | undefined;
-        if (meta) await refreshTokenIfNeeded(key, meta, quarryConfigPath);
+        if (meta) await refreshTokenIfNeeded(key, meta, appConfigPath);
       }
     }
   } catch {
     // Config doesn't exist or is invalid — fine
   }
 
-  const [claudeCodeServers, quarryServers] = await Promise.all([
+  const [claudeCodeServers, appServers] = await Promise.all([
     readMcpConfigFile(join(claudeDir, '.mcp.json')),
-    readMcpConfigFile(join(claudeDir, '.quarry-mcp.json')),
+    readMcpConfigFile(appConfigPath),
   ]);
-  return { ...claudeCodeServers, ...quarryServers };
+  return { ...claudeCodeServers, ...appServers };
 }

@@ -4,7 +4,7 @@ import { readProvisionedGithubToken } from "@/lib/github-token";
 export const runtime = 'nodejs';
 
 export async function GET() {
-  // Read the real PAT from ~/.claude/.quarry-mcp.json — the client-side store
+  // Read the real PAT from the provisioned MCP config — the client-side store
   // holds a "provisioned" sentinel that isn't a valid GitHub token.
   const token = await readProvisionedGithubToken();
 

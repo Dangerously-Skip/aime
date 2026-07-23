@@ -1,5 +1,6 @@
 import type { CanvasTemplate } from './types';
 import type { KanbanCardAction } from '@/lib/a2ui/types';
+import { APP_NAME } from '@/config/branding';
 
 interface PullRequest {
   /** Repo owner. */
@@ -33,7 +34,7 @@ interface PRTriageInput {
   title: string;
   /**
    * MCP tool prefix for GitHub. The agent fills this in based on which
-   * GitHub MCP is connected — e.g. `mcp__github__` or `mcp__nib-connector-github__`.
+   * GitHub MCP is connected — e.g. `mcp__github__` or `mcp__aime-connector-github__`.
    * Leave trailing double-underscore.
    */
   toolPrefix: string;
@@ -64,7 +65,7 @@ function buildActions(pr: PullRequest, toolPrefix: string): KanbanCardAction[] {
       label: '✓ Approve',
       variant: 'primary',
       tool: `${toolPrefix}create_and_submit_pull_request_review`,
-      args: { ...baseArgs, event: 'APPROVE', body: 'Approved via Quarry canvas.' },
+      args: { ...baseArgs, event: 'APPROVE', body: `Approved via ${APP_NAME} canvas.` },
       feedbackPrompt: `Approve PR #${pr.number} in ${pr.owner}/${pr.repo}.`,
     });
   }
@@ -74,7 +75,7 @@ function buildActions(pr: PullRequest, toolPrefix: string): KanbanCardAction[] {
       label: '✗ Request changes',
       variant: 'destructive',
       tool: `${toolPrefix}create_and_submit_pull_request_review`,
-      args: { ...baseArgs, event: 'REQUEST_CHANGES', body: 'Changes requested via Quarry canvas.' },
+      args: { ...baseArgs, event: 'REQUEST_CHANGES', body: `Changes requested via ${APP_NAME} canvas.` },
       feedbackPrompt: `Request changes on PR #${pr.number} in ${pr.owner}/${pr.repo}. Ask the user what changes to request before submitting.`,
     });
   }
@@ -103,13 +104,13 @@ export const githubPrTriageTemplate: CanvasTemplate<PRTriageInput> = {
   description: 'Render open pull requests as a kanban board grouped by review state, with one-click actions for approve, request changes, comment, and merge.',
   whenToUse:
     'When the user asks for their open PRs, PRs to review, or wants to triage pull requests. ' +
-    'First, identify which GitHub MCP is connected — common server names are `github` and `nib-connector-github` (tool format `mcp__<server>__<tool>`). ' +
+    'First, identify which GitHub MCP is connected — common server names are `github` and `aime-connector-github` (or legacy `nib-connector-github`) (tool format `mcp__<server>__<tool>`). ' +
     'Use the *_search_pull_requests or *_list_pull_requests tool to fetch PRs. For each, determine its review state by inspecting reviews (*_get_pull_request_reviews): ' +
     '"approved" if any APPROVED review and no later CHANGES_REQUESTED; "changes_requested" if any CHANGES_REQUESTED review; "draft" if `draft: true`; otherwise "needs_review". ' +
-    'Pass `toolPrefix` as `mcp__<server>__` so the template can build action calls — e.g. `mcp__nib-connector-github__`. ' +
+    'Pass `toolPrefix` as `mcp__<server>__` so the template can build action calls — e.g. `mcp__aime-connector-github__`. ' +
     'Limit to ~20 most relevant PRs to keep the board readable.',
   inputShape:
-    '{ title: string, toolPrefix: string (e.g. "mcp__nib-connector-github__"), columns?: string[] (default ["Needs review", "Changes requested", "Approved", "Draft"]), prs: { owner, repo, number, title, description?, author?, reviewers?, state ("needs_review"|"changes_requested"|"approved"|"draft"|"merged"), mergeable?, url, labels?, age?, priority? }[], caption?: string }',
+    '{ title: string, toolPrefix: string (e.g. "mcp__aime-connector-github__"), columns?: string[] (default ["Needs review", "Changes requested", "Approved", "Draft"]), prs: { owner, repo, number, title, description?, author?, reviewers?, state ("needs_review"|"changes_requested"|"approved"|"draft"|"merged"), mergeable?, url, labels?, age?, priority? }[], caption?: string }',
   render: ({ title, toolPrefix, columns, prs, caption }) => {
     const safePrs = Array.isArray(prs) ? prs : [];
     const safeColumns = (Array.isArray(columns) && columns.length > 0) ? columns : DEFAULT_COLUMNS;

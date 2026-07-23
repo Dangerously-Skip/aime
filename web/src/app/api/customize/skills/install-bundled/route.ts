@@ -11,7 +11,7 @@ const SKILLS_DIR = join(homedir(), '.claude', 'skills');
 // plugin path (~/.claude/plugins/<plugin>/skills/<skill>) or been
 // retired. We delete these on each install so existing users don't keep
 // stale duplicates that confuse skill matching.
-const OBSOLETE_SKILL_IDS = ['nib-ppt'];
+const OBSOLETE_SKILL_IDS = ['nib-ppt', 'nib-pdf'];  // pre-rename ids removed on install
 
 /**
  * POST /api/customize/skills/install-bundled
@@ -35,7 +35,7 @@ export async function POST() {
     const skillDir = join(SKILLS_DIR, skill.id);
 
     try {
-      // Always overwrite — the bundled-skills set is Quarry-curated and
+      // Always overwrite — the bundled-skills set is app-curated and
       // ships fixes (e.g. wording corrections to a SKILL.md that misled
       // the model). Existing installs need to receive those updates each
       // launch. Mirrors the force-recopy pattern in main-web.js's

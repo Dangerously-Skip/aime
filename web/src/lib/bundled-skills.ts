@@ -26,17 +26,17 @@ export function applySkillGating(skill: BundledSkill, skillMdContent: string): B
   return skill;
 }
 
-// IMPORTANT: don't add nib-ppt here. The full nib-ppt plugin is bundled
-// via main-web.js's installNibPptPlugin() into ~/.claude/plugins/nib-ppt/,
-// which registers the canonical sub-skill `nib-ppt:generate-ppt` along
-// with its sibling skills. Adding a competing top-level `nib-ppt` here
+// IMPORTANT: don't add ppt here. The full ppt plugin is bundled
+// via main-web.js's installPptPlugin() into ~/.claude/plugins/ppt/,
+// which registers the canonical sub-skill `ppt:generate-ppt` along
+// with its sibling skills. Adding a competing top-level `ppt` here
 // confuses skill matching — Claude tends to read the simpler bundled
 // SKILL.md and shell out via Bash directly instead of invoking the
 // richer plugin sub-skill via the Skill tool.
 export const BUNDLED_SKILLS: BundledSkill[] = [
   {
-    id: 'nib-pdf',
-    name: 'nib-pdf',
+    id: 'pdf',
+    name: 'pdf',
     description: 'Generate professional PDF documents using Python fpdf2',
     files: ['SKILL.md'],
   },

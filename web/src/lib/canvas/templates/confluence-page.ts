@@ -32,7 +32,7 @@ export const confluencePageTemplate: CanvasTemplate<ConfluencePageInput> = {
   description: 'Render a Confluence page as markdown with metadata + actions to refresh, open, or hand off to the agent for edits.',
   whenToUse:
     'When the user asks to view, summarise, or edit a specific Confluence page. ' +
-    'Identify the Atlassian MCP server (`claude_ai_Atlassian` or `nib-mcp-atlassian`) and use *_getConfluencePage to fetch. ' +
+    'Identify the Atlassian MCP server (`claude_ai_Atlassian`, `aime-mcp-atlassian`, or legacy `nib-mcp-atlassian`) and use *_getConfluencePage to fetch. ' +
     'Convert the body to markdown. Pass `updateTool` as the FULL MCP tool name so the "Edit via agent" action wires correctly.',
   inputShape:
     '{ title: string, pageId: string, cloudId: string, spaceKey?: string, version: number, body: string (markdown), url?: string, author?: string, lastModified?: string, updateTool?: string }',

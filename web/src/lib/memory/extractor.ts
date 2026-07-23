@@ -1,11 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MemoryCategory } from './types';
-import { isGatewayConfigured, getGatewayEnv } from '../gateway-env';
 
 /** Model used for memory extraction — can be overridden via MEMORY_EXTRACTION_MODEL env var. */
 const EXTRACTION_MODEL = process.env.MEMORY_EXTRACTION_MODEL || 'claude-haiku-4-5-20251001';
-/** Gateway-compatible model for extraction (cheap/fast). */
-const GATEWAY_EXTRACTION_MODEL = 'cheap';
 
 const EXTRACTION_PROMPT = `You are a memory extraction system. Analyze the conversation turn and extract useful memories about the user.
 
@@ -59,16 +56,9 @@ export async function extractMemories(
   if (!key) return [];
 
   try {
-    // Route through gateway if using a gateway key
-    const useGateway = isGatewayConfigured(key);
-    const gatewayEnv = useGateway ? getGatewayEnv(key) : null;
-    const client = new Anthropic({
-      apiKey: key,
-      ...(gatewayEnv ? { baseURL: gatewayEnv.ANTHROPIC_BASE_URL } : {}),
-    });
-    const model = useGateway ? GATEWAY_EXTRACTION_MODEL : EXTRACTION_MODEL;
+    const client = new Anthropic({ apiKey: key });
     const response = await client.messages.create({
-      model,
+      model: EXTRACTION_MODEL,
       max_tokens: 1024,
       system: EXTRACTION_PROMPT,
       messages: [

@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Github, Search, Loader2, Lock, Check } from "lucide-react";
+import { REPOS_DIR_NAME } from "@/config/branding";
 
 interface Repo {
   fullName: string;
@@ -38,7 +39,7 @@ export function CloneFromGitHub({ open, onOpenChange, onCloned }: CloneFromGitHu
     if (!open) return;
     setLoading(true);
     setError(null);
-    // Token lives server-side in ~/.claude/.quarry-mcp.json — the route
+    // Token lives server-side in the provisioned MCP config — the route
     // looks it up directly so we don't need to pass one from the client.
     fetch("/api/github/repos")
       .then((r) => (r.ok ? r.json() : r.json().then((j) => Promise.reject(j.error))))
@@ -94,7 +95,7 @@ export function CloneFromGitHub({ open, onOpenChange, onCloned }: CloneFromGitHu
             Clone from GitHub
           </DialogTitle>
           <DialogDescription>
-            Pick a repository to clone to <code className="text-xs">~/Quarry/repos/</code> and open it for coding.
+            Pick a repository to clone to <code className="text-xs">~/{REPOS_DIR_NAME}/repos/</code> and open it for coding.
           </DialogDescription>
         </DialogHeader>
 

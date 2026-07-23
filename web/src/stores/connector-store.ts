@@ -152,7 +152,7 @@ export const useConnectorStore = create<ConnectorStore>()(
       getOAuthClientCreds: (id) => get().oauthClientCreds[id],
     }),
     {
-      name: 'nibcowork:connectors',
+      name: 'aime:connectors',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       version: 0,

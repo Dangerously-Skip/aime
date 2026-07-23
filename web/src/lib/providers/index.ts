@@ -1,7 +1,5 @@
 import { ClaudeProvider } from './claude-provider';
-import { OpencodeProvider } from './opencode-provider';
 import { BaseProvider, type ProviderConfig } from './base-provider';
-import { isBedrockConfigured } from '../bedrock-env';
 
 // Extend globalThis for singleton caching to survive Next.js hot reload
 declare global {
@@ -11,12 +9,13 @@ declare global {
   var __providerInstances: Map<string, BaseProvider> | undefined;
 }
 
-// Provider registry - cached on globalThis for hot reload survival
+// Provider registry - cached on globalThis for hot reload survival.
+// Claude (Agent SDK) is the only execution engine; the multi-provider
+// model registry is a roadmap pillar (see .planning/aime-roadmap.md).
 function getRegistry(): Record<string, typeof BaseProvider> {
   if (!globalThis.__providerRegistry) {
     globalThis.__providerRegistry = {
       claude: ClaudeProvider as unknown as typeof BaseProvider,
-      opencode: OpencodeProvider as unknown as typeof BaseProvider,
     };
   }
   return globalThis.__providerRegistry;
@@ -84,25 +83,7 @@ export async function clearProviderCache(): Promise<void> {
   instanceCache.clear();
 }
 
-/**
- * Initialize providers (pre-start opencode, etc.).
- */
-export async function initializeProviders(): Promise<void> {
-  console.log('[Providers] Initializing providers...');
-  console.log('[Providers] Bedrock configured:', isBedrockConfigured());
-  try {
-    // Get and initialize opencode provider
-    const opencodeProvider = getProvider('opencode');
-    await opencodeProvider.initialize();
-    console.log('[Providers] Opencode provider initialized');
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('[Providers] Error initializing providers:', message);
-  }
-}
-
 // Re-export classes and types for direct use
 export { ClaudeProvider } from './claude-provider';
-export { OpencodeProvider } from './opencode-provider';
 export { BaseProvider } from './base-provider';
 export type { ProviderConfig, QueryParams, StreamChunk, ChunkType } from './base-provider';
