@@ -316,7 +316,7 @@ export const useChatStore = create<ChatStore>()(
         })),
     }),
     {
-      name: 'nibcowork:chat',
+      name: 'aime:chat',
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,

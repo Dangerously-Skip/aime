@@ -178,7 +178,7 @@ export const useConversationStore = create<ConversationStore>()(
       canGoForward: () => get().navigationIndex < get().navigationHistory.length - 1,
     }),
     {
-      name: 'nibcowork:conversations',
+      name: 'aime:conversations',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {

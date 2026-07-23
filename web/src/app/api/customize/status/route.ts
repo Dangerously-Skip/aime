@@ -1,13 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { getMcpConfigPath } from '@/lib/app-paths';
 
 export const runtime = 'nodejs';
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const SKILLS_DIR = path.join(CLAUDE_DIR, 'skills');
 const PLUGINS_DIR = path.join(CLAUDE_DIR, 'plugins');
-const MCP_JSON_PATH = path.join(CLAUDE_DIR, '.quarry-mcp.json');
+const MCP_JSON_PATH = getMcpConfigPath();
 
 /**
  * GET /api/customize/status — Aggregate status of skills, connectors, plugins

@@ -58,12 +58,12 @@ export interface UserFeedbackData {
 let cachedIdentity: AnalyticsIdentity | null = null;
 
 /**
- * Build the client-side identity for Quarry events.
+ * Build the client-side identity for app events.
  * Uses Electron IPC for real platform/version info, and reads
  * ~/.claude/nib-analytics.conf for user_email + team_slug (the same
  * config the nib Claude Code CLI hook uses, so both tools share identity).
  */
-function getQuarryIdentity(): AnalyticsIdentity {
+function getAppIdentity(): AnalyticsIdentity {
   if (cachedIdentity) return cachedIdentity;
 
   const identity: AnalyticsIdentity = {
@@ -112,7 +112,7 @@ async function postEvents(
   flush = false,
 ): Promise<void> {
   try {
-    const baseIdentity = getQuarryIdentity();
+    const baseIdentity = getAppIdentity();
     const payload = events.map((e) => ({
       schema_version: '1.0' as const,
       event_type: e.event_type,

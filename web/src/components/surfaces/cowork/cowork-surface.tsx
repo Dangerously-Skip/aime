@@ -198,7 +198,7 @@ function categorizeToolCall(
     if (typeof raw !== "string") return null;
     // Filter out agent-internal files that aren't user context
     if (raw.includes('.claude/') || raw.includes('CLAUDE.md') || raw.includes('/plugins/') ||
-        raw.includes('.quarry/') || raw.includes('/scratch/') ||
+        raw.includes('.aime/') || raw.includes('.quarry/') || raw.includes('/scratch/') ||
         raw.endsWith('.sh') || raw.endsWith('.py') || raw.includes('node_modules/')) return null;
     // Glob patterns aren't meaningful context entries
     if (toolName === "Glob" || toolName === "Grep") return null;

@@ -118,7 +118,13 @@ describe('isValidSidebarEntry', () => {
     expect(isValidSidebarEntry('site/styles.css')).toBe(true);
   });
 
-  it('filters internal quarry paths but allows scratch artifacts', () => {
+  it('filters internal app paths but allows scratch artifacts', () => {
+    expect(isValidSidebarEntry('/home/u/.aime/tmp/x.txt')).toBe(false);
+    expect(isValidSidebarEntry('/home/u/.aime/scratch/chat1/out.pptx')).toBe(true);
+    expect(isValidSidebarEntry('/home/u/.aime/scratch/chat1/documents/extracted.txt')).toBe(false);
+  });
+
+  it('keeps filtering legacy .quarry paths (pre-rename conversations)', () => {
     expect(isValidSidebarEntry('/home/u/.quarry/tmp/x.txt')).toBe(false);
     expect(isValidSidebarEntry('/home/u/.quarry/scratch/chat1/out.pptx')).toBe(true);
     expect(isValidSidebarEntry('/home/u/.quarry/scratch/chat1/documents/extracted.txt')).toBe(false);

@@ -207,7 +207,7 @@ export const useCodeStore = create<CodeStore>()(
       setStreamError: (e) => set({ streamError: e }),
     }),
     {
-      name: 'nibcowork:code',
+      name: 'aime:code',
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,

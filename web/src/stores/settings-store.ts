@@ -223,7 +223,7 @@ export const useSettingsStore = create<SettingsStore>()(
       resetAll: () => set(initialState),
     }),
     {
-      name: 'nibcowork:settings',
+      name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       version: 6,

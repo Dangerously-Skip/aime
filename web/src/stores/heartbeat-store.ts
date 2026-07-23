@@ -65,7 +65,7 @@ export const useHeartbeatStore = create<HeartbeatStore>()(
         }),
     }),
     {
-      name: 'nibcowork:heartbeat',
+      name: 'aime:heartbeat',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
     }

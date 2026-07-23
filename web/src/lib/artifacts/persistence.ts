@@ -1,4 +1,5 @@
 import type { ParsedArtifact } from './parser';
+import { DATA_DIR_NAME } from '@/config/branding';
 
 export type SaveStatus =
   | { state: 'idle' }
@@ -80,7 +81,7 @@ export function getArtifactFilename(artifact: ParsedArtifact): string {
 }
 
 export function getAutoSaveDir(projectFolder: string, conversationId: string): string {
-  return `${projectFolder}/.quarry/artifacts/${conversationId}`;
+  return `${projectFolder}/${DATA_DIR_NAME}/artifacts/${conversationId}`;
 }
 
 function getElectronAPI() {

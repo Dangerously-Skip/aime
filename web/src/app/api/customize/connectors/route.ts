@@ -2,10 +2,11 @@ import { NextRequest } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { getMcpConfigPath } from '@/lib/app-paths';
 
 export const runtime = 'nodejs';
 
-const MCP_JSON_PATH = path.join(os.homedir(), '.claude', '.quarry-mcp.json');
+const MCP_JSON_PATH = getMcpConfigPath();
 
 interface McpServerConfig {
   type: 'stdio' | 'http' | 'sse';

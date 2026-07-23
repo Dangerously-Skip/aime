@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { getMcpConfigPath } from '@/lib/app-paths';
+import { MCP_CONFIG_FILENAME } from '@/config/branding';
 
 export const runtime = 'nodejs';
 
@@ -75,13 +77,13 @@ async function checkIdentityFiles(): Promise<HealthCheck[]> {
 }
 
 async function checkProvisionedMcpServers(): Promise<HealthCheck> {
-  const mcpPath = path.join(os.homedir(), '.claude', '.quarry-mcp.json');
+  const mcpPath = getMcpConfigPath();
   if (!fs.existsSync(mcpPath)) {
     return {
       id: 'mcp_servers',
       label: 'Connector MCP Servers',
       status: 'warn',
-      message: 'No provisioned connector servers found (~/.claude/.quarry-mcp.json missing)',
+      message: `No provisioned connector servers found (~/.claude/${MCP_CONFIG_FILENAME} missing)`,
       fix: 'Connect integrations via Customize → Connectors',
     };
   }
@@ -95,15 +97,15 @@ async function checkProvisionedMcpServers(): Promise<HealthCheck> {
       status: count > 0 ? 'ok' : 'warn',
       message: count > 0
         ? `${count} server(s) configured: ${Object.keys(config.mcpServers ?? {}).join(', ')}`
-        : 'No servers configured in .quarry-mcp.json',
+        : `No servers configured in ${MCP_CONFIG_FILENAME}`,
     };
   } catch {
     return {
       id: 'mcp_servers',
       label: 'Connector MCP Servers',
       status: 'error',
-      message: '~/.claude/.quarry-mcp.json is malformed',
-      fix: 'Check or delete ~/.claude/.quarry-mcp.json',
+      message: `~/.claude/${MCP_CONFIG_FILENAME} is malformed`,
+      fix: `Check or delete ~/.claude/${MCP_CONFIG_FILENAME}`,
     };
   }
 }
