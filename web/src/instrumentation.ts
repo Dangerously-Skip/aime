@@ -6,14 +6,14 @@ export async function register() {
   // pino is a Node-only dependency; only load and use it in the Node runtime.
   const isNodeRuntime = process.env['NEXT_RUNTIME'] === 'nodejs';
 
-  // QUARRY_SDK_CLI_PATH is set by the Electron main process with the path
+  // AIME_SDK_CLI_PATH is set by the Electron main process with the path
   // to the CLI binary (copied outside the app bundle for execution).
-  const sdkPath = process.env['QUARRY_SDK_CLI_PATH'];
+  const sdkPath = process.env['AIME_SDK_CLI_PATH'];
   if (sdkPath) {
-    (globalThis as Record<string, unknown>).__quarryClaudeSDKPath = sdkPath;
+    (globalThis as Record<string, unknown>).__aimeClaudeSDKPath = sdkPath;
     if (isNodeRuntime) {
       const { logger } = await import('./lib/logger');
-      logger.info({ event: 'quarry.sdk_path_set', sdkPath }, 'Claude SDK cli.js path set from env');
+      logger.info({ event: 'aime.sdk_path_set', sdkPath }, 'Claude SDK cli.js path set from env');
     } else {
       console.log('[AIME] Claude SDK cli.js path set from env:', sdkPath);
     }

@@ -1,7 +1,7 @@
 {
-  "name": "quarry",
+  "name": "aime",
   "version": "1.7.1",
-  "productName": "Quarry",
+  "productName": "AIME",
   "private": true,
   "main": "main-web.js",
   "scripts": {
@@ -22,8 +22,8 @@
     "test:e2e": "playwright test"
   },
   "build": {
-    "appId": "com.nib.quarry",
-    "productName": "Quarry",
+    "appId": "com.aime.app",
+    "productName": "AIME",
     "asarUnpack": [
       "**/node_modules/node-pty/**"
     ],
@@ -65,12 +65,12 @@
         ]
       },
       {
-        "from": "resources/quarry-skills",
-        "to": "quarry-skills"
+        "from": "resources/aime-skills",
+        "to": "aime-skills"
       },
       {
-        "from": "resources/nib-ppt-plugin",
-        "to": "nib-ppt-plugin"
+        "from": "resources/ppt-plugin",
+        "to": "ppt-plugin"
       },
       {
         "from": "mcp-servers",
@@ -124,7 +124,7 @@
       "allowToChangeInstallationDirectory": false,
       "deleteAppDataOnUninstall": false,
       "runAfterFinish": true,
-      "artifactName": "Quarry-Setup-${version}-${arch}.${ext}"
+      "artifactName": "AIME-Setup-${version}-${arch}.${ext}"
     },
     "dmg": {
       "background": null,
@@ -146,9 +146,9 @@
     },
     "publish": [
       {
-        "provider": "generic",
-        "url": "https://quarry.internal.invalid",
-        "channel": "latest"
+        "provider": "github",
+        "owner": "Dangerously-Skip",
+        "repo": "aime"
       }
     ]
   },

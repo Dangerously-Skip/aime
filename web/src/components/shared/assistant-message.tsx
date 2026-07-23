@@ -174,7 +174,7 @@ export function AssistantMessage({
   const hasArtifacts = parsed?.segments.some((s) => s.type === "artifact") ?? false;
 
   // Extract file paths from completed Write/Edit tool calls + binary artifacts
-  // produced by Bash (e.g. nib-ppt's generate_presentation.sh writing a .pptx).
+  // produced by Bash (e.g. the ppt plugin's generate_presentation.sh writing a .pptx).
   // The Bash scan reuses BASH_ARTIFACT_EXT so chips and the right-side panel agree
   // on what counts as a produced artifact.
   const writtenFiles = useMemo(() => {

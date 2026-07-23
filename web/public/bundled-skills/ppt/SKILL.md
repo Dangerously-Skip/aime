@@ -1,5 +1,5 @@
 ---
-name: nib-ppt
+name: ppt
 description: Generate PowerPoint presentations from markdown
 allowed-tools: Bash, Write, Read
 ---
@@ -60,7 +60,7 @@ Content here
 ## Step 2: Generate the .pptx
 
 ```bash
-bash ~/.claude/plugins/nib-ppt/generate_presentation.sh input.md output.pptx
+bash ~/.claude/plugins/ppt/generate_presentation.sh input.md output.pptx
 ```
 
 The presentation opens automatically when done.
@@ -79,5 +79,5 @@ pip3 install python-pptx pyyaml
 ## Rules
 
 - Do NOT use python-pptx directly — always use the generate script
-- Do NOT search for nib-ppt as a CLI tool — it is the shell script above
+- Do NOT search for ppt as a CLI tool — it is the shell script above
 - Write the markdown first, then run the script

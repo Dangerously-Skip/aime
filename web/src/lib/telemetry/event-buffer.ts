@@ -28,7 +28,7 @@ async function getBufferPath(): Promise<string> {
     const os = await import('os');
     const path = await import('path');
     const fs = await import('fs/promises');
-    const userDataDir = process.env.QUARRY_USER_DATA_DIR;
+    const userDataDir = process.env.AIME_USER_DATA_DIR;
     const dir = userDataDir
       ? path.join(userDataDir, 'telemetry')
       : getDataDir();

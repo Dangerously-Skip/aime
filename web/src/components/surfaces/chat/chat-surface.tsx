@@ -335,7 +335,7 @@ export function ChatSurface() {
       const doneId = getChatId();
       completeRunningTools(doneId);
       stopStreaming(doneId);
-      // Detect binary artifacts from Bash tool calls (e.g. nib-ppt .pptx output)
+      // Detect binary artifacts from Bash tool calls (e.g. ppt plugin .pptx output)
       if (doneId) {
         const msgs = useChatStore.getState().messages[doneId] ?? [];
         for (const msg of msgs) {

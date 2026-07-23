@@ -11,7 +11,7 @@ const SKILLS_DIR = join(homedir(), '.claude', 'skills');
 // plugin path (~/.claude/plugins/<plugin>/skills/<skill>) or been
 // retired. We delete these on each install so existing users don't keep
 // stale duplicates that confuse skill matching.
-const OBSOLETE_SKILL_IDS = ['nib-ppt'];
+const OBSOLETE_SKILL_IDS = ['nib-ppt', 'nib-pdf'];  // pre-rename ids removed on install
 
 /**
  * POST /api/customize/skills/install-bundled
