@@ -76,6 +76,14 @@ marketplace routes, widget cards). New: **skill generation** ("make me a
 skill and save it" → prompt + `serializeSkillMd()`, already tested) and
 **widget creation** (generation flow onto `AssistantCard.widget`).
 
+**Composio evaluation (DR-9):** Composio (composio.dev) is a tool-integration
+platform — hundreds of managed OAuth integrations exposed as agent tools,
+similar territory to our Nango option but agent-native. Evaluate as either a
+replacement for, or a third leg beside, the built-in connector registry and
+Nango. Note: the cowork surface config already has a `mcpServers: {}` stub
+commented "Composio added at runtime if configured" — someone had the same
+idea earlier. Evaluate during P3.
+
 ### P4 — Output & intelligence
 
 - **Generalized PDF/document creation with a design system** — replace
@@ -108,6 +116,7 @@ Sequence after P1 + Projects hardening. Interacts with DR-3 ($ tier/auth).
 | DR-6 | **Auto-update chain break** | New appId means nib installs won't auto-update to AIME. LEAN: intentional — it's a fork |
 | DR-7 | **User-data migration** | localStorage keys `nibcowork:*` → `aime:*` with migration; `~/.quarry` → `~/.aime` with fallback read. LEAN: migrate (cheap, machinery tested) |
 | DR-8 | **Opencode provider** | Dormant (unreachable from UI; `initializeProviders()` never called). LEAN: delete with gateway-provider; revisit under P1 registry if a second engine is wanted |
+| DR-9 | **Composio integration** | Managed tool-integration platform vs built-in connectors vs Nango. Evaluate in P3. UNDECIDED |
 
 ## Phasing
 
@@ -137,8 +146,8 @@ nibcowork:* read fallback, `.quarry`/`~/Library/…/Quarry` migration renames,
 nib-connector-*/nib-mcp-* config-key reads, `persist:quarry` Electron
 partition name (renaming it would orphan renderer localStorage).
 
-Open item for the owner: LICENSE says "Copyright (c) 2026 Composio" —
-looks copied from a template; needs the right copyright holder.
+LICENSE holder corrected to DangerouslySkip (was a template remnant saying
+"Composio" — which incidentally seeded DR-9).
 
 ## Test suite status (foundation for this work)
 
