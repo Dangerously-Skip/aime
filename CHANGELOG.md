@@ -11,4 +11,4 @@ where applicable.
 ### Added
 - Initial CHANGELOG scaffold.
 
-[Unreleased]: https://github.com/redacted-org/quarry/compare/master...HEAD
+[Unreleased]: https://github.com/Dangerously-Skip/aime/compare/master...HEAD

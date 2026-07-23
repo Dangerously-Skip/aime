@@ -88,8 +88,11 @@ export async function refreshCanvasDoc(
       // so request the union of canvas + common MCP-prefixed read tools.
       // Granted MCPs from claude-provider are still gated by their own auth.
       extraAllowedTools: [
-        'mcp__quarry__canvas',
-        // Atlassian read paths used by jira_kanban refresh
+        'mcp__aime__canvas',
+        // Atlassian read paths used by jira_kanban refresh (aime-* current, nib-* legacy)
+        'mcp__aime-mcp-atlassian__searchJiraIssuesUsingJql',
+        'mcp__aime-mcp-atlassian__getTransitionsForJiraIssue',
+        'mcp__aime-mcp-atlassian__getAccessibleAtlassianResources',
         'mcp__nib-mcp-atlassian__searchJiraIssuesUsingJql',
         'mcp__nib-mcp-atlassian__getTransitionsForJiraIssue',
         'mcp__nib-mcp-atlassian__getAccessibleAtlassianResources',

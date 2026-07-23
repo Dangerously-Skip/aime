@@ -2,7 +2,6 @@ import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { getSurfaceConfig } from '../surfaces';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
-import { getGatewayEnv, isGatewayConfigured, mapModelForGateway } from '../gateway-env';
 import { getClaudeSDKPath } from './sdk-path';
 import { waitForAnswer } from '../pending-questions';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
@@ -164,8 +163,8 @@ export class ClaudeProvider extends BaseProvider {
     // In-process MCP server exposing CronCreate so the model can schedule reminders
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const z = (await import('zod/v3') as any).z ?? (await import('zod/v3') as any).default ?? await import('zod/v3');
-    const quarryMcpServer = createSdkMcpServer({
-      name: 'quarry',
+    const aimeMcpServer = createSdkMcpServer({
+      name: 'aime',
       version: '1.0.0',
       tools: [
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -288,17 +287,21 @@ export class ClaudeProvider extends BaseProvider {
       maxTurns,
       mcpServers: {
         ...mcpServers,
-        quarry: quarryMcpServer,
-        'nib-web-search': {
-          type: 'stdio',
-          command: 'npx',
-          args: ['-y', '@jharding_npm/mcp-server-searxng'],
-          env: {
-            SEARXNG_INSTANCES: process.env.SEARXNG_INSTANCES || 'https://ai-studio-searxng.internal.invalid',
-            NODE_TLS_REJECT_UNAUTHORIZED: '0',
-            MCP_SEARXNG_DEBUG: process.env.MCP_SEARXNG_DEBUG || 'false',
-          },
-        },
+        aime: aimeMcpServer,
+        // Web search is opt-in: requires a SearXNG instance (SEARXNG_INSTANCES env var)
+        ...(process.env.SEARXNG_INSTANCES
+          ? {
+              'web-search': {
+                type: 'stdio',
+                command: 'npx',
+                args: ['-y', '@jharding_npm/mcp-server-searxng'],
+                env: {
+                  SEARXNG_INSTANCES: process.env.SEARXNG_INSTANCES,
+                  MCP_SEARXNG_DEBUG: process.env.MCP_SEARXNG_DEBUG || 'false',
+                },
+              },
+            }
+          : {}),
       },
       permissionMode,
       // Required by SDK when permissionMode is 'bypassPermissions'. Without it,
@@ -523,25 +526,15 @@ export class ClaudeProvider extends BaseProvider {
       CLAUDE_CONFIG_DIR: getDataDir(),
     };
 
-    // Gateway env passthrough: if nib Gateway API key is provided, route through gateway
-    // This takes priority over Bedrock env
-    if (apiKey && isGatewayConfigured(apiKey)) {
+    // BYOK: a user-provided API key routes directly to the Anthropic API
+    // and takes priority over Bedrock env.
+    if (apiKey) {
       queryOptions.env = {
         ...safeEnv,
         ...(queryOptions.env as Record<string, string> || {}),
-        ...getGatewayEnv(apiKey),
-        // Adaptive thinking (output_config.effort) is now supported — see
-        // ai-studio PR #38 (LiteLLM backport of upstream PR #27074).
-        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1',
-        // Verbose logging to stderr — captured by the Next.js server's
-        // stderr handler in main-web.js and written to main.log. Without
-        // this, "process exited with code 1" comes through with no detail.
-        ANTHROPIC_LOG: 'debug',
-        DEBUG: 'anthropic:*',
+        ANTHROPIC_API_KEY: apiKey,
       };
-      // Override model to use gateway-compatible short names
-      queryOptions.model = mapModelForGateway(model);
-      console.log('[Claude] Gateway configured, routing through nib AI Studio');
+      console.log('[Claude] API key provided, routing to the Anthropic API');
     } else if (isBedrockConfigured()) {
       queryOptions.env = { ...safeEnv, ...(queryOptions.env as Record<string, string> || {}), ...getBedrockEnv() };
       console.log('[Claude] Bedrock env configured, routing through AWS');
@@ -736,7 +729,7 @@ export class ClaudeProvider extends BaseProvider {
                 // If the agent passed { templateId, input }, expand via the template registry
                 // so downstream consumers always see a fully-rendered A2UIDocument.
                 // The tool may arrive as bare `canvas` or MCP-prefixed `mcp__quarry__canvas`.
-                if (toolName === CANVAS_TOOL_NAME || toolName === 'mcp__quarry__canvas') {
+                if (toolName === CANVAS_TOOL_NAME || toolName === 'mcp__aime__canvas') {
                   const expanded = expandCanvasTemplate(toolInput);
                   const doc = expanded ?? toolInput;
                   const rawSummary = JSON.stringify(toolInput).slice(0, 600);

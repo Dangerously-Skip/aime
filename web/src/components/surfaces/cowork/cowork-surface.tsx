@@ -755,7 +755,7 @@ export function CoworkSurface() {
   const conversations = useConversationStore((s) => s.conversations);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const displayName = useSettingsStore((s) => s.displayName);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
   const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
@@ -838,7 +838,7 @@ export function CoworkSurface() {
           messageCount: allMsgs.length,
           durationMs: usage.durationMs,
           model: usage.model,
-          apiKey: nibGatewayApiKey || undefined,
+          apiKey: anthropicApiKey || undefined,
         }),
       }).then((r) => r.json()).then(({ estimate }) => {
         if (!estimate) return;
@@ -1252,7 +1252,7 @@ export function CoworkSurface() {
               cwd: folder || projectFolder || scratchDir || undefined,
               history: hist.length > 0 ? hist : undefined,
               sessionControls: currentControls,
-              apiKey: nibGatewayApiKey || undefined,
+              apiKey: anthropicApiKey || undefined,
             });
           }, 1500);
           return; // skip "task complete" notification
@@ -1399,7 +1399,7 @@ export function CoworkSurface() {
         projectInstructions: projectInstructions || undefined,
         projectKnowledge: projectKnowledge || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-        apiKey: nibGatewayApiKey || undefined,
+        apiKey: anthropicApiKey || undefined,
         cwd: folder || projectFolder || scratchDir || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
@@ -1459,11 +1459,11 @@ export function CoworkSurface() {
       void sendMessage(prompt, bgId, 'cowork', model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
-        apiKey: nibGatewayApiKey || undefined,
+        apiKey: anthropicApiKey || undefined,
         cwd: folder || projectFolder || scratchDir || undefined,
       });
     },
-    [addConversation, addMessage, startStreaming, sendMessage, model, personalPreferences, displayName, nibGatewayApiKey, folder, projectFolder, scratchDir]
+    [addConversation, addMessage, startStreaming, sendMessage, model, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
   );
 
   // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store
@@ -1474,7 +1474,7 @@ export function CoworkSurface() {
         const resp = await fetch('/api/chat/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model, apiKey: nibGatewayApiKey || undefined }),
+          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model, apiKey: anthropicApiKey || undefined }),
         });
         if (!resp.ok || !resp.body) return;
         const reader = resp.body.getReader();

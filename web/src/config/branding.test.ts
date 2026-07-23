@@ -5,14 +5,10 @@ import { getAvailableSurfaces, getSurfaceConfig } from '@/lib/surfaces';
 /**
  * De-brand guard: the product is AIME (open source). Legacy identity strings
  * ("Quarry", "built by … nib", Bedrock claims) must never reappear in
- * model-visible surface prompts.
- *
- * Infra identifiers are allowed until their own P0 slices land
- * (see .planning/aime-roadmap.md): the `quarry` MCP server name
- * (`mcp__quarry__*`), the `nib-web-search` MCP server, the nib-ppt plugin,
- * and `.quarry` data paths.
+ * model-visible surface prompts. The `.quarry` legacy data-dir token is the
+ * only allowed remnant (migration-aware path filters).
  */
-const INFRA_ALLOWLIST = [/mcp__quarry__/g, /nib-web-search/g, /nib-ppt\S*/g, /\.quarry/g];
+const INFRA_ALLOWLIST = [/\.quarry/g];
 
 function promptTextFor(surfaceId: string): string {
   const config = getSurfaceConfig(surfaceId);

@@ -20,7 +20,7 @@ interface JiraKanbanInput {
   /**
    * Full MCP tool name to call when transitioning issues. Differs by org —
    * may be `mcp__claude_ai_Atlassian__transitionJiraIssue`,
-   * `mcp__nib-mcp-atlassian__transitionJiraIssue`, etc. The agent fills this
+   * `mcp__aime-mcp-atlassian__transitionJiraIssue`, etc. The agent fills this
    * in based on which Atlassian MCP it has available.
    */
   transitionTool: string;
@@ -112,9 +112,9 @@ export const jiraKanbanTemplate: CanvasTemplate<JiraKanbanInput> = {
   description: 'Render a kanban board of Jira issues grouped by status, with one-click transition buttons on each card. Cards link out to the Jira issue.',
   whenToUse:
     'When the user asks for their Jira backlog, sprint board, in-progress tickets, or any Jira issue list. ' +
-    'First, identify which Atlassian MCP is available — common server names are `claude_ai_Atlassian` and `nib-mcp-atlassian` (the tool prefix is `mcp__<server>__<toolName>`). ' +
+    'First, identify which Atlassian MCP is available — common server names are `claude_ai_Atlassian` and `aime-mcp-atlassian` (or legacy `nib-mcp-atlassian`) (the tool prefix is `mcp__<server>__<toolName>`). ' +
     'Use the *_searchJiraIssuesUsingJql tool from that server to fetch issues, group by status, and include each issue\'s allowed transitions via *_getTransitionsForJiraIssue. ' +
-    'Pass the `transitionTool` field as the FULL MCP tool name for transitions (e.g. `mcp__nib-mcp-atlassian__transitionJiraIssue`). ' +
+    'Pass the `transitionTool` field as the FULL MCP tool name for transitions (e.g. `mcp__aime-mcp-atlassian__transitionJiraIssue`). ' +
     'ALSO pass `commentTool` (e.g. `mcp__claude_ai_Atlassian__addCommentToJiraIssue`) so each card gets a 💬 button users can click to add a comment inline. ' +
     'If the Atlassian MCP requires a `cloudId` arg, fetch it via *_getAccessibleAtlassianResources and pass it in `baseToolArgs`. ' +
     'ALWAYS pass `refreshPrompt` so the canvas can re-fetch itself after a transition without the user having to re-ask. ' +

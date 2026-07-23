@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { useMarketplace } from "@/lib/use-marketplace";
 import { PluginRow } from "./plugin-row";
-import { NibSkillsSection } from "./nib-skills-section";
 import { Zap, FileText, Trash2, Pencil, Loader2, Plus, Check, X, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SkillFrontmatter } from "@/lib/skill-parser";
@@ -165,7 +164,6 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
           </div>
         )}
 
-        <NibSkillsSection />
       </div>
     );
   }

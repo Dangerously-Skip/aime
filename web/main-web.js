@@ -113,16 +113,11 @@ function waitForPort(port, timeout = 60000) {
   });
 }
 
-// --- nib analytics config ---
-// Reads ~/.claude/nib-analytics.conf — shared with the nib Claude Code CLI hook.
-// Used both as a runtime override for ANALYTICS_API_URL (set on the Next.js
-// child env below) and as the renderer-side identity source via IPC.
-const ANALYTICS_API_URL_DEFAULT =
-  "https://ompkko4b72.execute-api.ap-southeast-2.amazonaws.com/kaos";
-const ANALYTICS_AWS_REGION_DEFAULT = "ap-southeast-2";
-
-function readNibAnalyticsConf() {
-  const conf = path.join(os.homedir(), ".claude", "nib-analytics.conf");
+// --- Analytics config (opt-in) ---
+// Telemetry is disabled unless ANALYTICS_API_URL is set in the environment
+// (or ~/.claude/analytics.conf for packaged installs). No default endpoint.
+function readAnalyticsConf() {
+  const conf = path.join(os.homedir(), ".claude", "analytics.conf");
   const result = {};
   try {
     const text = fs.readFileSync(conf, "utf-8");
@@ -777,8 +772,8 @@ app.whenReady().then(async () => {
     // First-launch-installed Python + Playwright. If setup was skipped,
     // these paths simply don't exist and skill scripts fall through to
     // whatever's on the user's PATH (or fail gracefully).
-    const quarryPython = setupHandler.pythonExe();
-    const quarryPythonAvailable = fs.existsSync(quarryPython);
+    const managedPython = setupHandler.pythonExe();
+    const managedPythonAvailable = fs.existsSync(managedPython);
     const pythonBinDir = process.platform === 'win32'
       ? setupHandler.PYTHON_DIR
       : path.join(setupHandler.PYTHON_DIR, 'bin');
@@ -787,17 +782,14 @@ app.whenReady().then(async () => {
       : null;
 
     // Resolve analytics endpoint with precedence:
-    //   1. nib-analytics.conf `endpoint=` (per-user override, lets one binary
-    //      target different AWS accounts without a rebuild)
-    //   2. Hardcoded kaos default (covers a fresh install with no nib setup)
-    // process.env.ANALYTICS_API_URL is intentionally NOT used as a layer here:
-    // .env.local is dev-only and was the source of the silent-discard bug
-    // where packaged builds had ANALYTICS_API_URL='' and sendEvents bailed.
-    const nibConf = readNibAnalyticsConf();
-    // Normalise: nib-managed conf bakes the full path in (`…/kaos/v1/events`),
+    //   1. ~/.claude/analytics.conf `endpoint=` (per-user override)
+    //   2. ANALYTICS_API_URL from the process env
+    // No built-in default — telemetry is opt-in and off otherwise.
+    const analyticsConf = readAnalyticsConf();
+    // Normalise: managed confs may bake the full path in (`…/v1/events`),
     // but analytics-client appends `/v1/events` itself. Strip a trailing
     // `/v1/events` so we don't end up POSTing to `…/v1/events/v1/events` (404).
-    const rawEndpoint = (nibConf.endpoint || '').replace(/\/+$/, '');
+    const rawEndpoint = (analyticsConf.endpoint || process.env.ANALYTICS_API_URL || '').replace(/\/+$/, '');
     const normalisedEndpoint = rawEndpoint.replace(/\/v1\/events$/, '');
 
     const child = utilityProcess.fork(serverScript, [], {
@@ -807,14 +799,16 @@ app.whenReady().then(async () => {
         PORT: String(port),
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
-        ANALYTICS_API_URL: normalisedEndpoint || ANALYTICS_API_URL_DEFAULT,
-        ANALYTICS_AWS_REGION: nibConf.region || ANALYTICS_AWS_REGION_DEFAULT,
-        QUARRY_RESOURCES_PATH: process.resourcesPath,
+        ...(normalisedEndpoint ? { ANALYTICS_API_URL: normalisedEndpoint } : {}),
+        ...(analyticsConf.region || process.env.ANALYTICS_AWS_REGION
+          ? { ANALYTICS_AWS_REGION: analyticsConf.region || process.env.ANALYTICS_AWS_REGION }
+          : {}),
+        AIME_RESOURCES_PATH: process.resourcesPath,
         AIME_USER_DATA_DIR: app.getPath('userData'),
         ...(sdkCliPath ? { AIME_SDK_CLI_PATH: sdkCliPath } : {}),
         ...(gitBashPath ? { CLAUDE_CODE_GIT_BASH_PATH: gitBashPath } : {}),
-        ...(quarryPythonAvailable ? {
-          QUARRY_PYTHON: quarryPython,
+        ...(managedPythonAvailable ? {
+          AIME_PYTHON: managedPython,
           PLAYWRIGHT_BROWSERS_PATH: setupHandler.PLAYWRIGHT_DIR,
         } : {}),
         // Point the SDK's config dir to Quarry's own directory so it doesn't
@@ -826,12 +820,12 @@ app.whenReady().then(async () => {
         // PortableGit's bash dir (Windows only) before the user's PATH.
         PATH: (process.platform === 'win32'
           ? [
-              ...(quarryPythonAvailable ? [pythonBinDir, pythonScriptsDir] : []),
+              ...(managedPythonAvailable ? [pythonBinDir, pythonScriptsDir] : []),
               ...(gitBashPath ? [path.dirname(gitBashPath)] : []),
               process.env.PATH,
             ]
           : [
-              ...(quarryPythonAvailable ? [pythonBinDir] : []),
+              ...(managedPythonAvailable ? [pythonBinDir] : []),
               '/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin',
               process.env.PATH,
             ]
@@ -1002,8 +996,8 @@ ipcMain.on("get-app-version", (event) => {
   event.returnValue = app.getVersion();
 });
 
-ipcMain.on("get-nib-analytics-config", (event) => {
-  event.returnValue = readNibAnalyticsConf();
+ipcMain.on("get-analytics-config", (event) => {
+  event.returnValue = readAnalyticsConf();
 });
 
 ipcMain.handle("open-path", async (_event, filePath) => {

@@ -68,7 +68,7 @@ afterEach(() => {
 });
 
 describe('option assembly', () => {
-  it('applies defaults, quarry MCP server, and permission mode', async () => {
+  it('applies defaults, the aime MCP server, and permission mode', async () => {
     const { options } = await captureOptions(new ClaudeProvider());
 
     expect(options.allowedTools).toContain('Read');
@@ -79,8 +79,19 @@ describe('option assembly', () => {
     expect(options.allowDangerouslySkipPermissions).toBe(true);
 
     const mcp = options.mcpServers as Record<string, unknown>;
-    expect(mcp.quarry).toBeDefined();
-    expect(mcp['nib-web-search']).toBeDefined();
+    expect(mcp.aime).toBeDefined();
+  });
+
+  it('includes the web-search MCP server only when SEARXNG_INSTANCES is set', async () => {
+    vi.stubEnv('SEARXNG_INSTANCES', '');
+    const { options } = await captureOptions(new ClaudeProvider());
+    expect((options.mcpServers as Record<string, unknown>)['web-search']).toBeUndefined();
+
+    vi.stubEnv('SEARXNG_INSTANCES', 'https://searx.example.com');
+    const { options: withSearx } = await captureOptions(new ClaudeProvider());
+    const server = (withSearx.mcpServers as Record<string, Record<string, unknown>>)['web-search'];
+    expect(server).toBeDefined();
+    expect((server.env as Record<string, string>).SEARXNG_INSTANCES).toBe('https://searx.example.com');
   });
 
   it('falls back to a per-chat scratch cwd when no folder is selected', async () => {
@@ -141,12 +152,12 @@ describe('option assembly', () => {
     expect(cowork.promptSuggestions).toBeUndefined();
   });
 
-  it('routes through the nib gateway when an sk- API key is provided', async () => {
+  it('routes a user API key directly to the Anthropic API', async () => {
     const { options } = await captureOptions(new ClaudeProvider(), { apiKey: 'sk-test-key', model: 'opus' });
     const env = options.env as Record<string, string>;
     expect(env.ANTHROPIC_API_KEY).toBe('sk-test-key');
-    expect(env.ANTHROPIC_BASE_URL).toContain('ai-studio');
-    expect(options.model).toBe('claude-code-opus'); // gateway alias, not SDK name
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined(); // no gateway rewrite
+    expect(options.model).toBe('opus'); // SDK model name untouched
   });
 
   it('prepends conversation history as XML only when there is no session to resume', async () => {
@@ -263,7 +274,7 @@ describe('stream translation', () => {
       {
         type: 'assistant',
         message: {
-          content: [{ type: 'tool_use', name: 'mcp__quarry__CronCreate', input: { expression: '0 9 * * *', prompt: 'stand-up' }, id: 'cr1' }],
+          content: [{ type: 'tool_use', name: 'mcp__aime__CronCreate', input: { expression: '0 9 * * *', prompt: 'stand-up' }, id: 'cr1' }],
         },
       },
     ]);

@@ -119,7 +119,7 @@ export function ProjectDetail({
   const setStreamError = useChatStore((s) => s.setStreamError);
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
 
   const allCronJobs = useCronStore((s) => s.jobs);
   const cronJobs = useMemo(() => allCronJobs.filter((j) => j.projectId === projectId), [allCronJobs, projectId]);
@@ -273,7 +273,7 @@ export function ProjectDetail({
       projectInstructions,
       projectKnowledge,
       crossSurfaceContext: crossSurfaceContext || undefined,
-      apiKey: nibGatewayApiKey || undefined,
+      apiKey: anthropicApiKey || undefined,
     });
   }
 

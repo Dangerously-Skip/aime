@@ -6,9 +6,9 @@ export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): Surface
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash',
-      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'mcp__quarry__canvas', 'spawn_agent',
+      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'spawn_agent',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
-      'mcp__nib-web-search__web_search',
+      'mcp__web-search__web_search',
     ],
     permissionMode: 'bypassPermissions',
     systemPrompt: `You are ${APP_NAME}, an AI assistant.
@@ -51,7 +51,7 @@ ${PPT_PROMPT}
 - If a task requires many tool calls, prioritize completing the deliverable (the file the user asked for) over comprehensiveness of data gathering. A delivered report with available data is better than an incomplete task that ran out of turns.
 
 ## Web search
-You have web search available via the nib-web-search MCP server (tool: web_search). This is your ONLY search mechanism — use it whenever you need to look things up online.
+You have web search available via the web-search MCP server (tool: web_search). This is your ONLY search mechanism — use it whenever you need to look things up online.
 - The results it returns are real, working search results. Trust them and synthesize your answer directly from those results.
 - Do NOT fall back to Bash curl commands to scrape Google, DuckDuckGo, Yelp, or any other search engine. This wastes time and produces worse results.
 - Do NOT use WebFetch to re-fetch URLs already present in the search results unless the user specifically asks for detailed content from a particular page.

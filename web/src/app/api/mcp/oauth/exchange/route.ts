@@ -91,7 +91,7 @@ export async function POST(request: Request) {
     const isSse = typeof mcpUrl === 'string' && /\/sse\/?$/.test(mcpUrl);
     const transport = isSse ? 'sse' : 'streamable-http';
 
-    const serverKey = `nib-mcp-${mcpName}`;
+    const serverKey = `aime-mcp-${mcpName}`;
     mcpConfig.mcpServers[serverKey] = {
       transport, // Gets translated to 'sse' or 'http' for the SDK
       url: mcpUrl,

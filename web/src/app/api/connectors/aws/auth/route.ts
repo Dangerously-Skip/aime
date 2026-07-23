@@ -4,23 +4,24 @@ import { spawn } from 'child_process';
 
 /**
  * POST /api/connectors/aws/auth
- * Runs `rqp auth` to authenticate with AWS via the nib CLI.
- * Streams are captured; browser-based SSO will open automatically.
- * Times out after 5 minutes to allow for interactive auth flows.
+ * Verifies AWS credentials via the standard credential chain
+ * (`aws sts get-caller-identity`). If credentials are missing/expired the
+ * user is pointed at `aws sso login` / `aws configure` — we don't run an
+ * interactive flow server-side.
  */
 export async function POST() {
   return new Promise<Response>((resolve) => {
     let child: ReturnType<typeof spawn>;
 
     try {
-      child = spawn('rqp', ['auth'], {
+      child = spawn('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
       });
     } catch {
       resolve(
         Response.json(
-          { error: 'rqp not found. Install the nib CLI and ensure it is in your PATH.' },
+          { error: 'aws CLI not found. Install the AWS CLI and ensure it is in your PATH.' },
           { status: 500 }
         )
       );
@@ -36,16 +37,16 @@ export async function POST() {
     const timeout = setTimeout(() => {
       child.kill();
       resolve(
-        Response.json({ error: 'rqp auth timed out after 5 minutes.' }, { status: 504 })
+        Response.json({ error: 'AWS credential check timed out.' }, { status: 504 })
       );
-    }, 5 * 60 * 1000);
+    }, 30 * 1000);
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       clearTimeout(timeout);
       if (err.code === 'ENOENT') {
         resolve(
           Response.json(
-            { error: 'rqp not found. Install the nib CLI and ensure it is in your PATH.' },
+            { error: 'aws CLI not found. Install the AWS CLI and ensure it is in your PATH.' },
             { status: 500 }
           )
         );
@@ -64,7 +65,11 @@ export async function POST() {
         const detail = stderr.join('').trim() || stdout.join('').trim();
         resolve(
           Response.json(
-            { error: `rqp auth failed (exit ${code})${detail ? `: ${detail}` : '.'}` },
+            {
+              error:
+                `No valid AWS credentials found${detail ? ` (${detail})` : ''}. ` +
+                'Run `aws sso login` or `aws configure`, then try again.',
+            },
             { status: 500 }
           )
         );

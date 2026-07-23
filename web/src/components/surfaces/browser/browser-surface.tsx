@@ -119,7 +119,7 @@ export function BrowserSurface() {
   const updateToolResult = useBrowserStore((s) => s.updateToolResult);
   const startStreaming = useBrowserStore((s) => s.startStreaming);
   const stopStreaming = useBrowserStore((s) => s.stopStreaming);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const setCurrentChat = useBrowserStore((s) => s.setCurrentChat);
   const setLoopPhase = useBrowserStore((s) => s.setLoopPhase);
   const inspectorMode = useBrowserStore((s) => s.inspectorMode);
@@ -371,7 +371,7 @@ export function BrowserSurface() {
     onPhaseChange(phase) {
       setLoopPhase(phase);
     },
-    apiKey: nibGatewayApiKey,
+    apiKey: anthropicApiKey,
     memories: memoriesStr || undefined,
     consoleBuffer: consoleBufferRef.current,
     getTabs() {
@@ -599,7 +599,7 @@ export function BrowserSurface() {
       }
 
       // Check API key is available before making the request
-      const currentApiKey = useSettingsStore.getState().nibGatewayApiKey;
+      const currentApiKey = useSettingsStore.getState().anthropicApiKey;
       if (!currentApiKey) {
         appendToLastAssistant(id, "No API key configured. Go to Settings > Connectors and add your nib AI Studio Gateway key.");
         stopStreaming(id);

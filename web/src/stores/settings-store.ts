@@ -72,8 +72,8 @@ interface SettingsState {
   githubToken: string | null;
   githubUser: string | null;
 
-  // nib Gateway
-  nibGatewayApiKey: string | null;
+  // API access
+  anthropicApiKey: string | null;
 
   // Memory
   autoExtractMemories: boolean;
@@ -111,7 +111,7 @@ interface SettingsActions {
   setGithubToken: (token: string | null) => void;
   setGithubUser: (user: string | null) => void;
   clearGithubAuth: () => void;
-  setNibGatewayApiKey: (key: string | null) => void;
+  setAnthropicApiKey: (key: string | null) => void;
   setAutoExtractMemories: (enabled: boolean) => void;
   setBlockDangerousCommands: (enabled: boolean) => void;
   setBlockNetworkCommands: (enabled: boolean) => void;
@@ -147,7 +147,7 @@ const initialState: SettingsState = {
   trustedFolders: [],
   githubToken: null,
   githubUser: null,
-  nibGatewayApiKey: null,
+  anthropicApiKey: null,
   autoExtractMemories: true,
   blockDangerousCommands: true,
   blockNetworkCommands: false,
@@ -206,7 +206,7 @@ export const useSettingsStore = create<SettingsStore>()(
       setGithubUser: (githubUser) => set({ githubUser }),
       clearGithubAuth: () => set({ githubToken: null, githubUser: null }),
 
-      setNibGatewayApiKey: (nibGatewayApiKey) => set({ nibGatewayApiKey }),
+      setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
 
       setAutoExtractMemories: (autoExtractMemories) => set({ autoExtractMemories }),
 
@@ -226,9 +226,16 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 6,
+      version: 7,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
+        // v7 rename (applies to every pre-v7 payload regardless of source
+        // version): nibGatewayApiKey → anthropicApiKey. Done up front so the
+        // per-version branches below stay additive-only.
+        if (version < 7 && state.nibGatewayApiKey !== undefined && state.anthropicApiKey === undefined) {
+          state.anthropicApiKey = state.nibGatewayApiKey;
+          delete state.nibGatewayApiKey;
+        }
         if (version === 0) {
           return { ...initialState, ...state } as unknown as SettingsState & SettingsActions;
         }
@@ -300,7 +307,7 @@ export const useSettingsStore = create<SettingsStore>()(
         trustedFolders: state.trustedFolders,
         githubToken: state.githubToken,
         githubUser: state.githubUser,
-        nibGatewayApiKey: state.nibGatewayApiKey,
+        anthropicApiKey: state.anthropicApiKey,
         autoExtractMemories: state.autoExtractMemories,
         blockDangerousCommands: state.blockDangerousCommands,
         blockNetworkCommands: state.blockNetworkCommands,

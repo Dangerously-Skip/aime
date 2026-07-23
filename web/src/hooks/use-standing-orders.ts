@@ -66,7 +66,7 @@ export function useStandingOrders() {
  * Execute a single standing order: call the API, produce a card, update state.
  */
 async function executeOrder(order: import('@/stores/assistant-store').StandingOrder): Promise<void> {
-  const nibGatewayApiKey = useSettingsStore.getState().nibGatewayApiKey;
+  const anthropicApiKey = useSettingsStore.getState().anthropicApiKey;
 
   // Build prompt with accumulated state context
   let prompt = order.instruction;
@@ -91,7 +91,7 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
       message: prompt,
       chatId,
       model: 'sonnet',
-      apiKey: nibGatewayApiKey || undefined,
+      apiKey: anthropicApiKey || undefined,
     }),
   });
 

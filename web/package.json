@@ -165,7 +165,6 @@
     "@huggingface/transformers": "^3.8.1",
     "@nangohq/frontend": "^0.69.44",
     "@nangohq/node": "^0.69.44",
-    "@opencode-ai/sdk": "^1.2.24",
     "@smithy/signature-v4": "^5.3.12",
     "chokidar": "^5.0.0",
     "class-variance-authority": "^0.7.1",
