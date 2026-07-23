@@ -8,7 +8,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       'WebFetch', 'Agent', 'NotebookEdit',
       'TodoWrite', 'AskUserQuestion', 'EnterWorktree',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
-      'mcp__nib-web-search__web_search',
+      'mcp__web-search__web_search',
     ],
     permissionMode: 'acceptEdits',
     systemPrompt: {
@@ -19,7 +19,7 @@ Do not use emojis in your responses. Keep output clean, professional, and text-o
 Prefer prose over bullet points in conversational responses.
 
 ## Web search
-You have web search available via the nib-web-search MCP server (tool: web_search). This is your ONLY search mechanism.
+You have web search available via the web-search MCP server (tool: web_search). This is your ONLY search mechanism.
 - Trust the results and use them directly. Do NOT fall back to Bash curl commands to scrape Google, DuckDuckGo, or other search engines.
 - Do NOT use a built-in WebSearch tool — it is not available in this environment.
 - If the first search doesn't find what you need, refine your query and search again with the MCP tool.`,

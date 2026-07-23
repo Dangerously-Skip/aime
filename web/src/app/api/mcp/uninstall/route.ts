@@ -36,6 +36,9 @@ export async function POST(request: Request) {
     try {
       const config = JSON.parse(await readFile(MCP_CONFIG_FILE, 'utf-8'));
       if (config.mcpServers) {
+        delete config.mcpServers[`aime-mcp-${name}`];
+        delete config.mcpServers[`aime-connector-${name}`];
+        // Legacy pre-rename prefixes
         delete config.mcpServers[`nib-mcp-${name}`];
         delete config.mcpServers[`nib-connector-${name}`];
         await writeFile(MCP_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');

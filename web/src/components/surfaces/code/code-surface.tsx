@@ -599,7 +599,7 @@ export function CodeSurface() {
       EMPTY_MESSAGES
   );
   const model = useCodeStore((s) => s.model);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
   const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
@@ -1060,7 +1060,7 @@ export function CodeSurface() {
       }
 
       await sendMessage(trimmed, id, "code", model, {
-        apiKey: nibGatewayApiKey || undefined,
+        apiKey: anthropicApiKey || undefined,
         cwd: folder || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,

@@ -456,7 +456,7 @@ export function AssistantSurface() {
   const cards = useAssistantStore((s) => s.cards);
   const addCard = useAssistantStore((s) => s.addCard);
   const addOrder = useAssistantStore((s) => s.addOrder);
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
 
   // Hydrate store on mount
   useEffect(() => {
@@ -528,7 +528,7 @@ export function AssistantSurface() {
           message: prompt,
           chatId,
           model: 'sonnet',
-          apiKey: nibGatewayApiKey || undefined,
+          apiKey: anthropicApiKey || undefined,
         }),
         signal: controller.signal,
       });
@@ -612,7 +612,7 @@ export function AssistantSurface() {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [inputValue, isStreaming, nibGatewayApiKey, addCard]);
+  }, [inputValue, isStreaming, anthropicApiKey, addCard]);
 
   const handleAbort = useCallback(() => {
     abortRef.current?.abort();

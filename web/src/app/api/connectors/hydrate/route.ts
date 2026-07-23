@@ -32,8 +32,12 @@ export async function GET() {
       else if (meta?.connectorId && typeof meta.connectorId === 'string') {
         ids.push(meta.connectorId);
       }
-      // Fallback: derive from key prefix
-      else if (key.startsWith('nib-mcp-')) {
+      // Fallback: derive from key prefix (aime-* current, nib-* legacy)
+      else if (key.startsWith('aime-mcp-')) {
+        ids.push(key.replace('aime-mcp-', ''));
+      } else if (key.startsWith('aime-connector-')) {
+        ids.push(key.replace('aime-connector-', ''));
+      } else if (key.startsWith('nib-mcp-')) {
         ids.push(key.replace('nib-mcp-', ''));
       } else if (key.startsWith('nib-connector-')) {
         ids.push(key.replace('nib-connector-', ''));

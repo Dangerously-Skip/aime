@@ -6,9 +6,9 @@ export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__quarry__canvas',
+      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
-      'mcp__nib-web-search__web_search',
+      'mcp__web-search__web_search',
     ],
     permissionMode: 'bypassPermissions',
     systemPrompt: `You are ${APP_NAME}, an AI assistant.

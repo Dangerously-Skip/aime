@@ -23,7 +23,7 @@ export async function readProvisionedGithubToken(): Promise<string | null> {
         { headers?: Record<string, string>; env?: Record<string, string> }
       >;
     };
-    const entry = config.mcpServers?.['nib-connector-github'];
+    const entry = config.mcpServers?.['aime-connector-github'] ?? config.mcpServers?.['nib-connector-github'];
     if (!entry) return null;
 
     // HTTP transport: Authorization: Bearer <pat>

@@ -99,7 +99,7 @@ export function buildCanvasTemplatesPrompt(surfaceId: string): string {
   );
   return `## Visualisations — you MUST call the canvas tool
 
-For ANY visual artefact — diagrams, charts, kanban boards, schemas, dashboards, mind maps, sequence diagrams, PR/Jira/build/endpoint lists — you **must** call the \`mcp__quarry__canvas\` tool. The user sees nothing visual unless this tool fires.
+For ANY visual artefact — diagrams, charts, kanban boards, schemas, dashboards, mind maps, sequence diagrams, PR/Jira/build/endpoint lists — you **must** call the \`mcp__aime__canvas\` tool. The user sees nothing visual unless this tool fires.
 
 ### Hard rule (read this twice)
 
@@ -110,11 +110,11 @@ If you find yourself about to type any of these phrases:
   - "is on the canvas"
   - "the canvas above/below shows"
 
-…**STOP**. Either you have already called \`mcp__quarry__canvas\` in this turn, or you are about to lie to the user. Call the tool first; only mention the canvas in prose AFTER the tool call has succeeded.
+…**STOP**. Either you have already called \`mcp__aime__canvas\` in this turn, or you are about to lie to the user. Call the tool first; only mention the canvas in prose AFTER the tool call has succeeded.
 
 ### Do / don't
 
-- ✅ Gather data → call \`mcp__quarry__canvas\` with a templated payload → write a 1–2 sentence summary referencing the canvas.
+- ✅ Gather data → call \`mcp__aime__canvas\` with a templated payload → write a 1–2 sentence summary referencing the canvas.
 - ❌ Describe a visualisation in prose without calling the tool.
 - ❌ Generate HTML/SVG files for diagrams or lists — the canvas panel renders them natively.
 

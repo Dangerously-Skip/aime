@@ -4,7 +4,7 @@ import { APP_NAME } from '@/config/branding';
 export function getAssistantConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
     allowedTools: [
-      'WebSearch', 'WebFetch', 'mcp__quarry__canvas',
+      'WebSearch', 'WebFetch', 'mcp__aime__canvas',
       'StandingOrderCreate', 'StandingOrderList',
       'StandingOrderUpdate', 'StandingOrderCancel', 'StandingOrderHistory',
     ],

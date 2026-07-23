@@ -52,7 +52,7 @@ export const decisionLogTemplate: CanvasTemplate<ADRInput> = {
   whenToUse:
     'When the user wants to capture a technical decision — reasoning, trade-offs, consequences. ' +
     'Help the user fill in context/decision/consequences (ask if missing), then call this template. ' +
-    'Pass `repo`, `path` (e.g. "docs/adr/0017-feature-flags.md"), and `saveTool` (e.g. `mcp__nib-connector-github__create_or_update_file`) so the Save action wires up.',
+    'Pass `repo`, `path` (e.g. "docs/adr/0017-feature-flags.md"), and `saveTool` (e.g. `mcp__aime-connector-github__create_or_update_file`) so the Save action wires up.',
   inputShape:
     '{ number?: number, title: string, status?: string, author?: string, date?: string, context: string, decision: string, consequences: string, alternatives?: string, repo?: string, path?: string, saveTool?: string }',
   render: (input) => {

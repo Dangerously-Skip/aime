@@ -1,8 +1,6 @@
 /**
- * Bundled OAuth app credentials for nib deployment.
- *
- * For non-nib deployments, env var overrides are checked first
- * (e.g. GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET), falling back to these.
+ * OAuth app credentials, sourced from environment variables
+ * (e.g. GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET).
  *
  * Replace placeholder values with real registered OAuth app credentials
  * before deploying.
@@ -45,7 +43,7 @@ export const OAUTH_CREDENTIALS: Record<string, OAuthCredentials> = {
     tenantId: process.env.MS365_TENANT_ID || 'common',
   },
   // Workspace Google — IT-managed OAuth app. Same env vars as the
-  // retired google-drive connector so nib's existing config carries over.
+  // retired google-drive connector so existing configs carry over.
   'google-workspace': {
     clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
@@ -72,7 +70,7 @@ export const OAUTH_CREDENTIALS: Record<string, OAuthCredentials> = {
   },
   // Microsoft Graph PowerShell — Microsoft first-party public client (FOCI app).
   // Pre-registered in every Entra tenant, accepts http://localhost:* redirects,
-  // no client_secret required (PKCE). Lets any nib user connect their own
+  // no client_secret required (PKCE). Lets any user connect their own
   // mail/calendar without IT creating a bespoke Entra app.
   'm365-graph': {
     clientId: '14d82eec-204b-4c2f-b7e8-296a70dab67e',

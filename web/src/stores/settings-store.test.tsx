@@ -69,8 +69,15 @@ describe('settings migrations', () => {
     expect(useSettingsStore.getState().fullName).toBe('Legacy User');
   });
 
+  it('v6 → v7: renames nibGatewayApiKey to anthropicApiKey', async () => {
+    await rehydrateWith(6, { fullName: 'Kai', nibGatewayApiKey: 'sk-team-key' });
+    const s = useSettingsStore.getState();
+    expect(s.anthropicApiKey).toBe('sk-team-key');
+    expect((s as unknown as Record<string, unknown>).nibGatewayApiKey).toBeUndefined();
+  });
+
   it('current version passes through untouched', async () => {
-    await rehydrateWith(6, { fullName: 'Zoe', devHourlyRate: 200, onboardingComplete: true });
+    await rehydrateWith(7, { fullName: 'Zoe', devHourlyRate: 200, onboardingComplete: true });
 
     const s = useSettingsStore.getState();
     expect(s.fullName).toBe('Zoe');

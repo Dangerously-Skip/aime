@@ -15,14 +15,23 @@ interface HealthCheck {
   fix?: string;
 }
 
-async function checkNibGateway(): Promise<HealthCheck> {
-  // The gateway URL is hardcoded in gateway-env.ts — just verify it's reachable
-  // In practice, the team API key is set via the settings UI and used per-request
+async function checkModelAccess(): Promise<HealthCheck> {
+  const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
+  const hasBedrock = !!(process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION);
+  if (!hasApiKey && !hasBedrock) {
+    return {
+      id: 'model_access',
+      label: 'Model access',
+      status: 'warn',
+      message: 'No ANTHROPIC_API_KEY or Bedrock env detected — set a key in Settings or .env',
+      fix: 'Set ANTHROPIC_API_KEY (or CLAUDE_CODE_USE_BEDROCK=1 + AWS credentials)',
+    };
+  }
   return {
-    id: 'nib_gateway',
-    label: 'nib AI Gateway',
+    id: 'model_access',
+    label: 'Model access',
     status: 'ok',
-    message: 'Routing through nib AI Studio (configure team in Settings → Team (Billing))',
+    message: hasApiKey ? 'Anthropic API key configured' : 'AWS Bedrock env detected',
   };
 }
 
@@ -141,15 +150,15 @@ async function checkSkillFiles(): Promise<HealthCheck> {
 export async function GET(_req: NextRequest) {
   const checks: HealthCheck[] = [];
 
-  const [gatewayCheck, claudeDirCheck, mcpCheck, skillsCheck] = await Promise.all([
-    checkNibGateway(),
+  const [modelAccessCheck, claudeDirCheck, mcpCheck, skillsCheck] = await Promise.all([
+    checkModelAccess(),
     checkClaudeDir(),
     checkProvisionedMcpServers(),
     checkSkillFiles(),
   ]);
   const identityChecks = await checkIdentityFiles();
 
-  checks.push(gatewayCheck, claudeDirCheck, ...identityChecks, mcpCheck, skillsCheck);
+  checks.push(modelAccessCheck, claudeDirCheck, ...identityChecks, mcpCheck, skillsCheck);
 
   const hasError = checks.some((c) => c.status === 'error');
   const hasWarn = checks.some((c) => c.status === 'warn');

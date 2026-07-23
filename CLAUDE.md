@@ -22,7 +22,7 @@ Run `npm run typecheck` and `npm test` before commits and ships — CI (`.github
 
 Unit tests use Vitest (`web/vitest.config.ts`, node environment by default, `@/` alias). Test files live next to the code they test (`*.test.ts`); React hook/component tests use jsdom via a `// @vitest-environment jsdom` pragma and Testing Library. E2E smoke tests use Playwright (`web/playwright.config.ts`, specs in `web/e2e/`, boots `next dev` on port 3100): `npm run test:e2e`.
 
-Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming (server + client hook), memory retriever/dedup, store actions (conversation, cowork, assistant, context-bus, memory), settings migrations (v1→v6 via real rehydrate), minute-tick hooks (cron, heartbeat), API routes (cron, webhooks CRUD + trigger), ClaudeProvider (SDK mocked: option assembly, session resumption, stream translation, canUseTool governance/loop-detection/interception), the chat SSE route (validation, streaming, tool profiles, agent routing, security injection, memory extraction), canvas templates (registry + expansion), gateway/bedrock env mapping, pending-questions bridge, xlsx extractor (real files), and browser-boot smoke E2E.
+Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming (server + client hook), memory retriever/dedup, store actions (conversation, cowork, assistant, context-bus, memory), settings migrations (v1→v7 via real rehydrate), minute-tick hooks (cron, heartbeat), API routes (cron, webhooks CRUD + trigger), ClaudeProvider (SDK mocked: option assembly, session resumption, stream translation, canUseTool governance/loop-detection/interception), the chat SSE route (validation, streaming, tool profiles, agent routing, security injection, memory extraction), canvas templates (registry + expansion), gateway/bedrock env mapping, pending-questions bridge, xlsx extractor (real files), and browser-boot smoke E2E.
 
 ## Architecture
 
@@ -84,9 +84,7 @@ Every code change should include tests: unit for logic, and a regression test re
 
 ### Providers (`web/src/lib/providers/`)
 
-- `claude-provider.ts` — Main provider. Injects MCP servers (connectors + `nib-web-search` searxng + `quarry`), handles tool interception (canvas, spawn_agent, loop detection), session controls
-- `gateway-provider.ts` — API gateway routing
-- `opencode-provider.ts` — OpenCode SDK integration
+- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` searxng + in-process `aime` server), handles tool interception (canvas, spawn_agent, loop detection), session controls. A multi-provider model registry is the first roadmap pillar.
 
 ### Key Libraries (`web/src/lib/`)
 
@@ -95,9 +93,9 @@ Every code change should include tests: unit for logic, and a regression test re
 - `a2ui/` — Anthropic A2UI canvas type system (`types.ts`) + renderer (`renderer.tsx`)
 - `telemetry/` — `roi.ts`, `analytics-client.ts` (SigV4), `event-buffer.ts` (JSONL)
 - `memory/` — `extractor.ts`, `retriever.ts`, `summarizer.ts`
-- `connectors/` — OAuth flow, credential storage, provisioner, registry (GitHub, Slack, Jira, Confluence, Figma, Google Drive, SharePoint, Outlook, Miro, Zoom, Buildkite, SumoLogic, AWS)
+- `connectors/` — OAuth flow, credential storage (env-driven), provisioner, registry (GitHub, Slack, Atlassian, Figma, Google, M365, Miro, Zoom, Buildkite, SumoLogic, Snowflake, AWS)
 - `extractors/` — PDF, DOCX, XLSX, PPTX, audio, video content extraction
-- `surfaces/` — Per-surface config (allowed tools, system prompts). Cowork config has web search prompt directing to `nib-web-search` MCP
+- `surfaces/` — Per-surface config (allowed tools, system prompts). Cowork config has web search prompt directing to the `web-search` MCP
 - `standing-order-engine.ts` / `standing-order-templates.ts` — Automation execution
 - `browser-tools.ts` — DOM interaction, element inspection, navigation
 - `artifacts/` — Parser, persistence, server-detector
@@ -123,7 +121,7 @@ Every code change should include tests: unit for logic, and a regression test re
 ## External Integrations
 
 - **OAuth connectors** provisioned to `~/.claude/.mcp.json` via `loadProvisionedMcpServers()` at request time
-- **Web search** via `nib-web-search` MCP (searxng at `SEARXNG_INSTANCES` env var)
+- **Web search** via the `web-search` MCP — opt-in, only mounted when `SEARXNG_INSTANCES` is set
 - **Telemetry** via SigV4-signed analytics API (`ANALYTICS_API_URL`)
 - **Auto-update** from generic provider URL in electron-builder config
 - **Nango** (optional) for 700+ OAuth connector hub
@@ -132,11 +130,11 @@ Every code change should include tests: unit for logic, and a regression test re
 
 Defined in `.env` (copy from `.env.example`):
 
-- `CLAUDE_CODE_USE_BEDROCK=1` + AWS credentials — Required for Claude inference via Bedrock
-- `ANTHROPIC_API_KEY` — Alternative to Bedrock (direct API)
+- `ANTHROPIC_API_KEY` — Claude inference via the Anthropic API (BYOK; also settable per-user in Settings → API Access)
+- `CLAUDE_CODE_USE_BEDROCK=1` + AWS credentials — Alternative: Claude inference via Bedrock
 - `NIB_COWORK_DEFAULT_MODEL` — Default model (`sonnet`)
-- `ANALYTICS_API_URL` / `ANALYTICS_AWS_REGION` — ROI telemetry pipeline
-- `SEARXNG_INSTANCES` — Custom searxng URL (defaults to internal nib instance)
+- `ANALYTICS_API_URL` / `ANALYTICS_AWS_REGION` — ROI telemetry pipeline (opt-in; telemetry is off without it)
+- `SEARXNG_INSTANCES` — searxng URL for web search (no default; feature off without it)
 - OAuth credentials (GitHub, Slack, Atlassian, MS365, Google, Figma, Miro, Zoom) — see `.env.example`
 - `NANGO_*` — Optional Nango connector hub
 
@@ -173,46 +171,14 @@ git tag v1.0.X && git push origin v1.0.X
 ```
 
 The pipeline (`.github/workflows/release.yml`):
-1. **GitHub Actions** builds macOS (DMG + ZIP, signed + notarized) and Windows (NSIS installer) artifacts
-2. Creates a **GitHub Release** with the artifacts attached
-3. Triggers **Buildkite `promote-release`** pipeline via API — downloads artifacts, bundles with landing page, deploys to internal site via SAMOA (`RQP::StaticSite`)
-4. **Strips the CloudFront WAF** (`:unlock: Remove WAF from CloudFront` step)
+1. **GitHub Actions** builds macOS (DMG + ZIP, signed + notarized when Apple secrets are set) and Windows (NSIS installer) artifacts
+2. Creates a **GitHub Release** with the artifacts attached — this is also the auto-update feed (electron-updater `github` provider)
 
-Internal download page: `quarry.internal.invalid` (VPN required). Existing installs auto-update.
+### Optional GitHub secrets
 
-### ⚠️ WAF bypass constraint — don't remove
-
-SAMOA attaches a Cloudflare-IP-whitelist WAF to every CloudFront distribution it
-provisions. This site is **VPN-only internal**, not routed through Cloudflare, so
-the WAF blocks every legitimate nib VPN user with 403s.
-
-The final Buildkite step (`.buildkite/promote-release.yml:167`) detaches the
-WebACL from the distribution after each deploy. It is `soft_fail: true`, so if
-this step errors the overall pipeline still goes green — **and the download site
-silently becomes inaccessible to VPN users until someone notices**.
-
-After pushing a release tag, watch the Buildkite pipeline and confirm the
-`:unlock: Remove WAF from CloudFront` step logs `WAF removed successfully`
-(or `No WAF attached — nothing to do` if SAMOA's defaults have shifted). If it
-fails, re-run that step manually or hand-strip the WebACL via `aws cloudfront
-update-distribution` using the `deployer` role in account `384553929753`.
-
-### Release infrastructure
-
-| File | Purpose |
-|------|---------|
-| `.github/workflows/release.yml` | GitHub Actions: build + notarize + release + trigger Buildkite |
-| `.buildkite/pipeline.yml` | Buildkite: SAMOA deploy |
-| `.buildkite/promote-release.yml` | Buildkite: download from GitHub Release, bundle, deploy |
-| `infrastructure/releases/sam_template.yaml` | SAM template (`RQP::StaticSite`) |
-| `infrastructure/releases/nginx.conf` | Nginx config for release site |
-| `infrastructure/releases/html/` | Landing page for internal download site |
-
-### Required GitHub secrets
-
-`MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `DOT_ENV`, `TEAMS_JSON`, `BUILDKITE_API_TOKEN`
+`MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` (macOS signing/notarization), `WIN_CERT_PFX_BASE64`, `WIN_CERT_PASSWORD` (Windows signing), `DOT_ENV` (bundled .env), `TEAMS_JSON` (org team config; falls back to the empty example)
 
 ## Config Files
 
-- `web/src/config/teams.json` — Team definitions (injected from `TEAMS_JSON` secret in CI, use `teams.example.json` locally)
+- `web/src/config/teams.json` — Optional org team definitions (id/name/API key). Empty array = BYOK onboarding. Injected from `TEAMS_JSON` secret in CI when set; use `teams.example.json` locally
 - `web/src/config/teams.ts` — TypeScript interface for team config

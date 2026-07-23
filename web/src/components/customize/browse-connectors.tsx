@@ -379,7 +379,7 @@ export function BrowseConnectors() {
             ? Date.now() + result.expiresIn * 1000
             : undefined;
           // The /api/mcp/oauth/exchange endpoint already wrote to the provisioned MCP config
-          // as `nib-mcp-<id>`. We store token metadata in the client store too so
+          // as `aime-mcp-<id>`. We store token metadata in the client store too so
           // the UI reflects authenticated state.
           setTokenMeta(connector.id, {
             accessToken: result.accessToken,
@@ -526,7 +526,7 @@ export function BrowseConnectors() {
       setEnabled(connectorId, false);
       clearToken(connectorId);
 
-      // For mcp-oauth connectors, the entry is written as `nib-mcp-<id>` by the
+      // For mcp-oauth connectors, the entry is written as `aime-mcp-<id>` by the
       // exchange endpoint. Use the MCP uninstall path which cleans up both the
       // MCP config entry and the stored DCR registration.
       if (connector?.auth.type === 'mcp-oauth') {
