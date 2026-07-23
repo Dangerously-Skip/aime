@@ -2,7 +2,7 @@
  * First-launch setup: downloads a self-contained Python from
  * astral-sh/python-build-standalone into ~/.quarry/python/, then
  * pip-installs the deps the bundled skills need (python-pptx, fpdf2,
- * Pillow, etc.) and runs `playwright install chromium` so nib-ppt's
+ * Pillow, etc.) and runs `playwright install chromium` so the ppt plugin's
  * HTML-to-PNG slide rendering works without the user lifting a finger.
  *
  * Idempotent: subsequent launches detect the existing setup and skip
@@ -33,7 +33,7 @@ function platformAssetSuffix() {
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     https
-      .get(url, { headers: { "User-Agent": "Quarry-Setup", Accept: "application/vnd.github+json" } }, (res) => {
+      .get(url, { headers: { "User-Agent": "AIME-Setup", Accept: "application/vnd.github+json" } }, (res) => {
         if (res.statusCode !== 200) {
           res.resume();
           return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
@@ -158,8 +158,8 @@ async function runSetup(report) {
     throw new Error(`Python not found at ${pythonExe()} after extract`);
   }
 
-  // Phase 3: pip-install the skill deps. fpdf2 for nib-pdf, python-pptx +
-  // PyYAML + Jinja2 + Pillow + pdf2image for nib-ppt and powerpoint-control.
+  // Phase 3: pip-install the skill deps. fpdf2 for the pdf skill, python-pptx +
+  // PyYAML + Jinja2 + Pillow + pdf2image for the ppt plugin and powerpoint-control.
   report({ phase: "install-deps", percent: 0, detail: "Installing PDF and PowerPoint libraries…" });
   const pipArgs = [
     "-m", "pip", "install",
@@ -181,7 +181,7 @@ async function runSetup(report) {
     },
   });
 
-  // Phase 4: chromium for nib-ppt's HTML-to-PNG slide rendering. ~250MB.
+  // Phase 4: chromium for the ppt plugin's HTML-to-PNG slide rendering. ~250MB.
   // PLAYWRIGHT_BROWSERS_PATH points it at our managed dir, not the user's
   // ~/Library/Caches/ms-playwright (avoids polluting their global cache).
   report({ phase: "install-chromium", detail: "Installing Chromium for slide rendering…" });

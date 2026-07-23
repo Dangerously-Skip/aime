@@ -148,9 +148,9 @@ export function BrowserSurface() {
     const msg = e.message || '';
 
     // Handle selection messages from injected script
-    if (msg.startsWith('__QUARRY_SELECTION__:')) {
+    if (msg.startsWith('__AIME_SELECTION__:')) {
       try {
-        const payload = JSON.parse(msg.slice('__QUARRY_SELECTION__:'.length));
+        const payload = JSON.parse(msg.slice('__AIME_SELECTION__:'.length));
         setSelectionInfo({ text: payload.text, x: payload.x, y: payload.bottom + 4 });
       } catch { /* ignore parse errors */ }
       return;

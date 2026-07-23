@@ -1,4 +1,4 @@
-# nib-pdf
+# pdf
 
 Generate professional PDF documents from natural language descriptions using Python.
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Patches the Electron.app bundle so macOS shows "Quarry" in the dock.
+ * Patches the Electron.app bundle so macOS shows "AIME" in the dock.
  * Runs as a postinstall script — re-run after npm install.
  *
  * What it does:
- *   1. Renames Electron.app → Quarry.app
+ *   1. Renames Electron.app → AIME.app
  *   2. Patches Info.plist CFBundleName + CFBundleDisplayName
  *   3. Updates the electron npm package's path export to point to the renamed binary
  */
@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const APP_NAME = 'Quarry';
+const APP_NAME = 'AIME';
 const electronDir = path.join(__dirname, '..', 'node_modules', 'electron', 'dist');
 const oldApp = path.join(electronDir, 'Electron.app');
 const newApp = path.join(electronDir, `${APP_NAME}.app`);
