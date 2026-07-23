@@ -1,7 +1,1 @@
-[
-  { "id": "platform", "name": "Platform Engineering", "key": "sk-ant-REPLACE_ME" },
-  { "id": "data", "name": "Data & Analytics", "key": "sk-ant-REPLACE_ME" },
-  { "id": "mobile", "name": "Mobile", "key": "sk-ant-REPLACE_ME" },
-  { "id": "claims", "name": "Claims", "key": "sk-ant-REPLACE_ME" },
-  { "id": "travel", "name": "Travel", "key": "sk-ant-REPLACE_ME" }
-]
+[]

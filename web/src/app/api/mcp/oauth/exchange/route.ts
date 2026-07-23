@@ -3,16 +3,17 @@ export const runtime = 'nodejs';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import { getMcpConfigPath, getMcpClientsPath } from '@/lib/app-paths';
 
 const QUARRY_DIR = join(homedir(), '.claude');
-const MCP_CONFIG_FILE = join(QUARRY_DIR, '.quarry-mcp.json');
-const MCP_CLIENTS_FILE = join(QUARRY_DIR, '.quarry-mcp-clients.json');
+const MCP_CONFIG_FILE = getMcpConfigPath();
+const MCP_CLIENTS_FILE = getMcpClientsPath();
 
 /**
  * POST /api/mcp/oauth/exchange
  * Body: { mcpName, code, codeVerifier, redirectUri, tokenEndpoint, clientId }
  * Exchanges the auth code for tokens, then writes the authenticated MCP config
- * into .quarry-mcp.json with auto-refresh metadata.
+ * into the MCP config file with auto-refresh metadata.
  */
 export async function POST(request: Request) {
   try {
@@ -72,7 +73,7 @@ export async function POST(request: Request) {
       return Response.json({ error: 'No access token in response' }, { status: 502 });
     }
 
-    // Write to .quarry-mcp.json with token + refresh metadata
+    // Write to the MCP config file with token + refresh metadata
     await mkdir(QUARRY_DIR, { recursive: true });
 
     let mcpConfig: { mcpServers?: Record<string, Record<string, unknown>> } = {};
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
     const isSse = typeof mcpUrl === 'string' && /\/sse\/?$/.test(mcpUrl);
     const transport = isSse ? 'sse' : 'streamable-http';
 
-    const serverKey = `nib-mcp-${mcpName}`;
+    const serverKey = `aime-mcp-${mcpName}`;
     mcpConfig.mcpServers[serverKey] = {
       transport, // Gets translated to 'sse' or 'http' for the SDK
       url: mcpUrl,

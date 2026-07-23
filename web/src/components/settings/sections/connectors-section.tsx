@@ -8,8 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Eye, EyeOff, X, Check, KeyRound } from 'lucide-react'
 
 export function ConnectorsSection() {
-  const nibGatewayApiKey = useSettingsStore((s) => s.nibGatewayApiKey)
-  const setNibGatewayApiKey = useSettingsStore((s) => s.setNibGatewayApiKey)
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey)
+  const setAnthropicApiKey = useSettingsStore((s) => s.setAnthropicApiKey)
   const teamId = useSettingsStore((s) => s.teamId)
   const setTeamId = useSettingsStore((s) => s.setTeamId)
 
@@ -22,25 +22,25 @@ export function ConnectorsSection() {
   }, [])
 
   const hasTeams = teams.length > 0
-  const isConfigured = !!nibGatewayApiKey
+  const isConfigured = !!anthropicApiKey
   const currentTeam = teams.find((t) => t.id === teamId)
 
   function handleSelectTeam(team: TeamConfig) {
     setTeamId(team.id)
-    setNibGatewayApiKey(team.key)
+    setAnthropicApiKey(team.key)
   }
 
   function handleSaveKey() {
     const trimmed = keyInput.trim()
     if (trimmed) {
-      setNibGatewayApiKey(trimmed)
+      setAnthropicApiKey(trimmed)
       setTeamId(null)
       setKeyInput('')
     }
   }
 
   function handleClearKey() {
-    setNibGatewayApiKey(null)
+    setAnthropicApiKey(null)
     setTeamId(null)
     setKeyInput('')
     setShowKey(false)
@@ -55,7 +55,7 @@ export function ConnectorsSection() {
               isConfigured ? 'bg-green-500' : 'bg-muted-foreground/40'
             }`}
           />
-          <h4 className="text-sm font-medium">nib AI Studio Gateway</h4>
+          <h4 className="text-sm font-medium">Anthropic API Key</h4>
           {isConfigured && currentTeam && (
             <span className="ml-auto text-xs text-muted-foreground font-medium">
               {currentTeam.name}
@@ -63,7 +63,7 @@ export function ConnectorsSection() {
           )}
         </div>
         <p className="text-sm text-muted-foreground">
-          Select your team to configure AI access automatically. Requires VPN.
+          Select your team to configure AI access automatically.
         </p>
 
         {hasTeams ? (
@@ -113,7 +113,7 @@ export function ConnectorsSection() {
               <div className="flex items-center gap-2">
                 <Input
                   type={showKey ? 'text' : 'password'}
-                  value={nibGatewayApiKey ?? ''}
+                  value={anthropicApiKey ?? ''}
                   readOnly
                   className="font-mono text-sm"
                 />
@@ -135,7 +135,7 @@ export function ConnectorsSection() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                All inference will route through the nib AI Studio gateway.
+                Used for Claude inference via the Anthropic API.
               </p>
             </div>
           ) : (

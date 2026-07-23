@@ -1,11 +1,8 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createSSEStream } from '@/lib/sse';
-import { isGatewayConfigured, mapModelForGateway } from '@/lib/gateway-env';
 
 export const runtime = 'nodejs';
-
-const NIB_GATEWAY_BASE_URL = 'https://ai-studio.internal.invalid';
 
 const MODEL_MAP: Record<string, string> = {
   sonnet: 'claude-sonnet-4-20250514',
@@ -36,7 +33,7 @@ export async function POST(req: NextRequest) {
     model = 'sonnet',
     tools,
     system,
-    apiKey: gatewayKey = null,
+    apiKey: userApiKey = null,
   } = body as {
     messages: Anthropic.MessageParam[];
     model?: string;
@@ -49,18 +46,14 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'messages array is required' }, { status: 400 });
   }
 
-  // Resolve API key and client — prefer gateway key, fall back to env
-  const useGateway = isGatewayConfigured(gatewayKey);
-  const resolvedApiKey = useGateway ? gatewayKey! : process.env.ANTHROPIC_API_KEY;
+  // Resolve API key — prefer the user's key from settings, fall back to env
+  const resolvedApiKey = userApiKey || process.env.ANTHROPIC_API_KEY;
   if (!resolvedApiKey) {
     return Response.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 });
   }
 
-  const resolvedModel = useGateway ? mapModelForGateway(model) : (MODEL_MAP[model] || model);
-  const client = useGateway
-    ? new Anthropic({ apiKey: resolvedApiKey, baseURL: NIB_GATEWAY_BASE_URL })
-    : new Anthropic({ apiKey: resolvedApiKey });
-  if (useGateway) console.log('[BROWSER-TURN] Using nib AI Studio gateway, model:', resolvedModel);
+  const resolvedModel = MODEL_MAP[model] || model;
+  const client = new Anthropic({ apiKey: resolvedApiKey });
   const sse = createSSEStream();
 
   (async () => {

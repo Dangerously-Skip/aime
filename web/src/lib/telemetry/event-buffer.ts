@@ -1,12 +1,13 @@
 /**
  * Local JSONL event buffer.
  * Accumulates analytics events in memory and, when delivery fails, persists
- * them to disk (under Electron's userData dir, or ~/.quarry/ in dev) so they
+ * them to disk (under Electron's userData dir, or the app data dir in dev) so they
  * can be retried on the next flush.
  */
 
 import type { AnalyticsEvent } from './analytics-client';
 import { sendEvents } from './analytics-client';
+import { getDataDir } from '@/lib/app-paths';
 
 const BUFFER_FILENAME = 'analytics-buffer.jsonl';
 const FLUSH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -18,7 +19,7 @@ let bufferFilePath: string | null = null;
 /**
  * Resolve the on-disk buffer location. In packaged builds the Electron main
  * process passes its userData dir via QUARRY_USER_DATA_DIR — we land the
- * buffer under `<userData>/telemetry/`. Dev mode falls back to `~/.quarry/`.
+ * buffer under `<userData>/telemetry/`. Dev mode falls back to the app data dir.
  * Either way we mkdir the parent so appendFile never silently ENOENTs.
  */
 async function getBufferPath(): Promise<string> {
@@ -27,10 +28,10 @@ async function getBufferPath(): Promise<string> {
     const os = await import('os');
     const path = await import('path');
     const fs = await import('fs/promises');
-    const userDataDir = process.env.QUARRY_USER_DATA_DIR;
+    const userDataDir = process.env.AIME_USER_DATA_DIR;
     const dir = userDataDir
       ? path.join(userDataDir, 'telemetry')
-      : path.join(os.homedir(), '.quarry');
+      : getDataDir();
     await fs.mkdir(dir, { recursive: true });
     bufferFilePath = path.join(dir, BUFFER_FILENAME);
   } catch {

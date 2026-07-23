@@ -6,16 +6,17 @@ import { mkdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { readProvisionedGithubToken } from '@/lib/github-token';
+import { REPOS_DIR_NAME } from '@/config/branding';
 
 const execAsync = promisify(exec);
 
-const REPOS_DIR = join(homedir(), 'Quarry', 'repos');
+const REPOS_DIR = join(homedir(), REPOS_DIR_NAME, 'repos');
 
 /**
  * POST /api/github/clone
  * Body: { owner, repo, defaultBranch? }
- * Clones the repo to ~/Quarry/repos/<owner>/<repo>/ using the provisioned
- * GitHub PAT from ~/.claude/.quarry-mcp.json.
+ * Clones the repo to ~/<REPOS_DIR_NAME>/repos/<owner>/<repo>/ using the
+ * provisioned GitHub PAT from the provisioned MCP config.
  * Returns { path } where path is the absolute local path to the cloned repo.
  */
 export async function POST(request: Request) {

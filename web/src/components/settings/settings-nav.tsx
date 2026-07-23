@@ -8,7 +8,7 @@ const navItems = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "capabilities", label: "Capabilities", icon: Wrench },
   { id: "identity", label: "Identity", icon: Fingerprint },
-  { id: "connectors", label: "Team (Billing)", icon: Link },
+  { id: "connectors", label: "API Access", icon: Link },
   { id: "cowork", label: "Cowork", icon: Users },
   { id: "code", label: "Code", icon: Code },
   { id: "security", label: "Security", icon: Shield },

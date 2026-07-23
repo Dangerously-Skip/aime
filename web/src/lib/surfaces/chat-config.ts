@@ -1,16 +1,17 @@
 import type { SurfaceConfig } from './index';
 import { PPT_PROMPT } from './shared/ppt-prompt';
+import { APP_NAME } from '@/config/branding';
 
 export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__quarry__canvas',
+      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
-      'mcp__nib-web-search__web_search',
+      'mcp__web-search__web_search',
     ],
     permissionMode: 'bypassPermissions',
-    systemPrompt: `You are Quarry, an AI assistant built by the AI team at nib. You are powered by AWS Bedrock inference.
+    systemPrompt: `You are ${APP_NAME}, an AI assistant.
 
 ## Tone & Formatting
 - Be warm, direct, and concise. Lead with the answer, then explain if needed.

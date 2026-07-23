@@ -12,6 +12,8 @@
  * itself works normally.
  */
 
+import { STORAGE_PREFIX, LEGACY_STORAGE_PREFIX } from '@/config/branding';
+
 let gateOpen = false;
 
 /** Allow writes to localStorage.  Called by StoreHydration after rehydration. */
@@ -35,7 +37,18 @@ export function getGatedStorage(): Storage {
     },
     clear: () => localStorage.clear(),
     key: (index: number) => localStorage.key(index),
-    getItem: (key: string) => localStorage.getItem(key),
+    getItem: (key: string) => {
+      const value = localStorage.getItem(key);
+      if (value !== null) return value;
+      // Legacy fallback: pre-rename installs persisted under the old prefix.
+      // First write after rehydration lands on the new key; old keys are left as-is.
+      if (key.startsWith(`${STORAGE_PREFIX}:`)) {
+        return localStorage.getItem(
+          key.replace(`${STORAGE_PREFIX}:`, `${LEGACY_STORAGE_PREFIX}:`),
+        );
+      }
+      return null;
+    },
     setItem: (key: string, value: string) => {
       if (!gateOpen) return; // Silently skip — rehydration hasn't completed yet
       localStorage.setItem(key, value);

@@ -135,7 +135,7 @@ export function getSelectionListenerScript(): string {
       if (text.length > 0) {
         var range = sel.getRangeAt(0);
         var rect = range.getBoundingClientRect();
-        console.log('__QUARRY_SELECTION__:' + JSON.stringify({
+        console.log('__AIME_SELECTION__:' + JSON.stringify({
           text: text,
           x: rect.x,
           y: rect.y,

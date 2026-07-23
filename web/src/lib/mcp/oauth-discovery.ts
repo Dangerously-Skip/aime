@@ -1,3 +1,4 @@
+import { APP_NAME } from '@/config/branding';
 /**
  * MCP OAuth 2.1 discovery and dynamic client registration.
  *
@@ -135,7 +136,7 @@ export async function discoverMcpOAuth(mcpUrl: string): Promise<{
 }
 
 /**
- * Register Quarry as a dynamic OAuth client (RFC 7591).
+ * Register the app as a dynamic OAuth client (RFC 7591).
  *
  * The MCP server's authorization server must support Dynamic Client Registration.
  * Some servers (like Atlassian) support this, others require pre-registered clients.
@@ -143,7 +144,7 @@ export async function discoverMcpOAuth(mcpUrl: string): Promise<{
 export async function registerOAuthClient(
   metadata: OAuthServerMetadata,
   redirectUri: string,
-  clientName = 'Quarry',
+  clientName = APP_NAME,
 ): Promise<RegisteredClient> {
   if (!metadata.registration_endpoint) {
     throw new Error(

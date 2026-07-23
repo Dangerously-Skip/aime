@@ -4,9 +4,11 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { discoverMcpOAuth, registerOAuthClient } from '@/lib/mcp/oauth-discovery';
+import { getMcpClientsPath } from '@/lib/app-paths';
+import { APP_NAME } from '@/config/branding';
 
 const QUARRY_DIR = join(homedir(), '.claude');
-const MCP_CLIENTS_FILE = join(QUARRY_DIR, '.quarry-mcp-clients.json');
+const MCP_CLIENTS_FILE = getMcpClientsPath();
 
 interface StoredClient {
   clientId: string;
@@ -155,7 +157,7 @@ export async function POST(request: Request) {
     let clientSecret: string | undefined;
 
     if (serverMetadata.registration_endpoint) {
-      const client = await registerOAuthClient(serverMetadata, redirectUri, 'Quarry');
+      const client = await registerOAuthClient(serverMetadata, redirectUri, APP_NAME);
       clientId = client.client_id;
       clientSecret = client.client_secret;
       console.log(`[MCP OAuth Setup] Registered client ${clientId} for ${mcpName}`);

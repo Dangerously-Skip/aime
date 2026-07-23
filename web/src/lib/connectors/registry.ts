@@ -1,4 +1,5 @@
 import type { ConnectorDefinition } from './types';
+import { APP_NAME } from '@/config/branding';
 
 /**
  * Master connector registry.
@@ -22,7 +23,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     auth: {
       type: 'api_key',
       envVarName: 'GITHUB_PERSONAL_ACCESS_TOKEN',
-      hint: 'Go to github.com/settings/tokens → Generate new token (classic). Recommended scopes: repo, read:org, read:user, workflow, gist. Fine-grained tokens also work — grant access to the repos you want Quarry to work with.',
+      hint: `Go to github.com/settings/tokens → Generate new token (classic). Recommended scopes: repo, read:org, read:user, workflow, gist. Fine-grained tokens also work — grant access to the repos you want ${APP_NAME} to work with.`,
     },
     mcp: {
       // Official hosted GitHub MCP — ~100 tools including PRs, issues, workflows, code scanning
@@ -113,8 +114,8 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
 
   {
     id: 'google-workspace',
-    name: 'Google Workspace (nib)',
-    description: 'Gmail, Calendar, and Drive — uses your nib Google account',
+    name: 'Google Workspace',
+    description: 'Gmail, Calendar, and Drive — uses your workspace Google account',
     category: 'documentation',
     auth: {
       type: 'oauth2',
@@ -133,7 +134,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     mcp: {
       transport: 'stdio',
       command: 'node',
-      args: ['{quarryAppDir}/mcp-servers/google-workspace/index.mjs'],
+      args: ['{appDir}/mcp-servers/google-workspace/index.mjs'],
       tokenInjection: { method: 'env', envVar: 'GOOGLE_ACCESS_TOKEN' },
     },
   },
@@ -169,7 +170,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     mcp: {
       transport: 'stdio',
       command: 'node',
-      args: ['{quarryAppDir}/mcp-servers/google-workspace/index.mjs'],
+      args: ['{appDir}/mcp-servers/google-workspace/index.mjs'],
       tokenInjection: { method: 'env', envVar: 'GOOGLE_ACCESS_TOKEN' },
     },
   },
@@ -204,8 +205,8 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     mcp: {
       transport: 'stdio',
       command: 'node',
-      // {quarryAppDir} is substituted server-side at provision time
-      args: ['{quarryAppDir}/mcp-servers/m365-graph/index.mjs'],
+      // {appDir} is substituted server-side at provision time
+      args: ['{appDir}/mcp-servers/m365-graph/index.mjs'],
       tokenInjection: { method: 'env', envVar: 'GRAPH_ACCESS_TOKEN' },
     },
   },
@@ -280,49 +281,6 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
       tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
     },
   },
-
-  // ── nib internal ───────────────────────────────────────────────────────────
-
-  {
-    id: 'jeff',
-    name: 'JEFF',
-    description: 'nib\'s code-writing AI agent — investigate bugs, add features, and open PRs across nib repos',
-    category: 'development',
-    auth: {
-      type: 'api_key',
-      envVarName: 'JEFF_API_KEY',
-      hint: 'Generate a key at JEFF UI → Settings → Connected Services → User API Keys → New API Key. Pick scopes: jobs:create, jobs:read, agents:read. Requires VPN — internal.invalid is internal-only.',
-    },
-    mcp: {
-      transport: 'http',
-      url: 'https://jeff-api.internal.invalid/api/v1/mcp',
-      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
-    },
-  },
-
-  // ── Data ───────────────────────────────────────────────────────────────────
-
-  {
-    id: 'snowflake',
-    name: 'Snowflake',
-    description: 'Query Snowflake data via your org\'s hosted MCP server',
-    category: 'cloud',
-    auth: {
-      // Snowflake's hosted MCP doesn't support Dynamic Client Registration, and
-      // OAuth setup requires ACCOUNTADMIN to CREATE SECURITY INTEGRATION. PATs
-      // are user-generated (no admin needed) and pass as a Bearer token.
-      type: 'api_key',
-      envVarName: 'SNOWFLAKE_PAT',
-      hint: 'Use a Programmatic Access Token (PAT). See the connect dialog for the one-time setup SQL to run in Snowsight.',
-    },
-    mcp: {
-      transport: 'http',
-      url: 'https://{account}.snowflakecomputing.com/api/v2/databases/{database}/schemas/{schema}/mcp-servers/{server}',
-      tokenInjection: { method: 'header', headerName: 'Authorization', prefix: 'Bearer ' },
-    },
-  },
-
-  // ── Cloud ──────────────────────────────────────────────────────────────────
 
   {
     id: 'aws',

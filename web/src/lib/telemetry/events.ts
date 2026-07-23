@@ -58,12 +58,12 @@ export interface UserFeedbackData {
 let cachedIdentity: AnalyticsIdentity | null = null;
 
 /**
- * Build the client-side identity for Quarry events.
+ * Build the client-side identity for app events.
  * Uses Electron IPC for real platform/version info, and reads
- * ~/.claude/nib-analytics.conf for user_email + team_slug (the same
- * config the nib Claude Code CLI hook uses, so both tools share identity).
+ * ~/.claude/analytics.conf for user_email + team_slug (shared identity
+ * config, optional).
  */
-function getQuarryIdentity(): AnalyticsIdentity {
+function getAppIdentity(): AnalyticsIdentity {
   if (cachedIdentity) return cachedIdentity;
 
   const identity: AnalyticsIdentity = {
@@ -76,7 +76,7 @@ function getQuarryIdentity(): AnalyticsIdentity {
         getAppVersion?: () => string;
         getPlatform?: () => string;
         getHostname?: () => string;
-        getNibAnalyticsConfig?: () => Record<string, string>;
+        getAnalyticsConfig?: () => Record<string, string>;
       }
     }).electronAPI;
 
@@ -84,15 +84,15 @@ function getQuarryIdentity(): AnalyticsIdentity {
     if (api?.getPlatform) identity.platform = api.getPlatform();
     if (api?.getHostname) identity.hostname = api.getHostname();
 
-    if (api?.getNibAnalyticsConfig) {
-      const conf = api.getNibAnalyticsConfig();
+    if (api?.getAnalyticsConfig) {
+      const conf = api.getAnalyticsConfig();
       if (conf.user_email) identity.user_email = conf.user_email;
       if (conf.team_slug) identity.team_slug = conf.team_slug;
       if (conf.hostname && !identity.hostname) identity.hostname = conf.hostname;
     }
   }
 
-  // Fall back to settings-store displayName if nib config didn't supply user_email.
+  // Fall back to settings-store displayName if the conf didn't supply user_email.
   if (!identity.user_email) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -112,7 +112,7 @@ async function postEvents(
   flush = false,
 ): Promise<void> {
   try {
-    const baseIdentity = getQuarryIdentity();
+    const baseIdentity = getAppIdentity();
     const payload = events.map((e) => ({
       schema_version: '1.0' as const,
       event_type: e.event_type,

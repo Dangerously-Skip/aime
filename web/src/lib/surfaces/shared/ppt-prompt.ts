@@ -3,7 +3,7 @@
  * cowork-config so both surfaces produce decks with consistent style.
  *
  * The detailed format reference lives in SKILL.md
- * (~/.claude/plugins/nib-ppt/skills/generate-ppt/SKILL.md). This snippet
+ * (~/.claude/plugins/ppt/skills/generate-ppt/SKILL.md). This snippet
  * is the inline reminder the surface system prompt embeds; it explicitly
  * substitutes both placeholders in the slide header to avoid the
  * literal-`title:title` failure mode that the parser guard now rejects.
@@ -43,6 +43,6 @@ Example (placeholders fully substituted):
 - **Sydney Opera House setting**
 \\\`\\\`\\\`
 
-**Step 2** — Run \`bash ~/.claude/plugins/nib-ppt/generate_presentation.sh input.md output.pptx\`.
+**Step 2** — Run \`bash ~/.claude/plugins/ppt/generate_presentation.sh input.md output.pptx\`.
 The deck opens automatically. Do NOT use python-pptx directly. Do NOT
-search for nib-ppt files. Just write the markdown then run the command.`;
+search for the ppt plugin files. Just write the markdown then run the command.`;

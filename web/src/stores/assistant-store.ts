@@ -277,7 +277,7 @@ export const useAssistantStore = create<AssistantStore>()(
       },
     }),
     {
-      name: 'nibcowork:assistant',
+      name: 'aime:assistant',
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         orders: state.orders,

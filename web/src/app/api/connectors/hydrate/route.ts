@@ -3,13 +3,14 @@ export const runtime = 'nodejs';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import { getMcpConfigPath } from '@/lib/app-paths';
 
-const MCP_CONFIG_FILE = join(homedir(), '.claude', '.quarry-mcp.json');
+const MCP_CONFIG_FILE = getMcpConfigPath();
 
 /**
  * GET /api/connectors/hydrate
  * Returns the list of connector IDs that are currently provisioned in
- * ~/.claude/.quarry-mcp.json. The connector store reads this on startup
+ * the provisioned MCP config (see app-paths). The connector store reads this on startup
  * to reflect state from other surfaces (e.g. marketplace installs,
  * CLI-written configs) in the Connectors UI.
  */
@@ -31,8 +32,12 @@ export async function GET() {
       else if (meta?.connectorId && typeof meta.connectorId === 'string') {
         ids.push(meta.connectorId);
       }
-      // Fallback: derive from key prefix
-      else if (key.startsWith('nib-mcp-')) {
+      // Fallback: derive from key prefix (aime-* current, nib-* legacy)
+      else if (key.startsWith('aime-mcp-')) {
+        ids.push(key.replace('aime-mcp-', ''));
+      } else if (key.startsWith('aime-connector-')) {
+        ids.push(key.replace('aime-connector-', ''));
+      } else if (key.startsWith('nib-mcp-')) {
         ids.push(key.replace('nib-mcp-', ''));
       } else if (key.startsWith('nib-connector-')) {
         ids.push(key.replace('nib-connector-', ''));

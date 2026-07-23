@@ -308,7 +308,7 @@ export const useCoworkStore = create<CoworkStore>()(
         })),
     }),
     {
-      name: 'nibcowork:cowork',
+      name: 'aime:cowork',
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,

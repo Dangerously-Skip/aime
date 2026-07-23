@@ -1,6 +1,6 @@
 /**
  * Multipart file upload endpoint.
- * Streams large files to ~/.quarry/scratch/{chatId}/uploads/{name}.
+ * Streams large files to the per-chat scratch dir (<dataDir>/scratch/{chatId}/uploads/{name}).
  * Returns { path, size, name }.
  */
 import { NextRequest } from 'next/server';
@@ -21,10 +21,10 @@ export async function POST(req: NextRequest) {
     }
 
     const { join } = await import('path');
-    const { homedir } = await import('os');
     const { mkdirSync, writeFileSync } = await import('fs');
+    const { getScratchDir } = await import('@/lib/app-paths');
 
-    const uploadDir = join(homedir(), '.quarry', 'scratch', chatId, 'uploads');
+    const uploadDir = join(getScratchDir(chatId), 'uploads');
     mkdirSync(uploadDir, { recursive: true });
 
     // Sanitize filename
