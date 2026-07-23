@@ -115,22 +115,30 @@ P0 de-nib + rename → P1 provider/model registry + guided onboarding →
 P2 surface clarity (DR-1/DR-2) → P3 skills/widgets/MCP polish →
 P4 memory graph + voice + PTT + doc service → P5 shared projects.
 
-## De-nib checklist (P0)
+## De-nib checklist (P0) — ✅ COMPLETE (2026-07-24, commits 90fe812..01903c9)
 
-- [ ] Branding module (single source of truth: name, appId, dirs, key prefix)
-- [ ] Surface prompts: "You are Quarry… built by the AI team at nib" (all 5 `src/lib/surfaces/*-config.ts`)
-- [ ] UI strings (components, onboarding wizard)
-- [ ] `package.json`: name `quarry`, productName `Quarry`, appId `com.nib.quarry`
-- [ ] Storage keys `nibcowork:*` (13 stores) — migrate per DR-7
-- [ ] Data dir `~/.quarry` (~20 refs incl. scratch, CLAUDE_CONFIG_DIR) — per DR-7
-- [ ] searxng default URL (internal nib host in `claude-provider.ts`) → env-required, no internal default
-- [ ] Gateway URLs (`gateway-env.ts` — nib AI Studio) → generalize or remove under P1
-- [ ] `teams.json` / TEAMS_JSON secret → optional
-- [ ] SigV4 telemetry (`ANALYTICS_API_URL`) → opt-in
-- [ ] Release pipeline: Buildkite/SAMOA/WAF files, internal download URL, auto-update URL → GitHub Releases
-- [ ] Dead code: `gateway-provider.ts` (unreachable), opencode provider + `@opencode-ai/sdk` (DR-8)
-- [ ] README rewrite for OSS; CLAUDE.md update
-- [ ] Guard test: no forbidden brand strings in surface prompts; `getAvailableProviders() === ['claude']`
+- [x] Branding module (P0.1) — `web/src/config/branding.ts`
+- [x] Surface prompts de-branded (P0.1)
+- [x] UI strings (P0.1)
+- [x] `package.json` name/productName/appId → aime/AIME/com.aime.app (P0.3)
+- [x] Storage keys `aime:*` with legacy read fallback (P0.2, DR-7)
+- [x] Data dirs `~/.aime`, `.aime-mcp.json`, Electron userData — one-time renames (P0.2/P0.3, DR-7)
+- [x] searxng: `web-search` server, opt-in via SEARXNG_INSTANCES, no internal default (P0.4)
+- [x] Gateway removed; BYOK keys route directly to the Anthropic API; settings v7 rename (P0.4)
+- [x] teams.json optional — empty example → manual-key onboarding (P0.4)
+- [x] Telemetry opt-in, no default endpoint (P0.4)
+- [x] Release pipeline → GitHub Releases (build + optional signing); Buildkite/SAMOA/WAF deleted (P0.4)
+- [x] Dead code removed: gateway-provider, opencode + SDK dep; JEFF connector; nib-skills; rqp AWS auth → aws CLI (P0.4, DR-8)
+- [x] README + CLAUDE.md + SECURITY.md + .env.example rewritten (P0.3/P0.4)
+- [x] Guard tests: branding guard on surface prompts; `getAvailableProviders() === ['claude']`
+
+Deliberate legacy-compat remnants (do not "clean up"): gated-storage
+nibcowork:* read fallback, `.quarry`/`~/Library/…/Quarry` migration renames,
+nib-connector-*/nib-mcp-* config-key reads, `persist:quarry` Electron
+partition name (renaming it would orphan renderer localStorage).
+
+Open item for the owner: LICENSE says "Copyright (c) 2026 Composio" —
+looks copied from a template; needs the right copyright holder.
 
 ## Test suite status (foundation for this work)
 
