@@ -3,10 +3,11 @@ export const runtime = 'nodejs';
 import { readdir, readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import { getMcpConfigPath } from '@/lib/app-paths';
 
 const QUARRY_DIR = join(homedir(), '.claude');
 const PLUGINS_DIR = join(QUARRY_DIR, 'plugins');
-const MCP_CONFIG_FILE = join(QUARRY_DIR, '.quarry-mcp.json');
+const MCP_CONFIG_FILE = getMcpConfigPath();
 
 export interface InstalledPlugin {
   name: string;

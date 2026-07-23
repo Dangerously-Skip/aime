@@ -1,19 +1,20 @@
 import { readFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
+import { getMcpConfigPath } from '@/lib/app-paths';
 
 /**
  * Read the GitHub PAT from the provisioned MCP config.
  *
  * The client-side connector store stores a "provisioned" sentinel instead of
  * the real PAT (to avoid leaking it into localStorage). The real token lives
- * in ~/.claude/.quarry-mcp.json under the GitHub connector's headers, so any
+ * in the provisioned MCP config under the GitHub connector's headers, so any
  * server-side github API route reads it from there.
  *
  * Returns null if GitHub isn't connected / token isn't present.
  */
 export async function readProvisionedGithubToken(): Promise<string | null> {
-  const configPath = join(homedir(), '.claude', '.quarry-mcp.json');
+  const configPath = getMcpConfigPath();
   try {
     const raw = await readFile(configPath, 'utf-8');
     const config = JSON.parse(raw) as {

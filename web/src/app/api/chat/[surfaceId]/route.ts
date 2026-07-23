@@ -473,8 +473,8 @@ export async function POST(
       // Run extraction on non-text/non-image attachments before sending to provider
       if (attachments && attachments.length > 0) {
         const { extractDocument } = await import('@/lib/extractors');
+        const { getScratchDir } = await import('@/lib/app-paths');
         const { join: ej } = await import('path');
-        const { homedir: eHomedir } = await import('os');
         const { mkdirSync: eMkdir, writeFileSync: eWrite } = await import('fs');
         const isToolSurface = surfaceId === 'cowork' || surfaceId === 'code';
 
@@ -485,7 +485,7 @@ export async function POST(
           // Images: save to scratch so the model can use Read tool to view them
           if (att.category === 'image') {
             if (att.content) {
-              const imgDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'uploads');
+              const imgDir = ej(getScratchDir(chatId as string), 'uploads');
               eMkdir(imgDir, { recursive: true });
               const imgName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
               const imgPath = ej(imgDir, imgName);
@@ -499,7 +499,7 @@ export async function POST(
           }
 
           // Always save the raw file to scratch so the model can read it if extraction fails
-          const scratchDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'uploads');
+          const scratchDir = ej(getScratchDir(chatId as string), 'uploads');
           eMkdir(scratchDir, { recursive: true });
           const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
           const savedPath = ej(scratchDir, safeName);
@@ -548,7 +548,7 @@ export async function POST(
               console.log('[EXTRACT] Empty result; falling back to Read tool path for', att.name);
             } else if (isToolSurface && result.text.length > 0) {
               // Save to scratch dir for agent to Read/Grep
-              const scratchDir = ej(eHomedir(), '.quarry', 'scratch', chatId as string, 'documents');
+              const scratchDir = ej(getScratchDir(chatId as string), 'documents');
               eMkdir(scratchDir, { recursive: true });
               const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.[^.]+$/, '.md');
               const extractedPath = ej(scratchDir, safeName);

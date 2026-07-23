@@ -2,7 +2,8 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
 import { useSettingsStore, DEFAULT_HEARTBEAT_MODES } from './settings-store';
 
-const KEY = 'nibcowork:settings';
+const KEY = 'aime:settings';
+const LEGACY_KEY = 'nibcowork:settings';
 
 // jsdom 29 (under vitest) ships sessionStorage but no localStorage —
 // provide an in-memory Storage so gated-storage/zustand persist work.
@@ -58,6 +59,14 @@ describe('settings migrations', () => {
   it('v5 → v6: adds devHourlyRate', async () => {
     await rehydrateWith(5, { fullName: 'Kim' });
     expect(useSettingsStore.getState().devHourlyRate).toBe(150);
+  });
+
+  // Regression for the Quarry → AIME rename: pre-rename installs persisted
+  // under nibcowork:*; rehydration must pick those up via the storage fallback.
+  it('rehydrates from a legacy nibcowork:settings key', async () => {
+    localStorage.setItem(LEGACY_KEY, JSON.stringify({ state: { fullName: 'Legacy User' }, version: 6 }));
+    await useSettingsStore.persist.rehydrate();
+    expect(useSettingsStore.getState().fullName).toBe('Legacy User');
   });
 
   it('current version passes through untouched', async () => {

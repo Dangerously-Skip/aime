@@ -376,7 +376,7 @@ export const useProjectStore = create<ProjectStore>()(
         })),
     }),
     {
-      name: 'nibcowork:projects',
+      name: 'aime:projects',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       // Migrate on rehydration

@@ -15,7 +15,7 @@ export async function register() {
       const { logger } = await import('./lib/logger');
       logger.info({ event: 'quarry.sdk_path_set', sdkPath }, 'Claude SDK cli.js path set from env');
     } else {
-      console.log('[Quarry] Claude SDK cli.js path set from env:', sdkPath);
+      console.log('[AIME] Claude SDK cli.js path set from env:', sdkPath);
     }
   }
 

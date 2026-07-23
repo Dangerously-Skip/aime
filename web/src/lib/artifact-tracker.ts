@@ -29,7 +29,10 @@ export function isValidSidebarEntry(path: string): boolean {
   if (/^[^a-zA-Z0-9/~.]+$/.test(path) || /^[|&;]+/.test(path)) return false;
   if (path.includes('?') || path.includes('://') || path.startsWith('http')) return false;
   if (!path.includes('/') && /^[\w.-]+\.(?:css|js|jsx|ts|tsx|html?|woff2?|ttf|eot|ico|map)$/i.test(path)) return false;
-  // Filter internal quarry operations (document extraction temp files), but allow user artifacts in scratch space
+  // Filter internal app operations (document extraction temp files), but allow user
+  // artifacts in scratch space. Checks the legacy .quarry dir too — old conversations
+  // still reference pre-rename paths.
+  if (path.includes('.aime/') && !path.includes('.aime/scratch/')) return false;
   if (path.includes('.quarry/') && !path.includes('.quarry/scratch/')) return false;
   if (path.includes('/scratch/') && path.includes('/documents/')) return false;
   return true;
@@ -62,7 +65,7 @@ export function categorizeToolCall(
     const raw = toolInput.file_path || toolInput.path || toolInput.pattern || toolInput.url || toolInput.query;
     if (typeof raw !== "string") return null;
     if (raw.includes('.claude/') || raw.includes('CLAUDE.md') || raw.includes('/plugins/') ||
-        raw.includes('.quarry/') || raw.includes('/scratch/') ||
+        raw.includes('.aime/') || raw.includes('.quarry/') || raw.includes('/scratch/') ||
         raw.endsWith('.sh') || raw.endsWith('.py') || raw.includes('node_modules/')) return null;
     if (toolName === "Glob" || toolName === "Grep") return null;
     return { category: "context", path: raw };

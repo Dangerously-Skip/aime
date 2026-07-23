@@ -495,9 +495,10 @@ export class ClaudeProvider extends BaseProvider {
       const os = await import('os');
       const path = await import('path');
       const fs = await import('fs');
+      const { getScratchDir } = await import('../app-paths');
       const safeCwd = chatId
-        ? path.join(os.homedir(), '.quarry', 'scratch', chatId)
-        : path.join(os.tmpdir(), 'quarry-sandbox');
+        ? getScratchDir(chatId)
+        : path.join(os.tmpdir(), 'aime-sandbox');
       fs.mkdirSync(safeCwd, { recursive: true });
       queryOptions.cwd = safeCwd;
       console.log('[Claude] No folder selected — using scratch directory:', safeCwd);
@@ -515,12 +516,11 @@ export class ClaudeProvider extends BaseProvider {
 
     // IMPORTANT: Always strip CLAUDECODE from subprocess env to prevent
     // "nested session" detection when the app is launched from a Claude Code terminal.
-    const os = await import('os');
-    const path = await import('path');
+    const { getDataDir } = await import('../app-paths');
     const { CLAUDECODE: _cc, ...safeEnv } = process.env;
     queryOptions.env = {
       ...safeEnv,
-      CLAUDE_CONFIG_DIR: path.join(os.homedir(), '.quarry'),
+      CLAUDE_CONFIG_DIR: getDataDir(),
     };
 
     // Gateway env passthrough: if nib Gateway API key is provided, route through gateway

@@ -23,6 +23,6 @@ export function getClaudeSDKPath(): string | undefined {
     return cliPath;
   }
 
-  console.warn('[Quarry] Claude SDK cli.js not found at:', cliPath);
+  console.warn('[AIME] Claude SDK cli.js not found at:', cliPath);
   return undefined;
 }

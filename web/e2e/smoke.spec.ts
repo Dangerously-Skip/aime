@@ -34,6 +34,15 @@ test.describe('App boot', () => {
   test('completed onboarding boots into the app shell', async ({ page }) => {
     await page.addInitScript(
       ([key, value]) => window.localStorage.setItem(key, value),
+      ['aime:settings', COMPLETED_SETTINGS],
+    );
+    await page.goto('/');
+    await expect(page.getByText('New Chat').first()).toBeVisible({ timeout: 30_000 });
+  });
+
+  test('legacy nibcowork settings still boot into the app shell (rename migration)', async ({ page }) => {
+    await page.addInitScript(
+      ([key, value]) => window.localStorage.setItem(key, value),
       ['nibcowork:settings', COMPLETED_SETTINGS],
     );
     await page.goto('/');
@@ -46,7 +55,7 @@ test.describe('App boot', () => {
 
     await page.addInitScript(
       ([key, value]) => window.localStorage.setItem(key, value),
-      ['nibcowork:settings', COMPLETED_SETTINGS],
+      ['aime:settings', COMPLETED_SETTINGS],
     );
     await page.goto('/');
     await expect(page.getByText('New Chat').first()).toBeVisible({ timeout: 30_000 });

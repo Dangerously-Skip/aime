@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { APP_NAME } from '@/config/branding';
 
 export const runtime = 'nodejs';
 
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
     const res = await fetch(upstream, {
       headers: {
         // Yahoo blocks default fetch user-agents.
-        'User-Agent': 'Mozilla/5.0 (Quarry) AppleWebKit/605.1.15',
+        'User-Agent': `Mozilla/5.0 (${APP_NAME}) AppleWebKit/605.1.15`,
       },
     });
     if (!res.ok) {

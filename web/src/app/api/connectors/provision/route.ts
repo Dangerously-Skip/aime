@@ -3,6 +3,7 @@ export const runtime = 'nodejs';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import { getMcpConfigPath } from '@/lib/app-paths';
 
 /**
  * MCP provisioner API route.
@@ -10,14 +11,14 @@ import { homedir } from 'os';
  */
 
 const MCP_CONFIG_DIR = join(homedir(), '.claude');
-const MCP_CONFIG_PATH = join(MCP_CONFIG_DIR, '.quarry-mcp.json');
+const MCP_CONFIG_PATH = getMcpConfigPath();
 
 /**
- * Resolve the directory Quarry's bundled MCP servers live in. Dev: web/.
+ * Resolve the directory the app's bundled MCP servers live in. Dev: web/.
  * Packaged app: process.resourcesPath (from electron-builder extraResources).
  * Used to substitute {quarryAppDir} placeholders in connector args.
  */
-function resolveQuarryAppDir(): string {
+function resolveAppDir(): string {
   // process.resourcesPath is set by Electron at runtime; the Node types don't
   // know about it, so we read through the process as a loose record.
   const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
@@ -30,7 +31,7 @@ function resolveQuarryAppDir(): string {
 
 function substituteArgs(args: string[] | undefined): string[] | undefined {
   if (!args) return args;
-  const appDir = resolveQuarryAppDir();
+  const appDir = resolveAppDir();
   return args.map((a) => a.replace(/\{quarryAppDir\}/g, appDir));
 }
 

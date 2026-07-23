@@ -70,7 +70,7 @@ export const useCronStore = create<CronStore>()(
         get().jobs.filter((j) => j.projectId === projectId),
     }),
     {
-      name: 'nibcowork:cron',
+      name: 'aime:cron',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
     }

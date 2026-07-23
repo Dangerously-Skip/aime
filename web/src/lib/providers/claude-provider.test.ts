@@ -85,7 +85,7 @@ describe('option assembly', () => {
 
   it('falls back to a per-chat scratch cwd when no folder is selected', async () => {
     const { options } = await captureOptions(new ClaudeProvider(), { chatId: 'scratch-test' });
-    expect(options.cwd).toBe(path.join(os.homedir(), '.quarry', 'scratch', 'scratch-test'));
+    expect(options.cwd).toBe(path.join(os.homedir(), '.aime', 'scratch', 'scratch-test'));
   });
 
   it('uses the provided cwd when given', async () => {
@@ -98,7 +98,7 @@ describe('option assembly', () => {
     const { options } = await captureOptions(new ClaudeProvider());
     const env = options.env as Record<string, string>;
     expect(env.CLAUDECODE).toBeUndefined();
-    expect(env.CLAUDE_CONFIG_DIR).toBe(path.join(os.homedir(), '.quarry'));
+    expect(env.CLAUDE_CONFIG_DIR).toBe(path.join(os.homedir(), '.aime'));
   });
 
   it('maps think levels to SDK thinking config', async () => {
