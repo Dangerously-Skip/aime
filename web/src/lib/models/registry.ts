@@ -94,8 +94,23 @@ const BEDROCK_PROVIDER: ModelProvider = {
   credentialEnv: ['AWS_REGION', 'AWS_DEFAULT_REGION'],
 };
 
-/** Claude models keyed to the SDK short names the provider already passes. */
+/**
+ * Claude models. opus/sonnet/haiku use the SDK short names the CLI resolves;
+ * Fable uses its full model id (the short `fable` alias isn't guaranteed).
+ * Pricing is per-1k USD from the current model reference (Fable $10/$50,
+ * Opus 4.8 $5/$25, Sonnet 5 $3/$15, Haiku 4.5 $1/$5).
+ */
 const CLAUDE_MODELS: Model[] = [
+  {
+    id: 'claude-fable',
+    providerId: 'anthropic',
+    label: 'Claude Fable',
+    capabilities: ['chat', 'code'],
+    driverModel: 'claude-fable-5',
+    agentCapable: true,
+    contextWindow: 1_000_000,
+    pricing: { inputPer1kUsd: 0.010, outputPer1kUsd: 0.050 },
+  },
   {
     id: 'claude-opus',
     providerId: 'anthropic',
@@ -103,7 +118,8 @@ const CLAUDE_MODELS: Model[] = [
     capabilities: ['chat', 'code'],
     driverModel: 'opus',
     agentCapable: true,
-    pricing: { inputPer1kUsd: 0.015, outputPer1kUsd: 0.075 },
+    contextWindow: 1_000_000,
+    pricing: { inputPer1kUsd: 0.005, outputPer1kUsd: 0.025 },
   },
   {
     id: 'claude-sonnet',
@@ -112,6 +128,7 @@ const CLAUDE_MODELS: Model[] = [
     capabilities: ['chat', 'code'],
     driverModel: 'sonnet',
     agentCapable: true,
+    contextWindow: 1_000_000,
     pricing: { inputPer1kUsd: 0.003, outputPer1kUsd: 0.015 },
   },
   {
@@ -121,7 +138,8 @@ const CLAUDE_MODELS: Model[] = [
     capabilities: ['chat', 'code'],
     driverModel: 'haiku',
     agentCapable: true,
-    pricing: { inputPer1kUsd: 0.00025, outputPer1kUsd: 0.00125 },
+    contextWindow: 200_000,
+    pricing: { inputPer1kUsd: 0.001, outputPer1kUsd: 0.005 },
   },
 ];
 
@@ -131,12 +149,15 @@ export function createDefaultRegistry(): ModelRegistry {
     providers: [{ ...ANTHROPIC_PROVIDER }, { ...BEDROCK_PROVIDER }],
     models: CLAUDE_MODELS.map((m) => ({ ...m })),
     routing: {
+      // chat has no stallion tier — a stallion chat request tumbles to smort.
       chat: {
         smort: ['claude-opus', 'claude-sonnet'],
         good: ['claude-sonnet', 'claude-haiku'],
         cheap: ['claude-haiku'],
       },
+      // code adds stallion (Fable) as the premium coding tier.
       code: {
+        stallion: ['claude-fable', 'claude-opus'],
         smort: ['claude-opus', 'claude-sonnet'],
         good: ['claude-sonnet', 'claude-haiku'],
         cheap: ['claude-haiku'],
