@@ -160,6 +160,27 @@ describe('option assembly', () => {
     expect(options.model).toBe('opus'); // SDK model name untouched
   });
 
+  it('points the SDK at a user-added provider base URL alongside its key', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      apiKey: 'sk-or-user-key',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      model: 'moonshotai/kimi-k2',
+    });
+    const env = options.env as Record<string, string>;
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-or-user-key');
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://openrouter.ai/api/v1');
+    expect(options.model).toBe('moonshotai/kimi-k2'); // driver model passed through
+  });
+
+  it('sets a base URL even without a per-request key (env/keychain path)', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      baseUrl: 'http://127.0.0.1:3100/api/llm-proxy/local',
+      model: 'llama3',
+    });
+    const env = options.env as Record<string, string>;
+    expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:3100/api/llm-proxy/local');
+  });
+
   it('prepends conversation history as XML only when there is no session to resume', async () => {
     const history = [
       { role: 'user' as const, content: 'earlier question' },

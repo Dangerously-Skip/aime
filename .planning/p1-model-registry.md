@@ -167,8 +167,12 @@ providers, so it's a no-behaviour-change drop-in.
   override preserved; `/api/models` serves the registry + tier grid. *(done)*
   Client wiring — surfaces *sending* `(capability, tier)` and the tier
   selector — is P2 (surface clarity); today's explicit-model path is unchanged.
-- **P1.3b** — resolve against **user-added** providers (provider-store +
-  keychain), not just the default Claude registry.
+- **P1.3b** — execute a model on a **user-added** provider: the request
+  carries a non-secret `providerConfig` (`providerId`, `transport`, `baseUrl`);
+  the server resolves the key from the keychain (by `providerId`) or a transient
+  request key, and drives the SDK against the provider's Anthropic-compat base
+  URL (`ANTHROPIC_BASE_URL`). `resolveExecution()` is the seam the P1.4 shim
+  extends for `openai-compat`. *(done)*
 - **P1.3-orig** — wire agent surfaces: chat/code/cowork request `(capability,
   tier)`; `/api/chat` + ClaudeProvider resolve via the registry; keep the
   raw `model` override path working. `/api/models` reads the registry.

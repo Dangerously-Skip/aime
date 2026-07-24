@@ -60,6 +60,13 @@ export interface QueryParams {
   projectInstructions?: string;
   projectKnowledge?: string;
   apiKey?: string;
+  /**
+   * Anthropic-compatible base URL for a user-added provider (OpenRouter's
+   * anthropic endpoint, a self-hosted gateway, or the local openai-compat
+   * shim). When set, drives the agent loop against that endpoint instead of
+   * the default Anthropic API. Ignored by non-Claude providers.
+   */
+  baseUrl?: string;
   cwd?: string;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   /** Session controls from slash commands (thinking, effort, model override). */
