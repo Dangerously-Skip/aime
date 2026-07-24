@@ -9,6 +9,9 @@ import {
   type ModelProvider,
   type ModelRegistry,
   type ResolvedRoute,
+  type ResolvedRouteWithSettings,
+  type RouteSettings,
+  type RouteSlot,
   type Tier,
   TIER_ORDER,
 } from './types';
@@ -48,9 +51,9 @@ export function resolveRoute(
   capability: Capability,
   tier: Tier,
   isAvailable: AvailabilityFn,
-  opts: { allowTierDegrade?: boolean } = {},
+  opts: { allowTierDegrade?: boolean; candidateFilter?: (model: Model) => boolean } = {},
 ): ResolvedRoute | null {
-  const { allowTierDegrade = true } = opts;
+  const { allowTierDegrade = true, candidateFilter } = opts;
 
   const startIdx = TIER_ORDER.indexOf(tier);
   // Requested tier first, then progressively cheaper tiers.
@@ -61,6 +64,9 @@ export function resolveRoute(
     for (const [candidateIdx, modelId] of candidates.entries()) {
       const model = getModel(registry, modelId);
       if (!model) continue;
+      // A filtered-out candidate (e.g. over a cost ceiling) is skipped like an
+      // unavailable one — a later, cheaper pick still counts as degraded.
+      if (candidateFilter && !candidateFilter(model)) continue;
       const provider = getProvider(registry, model.providerId);
       if (!provider || !isAvailable(provider)) continue;
       return {
@@ -73,6 +79,75 @@ export function resolveRoute(
     }
   }
   return null;
+}
+
+/** Map warmth (0..1) to an Anthropic/OpenAI temperature, clamped to [0, 1]. */
+export function warmthToTemperature(warmth: number): number {
+  return Math.max(0, Math.min(1, warmth));
+}
+
+const slotKey = (capability: Capability, tier: Tier): string => `${capability}:${tier}`;
+
+/**
+ * Resolve a route under a `RouteSettings` policy — the full "cost compaction"
+ * lever set on top of the base resolver:
+ *
+ * 1. `maxTier` clamps a too-premium request down before resolution.
+ * 2. `costCeilingPer1kUsd` filters out candidates priced above the ceiling.
+ * 3. `tumbleChains` replaces the default downward tumble with an explicit slot
+ *    chain for the (capability, effectiveTier) primary.
+ * 4. `warmth` is turned into a temperature returned alongside the route.
+ *
+ * A clamp or non-primary pick marks the route `degraded`. Returns null when
+ * nothing resolves.
+ */
+export function resolveWithSettings(
+  registry: ModelRegistry,
+  capability: Capability,
+  tier: Tier,
+  isAvailable: AvailabilityFn,
+  settings: RouteSettings = {},
+): ResolvedRouteWithSettings | null {
+  // 1. maxTier clamp. TIER_ORDER is premium→cheap, so a more-premium request
+  //    has a LOWER index than its cap.
+  let effectiveTier = tier;
+  if (settings.maxTier) {
+    const reqIdx = TIER_ORDER.indexOf(tier);
+    const capIdx = TIER_ORDER.indexOf(settings.maxTier);
+    if (reqIdx >= 0 && capIdx >= 0 && reqIdx < capIdx) effectiveTier = settings.maxTier;
+  }
+
+  // 2. cost ceiling filter.
+  const ceiling = settings.costCeilingPer1kUsd;
+  const candidateFilter =
+    ceiling != null ? (m: Model) => m.pricing == null || m.pricing.outputPer1kUsd <= ceiling : undefined;
+
+  // 3. explicit tumble chain (if any) for the primary slot.
+  const chain = settings.tumbleChains?.[slotKey(capability, effectiveTier)];
+  let route: ResolvedRoute | null = null;
+  if (chain && chain.length) {
+    const slots: RouteSlot[] = [{ capability, tier: effectiveTier }, ...chain];
+    for (const [i, slot] of slots.entries()) {
+      const r = resolveRoute(registry, slot.capability, slot.tier, isAvailable, {
+        allowTierDegrade: false,
+        candidateFilter,
+      });
+      if (r) {
+        route = i > 0 ? { ...r, degraded: true } : r;
+        break;
+      }
+    }
+  } else {
+    route = resolveRoute(registry, capability, effectiveTier, isAvailable, { candidateFilter });
+  }
+
+  if (!route) return null;
+  // A clamp that actually lowered the tier is itself a degrade signal.
+  if (effectiveTier !== tier) route = { ...route, degraded: true };
+
+  const out: ResolvedRouteWithSettings = { route };
+  if (settings.warmth != null) out.temperature = warmthToTemperature(settings.warmth);
+  return out;
 }
 
 // ── Default registry ──────────────────────────────────────────────────────

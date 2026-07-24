@@ -192,10 +192,19 @@ providers, so it's a no-behaviour-change drop-in.
   (`{images[]}` / `{mesh:{url}}` / `{embeddings[][]}`); `POST /api/capabilities`
   wraps it, resolving the key from the keychain by providerId. (DR-5: mesh is a
   first-class capability slot; no persona semantics here.)
-- **P1.6** — guided provider setup UIs (Bedrock, Vertex, local/Ollama, BYOK
-  OpenRouter/FAL) + onboarding rework around provider paths.
-- **P1.7** — RouteSettings: thinking budget (exists), warmth, explicit
-  tumbling chains, cost-compaction budget policy.
+- **P1.6 (UI — remaining, best done interactively)** — guided provider setup
+  UIs (Bedrock, Vertex, local/Ollama, BYOK OpenRouter/FAL) + onboarding rework
+  around provider paths. Deferred: it is React/visual work that wants a human in
+  the loop (per the E2E/visual-verification standard); the backend it drives is
+  now complete.
+- **P1.7** — RouteSettings: thinking budget (exists), warmth, explicit tumbling
+  chains, cost-compaction budget policy. *(done)* `resolveWithSettings()` layers
+  `maxTier` clamp → `costCeilingPer1kUsd` candidate filter → explicit
+  `tumbleChains` (overriding the default TIER_ORDER tumble) → `warmth`→
+  temperature, on top of `resolveRoute` (which gained a `candidateFilter`).
+  DR-4: warmth = temperature (a sampling lever), persona stays a SOUL.md
+  concern. Client wiring (surfaces sending RouteSettings; threading temperature
+  into openai-compat/capability calls) is P2 surface work.
 
-DR-4 (warmth = temperature vs persona) and DR-5 (mesh slot only) fold in at
-P1.7 / P1.5.
+DR-4 (warmth = temperature vs persona) and DR-5 (mesh slot only) resolved in
+P1.7 / P1.5 respectively.
