@@ -208,6 +208,26 @@ describe('provider parameter assembly', () => {
     expect(prompt).toContain('[P0 — standing-order:so1] Build failed on main');
   });
 
+  it('resolves (capability, tier) through the registry when no explicit model is given', async () => {
+    // code + stallion → Fable; a request API key makes the anthropic provider available
+    await post('cowork', { message: 'refactor', chatId: 'c1', capability: 'code', tier: 'stallion', apiKey: 'sk-x' });
+    expect(providerParams().model).toBe('claude-fable-5');
+
+    // chat + good → sonnet
+    await post('chat', { message: 'hi', chatId: 'c1', capability: 'chat', tier: 'good', apiKey: 'sk-x' });
+    expect(providerParams().model).toBe('sonnet');
+  });
+
+  it('tumbles a chat stallion request down to smort (opus)', async () => {
+    await post('chat', { message: 'hi', chatId: 'c1', capability: 'chat', tier: 'stallion', apiKey: 'sk-x' });
+    expect(providerParams().model).toBe('opus');
+  });
+
+  it('lets an explicit model override beat capability/tier resolution', async () => {
+    await post('cowork', { message: 'hi', chatId: 'c1', model: 'opus', capability: 'code', tier: 'cheap', apiKey: 'sk-x' });
+    expect(providerParams().model).toBe('opus');
+  });
+
   it('requests compaction when history approaches the context limit', async () => {
     const history = Array.from({ length: 150 }, (_, i) => ({
       role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant',
