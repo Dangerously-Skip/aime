@@ -22,6 +22,19 @@ export interface ResolvedExecution {
 }
 
 /**
+ * Build the local translation-shim base URL for an `openai-compat` provider.
+ * The Agent SDK will append `/v1/messages`, so the URL ends at the encoded
+ * upstream segment. The provider id and its real (OpenAI-format) base URL are
+ * carried in the path — the upstream base is base64url-encoded so arbitrary
+ * URLs survive routing. The key rides separately as the SDK's x-api-key header.
+ */
+export function buildShimBaseUrl(shimOrigin: string, providerId: string, upstreamBaseUrl: string): string {
+  const origin = shimOrigin.replace(/\/$/, '');
+  const upstream = Buffer.from(upstreamBaseUrl, 'utf8').toString('base64url');
+  return `${origin}/api/llm-proxy/${encodeURIComponent(providerId)}/${upstream}`;
+}
+
+/**
  * Compute the execution env (key + Anthropic-compatible base URL) for a chat
  * request. Credentials are resolved from the keychain (by `providerId`) unless
  * a transient request key is supplied, which wins.
@@ -40,6 +53,8 @@ export async function resolveExecution(opts: {
   providerConfig?: ProviderExecConfig | null;
   requestApiKey?: string | null;
   loadKey?: (providerId: string) => Promise<string | undefined>;
+  /** Origin (scheme+host+port) of this server, used to build the shim URL. */
+  shimOrigin?: string;
 }): Promise<ResolvedExecution> {
   const { providerConfig, requestApiKey } = opts;
   if (!providerConfig) return { apiKey: requestApiKey || undefined };
@@ -54,7 +69,18 @@ export async function resolveExecution(opts: {
     // Capability-only provider — it can never drive the agent loop.
     return { apiKey };
   }
-  // anthropic-native + openai-compat both reach the SDK via a base URL. The
-  // openai-compat case is completed by the shim in P1.4.
+  if (transport === 'openai-compat') {
+    // Route through the local translation shim (DR-11). Without a base URL to
+    // translate, or without knowing our own origin, we can't build the shim
+    // target — surface no base URL so the caller falls back / errors cleanly.
+    if (providerConfig.baseUrl && opts.shimOrigin) {
+      return {
+        apiKey,
+        baseUrl: buildShimBaseUrl(opts.shimOrigin, providerConfig.providerId, providerConfig.baseUrl),
+      };
+    }
+    return { apiKey };
+  }
+  // anthropic-native: drive the SDK directly against the provider's base URL.
   return { apiKey, baseUrl: providerConfig.baseUrl };
 }

@@ -176,9 +176,14 @@ providers, so it's a no-behaviour-change drop-in.
 - **P1.3-orig** — wire agent surfaces: chat/code/cowork request `(capability,
   tier)`; `/api/chat` + ClaudeProvider resolve via the registry; keep the
   raw `model` override path working. `/api/models` reads the registry.
-- **P1.4** — the anthropic-compat translation shim (DR-11): OpenRouter
-  direct-route path + the local Next.js OpenAI↔Anthropic shim for
-  local/OpenAI-compat providers.
+- **P1.4** — the anthropic-compat translation shim (DR-11): the local Next.js
+  OpenAI↔Anthropic shim for local/OpenAI-compat providers (anthropic-native
+  providers route directly, no shim). *(done)* The SDK is pointed at
+  `/api/llm-proxy/<providerId>/<base64url(upstream)>`; the shim decodes the
+  upstream, takes the key from `x-api-key`, and translates request + response
+  (non-streaming and streaming, text + tool_use) via pure functions in
+  `lib/models/llm-proxy/{translate,stream}.ts`. `count_tokens` is estimated;
+  the upstream scheme is validated (http/https only).
 - **P1.5** — capability calls: image/mesh (FAL/OpenAI) + embedding, called
   outside the agent loop; `search`/`voice` already covered.
 - **P1.6** — guided provider setup UIs (Bedrock, Vertex, local/Ollama, BYOK
