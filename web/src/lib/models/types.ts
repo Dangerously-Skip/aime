@@ -17,11 +17,15 @@ export type Capability =
   | 'voice'      // speech-to-text (today: local Whisper)
   | 'embedding'; // vector embeddings
 
-/** Quality/cost tier. TIER_ORDER runs premium → cheap for downward tumbling. */
-export type Tier = 'cheap' | 'good' | 'smort';
+/**
+ * Quality/cost tier. TIER_ORDER runs premium → cheap for downward tumbling.
+ * `stallion` is the premium-most tier, reserved for the hardest coding work
+ * (e.g. Fable); most capabilities don't populate it and tumble down to smort.
+ */
+export type Tier = 'cheap' | 'good' | 'smort' | 'stallion';
 
 /** Tiers ordered premium-first, so tier-tumbling degrades to the right. */
-export const TIER_ORDER: readonly Tier[] = ['smort', 'good', 'cheap'] as const;
+export const TIER_ORDER: readonly Tier[] = ['stallion', 'smort', 'good', 'cheap'] as const;
 
 /**
  * How a provider is reached.

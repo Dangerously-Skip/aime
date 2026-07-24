@@ -135,6 +135,30 @@ describe('default registry', () => {
     }
   });
 
+  it('routes code stallion to Fable', () => {
+    const r = resolveRoute(reg, 'code', 'stallion', allAvailable);
+    expect(r?.model.driverModel).toBe('claude-fable-5');
+    expect(r?.tier).toBe('stallion');
+    expect(r?.degraded).toBe(false);
+  });
+
+  it('stallion falls back to opus within-tier when Fable is unavailable', () => {
+    // Fable and Opus are both on the anthropic provider here, so simulate a
+    // model-level outage by pointing Fable at a missing provider.
+    const custom = createDefaultRegistry();
+    custom.models.find((m) => m.id === 'claude-fable')!.providerId = 'ghost';
+    const r = resolveRoute(custom, 'code', 'stallion', allAvailable);
+    expect(r?.model.driverModel).toBe('opus');
+    expect(r?.degraded).toBe(true);
+  });
+
+  it('a chat stallion request tumbles down to smort (no chat stallion tier)', () => {
+    const r = resolveRoute(reg, 'chat', 'stallion', allAvailable);
+    expect(r?.model.driverModel).toBe('opus');
+    expect(r?.tier).toBe('smort');
+    expect(r?.degraded).toBe(true);
+  });
+
   it('every model routed to chat/code is agentCapable (Agent SDK constraint)', () => {
     for (const cap of ['chat', 'code'] as const) {
       for (const tierModels of Object.values(reg.routing[cap] ?? {})) {
