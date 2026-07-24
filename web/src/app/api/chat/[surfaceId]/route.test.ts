@@ -228,6 +228,30 @@ describe('provider parameter assembly', () => {
     expect(providerParams().model).toBe('opus');
   });
 
+  it('drives an explicit model on a user-added provider via its base URL', async () => {
+    // Picking a scanned OpenRouter model: explicit driver model + providerConfig.
+    await post('chat', {
+      message: 'hi',
+      chatId: 'c1',
+      model: 'moonshotai/kimi-k2',
+      apiKey: 'sk-or-transient',
+      providerConfig: {
+        providerId: 'openrouter-1',
+        transport: 'anthropic-native',
+        baseUrl: 'https://openrouter.ai/api/v1',
+      },
+    });
+    const p = providerParams();
+    expect(p.model).toBe('moonshotai/kimi-k2');
+    expect(p.apiKey).toBe('sk-or-transient');
+    expect(p.baseUrl).toBe('https://openrouter.ai/api/v1');
+  });
+
+  it('leaves base URL unset on the default Anthropic path', async () => {
+    await post('chat', { message: 'hi', chatId: 'c1', apiKey: 'sk-x' });
+    expect(providerParams().baseUrl).toBeUndefined();
+  });
+
   it('requests compaction when history approaches the context limit', async () => {
     const history = Array.from({ length: 150 }, (_, i) => ({
       role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant',

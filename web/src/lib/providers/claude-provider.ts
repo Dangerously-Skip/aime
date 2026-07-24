@@ -103,6 +103,7 @@ export class ClaudeProvider extends BaseProvider {
       model: explicitModel,
       attachments,
       apiKey,
+      baseUrl,
       cwd,
       history,
       sessionControls,
@@ -538,6 +539,17 @@ export class ClaudeProvider extends BaseProvider {
     } else if (isBedrockConfigured()) {
       queryOptions.env = { ...safeEnv, ...(queryOptions.env as Record<string, string> || {}), ...getBedrockEnv() };
       console.log('[Claude] Bedrock env configured, routing through AWS');
+    }
+
+    // A user-added provider (OpenRouter's anthropic endpoint, a self-hosted
+    // gateway, or the local openai-compat shim) supplies an Anthropic-compat
+    // base URL. Point the SDK at it. Applies on top of whichever key branch ran.
+    if (baseUrl) {
+      queryOptions.env = {
+        ...(queryOptions.env as Record<string, string> || {}),
+        ANTHROPIC_BASE_URL: baseUrl,
+      };
+      console.log('[Claude] Custom Anthropic-compatible base URL configured');
     }
 
     // Check for existing session - matches server.js session resumption logic

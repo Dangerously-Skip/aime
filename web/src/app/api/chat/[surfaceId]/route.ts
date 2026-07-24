@@ -148,6 +148,7 @@ export async function POST(
     onboardingComplete = true,
     capability = null,
     tier = null,
+    providerConfig = null,
   } = body as {
     message?: string;
     chatId?: string;
@@ -178,6 +179,7 @@ export async function POST(
     onboardingComplete?: boolean;
     capability?: import('@/lib/models/types').Capability | null;
     tier?: import('@/lib/models/types').Tier | null;
+    providerConfig?: import('@/lib/models/execution').ProviderExecConfig | null;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -494,6 +496,31 @@ export async function POST(
         }
       }
 
+      // ── Execution resolution (user-added providers) ────────────────────
+      // For a model on a user-added provider, resolve the key (keychain by
+      // providerId, or the transient request key) and the Anthropic-compat
+      // base URL. No providerConfig ⇒ default BYOK/env/Bedrock path unchanged.
+      const { resolveExecution } = await import('@/lib/models/execution');
+      const exec = await resolveExecution({
+        providerConfig,
+        requestApiKey: apiKey,
+        loadKey: async (id) => {
+          try {
+            const { getCredentialStore } = await import('@/lib/models/credentials');
+            return await getCredentialStore().getField(id, 'apiKey');
+          } catch {
+            // CredentialStoreUnavailable (no AIME_CRED_KEY) or read error →
+            // fall back to whatever the request supplied.
+            return undefined;
+          }
+        },
+      });
+      if (providerConfig) {
+        console.log('[CHAT] Provider config:', providerConfig.providerId,
+          providerConfig.transport ?? 'anthropic-native',
+          exec.baseUrl ? '(custom base URL)' : '');
+      }
+
       // Thinking and effort are now handled natively by the SDK via ClaudeProvider
       // (passed as queryOptions.thinking and queryOptions.effort)
 
@@ -655,7 +682,8 @@ export async function POST(
           systemPrompt,
           attachments: attachments || undefined,
           webSearch: webSearch || undefined,
-          apiKey: (apiKey as string) || undefined,
+          apiKey: exec.apiKey,
+          baseUrl: exec.baseUrl,
           cwd: (cwd as string) || undefined,
           history: history || undefined,
           sessionControls: sessionControls || undefined,
