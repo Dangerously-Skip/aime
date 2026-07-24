@@ -146,6 +146,8 @@ export async function POST(
     sessionControls = null,
     toolProfile = 'full',
     onboardingComplete = true,
+    capability = null,
+    tier = null,
   } = body as {
     message?: string;
     chatId?: string;
@@ -174,6 +176,8 @@ export async function POST(
     sessionControls?: SessionControls | null;
     toolProfile?: string;
     onboardingComplete?: boolean;
+    capability?: import('@/lib/models/types').Capability | null;
+    tier?: import('@/lib/models/types').Tier | null;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -458,13 +462,37 @@ export async function POST(
         });
       };
 
-      // ── Session controls: model override + thinking ────────────────────
-      // Apply sessionControls overrides (model, thinking) if provided
-      // Priority: sessionControls > agentModelOverride > request model > surface default
-      const effectiveModel = sessionControls?.modelOverride
+      // ── Model resolution ───────────────────────────────────────────────
+      // Priority: explicit model (sessionControls > agent > request) wins.
+      // Otherwise, if the client asked by (capability, tier), resolve through
+      // the model registry with tumbling. Falls back to the surface default.
+      const explicitModel = sessionControls?.modelOverride
         || agentModelOverride
-        || (model as string)
-        || surfaceConfig.model;
+        || (model as string | null)
+        || null;
+      let effectiveModel = explicitModel || surfaceConfig.model;
+
+      if (!explicitModel && (capability || tier)) {
+        const { resolveRoute, createDefaultRegistry } = await import('@/lib/models/registry');
+        const { isBedrockConfigured } = await import('@/lib/bedrock-env');
+        // Availability for the default (Claude) registry: an API key (BYOK/env)
+        // makes the anthropic provider usable; a region makes Bedrock usable.
+        const availableIds = new Set<string>();
+        if (apiKey || process.env.ANTHROPIC_API_KEY) availableIds.add('anthropic');
+        if (isBedrockConfigured()) availableIds.add('bedrock');
+
+        const resolved = resolveRoute(
+          createDefaultRegistry(),
+          capability ?? 'chat',
+          tier ?? 'good',
+          (p) => availableIds.has(p.id),
+        );
+        if (resolved) {
+          effectiveModel = resolved.model.driverModel;
+          console.log('[CHAT] Registry resolved', capability, tier, '→', effectiveModel,
+            resolved.degraded ? '(degraded)' : '');
+        }
+      }
 
       // Thinking and effort are now handled natively by the SDK via ClaudeProvider
       // (passed as queryOptions.thinking and queryOptions.effort)

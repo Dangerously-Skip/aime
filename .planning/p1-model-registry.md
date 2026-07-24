@@ -159,7 +159,17 @@ providers, so it's a no-behaviour-change drop-in.
   transport, the preset catalog for the ~10 providers, keychain-backed
   credential store (AES-256-GCM), and the `/api/models/scan` endpoint +
   normalizers. *(this slice)*
-- **P1.3** — wire agent surfaces: chat/code/cowork request `(capability,
+- **P1.2b** — add-provider round-trip: keychain credential write endpoint
+  (`/api/models/providers/credentials`) + client `provider-store`
+  (`aime:providers`). *(done)*
+- **P1.3 (server)** — `/api/chat/[surfaceId]` resolves `(capability, tier)`
+  through the default registry (availability from apiKey/env), explicit model
+  override preserved; `/api/models` serves the registry + tier grid. *(done)*
+  Client wiring — surfaces *sending* `(capability, tier)` and the tier
+  selector — is P2 (surface clarity); today's explicit-model path is unchanged.
+- **P1.3b** — resolve against **user-added** providers (provider-store +
+  keychain), not just the default Claude registry.
+- **P1.3-orig** — wire agent surfaces: chat/code/cowork request `(capability,
   tier)`; `/api/chat` + ClaudeProvider resolve via the registry; keep the
   raw `model` override path working. `/api/models` reads the registry.
 - **P1.4** — the anthropic-compat translation shim (DR-11): OpenRouter
