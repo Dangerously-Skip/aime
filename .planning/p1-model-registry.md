@@ -185,7 +185,13 @@ providers, so it's a no-behaviour-change drop-in.
   `lib/models/llm-proxy/{translate,stream}.ts`. `count_tokens` is estimated;
   the upstream scheme is validated (http/https only).
 - **P1.5** — capability calls: image/mesh (FAL/OpenAI) + embedding, called
-  outside the agent loop; `search`/`voice` already covered.
+  outside the agent loop; `search`/`voice` already covered. *(done)*
+  `lib/models/capabilities.ts` dispatches on (transport, capability): native-fal
+  → `POST <base>/<model>` (image/mesh, `Authorization: Key`); openai-compat →
+  `/images/generations` + `/embeddings` (Bearer). Results are normalized
+  (`{images[]}` / `{mesh:{url}}` / `{embeddings[][]}`); `POST /api/capabilities`
+  wraps it, resolving the key from the keychain by providerId. (DR-5: mesh is a
+  first-class capability slot; no persona semantics here.)
 - **P1.6** — guided provider setup UIs (Bedrock, Vertex, local/Ollama, BYOK
   OpenRouter/FAL) + onboarding rework around provider paths.
 - **P1.7** — RouteSettings: thinking budget (exists), warmth, explicit
