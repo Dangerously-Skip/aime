@@ -42,6 +42,42 @@ const LOG_DIR = path.join(app.getPath("userData"), "logs");
 const LOG_FILE = path.join(LOG_DIR, "aime.log");
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB — rotate when exceeded
 
+// Master key for the server's BYOK credential store (AES-256-GCM). The 32-byte
+// key is kept in the OS keychain via Electron safeStorage and injected into the
+// Next server as AIME_CRED_KEY (hex). The server never sees the keychain; the
+// renderer never sees the key. Falls back to a 0600 plaintext file only when no
+// OS keyring is available (headless Linux) — logged so it's not silent.
+let cachedCredentialKeyHex = null;
+function getCredentialKeyHex() {
+  if (cachedCredentialKeyHex) return cachedCredentialKeyHex;
+  try {
+    const crypto = require("crypto");
+    const { safeStorage } = require("electron");
+    const keyPath = path.join(app.getPath("userData"), "credential-master.key");
+    const encryptionOk = safeStorage.isEncryptionAvailable();
+
+    if (fs.existsSync(keyPath)) {
+      const stored = fs.readFileSync(keyPath);
+      cachedCredentialKeyHex = encryptionOk
+        ? safeStorage.decryptString(stored)
+        : stored.toString("utf-8");
+    } else {
+      cachedCredentialKeyHex = crypto.randomBytes(32).toString("hex");
+      const toStore = encryptionOk
+        ? safeStorage.encryptString(cachedCredentialKeyHex)
+        : Buffer.from(cachedCredentialKeyHex, "utf-8");
+      if (!encryptionOk) {
+        console.warn("[AIME] OS keyring unavailable — credential master key stored unencrypted (0600).");
+      }
+      fs.writeFileSync(keyPath, toStore, { mode: 0o600 });
+    }
+  } catch (err) {
+    console.error("[AIME] Could not provision credential master key:", err.message);
+    cachedCredentialKeyHex = null;
+  }
+  return cachedCredentialKeyHex;
+}
+
 function ensureLogDir() {
   try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
 }
@@ -805,6 +841,7 @@ app.whenReady().then(async () => {
           : {}),
         AIME_RESOURCES_PATH: process.resourcesPath,
         AIME_USER_DATA_DIR: app.getPath('userData'),
+        ...(getCredentialKeyHex() ? { AIME_CRED_KEY: getCredentialKeyHex() } : {}),
         ...(sdkCliPath ? { AIME_SDK_CLI_PATH: sdkCliPath } : {}),
         ...(gitBashPath ? { CLAUDE_CODE_GIT_BASH_PATH: gitBashPath } : {}),
         ...(managedPythonAvailable ? {

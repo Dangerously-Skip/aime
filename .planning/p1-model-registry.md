@@ -89,6 +89,40 @@ registry's `search` capability slot picks the *search backend* (searxng /
 Brave / Perplexity), independent of DR-11. (If "search" meant a
 search-augmented *model* or RAG embeddings, that's a different slot — flag it.)
 
+## DR-12 (RESOLVED): provider model = one type, three transports
+
+Add providers (Anthropic, OpenAI, Google, Groq, OpenRouter, Bedrock, Azure,
+Fal, local, …) by API key. One `Provider` concept, discriminated by
+**`transport`** — the single field that decides how a provider's models
+execute:
+
+| transport | providers | drives agent loop? | reached how |
+|---|---|---|---|
+| `anthropic-native` | anthropic, bedrock, vertex, openrouter | ✅ | env/base-URL; SDK drives directly (no translation) |
+| `openai-compat` | openai, azure, groq, gemini-direct, local | ✅ via the DR-11 shim | OpenAI-format endpoint; capability calls hit it directly |
+| `native-fal` | fal | ❌ capability-only | bespoke image/mesh/audio API, outside the loop |
+
+Design:
+
+- **Preset catalog, not a blank form.** Ship each provider as a
+  `ProviderPreset` template that knows its transport, default base URL,
+  required credential fields, capabilities, and how to list models. "Add
+  provider" = pick a preset → paste key. A `custom` preset is the escape hatch.
+- **Credentials in the OS keychain, never localStorage.** BYOK keys are
+  secrets. Store via Electron `safeStorage`: the main process holds a master
+  key in the keychain and injects a derived AES-256-GCM key into the Next
+  server as `AIME_CRED_KEY`; the server reads/writes an encrypted
+  `credentials.enc` blob with it. Keys never reach the renderer.
+- **Scan = call the provider's own list endpoint.** openai/azure/groq/gemini
+  `/v1/models`, anthropic `/v1/models`, and OpenRouter's rich
+  `/api/v1/models` (pricing + context + modality → auto-classify capability/
+  tier). Fal is a static catalog; Bedrock/Vertex/Azure model lists come later.
+  Flow: add + key → scan → enable models → they drop into the capability×tier
+  grid.
+- **`transport` is derived-not-duplicated with the registry's `ModelProvider.kind`** —
+  kind stays the routing reference; transport is the coarse execution strategy
+  used by the executor and the provider-config store.
+
 ## Registry core (P1.1 — decision-independent, in this slice)
 
 ```
@@ -121,8 +155,10 @@ providers, so it's a no-behaviour-change drop-in.
 
 - **P1.1** — registry core: types, `resolveRoute` + tumbling, default Claude
   registry, tests. *(this slice — no UI, no wiring, nothing breaks)*
-- **P1.2** — model-registry **store** (persisted): user-added providers,
-  scanned models, per-capability/tier defaults, `isAvailable` from settings.
+- **P1.2** — provider layer (DR-12): `Provider`/`ProviderPreset` types +
+  transport, the preset catalog for the ~10 providers, keychain-backed
+  credential store (AES-256-GCM), and the `/api/models/scan` endpoint +
+  normalizers. *(this slice)*
 - **P1.3** — wire agent surfaces: chat/code/cowork request `(capability,
   tier)`; `/api/chat` + ClaudeProvider resolve via the registry; keep the
   raw `model` override path working. `/api/models` reads the registry.
