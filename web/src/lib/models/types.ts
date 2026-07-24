@@ -102,3 +102,47 @@ export interface ResolvedRoute {
   /** True if a non-primary candidate or a lower tier was selected. */
   degraded: boolean;
 }
+
+/** A concrete (capability, tier) target the router can resolve. */
+export interface RouteSlot {
+  capability: Capability;
+  tier: Tier;
+}
+
+/**
+ * Per-request routing policy layered on top of (capability, tier). Every field
+ * is optional; an empty object reproduces plain `resolveRoute` behaviour.
+ */
+export interface RouteSettings {
+  /**
+   * Sampling warmth 0..1 → temperature (0 = deterministic, 1 = most varied).
+   * Persona/voice is a system-prompt concern (SOUL.md), NOT warmth (DR-4).
+   * Honoured by capability calls and openai-compat models; the Claude Agent
+   * loop is opinionated and may ignore it.
+   */
+  warmth?: number;
+  /**
+   * Cap the effective tier. A request more premium than `maxTier` is clamped
+   * down before resolution — a hard cost lever independent of availability.
+   */
+  maxTier?: Tier;
+  /**
+   * Skip candidate models whose output price exceeds this per-1k-token ceiling
+   * (USD). Unpriced models are always allowed. The floor of "cost compaction".
+   */
+  costCeilingPer1kUsd?: number;
+  /**
+   * Explicit fallback chain overriding the default downward tier-tumble. Keyed
+   * by `${capability}:${tier}`; the value is an ordered list of slots to try
+   * after the primary slot (which is always tried first). When present, the
+   * default TIER_ORDER tumble is NOT used for that slot.
+   */
+  tumbleChains?: Record<string, RouteSlot[]>;
+}
+
+/** A resolved route plus the sampling settings derived from RouteSettings. */
+export interface ResolvedRouteWithSettings {
+  route: ResolvedRoute;
+  /** Temperature derived from `warmth`, present only when warmth was set. */
+  temperature?: number;
+}
