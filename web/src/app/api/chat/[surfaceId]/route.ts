@@ -504,6 +504,8 @@ export async function POST(
       const exec = await resolveExecution({
         providerConfig,
         requestApiKey: apiKey,
+        // openai-compat providers route through the shim on this same server.
+        shimOrigin: new URL(req.url).origin,
         loadKey: async (id) => {
           try {
             const { getCredentialStore } = await import('@/lib/models/credentials');
