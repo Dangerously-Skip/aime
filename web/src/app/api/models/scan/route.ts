@@ -6,21 +6,25 @@ export const runtime = 'nodejs';
 
 /**
  * POST /api/models/scan
- * Body: { presetId, apiKey?, baseUrl? }
+ * Body: { presetId, apiKey?, baseUrl?, providerId? }
  *
- * Lists a provider's models. The API key is accepted transiently for the
+ * Lists a provider's models. A transient `apiKey` is accepted for the
  * "add provider → test & scan" flow (used to call the provider, never logged,
- * never persisted here — persistence is the credential store's job).
+ * never persisted here). For a *rescan* of an already-added provider the client
+ * no longer holds the key, so `providerId` lets the server read it back from
+ * the keychain. Neither path persists the key — persistence is the credential
+ * store's job.
  */
 export async function POST(req: NextRequest) {
-  let body: { presetId?: string; apiKey?: string; baseUrl?: string };
+  let body: { presetId?: string; apiKey?: string; baseUrl?: string; providerId?: string };
   try {
     body = await req.json();
   } catch {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { presetId, apiKey, baseUrl } = body;
+  const { presetId, baseUrl, providerId } = body;
+  let apiKey = body.apiKey;
   if (!presetId || typeof presetId !== 'string') {
     return Response.json({ error: 'presetId is required' }, { status: 400 });
   }
@@ -35,6 +39,19 @@ export async function POST(req: NextRequest) {
       { status: 422 },
     );
   }
+
+  // Rescan fallback: no transient key but a known provider id → read the stored
+  // key from the keychain. Best-effort; unavailability falls through to the
+  // needs-key check below with a clear error.
+  if (!apiKey && providerId) {
+    try {
+      const { getCredentialStore } = await import('@/lib/models/credentials');
+      apiKey = await getCredentialStore().getField(providerId, 'apiKey');
+    } catch {
+      // CredentialStoreUnavailable / read error → treat as no key.
+    }
+  }
+
   if (needsApiKey(preset) && !apiKey) {
     return Response.json({ error: `${preset.label} requires an API key` }, { status: 400 });
   }

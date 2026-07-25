@@ -11,11 +11,23 @@ const opt: ModelOption = {
   providerConfig: { providerId: 'p1', transport: 'openai-compat', baseUrl: 'http://x/v1' },
 };
 
+/** The provider-model slice both surface stores share (typed narrowly so the
+ *  parametrized suite can call it regardless of each store's full type). */
+interface ProviderModelStore {
+  getState: () => {
+    model: string;
+    providerModel: ModelOption | null;
+    setModel: (m: string) => void;
+    setProviderModel: (o: ModelOption | null) => void;
+  };
+  setState: (patch: { providerModel: ModelOption | null }) => void;
+}
+
 // Both surface stores mirror chat-store's provider-model override behaviour.
 describe.each([
-  ['code', useCodeStore],
-  ['cowork', useCoworkStore],
-] as const)('%s-store provider-model override', (_name, useStore) => {
+  ['code', useCodeStore as unknown as ProviderModelStore],
+  ['cowork', useCoworkStore as unknown as ProviderModelStore],
+])('%s-store provider-model override', (_name, useStore) => {
   beforeEach(() => useStore.setState({ providerModel: null }));
 
   it('records a provider selection without touching the built-in enum', () => {
