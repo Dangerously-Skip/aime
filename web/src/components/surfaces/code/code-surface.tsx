@@ -63,6 +63,12 @@ import { CommandPicker, type CommandSuggestion } from "@/components/shared/comma
 import { getSlashSuggestions, parseSlashCommand, applySlashCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
 import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
 import { WorkspaceLayout } from "./workspace/workspace-layout";
+import { useProviderStore } from "@/stores/provider-store";
+import { resolveSendRoute } from "@/lib/models/client-options";
+import { getSurfaceRoute } from "@/lib/models/surface-routes";
+
+/** This surface's routing capability — a fixed property of the surface. */
+const CAPABILITY = getSurfaceRoute("code").capability;
 
 const EMPTY_MESSAGES: Message[] = [];
 
@@ -602,8 +608,10 @@ export function CodeSurface() {
       EMPTY_MESSAGES
   );
   const model = useCodeStore((s) => s.model);
-  const providerModel = useCodeStore((s) => s.providerModel);
+  const modelRoute = useCodeStore((s) => s.modelRoute);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  const tierModels = useSettingsStore((s) => s.tierModels);
+  const providers = useProviderStore((s) => s.providers);
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
   const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
@@ -621,7 +629,7 @@ export function CodeSurface() {
   );
   const setSessionControls = useCodeStore((s) => s.setSessionControls);
   const setModel = useCodeStore((s) => s.setModel);
-  const setProviderModel = useCodeStore((s) => s.setProviderModel);
+  const setModelRoute = useCodeStore((s) => s.setModelRoute);
   const setFolder = useCodeStore((s) => s.setFolder);
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode);
   const addMessage = useCodeStore((s) => s.addMessage);
@@ -1064,9 +1072,18 @@ export function CodeSurface() {
         useContextBusStore.getState().consumeAll('code');
       }
 
-      await sendMessage(trimmed, id, "code", providerModel?.model ?? model, {
+      // A tier route resolves here (it can land on a user provider's model); a
+      // pinned model passes through. Null ⇒ nothing resolved, so fall back to
+      // the surface's built-in model rather than send an empty one.
+      const route = resolveSendRoute(modelRoute, providers, {
+        capability: CAPABILITY,
+        tierModels,
+        hasAnthropicKey: !!anthropicApiKey,
+      });
+
+      await sendMessage(trimmed, id, "code", route?.model ?? model, {
         apiKey: anthropicApiKey || undefined,
-        providerConfig: providerModel?.providerConfig,
+        providerConfig: route?.providerConfig,
         cwd: folder || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
@@ -1084,6 +1101,10 @@ export function CodeSurface() {
     [
       chatId,
       model,
+      modelRoute,
+      providers,
+      tierModels,
+      anthropicApiKey,
       folder,
       attachments,
       addMessage,
@@ -1133,9 +1154,9 @@ export function CodeSurface() {
                   isStreaming={isStreaming}
                   permissionMode={permissionMode}
                   onPermissionModeChange={setPermissionMode}
-                  model={providerModel ? providerModel.id : model}
+                  model={modelRoute ? modelRoute.id : model}
                   onModelChange={setModel}
-                  onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
+                  onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
                   placeholder="Find a small todo in the codebase and do it"
                   rows={2}
                   minHeight="min-h-[72px]"
@@ -1272,9 +1293,9 @@ export function CodeSurface() {
                           isStreaming={isStreaming}
                           permissionMode={permissionMode}
                           onPermissionModeChange={setPermissionMode}
-                          model={providerModel ? providerModel.id : model}
+                          model={modelRoute ? modelRoute.id : model}
                           onModelChange={setModel}
-                          onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
+                          onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
                           placeholder="Describe a task..."
                           rows={1}
                           minHeight="min-h-[36px]"

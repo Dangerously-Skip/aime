@@ -12,36 +12,36 @@ const opt: ModelOption = {
   providerConfig: { providerId: 'p1', transport: 'openai-compat', baseUrl: 'http://x/v1' },
 };
 
-/** The provider-model slice both surface stores share (typed narrowly so the
+/** The model-route slice both surface stores share (typed narrowly so the
  *  parametrized suite can call it regardless of each store's full type). */
-interface ProviderModelStore {
+interface ModelRouteStore {
   getState: () => {
     model: string;
-    providerModel: ModelOption | null;
+    modelRoute: ModelOption | null;
     setModel: (m: string) => void;
-    setProviderModel: (o: ModelOption | null) => void;
+    setModelRoute: (o: ModelOption | null) => void;
   };
-  setState: (patch: { providerModel: ModelOption | null }) => void;
+  setState: (patch: { modelRoute: ModelOption | null }) => void;
 }
 
-// Both surface stores mirror chat-store's provider-model override behaviour.
+// Both surface stores mirror chat-store's model-route override behaviour.
 describe.each([
-  ['code', useCodeStore as unknown as ProviderModelStore],
-  ['cowork', useCoworkStore as unknown as ProviderModelStore],
-])('%s-store provider-model override', (_name, useStore) => {
-  beforeEach(() => useStore.setState({ providerModel: null }));
+  ['code', useCodeStore as unknown as ModelRouteStore],
+  ['cowork', useCoworkStore as unknown as ModelRouteStore],
+])('%s-store model-route override', (_name, useStore) => {
+  beforeEach(() => useStore.setState({ modelRoute: null }));
 
-  it('records a provider selection without touching the built-in enum', () => {
+  it('records a route selection without touching the built-in enum', () => {
     const before = useStore.getState().model;
-    useStore.getState().setProviderModel(opt);
-    expect(useStore.getState().providerModel).toEqual(opt);
+    useStore.getState().setModelRoute(opt);
+    expect(useStore.getState().modelRoute).toEqual(opt);
     expect(useStore.getState().model).toBe(before);
   });
 
   it('clears the override when a valid built-in model is selected', () => {
-    useStore.getState().setProviderModel(opt);
+    useStore.getState().setModelRoute(opt);
     useStore.getState().setModel('opus');
     expect(useStore.getState().model).toBe('opus');
-    expect(useStore.getState().providerModel).toBeNull();
+    expect(useStore.getState().modelRoute).toBeNull();
   });
 });

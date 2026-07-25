@@ -41,6 +41,12 @@ import { useAssistantStore } from "@/stores/assistant-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
 import { categorizeToolCall, isValidSidebarEntry, BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
+import { useProviderStore } from "@/stores/provider-store";
+import { resolveSendRoute } from "@/lib/models/client-options";
+import { getSurfaceRoute } from "@/lib/models/surface-routes";
+
+/** This surface's routing capability — a fixed property of the surface. */
+const CAPABILITY = getSurfaceRoute("chat").capability;
 
 const EMPTY_SUGGESTIONS: string[] = [];
 
@@ -114,10 +120,10 @@ export function ChatSurface() {
       EMPTY_MESSAGES
   );
   const model = useChatStore((s) => s.model);
-  const providerModel = useChatStore((s) => s.providerModel);
+  const modelRoute = useChatStore((s) => s.modelRoute);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const setModel = useChatStore((s) => s.setModel);
-  const setProviderModel = useChatStore((s) => s.setProviderModel);
+  const setModelRoute = useChatStore((s) => s.setModelRoute);
   const addMessage = useChatStore((s) => s.addMessage);
   const appendToLastAssistant = useChatStore(
     (s) => s.appendToLastAssistant
@@ -151,6 +157,8 @@ export function ChatSurface() {
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const toolProfile = useSettingsStore((s) => s.toolProfile);
+  const tierModels = useSettingsStore((s) => s.tierModels);
+  const providers = useProviderStore((s) => s.providers);
   const setSessionControlsInStore = useChatStore((s) => s.setSessionControls);
   const addSuggestion = useChatStore((s) => s.addSuggestion);
   const clearSuggestions = useChatStore((s) => s.clearSuggestions);
@@ -473,7 +481,16 @@ export function ChatSurface() {
       // Clear prompt suggestions when user sends a new message
       if (chatId) clearSuggestions(chatId);
 
-      await sendMessage(trimmed, id, "chat", providerModel?.model ?? model, {
+      // A tier route resolves here (it can land on a user provider's model); a
+      // pinned model passes through. Null ⇒ nothing resolved, so fall back to
+      // the surface's built-in model rather than send an empty one.
+      const route = resolveSendRoute(modelRoute, providers, {
+        capability: CAPABILITY,
+        tierModels,
+        hasAnthropicKey: !!anthropicApiKey,
+      });
+
+      await sendMessage(trimmed, id, "chat", route?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
@@ -486,13 +503,16 @@ export function ChatSurface() {
         crossSurfaceContext: crossSurfaceContext || undefined,
         sessionControls: sessionControls,
         toolProfile: toolProfile,
-        providerConfig: providerModel?.providerConfig,
+        providerConfig: route?.providerConfig,
       });
     },
     [
       chatId,
       model,
-      providerModel,
+      modelRoute,
+      providers,
+      tierModels,
+      anthropicApiKey,
       addMessage,
       startStreaming,
       sendMessage,
@@ -730,9 +750,9 @@ export function ChatSurface() {
                 </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
-                    value={providerModel ? providerModel.id : model}
+                    value={modelRoute ? modelRoute.id : model}
                     onChange={setModel}
-                    onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
+                    onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
                     className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                   />
                   <Button
@@ -869,9 +889,9 @@ export function ChatSurface() {
                       </div>
                       <div className="flex items-center gap-2">
                         <ModelSelector
-                          value={providerModel ? providerModel.id : model}
+                          value={modelRoute ? modelRoute.id : model}
                           onChange={setModel}
-                          onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
+                          onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
                           className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                         />
                         <Button

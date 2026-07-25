@@ -24,8 +24,11 @@ interface CoworkState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
   model: ModelId;
-  /** User-added-provider model override (in-memory); null ⇒ use `model`. */
-  providerModel: ModelOption | null;
+  /**
+   * Selected route — a tier or a pinned model (in-memory); null ⇒ use the
+   * built-in `model` enum.
+   */
+  modelRoute: ModelOption | null;
   isStreaming: boolean;
   streamError: string | null;
   folderByChat: Record<string, string | null>;
@@ -45,7 +48,7 @@ interface CoworkActions {
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
   attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: A2UIDocument }) => void;
   setModel: (model: string) => void;
-  setProviderModel: (opt: ModelOption | null) => void;
+  setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
   setCurrentChat: (chatId: string | null) => void;
@@ -79,7 +82,7 @@ export const useCoworkStore = create<CoworkStore>()(
       messages: {},
       currentChatId: null,
       model: 'opus',
-      providerModel: null,
+      modelRoute: null,
       isStreaming: false,
       streamError: null,
       folderByChat: {},
@@ -146,13 +149,13 @@ export const useCoworkStore = create<CoworkStore>()(
 
       setModel: (model) => {
         if (VALID_MODELS.has(model)) {
-          set({ model: model as ModelId, providerModel: null });
+          set({ model: model as ModelId, modelRoute: null });
         } else {
           console.warn(`[CoworkStore] Invalid model "${model}", keeping current`);
         }
       },
 
-      setProviderModel: (opt) => set({ providerModel: opt }),
+      setModelRoute: (opt) => set({ modelRoute: opt }),
 
       startStreaming: (chatId) => set((state) => ({
         isStreaming: true,

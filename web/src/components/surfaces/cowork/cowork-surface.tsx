@@ -78,6 +78,13 @@ import {
   DEFAULT_SESSION_CONTROLS,
 } from "@/lib/slash-commands";
 import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
+import { useProviderStore } from "@/stores/provider-store";
+import { resolveSendRoute } from "@/lib/models/client-options";
+import { getSurfaceRoute } from "@/lib/models/surface-routes";
+import type { Capability } from "@/lib/models/types";
+
+/** This surface's routing capability — a fixed property of the surface. */
+const CAPABILITY = getSurfaceRoute("cowork").capability;
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_FILES: string[] = [];
@@ -716,7 +723,7 @@ export function CoworkSurface() {
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
   const model = useCoworkStore((s) => s.model);
-  const providerModel = useCoworkStore((s) => s.providerModel);
+  const modelRoute = useCoworkStore((s) => s.modelRoute);
   const isStreaming = useCoworkStore((s) => s.isStreaming);
   const storeFolder = useCoworkStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
   const folder = storeFolder || pendingFolder;
@@ -724,7 +731,7 @@ export function CoworkSurface() {
   const artifactFiles = useCoworkStore((s) => (chatId ? s.artifactFiles[chatId] : undefined) ?? EMPTY_FILES);
   const canvasArtifacts = useCoworkStore((s) => (chatId ? s.canvasArtifacts[chatId] : undefined) ?? EMPTY_CANVASES);
   const setModel = useCoworkStore((s) => s.setModel);
-  const setProviderModel = useCoworkStore((s) => s.setProviderModel);
+  const setModelRoute = useCoworkStore((s) => s.setModelRoute);
   const setFolder = useCoworkStore((s) => s.setFolder);
   const addMessage = useCoworkStore((s) => s.addMessage);
   const appendToLastAssistant = useCoworkStore((s) => s.appendToLastAssistant);
@@ -763,6 +770,8 @@ export function CoworkSurface() {
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
   const disableBashTool = useSettingsStore((s) => s.disableBashTool);
   const devHourlyRate = useSettingsStore((s) => s.devHourlyRate);
+  const tierModels = useSettingsStore((s) => s.tierModels);
+  const providers = useProviderStore((s) => s.providers);
   const { projectInstructions, projectKnowledge, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "cowork");
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
@@ -771,6 +780,22 @@ export function CoworkSurface() {
   // Auto-project creation disabled — users create projects manually
   const { showNotification } = useElectron();
   const showReminder = useReminderStore((s) => s.showReminder);
+
+  /**
+   * What to send for the picker's current selection: a tier route resolves here
+   * (it can land on a user provider's model), a pinned model passes through.
+   * Returns null when nothing resolves — callers fall back to the built-in
+   * `model` rather than sending an empty one. Shared by all four send sites.
+   */
+  const resolveRoute = useCallback(
+    (capability: Capability = CAPABILITY) =>
+      resolveSendRoute(modelRoute, providers, {
+        capability,
+        tierModels,
+        hasAnthropicKey: !!anthropicApiKey,
+      }),
+    [modelRoute, providers, tierModels, anthropicApiKey]
+  );
 
   const handleFolderChange = useCallback(
     (f: string | null) => {
@@ -1248,14 +1273,15 @@ export function CoworkSurface() {
             const currentControls = useCoworkStore.getState().sessionControls[chatId] ?? DEFAULT_SESSION_CONTROLS;
             const priorMsgs = useCoworkStore.getState().messages[chatId] || [];
             const hist = stripMessagesForHistory(priorMsgs.slice(0, -2));
-            void sendMessage(continuePrompt, chatId, "cowork", providerModel?.model ?? model, {
+            const route = resolveRoute();
+            void sendMessage(continuePrompt, chatId, "cowork", route?.model ?? model, {
               personalPreferences: personalPreferences || undefined,
               displayName: displayName || undefined,
               cwd: folder || projectFolder || scratchDir || undefined,
               history: hist.length > 0 ? hist : undefined,
               sessionControls: currentControls,
               apiKey: anthropicApiKey || undefined,
-              providerConfig: providerModel?.providerConfig,
+              providerConfig: route?.providerConfig,
             });
           }, 1500);
           return; // skip "task complete" notification
@@ -1396,10 +1422,11 @@ export function CoworkSurface() {
       }
 
       const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
-      await sendMessage(trimmed, id, "cowork", providerModel?.model ?? model, {
+      const route = resolveRoute();
+      await sendMessage(trimmed, id, "cowork", route?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
-        providerConfig: providerModel?.providerConfig,
+        providerConfig: route?.providerConfig,
         projectInstructions: projectInstructions || undefined,
         projectKnowledge: projectKnowledge || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
@@ -1421,6 +1448,7 @@ export function CoworkSurface() {
     [
       chatId,
       model,
+      resolveRoute,
       folder,
       addMessage,
       startStreaming,
@@ -1460,15 +1488,16 @@ export function CoworkSurface() {
       addMessage(bgId, { id: crypto.randomUUID(), role: 'user', content: prompt, timestamp: Date.now() });
       addMessage(bgId, { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: Date.now(), isLoading: true, isStreaming: true });
       startStreaming(bgId);
-      void sendMessage(prompt, bgId, 'cowork', providerModel?.model ?? model, {
+      const route = resolveRoute();
+      void sendMessage(prompt, bgId, 'cowork', route?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         apiKey: anthropicApiKey || undefined,
         cwd: folder || projectFolder || scratchDir || undefined,
-        providerConfig: providerModel?.providerConfig,
+        providerConfig: route?.providerConfig,
       });
     },
-    [addConversation, addMessage, startStreaming, sendMessage, model, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
+    [addConversation, addMessage, startStreaming, sendMessage, model, resolveRoute, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
   );
 
   // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store
@@ -1476,10 +1505,11 @@ export function CoworkSurface() {
     async (prompt: string) => {
       try {
         const hbId = `hb-${crypto.randomUUID()}`;
+        const route = resolveRoute(getSurfaceRoute('chat').capability);
         const resp = await fetch('/api/chat/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: providerModel?.model ?? model, apiKey: anthropicApiKey || undefined, ...(providerModel?.providerConfig ? { providerConfig: providerModel.providerConfig } : {}) }),
+          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: route?.model ?? model, apiKey: anthropicApiKey || undefined, ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}) }),
         });
         if (!resp.ok || !resp.body) return;
         const reader = resp.body.getReader();
@@ -1517,7 +1547,7 @@ export function CoworkSurface() {
         // silent — no UI impact
       }
     },
-    [model]
+    [model, resolveRoute, anthropicApiKey]
   );
 
   // Cron and heartbeat hooks removed — standing order engine in the Assistant
@@ -1712,9 +1742,9 @@ export function CoworkSurface() {
                 </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
-                    value={providerModel ? providerModel.id : model}
+                    value={modelRoute ? modelRoute.id : model}
                     onChange={setModel}
-                    onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
+                    onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
                     className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                   />
                   <Button
@@ -1798,9 +1828,9 @@ export function CoworkSurface() {
                     </div>
                     <div className="flex items-center gap-2">
                       <ModelSelector
-                        value={providerModel ? providerModel.id : model}
+                        value={modelRoute ? modelRoute.id : model}
                         onChange={setModel}
-                        onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
+                        onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
                         className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                       />
                       <Button
