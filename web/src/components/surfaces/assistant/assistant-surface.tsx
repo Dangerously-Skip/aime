@@ -55,6 +55,7 @@ import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/stan
 import { TemplateDialog } from "./template-dialog";
 import { OrderEditor } from "./order-editor";
 import { exportOrdersToJson } from "@/lib/standing-order-yaml";
+import { Cockpit } from "./cockpit";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -439,6 +440,8 @@ export function AssistantSurface() {
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  /** Assistant feed vs. Cockpit (scheduled work + run outcomes). */
+  const [view, setView] = useState<"feed" | "cockpit">("feed");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [activeTemplate, setActiveTemplate] = useState<StandingOrderTemplate | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -659,6 +662,26 @@ export function AssistantSurface() {
 
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* View switch — the Assistant feed, or the Cockpit over runs. */}
+        <div className="flex items-center gap-1 border-b border-border px-4 py-1.5">
+          {(["feed", "cockpit"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
+                view === v
+                  ? "bg-accent font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {v === "feed" ? "Activity" : "Cockpit"}
+            </button>
+          ))}
+        </div>
+        {view === "cockpit" ? (
+          <Cockpit />
+        ) : (
+        <>
         {/* Input area */}
         <div className="px-4 py-3 border-b border-border">
           <div className="max-w-3xl mx-auto">
@@ -790,6 +813,8 @@ export function AssistantSurface() {
             )}
           </div>
         </ScrollArea>
+        </>
+        )}
 
         {/* Status bar */}
         <StatusBar orders={orders} />

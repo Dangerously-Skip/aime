@@ -49,6 +49,7 @@ import { ProjectCanvases } from "./project-canvases";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
+import { useRunRecorder } from "@/hooks/use-run-recorder";
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -176,10 +177,16 @@ export function ProjectDetail({
   const launchedConvIdRef = useRef<string>("");
   const [activeChatId, setActiveChatId] = useState("");
 
+  // Records a Run per turn so every execution leaves a durable trace with its
+  // cost attached (P6 substrate — see lib/runs). Project chats run on the chat
+  // surface, so they record against it.
+  const runRecorder = useRunRecorder("chat");
+
   const { sendMessage } = useSSEStream({
     chatId: activeChatId,
     setIsStreaming,
     setStreamError,
+    onUsage: runRecorder.onUsage,
     onChunk(event) {
       const cid = launchedConvIdRef.current;
       if (!cid) return;
@@ -209,12 +216,14 @@ export function ProjectDetail({
       }
     },
     onDone() {
+      runRecorder.succeed();
       const cid = launchedConvIdRef.current;
       if (cid) {
         stopStreaming(cid);
       }
     },
     onError(error) {
+      runRecorder.fail(error.message);
       const cid = launchedConvIdRef.current;
       if (cid) {
         stopStreaming(cid);
@@ -308,6 +317,9 @@ export function ProjectDetail({
       hasAnthropicKey: !!anthropicApiKey,
     });
 
+    // Open the run record before the turn starts so an immediate failure is
+    // still attributed rather than lost.
+    runRecorder.begin({ trigger: "chat", model: route?.model ?? model });
     sendMessage(trimmed, conv.id, "chat", route?.model ?? model, {
       personalPreferences: personalPreferences || undefined,
       displayName: displayName || undefined,

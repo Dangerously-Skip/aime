@@ -17,14 +17,26 @@ const usage = (over: Partial<StreamUsage> = {}): StreamUsage => ({
 
 const runs = () => useRunStore.getState().runs;
 
+const fetchMock = vi.fn();
+/** Run records POSTed to the durable JSONL log. */
+const persisted = () =>
+  fetchMock.mock.calls
+    .filter((c) => String(c[0]).includes('/api/runs'))
+    .map((c) => JSON.parse((c[1] as RequestInit).body as string).run);
+
 beforeEach(() => {
+  fetchMock.mockReset().mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+  vi.stubGlobal('fetch', fetchMock);
   useRunStore.setState({ goals: [], runs: [] });
   let n = 0;
   vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(
     () => `run-${++n}` as `${string}-${string}-${string}-${string}-${string}`,
   );
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('useRunRecorder', () => {
   it('records a successful turn with cost and tool count from usage', () => {
@@ -114,5 +126,39 @@ describe('useRunRecorder', () => {
 
     expect(useRunStore.getState().getGoal('g1')?.consecutiveFailures).toBe(0);
     expect(useRunStore.getState().summaryForGoal('g1').successRate).toBe(1);
+  });
+
+  it('persists the completed run to the durable log, with its cost', () => {
+    const { result } = renderHook(() => useRunRecorder('chat'));
+    result.current.begin({ trigger: 'chat', model: 'sonnet' });
+    result.current.onUsage(usage());
+    result.current.succeed();
+
+    // The store window is for live display; THIS is the record that survives a
+    // restart and shows work done while the window was closed.
+    expect(persisted()).toHaveLength(1);
+    expect(persisted()[0]).toMatchObject({
+      status: 'succeeded',
+      trigger: 'chat',
+      cost: { inputTokens: 120, outputTokens: 340, totalUsd: 0.0123 },
+    });
+  });
+
+  it('does not fail the turn when the durable write fails', async () => {
+    fetchMock.mockRejectedValue(new Error('disk full'));
+    const { result } = renderHook(() => useRunRecorder('chat'));
+    result.current.begin({ trigger: 'chat' });
+    expect(() => result.current.succeed()).not.toThrow();
+    // the in-memory record still stands
+    expect(runs()[0].status).toBe('succeeded');
+  });
+
+  it('writes once per run, not once per state change', () => {
+    const { result } = renderHook(() => useRunRecorder('chat'));
+    result.current.begin({ trigger: 'chat' });
+    result.current.onUsage(usage());
+    result.current.succeed();
+    result.current.fail('late'); // already terminal — must not write again
+    expect(persisted()).toHaveLength(1);
   });
 });

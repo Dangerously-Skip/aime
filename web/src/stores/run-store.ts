@@ -9,16 +9,17 @@ import type { Deliverable, Goal, Run, RunCost, RunStatus, RunSummary, RunTrigger
 /**
  * Goals + a recent window of Runs.
  *
- * STORAGE DECISION (revisit at Clawish C5): this is a *client* store with a hard
- * cap. Every chat turn is a Run, so records accumulate fast and localStorage is
- * ~5MB and synchronous — unbounded persistence here would be a real problem.
+ * STORAGE: goals persist to localStorage; **runs do not**. Runs here are a
+ * short-lived in-memory window for live display only — the durable record is
+ * the append-only JSONL log behind `/api/runs` (see lib/runs/run-log.ts).
  *
- * The eventual home is server-side JSONL (the `telemetry/event-buffer` pattern),
- * which C5 forces anyway: once the run loop moves out of the renderer, work
- * happens with the window closed and a renderer store cannot observe it. Until
- * then a capped client store makes Cockpit real without that build. Keep reads
- * going through the selectors below so the backing can be swapped without
- * touching callers.
+ * Persisting runs here was the original design and it was wrong on three counts,
+ * all user-visible: zustand's `persist` re-serializes the entire partialized
+ * state on every change, so a 500-run array was fully stringified and written
+ * synchronously on the main thread during streaming; runs competed with
+ * conversations for one ~5MB localStorage budget, risking losing chat history to
+ * preserve disposable metrics; and a renderer store can never show work done
+ * while the window was closed, which is most of what Cockpit exists to report.
  */
 
 /** Per-goal history cap. Enough for a sparkline and a "last N runs" list. */
@@ -164,17 +165,10 @@ export const useRunStore = create<RunStore>()(
       name: 'aime:runs',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      partialize: (state) => ({ goals: state.goals, runs: state.runs }),
-      onRehydrateStorage: () => (state) => {
-        if (!state) return;
-        // A run left 'running' by a crash or a closed window is not running now.
-        // Without this it would show a spinner forever and skew activeRuns().
-        state.runs = state.runs.map((r) =>
-          r.status === 'running' || r.status === 'awaiting_approval'
-            ? { ...r, status: 'cancelled' as const, error: 'Interrupted — the app closed before this run finished' }
-            : r,
-        );
-      },
+      // Goals only. Runs are session-scoped here by design — see the note above.
+      // This also removes the whole class of "stale 'running' run after a crash"
+      // problem, since nothing in-flight is ever rehydrated.
+      partialize: (state) => ({ goals: state.goals }),
     },
   ),
 );
