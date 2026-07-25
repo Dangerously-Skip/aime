@@ -6,6 +6,7 @@ const kimi: ModelOption = {
   id: 'openrouter-1:kimi',
   label: 'Kimi K2',
   group: 'OpenRouter',
+  kind: 'model',
   model: 'moonshotai/kimi-k2',
   providerConfig: { providerId: 'openrouter-1', transport: 'anthropic-native', baseUrl: 'https://openrouter.ai/api/v1' },
 };

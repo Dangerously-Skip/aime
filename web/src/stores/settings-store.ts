@@ -93,12 +93,22 @@ interface SettingsState {
    * surface and is never user-overridable.
    */
   surfaceTiers: Record<string, Tier>;
+
+  /**
+   * Which model fills each tier, keyed by tier — a built-in registry id
+   * (`claude-opus`) or a user-provider composite (`prov-1:kimi-k2`). Absent ⇒
+   * the tier is filled by price-band inference. This is the "assign models to
+   * tiers" grid: 4 decisions, pre-filled, instead of labelling 345 models.
+   */
+  tierModels: Partial<Record<Tier, string>>;
 }
 
 interface SettingsActions {
   setDevHourlyRate: (rate: number) => void;
   /** Set (or clear, with null) a surface's tier override. */
   setSurfaceTier: (surfaceId: string, tier: Tier | null) => void;
+  /** Set (or clear, with null) which model fills a tier. */
+  setTierModel: (tier: Tier, modelId: string | null) => void;
   setFullName: (name: string) => void;
   setDisplayName: (name: string) => void;
   setWorkFunction: (fn: string) => void;
@@ -168,6 +178,7 @@ const initialState: SettingsState = {
   teamId: null,
   devHourlyRate: 150,
   surfaceTiers: {},
+  tierModels: {},
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -239,13 +250,21 @@ export const useSettingsStore = create<SettingsStore>()(
           return { surfaceTiers: next };
         }),
 
+      setTierModel: (tier, modelId) =>
+        set((state) => {
+          const next = { ...state.tierModels };
+          if (modelId === null) delete next[tier];
+          else next[tier] = modelId;
+          return { tierModels: next };
+        }),
+
       resetAll: () => set(initialState),
     }),
     {
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 8,
+      version: 9,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         // v7 rename (applies to every pre-v7 payload regardless of source
@@ -260,6 +279,10 @@ export const useSettingsStore = create<SettingsStore>()(
         // an up-front write is guaranteed to apply to every source version.
         if (version < 8 && state.surfaceTiers === undefined) {
           state.surfaceTiers = {};
+        }
+        // v9: which model fills each tier. Same up-front rationale as v8.
+        if (version < 9 && state.tierModels === undefined) {
+          state.tierModels = {};
         }
         if (version === 0) {
           return { ...initialState, ...state } as unknown as SettingsState & SettingsActions;
@@ -343,6 +366,7 @@ export const useSettingsStore = create<SettingsStore>()(
         teamId: state.teamId,
         devHourlyRate: state.devHourlyRate,
         surfaceTiers: state.surfaceTiers,
+        tierModels: state.tierModels,
       }),
     }
   )

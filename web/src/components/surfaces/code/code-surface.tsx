@@ -1064,7 +1064,7 @@ export function CodeSurface() {
         useContextBusStore.getState().consumeAll('code');
       }
 
-      await sendMessage(trimmed, id, "code", providerModel ? providerModel.model : model, {
+      await sendMessage(trimmed, id, "code", providerModel?.model ?? model, {
         apiKey: anthropicApiKey || undefined,
         providerConfig: providerModel?.providerConfig,
         cwd: folder || undefined,

@@ -473,7 +473,7 @@ export function ChatSurface() {
       // Clear prompt suggestions when user sends a new message
       if (chatId) clearSuggestions(chatId);
 
-      await sendMessage(trimmed, id, "chat", providerModel ? providerModel.model : model, {
+      await sendMessage(trimmed, id, "chat", providerModel?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,

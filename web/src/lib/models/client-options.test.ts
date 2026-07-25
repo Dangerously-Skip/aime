@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { buildModelOptions, findOption, groupOptions, BUILTIN_GROUP, type ConfiguredProviderLite } from './client-options';
+import {
+  buildModelOptions,
+  buildTierOptions,
+  buildTierSlotCandidates,
+  findOption,
+  groupOptions,
+  isTierOption,
+  tierFromOptionId,
+  resolveSendRoute,
+  BUILTIN_GROUP,
+  TIER_GROUP,
+  type ConfiguredProviderLite,
+} from './client-options';
+import type { ProviderWithModels } from './effective-registry';
 
 const BUILTINS = [
   { id: 'opus', label: 'Opus 4.7' },
@@ -7,72 +20,166 @@ const BUILTINS = [
 ];
 
 const openrouter: ConfiguredProviderLite = {
-  id: 'openrouter-1',
+  id: 'or-1',
   presetId: 'openrouter',
   label: 'OpenRouter',
   enabled: true,
   models: [{ id: 'moonshotai/kimi-k2', label: 'Kimi K2' }],
 };
 
-const localOllama: ConfiguredProviderLite = {
-  id: 'local-1',
-  presetId: 'local',
-  label: 'Local (Ollama)',
-  baseUrl: 'http://127.0.0.1:11434/v1',
-  enabled: true,
-  models: [{ id: 'llama3' }],
-};
-
-describe('buildModelOptions', () => {
-  it('lists built-ins first with their driver model and no providerConfig', () => {
-    const opts = buildModelOptions(BUILTINS, []);
-    expect(opts).toHaveLength(2);
-    expect(opts[0]).toEqual({ id: 'opus', label: 'Opus 4.7', group: BUILTIN_GROUP, model: 'opus' });
-    expect(opts[0].providerConfig).toBeUndefined();
+describe('tier options', () => {
+  it('offers all four tiers, premium-first', () => {
+    const tiers = buildTierOptions();
+    expect(tiers.map((t) => t.tier)).toEqual(['stallion', 'smort', 'good', 'cheap']);
+    expect(tiers.every((t) => t.kind === 'tier' && t.group === TIER_GROUP)).toBe(true);
   });
 
-  it('adds enabled provider models tagged with a resolved providerConfig', () => {
-    const opts = buildModelOptions(BUILTINS, [openrouter]);
-    const kimi = opts.find((o) => o.id === 'openrouter-1:moonshotai/kimi-k2')!;
-    expect(kimi.label).toBe('Kimi K2');
-    expect(kimi.group).toBe('OpenRouter');
-    expect(kimi.model).toBe('moonshotai/kimi-k2');
-    // openrouter preset → anthropic-native transport, preset default base URL
+  it('round-trips a tier through its option id', () => {
+    expect(isTierOption('tier:good')).toBe(true);
+    expect(isTierOption('sonnet')).toBe(false);
+    expect(tierFromOptionId('tier:smort')).toBe('smort');
+    expect(tierFromOptionId('tier:nonsense')).toBeNull();
+    expect(tierFromOptionId('sonnet')).toBeNull();
+  });
+});
+
+describe('buildModelOptions', () => {
+  it('lists tiers first, then built-ins', () => {
+    const opts = buildModelOptions(BUILTINS, []);
+    expect(opts[0].kind).toBe('tier');
+    const builtin = opts.find((o) => o.id === 'sonnet')!;
+    expect(builtin).toMatchObject({ group: BUILTIN_GROUP, kind: 'model', model: 'sonnet' });
+    expect(builtin.providerConfig).toBeUndefined();
+  });
+
+  it('can omit tiers for a models-only picker', () => {
+    const opts = buildModelOptions(BUILTINS, [], { includeTiers: false });
+    expect(opts.some((o) => o.kind === 'tier')).toBe(false);
+  });
+
+  // The flood guard: a 345-model provider must not reach the dropdown.
+  it('does NOT enumerate a provider catalog', () => {
+    const many: ConfiguredProviderLite = {
+      ...openrouter,
+      models: Array.from({ length: 345 }, (_, i) => ({ id: `vendor/m-${i}`, label: `M${i}` })),
+    };
+    const opts = buildModelOptions(BUILTINS, [many]);
+    expect(opts.filter((o) => o.group === 'OpenRouter')).toHaveLength(0);
+    expect(opts).toHaveLength(4 + BUILTINS.length); // 4 tiers + built-ins only
+  });
+
+  it('surfaces a provider model that fills a tier slot', () => {
+    const id = 'or-1:moonshotai/kimi-k2';
+    const opts = buildModelOptions(BUILTINS, [openrouter], { tierModels: { smort: id } });
+    const kimi = findOption(opts, id)!;
+    expect(kimi).toMatchObject({ label: 'Kimi K2', group: 'OpenRouter', kind: 'model', model: 'moonshotai/kimi-k2' });
     expect(kimi.providerConfig).toEqual({
-      providerId: 'openrouter-1',
+      providerId: 'or-1',
       transport: 'anthropic-native',
       baseUrl: 'https://openrouter.ai/api/v1',
     });
   });
 
-  it('prefers a provider base-URL override and derives openai-compat transport for local', () => {
-    const opts = buildModelOptions(BUILTINS, [localOllama]);
-    const llama = opts.find((o) => o.id === 'local-1:llama3')!;
-    expect(llama.label).toBe('llama3'); // falls back to id when no label
-    expect(llama.providerConfig).toEqual({
+  it('surfaces the current selection so a pinned model never vanishes', () => {
+    const id = 'or-1:moonshotai/kimi-k2';
+    const opts = buildModelOptions(BUILTINS, [openrouter], { includeModelIds: [id] });
+    expect(findOption(opts, id)).toBeDefined();
+  });
+
+  it('skips disabled providers even when referenced', () => {
+    const id = 'or-1:moonshotai/kimi-k2';
+    const opts = buildModelOptions(BUILTINS, [{ ...openrouter, enabled: false }], { tierModels: { smort: id } });
+    expect(findOption(opts, id)).toBeUndefined();
+  });
+
+  it('derives openai-compat transport and honours a base-URL override', () => {
+    const local: ConfiguredProviderLite = {
+      id: 'local-1',
+      presetId: 'local',
+      label: 'Local',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      enabled: true,
+      models: [{ id: 'llama3' }],
+    };
+    const opts = buildModelOptions(BUILTINS, [local], { includeModelIds: ['local-1:llama3'] });
+    const o = findOption(opts, 'local-1:llama3')!;
+    expect(o.label).toBe('llama3'); // falls back to id
+    expect(o.providerConfig).toEqual({
       providerId: 'local-1',
       transport: 'openai-compat',
       baseUrl: 'http://127.0.0.1:11434/v1',
     });
   });
+});
 
-  it('skips disabled providers', () => {
-    const opts = buildModelOptions(BUILTINS, [{ ...openrouter, enabled: false }]);
-    expect(opts.every((o) => o.group === BUILTIN_GROUP)).toBe(true);
+describe('groupOptions', () => {
+  it('groups in insertion order with tiers first', () => {
+    const id = 'or-1:moonshotai/kimi-k2';
+    const groups = groupOptions(buildModelOptions(BUILTINS, [openrouter], { tierModels: { good: id } }));
+    expect(groups.map((g) => g.group)).toEqual([TIER_GROUP, BUILTIN_GROUP, 'OpenRouter']);
   });
 });
 
-describe('findOption / groupOptions', () => {
-  it('finds an option by its select value', () => {
-    const opts = buildModelOptions(BUILTINS, [openrouter]);
-    expect(findOption(opts, 'sonnet')!.model).toBe('sonnet');
-    expect(findOption(opts, 'nope')).toBeUndefined();
+describe('resolveSendRoute', () => {
+  const providers: ProviderWithModels[] = [
+    {
+      id: 'or-1',
+      presetId: 'openrouter',
+      label: 'OpenRouter',
+      enabled: true,
+      createdAt: 0,
+      models: [{ id: 'moonshotai/kimi-k2', label: 'Kimi K2', pricing: { inputPer1kUsd: 0.001, outputPer1kUsd: 0.002 } }],
+    },
+  ];
+
+  it('returns null for no selection', () => {
+    expect(resolveSendRoute(null, [], { capability: 'chat' })).toBeNull();
   });
 
-  it('groups options by heading in insertion order', () => {
-    const groups = groupOptions(buildModelOptions(BUILTINS, [openrouter, localOllama]));
-    expect(groups.map((g) => g.group)).toEqual([BUILTIN_GROUP, 'OpenRouter', 'Local (Ollama)']);
-    expect(groups[0].items).toHaveLength(2);
-    expect(groups[1].items).toHaveLength(1);
+  it('sends a pinned built-in as-is', () => {
+    const sel = buildModelOptions(BUILTINS, []).find((o) => o.id === 'opus')!;
+    expect(resolveSendRoute(sel, [], { capability: 'chat' })).toEqual({ model: 'opus', providerConfig: undefined });
+  });
+
+  it('resolves a tier selection to a built-in when no assignment exists', () => {
+    const sel = buildTierOptions().find((o) => o.tier === 'good')!;
+    expect(resolveSendRoute(sel, [], { capability: 'chat', hasAnthropicKey: true })).toEqual({ model: 'sonnet' });
+  });
+
+  it('resolves a tier selection onto a user model when assigned — the payoff', () => {
+    const id = 'or-1:moonshotai/kimi-k2';
+    const sel = buildTierOptions().find((o) => o.tier === 'smort')!;
+    const route = resolveSendRoute(sel, providers, {
+      capability: 'chat',
+      tierModels: { smort: id },
+      hasAnthropicKey: true,
+    });
+    expect(route?.model).toBe('moonshotai/kimi-k2');
+    expect(route?.providerConfig?.providerId).toBe('or-1');
+  });
+
+  it('returns null when a tier cannot resolve, so the caller can fall back', () => {
+    const sel = buildTierOptions().find((o) => o.tier === 'good')!;
+    expect(resolveSendRoute(sel, [], { capability: 'chat', hasAnthropicKey: false })).toBeNull();
+  });
+});
+
+describe('buildTierSlotCandidates', () => {
+  it('DOES span the full catalog (it is search-backed, unlike the dropdown)', () => {
+    const many: ProviderWithModels = {
+      id: 'or-1',
+      presetId: 'openrouter',
+      label: 'OpenRouter',
+      enabled: true,
+      createdAt: 0,
+      models: Array.from({ length: 345 }, (_, i) => ({
+        id: `vendor/m-${i}`,
+        label: `M${i}`,
+        pricing: { inputPer1kUsd: 0.001, outputPer1kUsd: 0.002 },
+      })),
+    };
+    const cands = buildTierSlotCandidates(BUILTINS, [many]);
+    expect(cands).toHaveLength(BUILTINS.length + 345);
+    expect(cands.at(-1)).toMatchObject({ group: 'OpenRouter', outputPer1kUsd: 0.002 });
   });
 });
