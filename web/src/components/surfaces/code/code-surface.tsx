@@ -301,6 +301,7 @@ function CodeInput({
   onPermissionModeChange,
   model,
   onModelChange,
+  onSelectModel,
   placeholder,
   rows,
   minHeight,
@@ -327,6 +328,7 @@ function CodeInput({
   onPermissionModeChange: (mode: PermissionMode) => void;
   model: string;
   onModelChange: (model: string) => void;
+  onSelectModel?: (opt: import('@/lib/models/client-options').ModelOption) => void;
   placeholder: string;
   rows: number;
   minHeight: string;
@@ -538,6 +540,7 @@ function CodeInput({
           <ModelSelector
             value={model}
             onChange={onModelChange}
+            onSelectModel={onSelectModel}
             className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
           />
           <Button
@@ -599,6 +602,7 @@ export function CodeSurface() {
       EMPTY_MESSAGES
   );
   const model = useCodeStore((s) => s.model);
+  const providerModel = useCodeStore((s) => s.providerModel);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
   const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
@@ -617,6 +621,7 @@ export function CodeSurface() {
   );
   const setSessionControls = useCodeStore((s) => s.setSessionControls);
   const setModel = useCodeStore((s) => s.setModel);
+  const setProviderModel = useCodeStore((s) => s.setProviderModel);
   const setFolder = useCodeStore((s) => s.setFolder);
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode);
   const addMessage = useCodeStore((s) => s.addMessage);
@@ -1059,8 +1064,9 @@ export function CodeSurface() {
         useContextBusStore.getState().consumeAll('code');
       }
 
-      await sendMessage(trimmed, id, "code", model, {
+      await sendMessage(trimmed, id, "code", providerModel ? providerModel.model : model, {
         apiKey: anthropicApiKey || undefined,
+        providerConfig: providerModel?.providerConfig,
         cwd: folder || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
@@ -1127,8 +1133,9 @@ export function CodeSurface() {
                   isStreaming={isStreaming}
                   permissionMode={permissionMode}
                   onPermissionModeChange={setPermissionMode}
-                  model={model}
+                  model={providerModel ? providerModel.id : model}
                   onModelChange={setModel}
+                  onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
                   placeholder="Find a small todo in the codebase and do it"
                   rows={2}
                   minHeight="min-h-[72px]"
@@ -1265,8 +1272,9 @@ export function CodeSurface() {
                           isStreaming={isStreaming}
                           permissionMode={permissionMode}
                           onPermissionModeChange={setPermissionMode}
-                          model={model}
+                          model={providerModel ? providerModel.id : model}
                           onModelChange={setModel}
+                          onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
                           placeholder="Describe a task..."
                           rows={1}
                           minHeight="min-h-[36px]"

@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
+import type { ModelOption } from '@/lib/models/client-options';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 
@@ -15,6 +16,8 @@ interface CodeState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
   model: ModelId;
+  /** User-added-provider model override (in-memory); null ⇒ use `model`. */
+  providerModel: ModelOption | null;
   isStreaming: boolean;
   streamError: string | null;
   folderByChat: Record<string, string | null>;
@@ -31,6 +34,7 @@ interface CodeActions {
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
   setModel: (model: string) => void;
+  setProviderModel: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
   setCurrentChat: (chatId: string | null) => void;
@@ -59,6 +63,7 @@ export const useCodeStore = create<CodeStore>()(
       messages: {},
       currentChatId: null,
       model: 'sonnet',
+      providerModel: null,
       isStreaming: false,
       streamError: null,
       folderByChat: {},
@@ -106,7 +111,8 @@ export const useCodeStore = create<CodeStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setModel: (model) => set({ model: model as ModelId }),
+      setModel: (model) => set({ model: model as ModelId, providerModel: null }),
+      setProviderModel: (opt) => set({ providerModel: opt }),
 
       startStreaming: () => set({ isStreaming: true }),
 

@@ -6,6 +6,7 @@ import { getTeams, type TeamConfig } from '@/config/teams'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Eye, EyeOff, X, Check, KeyRound } from 'lucide-react'
+import { ProviderManager } from './provider-manager'
 
 export function ConnectorsSection() {
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey)
@@ -167,6 +168,8 @@ export function ConnectorsSection() {
           )
         )}
       </div>
+
+      <ProviderManager />
     </div>
   )
 }
