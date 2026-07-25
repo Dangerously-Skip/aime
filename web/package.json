@@ -215,6 +215,7 @@
     "electron-builder": "^26.8.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "fast-check": "^4.9.0",
     "jsdom": "^29.1.1",
     "pino-pretty": "^11.3.0",
     "tailwindcss": "^4",
