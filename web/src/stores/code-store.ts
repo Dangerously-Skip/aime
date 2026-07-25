@@ -16,8 +16,11 @@ interface CodeState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
   model: ModelId;
-  /** User-added-provider model override (in-memory); null ⇒ use `model`. */
-  providerModel: ModelOption | null;
+  /**
+   * Selected route — a tier or a pinned model (in-memory); null ⇒ use the
+   * built-in `model` enum.
+   */
+  modelRoute: ModelOption | null;
   isStreaming: boolean;
   streamError: string | null;
   folderByChat: Record<string, string | null>;
@@ -34,7 +37,7 @@ interface CodeActions {
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
   setModel: (model: string) => void;
-  setProviderModel: (opt: ModelOption | null) => void;
+  setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
   setCurrentChat: (chatId: string | null) => void;
@@ -63,7 +66,7 @@ export const useCodeStore = create<CodeStore>()(
       messages: {},
       currentChatId: null,
       model: 'sonnet',
-      providerModel: null,
+      modelRoute: null,
       isStreaming: false,
       streamError: null,
       folderByChat: {},
@@ -111,8 +114,8 @@ export const useCodeStore = create<CodeStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setModel: (model) => set({ model: model as ModelId, providerModel: null }),
-      setProviderModel: (opt) => set({ providerModel: opt }),
+      setModel: (model) => set({ model: model as ModelId, modelRoute: null }),
+      setModelRoute: (opt) => set({ modelRoute: opt }),
 
       startStreaming: () => set({ isStreaming: true }),
 

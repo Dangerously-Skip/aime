@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Eye, EyeOff, X, Check, KeyRound } from 'lucide-react'
 import { ProviderManager } from './provider-manager'
+import { TierGrid } from './tier-grid'
 
 export function ConnectorsSection() {
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey)
@@ -168,6 +169,8 @@ export function ConnectorsSection() {
           )
         )}
       </div>
+
+      <TierGrid />
 
       <ProviderManager />
     </div>

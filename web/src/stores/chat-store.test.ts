@@ -11,29 +11,29 @@ const kimi: ModelOption = {
   providerConfig: { providerId: 'openrouter-1', transport: 'anthropic-native', baseUrl: 'https://openrouter.ai/api/v1' },
 };
 
-describe('chat-store provider-model override', () => {
+describe('chat-store model-route override', () => {
   beforeEach(() => {
-    useChatStore.setState({ model: 'sonnet', providerModel: null });
+    useChatStore.setState({ model: 'sonnet', modelRoute: null });
   });
 
-  it('setProviderModel records a user-provider selection', () => {
-    useChatStore.getState().setProviderModel(kimi);
-    expect(useChatStore.getState().providerModel).toEqual(kimi);
+  it('setModelRoute records a route selection', () => {
+    useChatStore.getState().setModelRoute(kimi);
+    expect(useChatStore.getState().modelRoute).toEqual(kimi);
     // the built-in enum is untouched
     expect(useChatStore.getState().model).toBe('sonnet');
   });
 
   it('selecting a built-in model clears the provider override', () => {
-    useChatStore.getState().setProviderModel(kimi);
+    useChatStore.getState().setModelRoute(kimi);
     useChatStore.getState().setModel('opus');
     expect(useChatStore.getState().model).toBe('opus');
-    expect(useChatStore.getState().providerModel).toBeNull();
+    expect(useChatStore.getState().modelRoute).toBeNull();
   });
 
   it('rejects an invalid built-in model without touching the override', () => {
-    useChatStore.getState().setProviderModel(kimi);
+    useChatStore.getState().setModelRoute(kimi);
     useChatStore.getState().setModel('not-a-model');
     expect(useChatStore.getState().model).toBe('sonnet');
-    expect(useChatStore.getState().providerModel).toEqual(kimi); // unchanged
+    expect(useChatStore.getState().modelRoute).toEqual(kimi); // unchanged
   });
 });

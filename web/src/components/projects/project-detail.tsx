@@ -46,6 +46,12 @@ import {
 import { ProjectEditDialog } from "./project-edit-dialog";
 import { ProjectIcon } from "@/components/shared/project-icon";
 import { ProjectCanvases } from "./project-canvases";
+import { useProviderStore } from "@/stores/provider-store";
+import { resolveSendRoute } from "@/lib/models/client-options";
+import { getSurfaceRoute } from "@/lib/models/surface-routes";
+
+/** Project chats run on the chat surface, so they route with its capability. */
+const CAPABILITY = getSurfaceRoute("chat").capability;
 
 const SURFACE_CONFIG: Record<
   Surface,
@@ -108,9 +114,9 @@ export function ProjectDetail({
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
 
   const model = useChatStore((s) => s.model);
-  const providerModel = useChatStore((s) => s.providerModel);
+  const modelRoute = useChatStore((s) => s.modelRoute);
   const setModel = useChatStore((s) => s.setModel);
-  const setProviderModel = useChatStore((s) => s.setProviderModel);
+  const setModelRoute = useChatStore((s) => s.setModelRoute);
   const addMessage = useChatStore((s) => s.addMessage);
   const startStreaming = useChatStore((s) => s.startStreaming);
   const appendToLastAssistant = useChatStore((s) => s.appendToLastAssistant);
@@ -122,6 +128,8 @@ export function ProjectDetail({
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  const tierModels = useSettingsStore((s) => s.tierModels);
+  const providers = useProviderStore((s) => s.providers);
 
   const allCronJobs = useCronStore((s) => s.jobs);
   const cronJobs = useMemo(() => allCronJobs.filter((j) => j.projectId === projectId), [allCronJobs, projectId]);
@@ -268,7 +276,16 @@ export function ProjectDetail({
 
     const crossSurfaceContext = buildProjectContext(project!, "chat", conv.id);
 
-    sendMessage(trimmed, conv.id, "chat", providerModel?.model ?? model, {
+    // A tier route resolves here (it can land on a user provider's model); a
+    // pinned model passes through. Null ⇒ nothing resolved, so fall back to the
+    // built-in model rather than send an empty one.
+    const route = resolveSendRoute(modelRoute, providers, {
+      capability: CAPABILITY,
+      tierModels,
+      hasAnthropicKey: !!anthropicApiKey,
+    });
+
+    sendMessage(trimmed, conv.id, "chat", route?.model ?? model, {
       personalPreferences: personalPreferences || undefined,
       displayName: displayName || undefined,
       attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
@@ -276,7 +293,7 @@ export function ProjectDetail({
       projectKnowledge,
       crossSurfaceContext: crossSurfaceContext || undefined,
       apiKey: anthropicApiKey || undefined,
-      providerConfig: providerModel?.providerConfig,
+      providerConfig: route?.providerConfig,
     });
   }
 
@@ -470,9 +487,9 @@ export function ProjectDetail({
             />
             <div className="flex items-center gap-2">
               <ModelSelector
-                value={providerModel ? providerModel.id : model}
+                value={modelRoute ? modelRoute.id : model}
                 onChange={setModel}
-                onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
+                onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
                 className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
               />
               <Button
