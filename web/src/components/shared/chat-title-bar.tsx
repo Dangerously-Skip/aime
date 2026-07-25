@@ -34,6 +34,7 @@ export function ChatTitleBar({
 
   useEffect(() => {
     if (isRenaming) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- must run after mount: re-seeds the input and pairs with the focus/select below
       setRenameValue(title)
       requestAnimationFrame(() => {
         inputRef.current?.focus()

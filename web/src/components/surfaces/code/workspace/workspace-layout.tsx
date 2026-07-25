@@ -17,7 +17,6 @@ import { PanelToolbar } from "./panel-toolbar";
 import { BranchHeader } from "./branch-header";
 import { GitHistory } from "./git-history";
 import { FileTree } from "./file-tree";
-import { TabStrip } from "./tab-strip";
 import { ViewerPane } from "./viewer-pane";
 import { DiffViewer } from "./diff-viewer";
 import { StatusBar } from "./status-bar";

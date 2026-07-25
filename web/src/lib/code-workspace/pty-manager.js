@@ -77,7 +77,7 @@ function broadcast(channel, payload) {
         win.webContents.send(channel, payload);
       }
     }
-  } catch (err) {
+  } catch {
     // No electron context (e.g. tests) — silent no-op.
   }
 }

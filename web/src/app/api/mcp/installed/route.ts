@@ -25,7 +25,7 @@ export async function GET() {
     const installed: InstalledPlugin[] = [];
 
     // Load MCP config to determine which plugins are authenticated
-    let authenticatedMcps = new Set<string>();
+    const authenticatedMcps = new Set<string>();
     try {
       const config = JSON.parse(await readFile(MCP_CONFIG_FILE, 'utf-8'));
       for (const [key, entry] of Object.entries(config.mcpServers || {})) {

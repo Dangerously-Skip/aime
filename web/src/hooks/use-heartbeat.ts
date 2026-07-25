@@ -56,7 +56,13 @@ export function useHeartbeat(
   // re-registering leaked ipcRenderer listeners (no unsubscribe in older
   // preloads), duplicating heartbeat firings.
   const onFireRef = useRef(onFire);
-  onFireRef.current = onFire;
+  // Synced in an effect rather than during render (render must stay pure).
+  // Declared before the registration effect so the ref is current by the time
+  // that one runs; the registration effect keeps its empty dep array, so the
+  // listener is still registered exactly once for the hook's lifetime.
+  useEffect(() => {
+    onFireRef.current = onFire;
+  });
 
   const resetIdleTimer = useCallback(() => {
     idleMinutesRef.current = 0;

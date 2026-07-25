@@ -1,6 +1,10 @@
-// Lazy imports to avoid circular dependencies with Turbopack's module evaluation
+// Lazy imports to avoid circular dependencies with Turbopack's module evaluation.
+// Deliberately require() rather than static import: a static import here is
+// evaluated at module load and reintroduces the cycle.
+/* eslint-disable @typescript-eslint/no-require-imports */
 const getMemoryStore = () => require('@/stores/memory-store').useMemoryStore;
 const getConversationStore = () => require('@/stores/conversation-store').useConversationStore;
+/* eslint-enable @typescript-eslint/no-require-imports */
 import type { Message } from '@/stores/chat-store';
 import type { Memory } from './types';
 import type { Conversation } from '@/stores/conversation-store';
@@ -17,10 +21,6 @@ function extractSummary(messages: Message[]): string {
   // Collect user messages to understand what was discussed
   const userMessages = messages
     .filter((m) => m.role === 'user' && m.content)
-    .map((m) => m.content);
-
-  const assistantMessages = messages
-    .filter((m) => m.role === 'assistant' && m.content && m.content.length > 20)
     .map((m) => m.content);
 
   if (userMessages.length === 0) return '';

@@ -3,8 +3,8 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
-import type { Memory, MemoryCategory, MemoryScope } from '@/lib/memory/types';
-import { getMemoriesForContext, searchMemories, findDuplicate, findSimilar } from '@/lib/memory/retriever';
+import type { Memory, MemoryCategory } from '@/lib/memory/types';
+import { getMemoriesForContext, searchMemories, findSimilar } from '@/lib/memory/retriever';
 
 const PRUNE_TRIGGER = 600;
 const PRUNE_TARGET = 500;

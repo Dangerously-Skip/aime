@@ -101,7 +101,9 @@ export function useConversations(surface: string, projectId?: string | null): Us
     );
 
     return result;
-  }, [conversations, surface]);
+    // projectId is read above to filter the list, so it must be a dep —
+    // without it, switching project reused the previous project's grouping.
+  }, [conversations, surface, projectId]);
 
   const activeConversation = useMemo(
     () => (activeId ? conversations.find((c) => c.id === activeId) : undefined),

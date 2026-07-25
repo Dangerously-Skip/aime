@@ -46,6 +46,7 @@ export function XlsxRenderer({ content, encoding }: XlsxRendererProps) {
         };
       });
 
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- XLSX.read is a heavy synchronous parse; keeping it out of render also lets activeSheet reset with the new workbook
       setSheets(parsed);
       setActiveSheet(0);
     } catch (err) {

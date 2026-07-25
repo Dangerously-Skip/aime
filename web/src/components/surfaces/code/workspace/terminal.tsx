@@ -39,12 +39,6 @@ interface TerminalPanelProps {
   sessionKey?: string;
 }
 
-/** Read a CSS variable from documentElement, fall back to `def`. */
-function readCssVar(name: string, def: string): string {
-  if (typeof window === "undefined") return def;
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || def;
-}
 
 /**
  * Most of the app's CSS vars use the OKLCH/HSL function syntax which xterm.js can't
@@ -103,7 +97,8 @@ function deriveTheme(): ITheme {
   };
 }
 
-export function TerminalPanel({ workspace, onClose, visible = true, sessionKey }: TerminalPanelProps) {
+// onClose is part of the props contract but this panel has no close affordance.
+export function TerminalPanel({ workspace, visible = true, sessionKey }: TerminalPanelProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);

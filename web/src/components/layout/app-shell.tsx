@@ -7,7 +7,6 @@ import { SurfaceRouter } from "./surface-router";
 import { useAppStore, type Surface } from "@/stores/app-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useProjectStore } from "@/stores/project-store";
-import { getRandomIcon } from "@/stores/project-store";
 import { useElectron } from "@/hooks/use-electron";
 import { ProjectGrid } from "@/components/projects/project-grid";
 import { ProjectDetail } from "@/components/projects/project-detail";
@@ -78,6 +77,7 @@ export function AppShell() {
   useEffect(() => {
     if (sidebarMode !== "projects") {
       setViewingProjectId(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- view state is also set by user actions, so it can't be derived from sidebarMode during render
       setCreatingProject(false);
     }
   }, [sidebarMode, setViewingProjectId]);

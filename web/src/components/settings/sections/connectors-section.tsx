@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useSettingsStore } from '@/stores/settings-store'
 import { getTeams, type TeamConfig } from '@/config/teams'
 import { Input } from '@/components/ui/input'
@@ -15,13 +15,11 @@ export function ConnectorsSection() {
   const teamId = useSettingsStore((s) => s.teamId)
   const setTeamId = useSettingsStore((s) => s.setTeamId)
 
-  const [teams, setTeams] = useState<TeamConfig[]>([])
+  // getTeams() reads a statically imported JSON module — pure and identical on
+  // server and client, so it can seed state directly instead of via an effect.
+  const [teams] = useState<TeamConfig[]>(getTeams)
   const [showKey, setShowKey] = useState(false)
   const [keyInput, setKeyInput] = useState('')
-
-  useEffect(() => {
-    setTeams(getTeams())
-  }, [])
 
   const hasTeams = teams.length > 0
   const isConfigured = !!anthropicApiKey

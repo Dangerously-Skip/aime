@@ -4,10 +4,10 @@ import { useState, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useAssistantStore, type StandingOrder } from "@/stores/assistant-store";
+import { useAssistantStore } from "@/stores/assistant-store";
 import {
-  X, Play, Pause, Trash2, ChevronDown, ChevronUp,
-  Clock, Zap, CheckCircle2, AlertCircle, Code2,
+  X, Play, Pause, Trash2,
+  Zap, CheckCircle2, AlertCircle,
 } from "lucide-react";
 
 type Tier = 'summary' | 'form' | 'json';

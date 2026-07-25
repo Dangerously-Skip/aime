@@ -26,7 +26,6 @@ import type {
   TimelineComponent,
   MermaidComponent,
 } from './types';
-import { Badge } from '@/components/ui/badge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MermaidBlock } from '@/components/shared/mermaid-block';
@@ -1037,7 +1036,7 @@ function TimelineRenderer({ component }: { component: TimelineComponent }) {
       <CardBody>
         <div className="relative pl-6">
           <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border/60" />
-          {entries.map((entry, i) => {
+          {entries.map((entry) => {
             const colors = TIMELINE_STATUS_COLORS[entry.status || 'info'] || TIMELINE_STATUS_COLORS.info;
             return (
               <div key={entry.id} className="relative flex items-start gap-3 pb-4 last:pb-0">

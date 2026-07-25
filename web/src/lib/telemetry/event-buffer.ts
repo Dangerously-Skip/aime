@@ -25,7 +25,6 @@ let bufferFilePath: string | null = null;
 async function getBufferPath(): Promise<string> {
   if (bufferFilePath) return bufferFilePath;
   try {
-    const os = await import('os');
     const path = await import('path');
     const fs = await import('fs/promises');
     const userDataDir = process.env.AIME_USER_DATA_DIR;

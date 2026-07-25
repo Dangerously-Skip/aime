@@ -87,6 +87,7 @@ export function usePty(workspace: string | null, opts?: UsePtyOptions) {
 
   useEffect(() => {
     if (!workspace || !attachKey) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- detaches from the PTY registry; same subscribe/teardown pipeline as below
       setSession(null);
       return;
     }

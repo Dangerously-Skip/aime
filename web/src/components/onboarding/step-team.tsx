@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { getTeams, type TeamConfig } from "@/config/teams";
 import { Check, ArrowLeft, KeyRound } from "lucide-react";
 
@@ -21,11 +21,9 @@ export function StepTeam({
   onContinue,
   onBack,
 }: StepTeamProps) {
-  const [teams, setTeams] = useState<TeamConfig[]>([]);
-
-  useEffect(() => {
-    setTeams(getTeams());
-  }, []);
+  // getTeams() reads a statically imported JSON module — pure and identical on
+  // server and client, so it can seed state directly instead of via an effect.
+  const [teams] = useState<TeamConfig[]>(getTeams);
 
   const hasTeams = teams.length > 0;
   const canContinue = hasTeams ? !!teamId : manualApiKey.trim().length > 0;

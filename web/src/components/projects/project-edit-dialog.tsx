@@ -38,6 +38,7 @@ export function ProjectEditDialog({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- seeds the editable form from props each time the dialog opens; callers don't remount it with a key
       setNameValue(name);
       setDescValue(description);
       setIconValue(icon);

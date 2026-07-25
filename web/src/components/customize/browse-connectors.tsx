@@ -469,7 +469,7 @@ export function BrowseConnectors() {
         setConnectingId(null);
       }
     },
-    [setToken, setEnabled, clearToken]
+    [setToken, setEnabled, clearToken, setTokenMeta]
   );
 
   const handleToggle = useCallback(

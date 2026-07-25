@@ -5,7 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
-import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
+import { type SessionControls } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
 

@@ -155,7 +155,7 @@ export function DiffViewer({
   fromRef,
   toRef,
   mode: modeProp,
-  onClose,
+  // onClose is part of the props contract but this view has no close affordance.
 }: DiffViewerProps) {
   const theme = useAppStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -192,6 +192,7 @@ export function DiffViewer({
   useEffect(() => {
     if (!workspace || !filePath) return;
     const myReq = ++reqIdRef.current;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- spinner for the git IPC call this effect starts; nothing to derive during render
     setLoading(true);
     setError(null);
     getGitDiff(workspace, ipcOpts)

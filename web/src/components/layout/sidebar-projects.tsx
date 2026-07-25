@@ -12,6 +12,19 @@ interface SidebarProjectsProps {
   onNewProject: () => void;
 }
 
+/** Relative "updated" label. Module-scoped: it reads the wall clock, which
+ *  must not happen inside a component body. */
+function getLastUpdated(project: Project): string {
+  const diff = Date.now() - project.updatedAt;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 export function SidebarProjects({ onSelectProject, onNewProject }: SidebarProjectsProps) {
   const projects = useProjectStore((s) => s.projects);
   const removeProject = useProjectStore((s) => s.removeProject);
@@ -19,17 +32,6 @@ export function SidebarProjects({ onSelectProject, onNewProject }: SidebarProjec
 
   function getConversationCount(projectId: string): number {
     return conversations.filter((c) => c.projectId === projectId).length;
-  }
-
-  function getLastUpdated(project: Project): string {
-    const diff = Date.now() - project.updatedAt;
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "Just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
   }
 
   const starred = projects.filter((p) => p.starred);

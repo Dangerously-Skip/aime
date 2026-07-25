@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { createElement, useState, useEffect, useCallback, useRef } from "react";
 import {
   Sheet,
   SheetContent,
@@ -66,6 +66,7 @@ export function FilePreviewSheet({ path, open, onClose }: FilePreviewSheetProps)
 
   useEffect(() => {
     if (!open || !path) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the previously read file; same async read pipeline as below
       setFileData(null);
       setError(null);
       return;
@@ -132,6 +133,10 @@ export function FilePreviewSheet({ path, open, onClose }: FilePreviewSheetProps)
 
   const ext = fileData?.ext || (path ? `.${path.split(".").pop()?.toLowerCase()}` : "");
   const isUnprintable = UNPRINTABLE_BINARY_EXTS.has(ext);
+  // `getRenderer` is a lookup — it returns one of a fixed set of module-level
+  // lazy components, so the result is stable across renders. Elements are built
+  // with createElement rather than JSX so this reads as a lookup, not as a
+  // component defined during render (which would remount on every render).
   const Renderer = getRenderer(ext);
 
   return (
@@ -223,28 +228,26 @@ export function FilePreviewSheet({ path, open, onClose }: FilePreviewSheetProps)
           )}
 
           {/* Unprintable binary — can't preview, offer to open externally */}
-          {isUnprintable && !fileData && !loading && !error && path && (
-            <Renderer
-              content=""
-              encoding="utf-8"
-              ext={ext}
-              name={path.split("/").pop() || ""}
-              path={path}
-              onOpenExternal={openExternally}
-            />
-          )}
+          {isUnprintable && !fileData && !loading && !error && path &&
+            createElement(Renderer, {
+              content: "",
+              encoding: "utf-8",
+              ext,
+              name: path.split("/").pop() || "",
+              path,
+              onOpenExternal: openExternally,
+            })}
 
           {/* Render file content via the appropriate renderer */}
-          {fileData && !loading && !error && (
-            <Renderer
-              content={fileData.content}
-              encoding={fileData.encoding}
-              ext={fileData.ext}
-              name={fileData.name}
-              path={fileData.path}
-              onOpenExternal={openExternally}
-            />
-          )}
+          {fileData && !loading && !error &&
+            createElement(Renderer, {
+              content: fileData.content,
+              encoding: fileData.encoding,
+              ext: fileData.ext,
+              name: fileData.name,
+              path: fileData.path,
+              onOpenExternal: openExternally,
+            })}
         </div>
       </SheetContent>
     </Sheet>

@@ -659,7 +659,7 @@ export async function POST(
 
       // Stream responses from the provider
       let collectedResponse = '';
-      let inputChars = finalMessage.length;
+      const inputChars = finalMessage.length;
       let outputChars = 0;
       let toolCallCount = 0;
       const streamStartMs = Date.now();

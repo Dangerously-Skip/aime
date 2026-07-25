@@ -23,7 +23,6 @@ import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectContext } from "@/hooks/use-project-context";
-import { useAutoProject } from "@/hooks/use-auto-project";
 import { useElectron } from "@/hooks/use-electron";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { Textarea } from "@/components/ui/textarea";
@@ -148,15 +147,9 @@ const PERMISSION_MODES: {
   },
 ];
 
-function getPermissionIcon(mode: PermissionMode) {
-  const config = PERMISSION_MODES.find((m) => m.value === mode);
-  if (!config) return Shield;
-  return config.icon;
-}
-
-function getPermissionLabel(mode: PermissionMode) {
-  const config = PERMISSION_MODES.find((m) => m.value === mode);
-  return config?.label ?? "Ask permissions";
+/** PERMISSION_MODES[0] is the "default" (ask) mode, so it doubles as the fallback. */
+function getPermissionMode(mode: PermissionMode) {
+  return PERMISSION_MODES.find((m) => m.value === mode) ?? PERMISSION_MODES[0];
 }
 
 /* ── Attachment chip icon ── */
@@ -349,7 +342,9 @@ function CodeInput({
   planButton?: React.ReactNode;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const PermIcon = getPermissionIcon(permissionMode);
+  // Held as the config object (not a bare component) so the icon renders through
+  // a stable module-level reference rather than a locally-created component.
+  const permMode = getPermissionMode(permissionMode);
   const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
   const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
@@ -513,8 +508,8 @@ function CodeInput({
             <DropdownMenuTrigger
               render={
                 <button className="inline-flex items-center gap-1.5 rounded-md px-2 h-7 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-                  <PermIcon className="h-3.5 w-3.5" />
-                  <span>{getPermissionLabel(permissionMode)}</span>
+                  <permMode.icon className="h-3.5 w-3.5" />
+                  <span>{permMode.label}</span>
                 </button>
               }
             />
@@ -697,7 +692,7 @@ export function CodeSurface() {
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
   // Auto-project creation disabled — users create projects manually
-  const { isElectron, selectFolder: pickFolder, showNotification } = useElectron();
+  const { showNotification } = useElectron();
   const isEmpty = messages.length === 0;
 
   const handleFolderChange = useCallback(
@@ -1115,6 +1110,16 @@ export function CodeSurface() {
       sendMessage,
       setSessionStatus,
       updateConversation,
+      // Read inside the callback and previously missing, so a slash command or a
+      // security-setting change did not take effect until another dep changed.
+      // All are primitives or stable store references.
+      sessionControls,
+      pendingFolder,
+      setFolder,
+      blockDangerousCommands,
+      blockNetworkCommands,
+      restrictToProjectFolder,
+      disableBashTool,
     ]
   );
 

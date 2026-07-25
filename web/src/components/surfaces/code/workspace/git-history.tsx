@@ -30,6 +30,7 @@ export function GitHistory({ workspace, onClose }: GitHistoryProps) {
   // the `diff --git` headers — keeps us inside the IPC surface Wave 1 declared.
   useEffect(() => {
     if (!workspace || !selectedHash) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the previously fetched file list; same async pipeline as the fetch below
       setChangedFiles([]);
       setSelectedFile(null);
       return;

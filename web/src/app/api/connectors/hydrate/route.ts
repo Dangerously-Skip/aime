@@ -1,8 +1,6 @@
 export const runtime = 'nodejs';
 
 import { readFile } from 'fs/promises';
-import { join } from 'path';
-import { homedir } from 'os';
 import { getMcpConfigPath } from '@/lib/app-paths';
 
 const MCP_CONFIG_FILE = getMcpConfigPath();

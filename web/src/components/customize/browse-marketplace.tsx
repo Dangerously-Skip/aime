@@ -40,6 +40,7 @@ export function BrowseMarketplace() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount; the setState runs in the async continuation, not synchronously
     refreshInstalled();
   }, [refreshInstalled]);
 

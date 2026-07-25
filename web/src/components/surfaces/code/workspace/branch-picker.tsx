@@ -41,6 +41,7 @@ export function BranchPicker({
   useEffect(() => {
     if (!open || !workspace) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- spinner for the git IPC call this effect starts; nothing to derive during render
     setLoading(true);
     getGitBranches(workspace)
       .then((next) => {

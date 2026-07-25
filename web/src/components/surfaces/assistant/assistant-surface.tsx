@@ -2,16 +2,13 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useAssistantStore, type StandingOrder, type AssistantCard } from "@/stores/assistant-store";
-import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useAppStore } from "@/stores/app-store";
 import { useHydrated } from "@/components/store-hydration";
 import { useStandingOrders } from "@/hooks/use-standing-orders";
 import { useAssistantWidgets } from "@/hooks/use-assistant-widgets";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
 import type { A2UIAction } from "@/lib/a2ui/types";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
@@ -21,20 +18,15 @@ import {
   Play,
   Pause,
   Trash2,
-  Pin,
-  PinOff,
   X,
   Clock,
   Zap,
   CheckCircle2,
   AlertCircle,
-  ChevronRight,
-  ChevronDown,
   Download,
   PanelLeftClose,
   PanelLeft,
   Bot,
-  Plus,
   Sun,
   Moon,
   Timer,
@@ -62,7 +54,7 @@ const WIDGET_ICONS: Record<string, LucideIcon> = {
 import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/standing-order-templates";
 import { TemplateDialog } from "./template-dialog";
 import { OrderEditor } from "./order-editor";
-import { exportOrdersToJson, parseOrdersFromJson } from "@/lib/standing-order-yaml";
+import { exportOrdersToJson } from "@/lib/standing-order-yaml";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -85,7 +77,6 @@ function OrdersSidebar({
   const resumeOrder = useAssistantStore((s) => s.resumeOrder);
   const resumeAllPaused = useAssistantStore((s) => s.resumeAllPaused);
   const removeOrder = useAssistantStore((s) => s.removeOrder);
-  const addOrder = useAssistantStore((s) => s.addOrder);
 
   const activeOrders = orders.filter((o) => o.status === 'active');
   const pausedOrders = orders.filter((o) => o.status === 'paused');
@@ -513,7 +504,6 @@ export function AssistantSurface() {
     setIsStreaming(true);
 
     // Add a "thinking" card
-    const thinkingId = crypto.randomUUID();
     addCard({ title: prompt, summary: 'Thinking...' });
 
     const controller = new AbortController();

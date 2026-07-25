@@ -58,6 +58,7 @@ export function SidebarCustomize() {
   // Fetch data when section changes
   useEffect(() => {
     if (customizeSection === "skills") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- spinner for the fetch this effect starts; nothing to derive during render
       setLoading(true);
       fetch("/api/customize/skills")
         .then((r) => r.json())
