@@ -16,11 +16,19 @@ import {
 import { Plus, X, RefreshCw, Loader2, Boxes } from 'lucide-react'
 
 /** Discover a provider's models via the scan endpoint. Never persists secrets. */
-async function scanModels(presetId: string, apiKey?: string, baseUrl?: string): Promise<ScannedModel[]> {
+async function scanModels(
+  presetId: string,
+  opts: { apiKey?: string; baseUrl?: string; providerId?: string } = {},
+): Promise<ScannedModel[]> {
   const res = await fetch('/api/models/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ presetId, apiKey: apiKey || undefined, baseUrl: baseUrl || undefined }),
+    body: JSON.stringify({
+      presetId,
+      apiKey: opts.apiKey || undefined,
+      baseUrl: opts.baseUrl || undefined,
+      providerId: opts.providerId || undefined,
+    }),
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || `Scan failed (${res.status})`)
@@ -96,7 +104,7 @@ export function ProviderManager() {
     const keyNeeded = needsApiKey(preset)
     try {
       // 1. Discover models (transient key). Fail fast before persisting anything.
-      const models = preset.scan ? await scanModels(presetId, apiKey, baseUrl) : []
+      const models = preset.scan ? await scanModels(presetId, { apiKey, baseUrl }) : []
 
       // 2. Store the secret server-side (keychain) if the provider needs one.
       if (keyNeeded && apiKey.trim()) {
@@ -122,10 +130,9 @@ export function ProviderManager() {
     setBusy(providerId)
     setError(null)
     try {
-      // The secret lives in the keychain and is not exposed to the client, so
-      // rescan works for key-less providers (e.g. local). Key-required providers
-      // surface a clear "requires an API key" error — re-add to refresh the key.
-      const models = await scanModels(p.presetId, undefined, p.baseUrl)
+      // The secret is not exposed to the client; the server reads it back from
+      // the keychain by providerId, so rescan works for key-required providers too.
+      const models = await scanModels(p.presetId, { baseUrl: p.baseUrl, providerId })
       setModels(providerId, models)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Rescan failed')
