@@ -7,6 +7,7 @@ const opt: ModelOption = {
   id: 'p1:m1',
   label: 'M1',
   group: 'P1',
+  kind: 'model',
   model: 'm1',
   providerConfig: { providerId: 'p1', transport: 'openai-compat', baseUrl: 'http://x/v1' },
 };

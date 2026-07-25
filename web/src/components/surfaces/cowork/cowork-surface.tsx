@@ -1248,7 +1248,7 @@ export function CoworkSurface() {
             const currentControls = useCoworkStore.getState().sessionControls[chatId] ?? DEFAULT_SESSION_CONTROLS;
             const priorMsgs = useCoworkStore.getState().messages[chatId] || [];
             const hist = stripMessagesForHistory(priorMsgs.slice(0, -2));
-            void sendMessage(continuePrompt, chatId, "cowork", providerModel ? providerModel.model : model, {
+            void sendMessage(continuePrompt, chatId, "cowork", providerModel?.model ?? model, {
               personalPreferences: personalPreferences || undefined,
               displayName: displayName || undefined,
               cwd: folder || projectFolder || scratchDir || undefined,
@@ -1396,7 +1396,7 @@ export function CoworkSurface() {
       }
 
       const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
-      await sendMessage(trimmed, id, "cowork", providerModel ? providerModel.model : model, {
+      await sendMessage(trimmed, id, "cowork", providerModel?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         providerConfig: providerModel?.providerConfig,
@@ -1460,7 +1460,7 @@ export function CoworkSurface() {
       addMessage(bgId, { id: crypto.randomUUID(), role: 'user', content: prompt, timestamp: Date.now() });
       addMessage(bgId, { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: Date.now(), isLoading: true, isStreaming: true });
       startStreaming(bgId);
-      void sendMessage(prompt, bgId, 'cowork', providerModel ? providerModel.model : model, {
+      void sendMessage(prompt, bgId, 'cowork', providerModel?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         apiKey: anthropicApiKey || undefined,
@@ -1479,7 +1479,7 @@ export function CoworkSurface() {
         const resp = await fetch('/api/chat/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: providerModel ? providerModel.model : model, apiKey: anthropicApiKey || undefined, ...(providerModel?.providerConfig ? { providerConfig: providerModel.providerConfig } : {}) }),
+          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: providerModel?.model ?? model, apiKey: anthropicApiKey || undefined, ...(providerModel?.providerConfig ? { providerConfig: providerModel.providerConfig } : {}) }),
         });
         if (!resp.ok || !resp.body) return;
         const reader = resp.body.getReader();

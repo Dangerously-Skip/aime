@@ -268,7 +268,7 @@ export function ProjectDetail({
 
     const crossSurfaceContext = buildProjectContext(project!, "chat", conv.id);
 
-    sendMessage(trimmed, conv.id, "chat", providerModel ? providerModel.model : model, {
+    sendMessage(trimmed, conv.id, "chat", providerModel?.model ?? model, {
       personalPreferences: personalPreferences || undefined,
       displayName: displayName || undefined,
       attachments: currentAttachments.length > 0 ? currentAttachments : undefined,

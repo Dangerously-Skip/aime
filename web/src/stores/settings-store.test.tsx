@@ -86,8 +86,20 @@ describe('settings migrations', () => {
     expect(useSettingsStore.getState().surfaceTiers).toEqual({ cowork: 'stallion' });
   });
 
+  it('v8 → v9: backfills tier model assignments', async () => {
+    await rehydrateWith(8, { fullName: 'Rae', surfaceTiers: { cowork: 'smort' } });
+    const s = useSettingsStore.getState();
+    expect(s.tierModels).toEqual({});
+    expect(s.surfaceTiers).toEqual({ cowork: 'smort' }); // earlier field preserved
+  });
+
+  it('v9 preserves stored tier model assignments', async () => {
+    await rehydrateWith(9, { fullName: 'Bo', tierModels: { smort: 'or-1:kimi-k2' } });
+    expect(useSettingsStore.getState().tierModels).toEqual({ smort: 'or-1:kimi-k2' });
+  });
+
   it('current version passes through untouched', async () => {
-    await rehydrateWith(8, { fullName: 'Zoe', devHourlyRate: 200, onboardingComplete: true });
+    await rehydrateWith(9, { fullName: 'Zoe', devHourlyRate: 200, onboardingComplete: true });
 
     const s = useSettingsStore.getState();
     expect(s.fullName).toBe('Zoe');
