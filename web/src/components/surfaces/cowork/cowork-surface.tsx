@@ -76,6 +76,7 @@ import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import type { Capability } from "@/lib/models/types";
+import { useRunRecorder } from "@/hooks/use-run-recorder";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("cowork").capability;
@@ -775,11 +776,19 @@ export function CoworkSurface() {
     }
   }, [chatId]);
 
+  // Records a Run per turn so every execution leaves a durable trace with its
+  // cost attached (P6 substrate — see lib/runs).
+  const runRecorder = useRunRecorder("cowork");
+
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
     setStreamError,
     onUsage(usage) {
+      // Composed: the run recorder captures cost first (it must not be skipped
+      // by the no-active-conversation early return below), then the existing
+      // ROI/telemetry pipeline runs unchanged.
+      runRecorder.onUsage(usage);
       const id = useCoworkStore.getState().currentChatId;
       if (!id) return;
       // Store token usage
@@ -1145,6 +1154,7 @@ export function CoworkSurface() {
       }
     },
     onDone: () => {
+      runRecorder.succeed();
       completeRunningTools(chatId);
       stopStreaming(chatId);
       const allMsgs = useCoworkStore.getState().messages[chatId];
@@ -1220,6 +1230,9 @@ export function CoworkSurface() {
             const priorMsgs = useCoworkStore.getState().messages[chatId] || [];
             const hist = stripMessagesForHistory(priorMsgs.slice(0, -2));
             const route = resolveRoute();
+            // A fresh run: the auto-continue is a hook-driven turn of its own,
+            // and the turn that triggered it was already closed by succeed().
+            runRecorder.begin({ trigger: "hook", model: route?.model ?? model });
             void sendMessage(continuePrompt, chatId, "cowork", route?.model ?? model, {
               personalPreferences: personalPreferences || undefined,
               displayName: displayName || undefined,
@@ -1238,6 +1251,7 @@ export function CoworkSurface() {
       }
     },
     onError: (error) => {
+      runRecorder.fail(error.message);
       stopStreaming(chatId);
       appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
     },
@@ -1369,6 +1383,9 @@ export function CoworkSurface() {
 
       const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
       const route = resolveRoute();
+      // Open the run record before the turn starts so an immediate failure is
+      // still attributed rather than lost.
+      runRecorder.begin({ trigger: "manual", model: route?.model ?? model });
       await sendMessage(trimmed, id, "cowork", route?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
@@ -1394,6 +1411,7 @@ export function CoworkSurface() {
     [
       chatId,
       model,
+      runRecorder,
       resolveRoute,
       folder,
       addMessage,
@@ -1452,6 +1470,9 @@ export function CoworkSurface() {
       addMessage(bgId, { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: Date.now(), isLoading: true, isStreaming: true });
       startStreaming(bgId);
       const route = resolveRoute();
+      // Open the run record before the turn starts so an immediate failure is
+      // still attributed rather than lost.
+      runRecorder.begin({ trigger: 'hook', model: route?.model ?? model });
       void sendMessage(prompt, bgId, 'cowork', route?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
@@ -1460,7 +1481,7 @@ export function CoworkSurface() {
         providerConfig: route?.providerConfig,
       });
     },
-    [addConversation, addMessage, startStreaming, sendMessage, model, resolveRoute, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
+    [addConversation, addMessage, startStreaming, sendMessage, model, runRecorder, resolveRoute, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
   );
 
   // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store
@@ -1470,12 +1491,19 @@ export function CoworkSurface() {
       try {
         const hbId = `hb-${crypto.randomUUID()}`;
         const route = resolveRoute(getSurfaceRoute('chat').capability);
+        // Open the run record before the turn starts so an immediate failure is
+        // still attributed rather than lost. This site streams the raw fetch
+        // itself, so it also closes the record by hand below.
+        runRecorder.begin({ trigger: 'heartbeat', model: route?.model ?? model });
         const resp = await fetch('/api/chat/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: route?.model ?? model, apiKey: anthropicApiKey || undefined, ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}) }),
         });
-        if (!resp.ok || !resp.body) return;
+        if (!resp.ok || !resp.body) {
+          runRecorder.fail(resp.ok ? 'empty response body' : `HTTP ${resp.status}`);
+          return;
+        }
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let text = '';
@@ -1507,11 +1535,13 @@ export function CoworkSurface() {
             timestamp: Date.now(),
           });
         }
-      } catch {
-        // silent — no UI impact
+        runRecorder.succeed();
+      } catch (e) {
+        // silent — no UI impact, but the run still records the failure
+        runRecorder.fail(e instanceof Error ? e.message : String(e));
       }
     },
-    [model, resolveRoute, anthropicApiKey]
+    [model, runRecorder, resolveRoute, anthropicApiKey]
   );
 
   // Cron and heartbeat hooks removed — standing order engine in the Assistant

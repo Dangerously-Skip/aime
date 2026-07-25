@@ -65,6 +65,7 @@ import { WorkspaceLayout } from "./workspace/workspace-layout";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
+import { useRunRecorder } from "@/hooks/use-run-recorder";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
@@ -763,10 +764,15 @@ export function CodeSurface() {
     if (conv?.surface === "code") setCurrentChat(activeConvId);
   }, [activeConvId, allConversations, setCurrentChat]);
 
+  // Records a Run per turn so every execution leaves a durable trace with its
+  // cost attached (P6 substrate — see lib/runs).
+  const runRecorder = useRunRecorder("code");
+
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
     setStreamError,
+    onUsage: runRecorder.onUsage,
     onChunk(event) {
       switch (event.type) {
         case "turn_start":
@@ -937,6 +943,7 @@ export function CodeSurface() {
       }
     },
     onDone: () => {
+      runRecorder.succeed();
       // Mark any remaining running tools as complete
       completeRunningTools(chatId);
       // Set preview URL for any HTML files written in the last turn and auto-open preview
@@ -962,6 +969,7 @@ export function CodeSurface() {
       }
     },
     onError: (error) => {
+      runRecorder.fail(error.message);
       stopStreaming(chatId);
       setSessionStatus("idle");
       appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
@@ -1076,6 +1084,9 @@ export function CodeSurface() {
         hasAnthropicKey: !!anthropicApiKey,
       });
 
+      // Open the run record before the turn starts so an immediate failure is
+      // still attributed rather than lost.
+      runRecorder.begin({ trigger: "manual", model: route?.model ?? model });
       await sendMessage(trimmed, id, "code", route?.model ?? model, {
         apiKey: anthropicApiKey || undefined,
         providerConfig: route?.providerConfig,
@@ -1096,6 +1107,7 @@ export function CodeSurface() {
     [
       chatId,
       model,
+      runRecorder,
       modelRoute,
       providers,
       tierModels,

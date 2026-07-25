@@ -68,6 +68,19 @@ export function useRunRecorder(surfaceId: string) {
         cost: costFromStreamUsage(usage ?? undefined),
         toolCalls: usage?.toolCallCount,
       });
+
+      // Persist the completed record to the durable JSONL log. Fire-and-forget
+      // and failure-swallowing on purpose: the store already holds it for live
+      // display, and recording a run must never be able to fail the turn it
+      // describes. Written once, on completion, so the log stays append-only.
+      const finished = useRunStore.getState().getRun(id);
+      if (finished) {
+        void fetch('/api/runs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run: finished }),
+        }).catch(() => {});
+      }
     },
     [endRun],
   );
