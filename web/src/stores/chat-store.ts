@@ -5,6 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
+import type { ModelOption } from '@/lib/models/client-options';
 
 export type ModelId = 'sonnet' | 'opus' | 'haiku';
 export type { SessionControls };
@@ -71,6 +72,12 @@ interface ChatState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
   model: ModelId;
+  /**
+   * A user-added-provider model chosen from the selector, overriding `model`
+   * for the request. Null ⇒ use the built-in `model` enum. In-memory only
+   * (the provider list itself persists in provider-store).
+   */
+  providerModel: ModelOption | null;
   isStreaming: boolean;
   streamError: string | null;
   sessionControls: Record<string, SessionControls>;
@@ -85,6 +92,7 @@ interface ChatActions {
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
   attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }) => void;
   setModel: (model: string) => void;
+  setProviderModel: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
   setCurrentChat: (chatId: string) => void;
@@ -112,6 +120,7 @@ export const useChatStore = create<ChatStore>()(
       messages: {},
       currentChatId: null,
       model: 'sonnet',
+      providerModel: null,
       isStreaming: false,
       streamError: null,
       sessionControls: {},
@@ -173,11 +182,14 @@ export const useChatStore = create<ChatStore>()(
 
       setModel: (model) => {
         if (VALID_MODELS.has(model)) {
-          set({ model: model as ModelId });
+          // Selecting a built-in clears any user-provider override.
+          set({ model: model as ModelId, providerModel: null });
         } else {
           console.warn(`[ChatStore] Invalid model "${model}", keeping current`);
         }
       },
+
+      setProviderModel: (opt) => set({ providerModel: opt }),
 
       startStreaming: (chatId) => set((state) => ({
         isStreaming: true,

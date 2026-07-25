@@ -63,6 +63,10 @@ Two classes of provider:
    endpoint. **OpenRouter does** (and hosts Kimi K2, GPT, Gemini, …), as do
    Anthropic direct, Bedrock, and Vertex. For these, set `ANTHROPIC_BASE_URL`
    + the model alias and route **directly — no local layer needed**.
+   *(Verified 2026-07-25: `POST https://openrouter.ai/api/v1/messages` returns a
+   JSON 401 `Missing Authentication header`, whereas a bogus path returns an HTML
+   404 — i.e. `/v1/messages` is a real handled route. OpenRouter stays
+   `anthropic-native`; no shim.)*
 2. **OpenAI-compatible only** — local models (Ollama, LM Studio) and raw
    OpenAI-style endpoints speak the OpenAI format, *not* Anthropic. To drive
    these through the SDK, a request/response **translation shim** is required.

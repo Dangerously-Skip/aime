@@ -74,6 +74,9 @@ interface UseSSEStreamReturn {
       }
       toolProfile?: string
       contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
+      capability?: string
+      tier?: string
+      providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
     }
   ) => Promise<void>;
   abort: () => void;
@@ -168,6 +171,9 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           modelOverride?: string | null
         }
         toolProfile?: string
+        capability?: string
+        tier?: string
+        providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
       }
     ): Promise<void> => {
       // Abort any existing stream for this chatId
@@ -217,6 +223,9 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.securitySettings ? { securitySettings: extra.securitySettings } : {}),
             ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
             ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
+            ...(extra?.capability ? { capability: extra.capability } : {}),
+            ...(extra?.tier ? { tier: extra.tier } : {}),
+            ...(extra?.providerConfig ? { providerConfig: extra.providerConfig } : {}),
           }),
           signal: controller.signal,
         });
