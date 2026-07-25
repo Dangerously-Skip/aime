@@ -66,8 +66,10 @@ rebuild onboarding around P1 provider paths.
 
 ### P2 — Surface clarity
 
-Onboarding rework; per-surface default models (via RoutingTable); resolve
-DR-1 (Clawish) and DR-2 (Cockpit).
+Per-surface default models via the RoutingTable ✅ (2026-07-25, `808ac26`);
+onboarding rework around provider paths (outstanding); tier-vs-model as the
+primary control (DR-13, open). DR-1/DR-2 resolved out of this pillar into **P6**
+— they turned out to be substrate + a dashboard, not surface naming.
 
 ### P3 — Extensibility: MCPs, Skills, Widgets
 
@@ -104,6 +106,37 @@ Shared project scope between humans. Everything today is localStorage/
 Zustand on one machine — sharing needs a sync layer (server or CRDT).
 Sequence after P1 + Projects hardening. Interacts with DR-3 ($ tier/auth).
 
+### P6 — Autonomy & observability (Goals, Runs, Cockpit, Clawish runtime)
+
+Resolves DR-1 + DR-2. Detail in `clawish.md` (C1–C6) and `cockpit.md` (K1–K6).
+
+**The thesis:** OpenClaw (always-on, event-triggered turns), openworker
+(outcome as the unit of work, approval-gated), and the Burnbox Cockpit (widget =
+a saved recipe re-run on a schedule) all converge on **one missing primitive**:
+
+```
+Goal   objective, successCriteria, constraints, approvalPolicy, triggers
+ └─ Run      status, startedAt, durationMs, cost, tokens, toolCalls, error
+     └─ Deliverable   file | artifact | A2UI node | message
+```
+
+Every trigger AIME already owns (minute tick, cron, webhook, manual, chat)
+creates a Run against a Goal. Cockpit is a *view* over Goals+Runs. A widget is a
+Goal whose deliverable is an A2UI node. Standing orders become Goals. Clawish is
+the runtime that executes Goals when no human is present.
+
+**The differentiator:** ROI telemetry (cost/tokens/duration per run) already
+flows through the `done` SSE event. Attached to Run records it yields something
+none of the three reference tools has — *what your autonomous agents cost and
+what they actually produced*. OpenClaw has no economics or dashboard; openworker
+has no scheduling, verification, or history; Burnbox has tiles but discards run
+outcomes (`eprintln!` and gone).
+
+Order: **Runs first** (shared substrate: C2 = K3) → Cockpit view over them →
+widget catalog + recipe refresh → verification/retry (beats openworker) →
+approval policy → move the loop out of the renderer (real "works while you
+sleep"). **Not** building: external messaging channels, Burnbox's crypto.
+
 ## Decision records
 
 | # | Question | Status |
@@ -121,9 +154,21 @@ Sequence after P1 + Projects hardening. Interacts with DR-3 ($ tier/auth).
 
 ## Phasing
 
-P0 de-nib + rename → P1 provider/model registry + guided onboarding →
-P2 surface clarity (DR-1/DR-2) → P3 skills/widgets/MCP polish →
-P4 memory graph + voice + PTT + doc service → P5 shared projects.
+Pillar numbers are identities, not execution order. Actual sequence:
+
+1. **P0** de-nib + rename — ✅ complete (`90fe812..01903c9`)
+2. **P1** provider/model registry — ✅ complete (P1.1–P1.7, `928fad2..d3f4878`)
+3. **P2** surface clarity — per-surface defaults ✅ (`808ac26`); provider
+   management + model selection ✅ (`63482c1`, `178ae3f`, `0f6952b`)
+4. **P2d** ⟵ *in progress*: effective registry (user models into the
+   capability×tier grid, price-band inference), tier grid UI, route-selecting
+   dropdown. Resolves DR-13 and the 345-model scan flood.
+5. **P6** autonomy & observability — Runs substrate → Cockpit → widgets →
+   verification → approval policy → out-of-renderer runtime
+6. **P2** remainder — onboarding rework around provider paths
+7. **P3** skills/widgets/MCP polish + Composio evaluation (DR-9)
+8. **P4** memory graph + voice + PTT + doc service
+9. **P5** shared projects (needs a sync layer; interacts with DR-3)
 
 ## De-nib checklist (P0) — ✅ COMPLETE (2026-07-24, commits 90fe812..01903c9)
 
