@@ -218,6 +218,24 @@ describe('provider parameter assembly', () => {
     expect(providerParams().model).toBe('sonnet');
   });
 
+  it('uses the surface default route when no model or tier is sent', async () => {
+    // cowork defaults to code/smort → opus; chat defaults to chat/good → sonnet.
+    await post('cowork', { message: 'go', chatId: 'c1', apiKey: 'sk-x' });
+    expect(providerParams().model).toBe('opus');
+
+    await post('chat', { message: 'go', chatId: 'c1', apiKey: 'sk-x' });
+    expect(providerParams().model).toBe('sonnet');
+  });
+
+  it('honours a tier-only override, keeping the surface capability', async () => {
+    // No capability sent: cowork's own 'code' capability + the requested tier.
+    await post('cowork', { message: 'go', chatId: 'c1', tier: 'cheap', apiKey: 'sk-x' });
+    expect(providerParams().model).toBe('haiku');
+
+    await post('cowork', { message: 'go', chatId: 'c1', tier: 'stallion', apiKey: 'sk-x' });
+    expect(providerParams().model).toBe('claude-fable-5');
+  });
+
   it('tumbles a chat stallion request down to smort (opus)', async () => {
     await post('chat', { message: 'hi', chatId: 'c1', capability: 'chat', tier: 'stallion', apiKey: 'sk-x' });
     expect(providerParams().model).toBe('opus');
