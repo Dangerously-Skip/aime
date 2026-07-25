@@ -108,7 +108,9 @@ export function ProjectDetail({
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
 
   const model = useChatStore((s) => s.model);
+  const providerModel = useChatStore((s) => s.providerModel);
   const setModel = useChatStore((s) => s.setModel);
+  const setProviderModel = useChatStore((s) => s.setProviderModel);
   const addMessage = useChatStore((s) => s.addMessage);
   const startStreaming = useChatStore((s) => s.startStreaming);
   const appendToLastAssistant = useChatStore((s) => s.appendToLastAssistant);
@@ -266,7 +268,7 @@ export function ProjectDetail({
 
     const crossSurfaceContext = buildProjectContext(project!, "chat", conv.id);
 
-    sendMessage(trimmed, conv.id, "chat", model, {
+    sendMessage(trimmed, conv.id, "chat", providerModel ? providerModel.model : model, {
       personalPreferences: personalPreferences || undefined,
       displayName: displayName || undefined,
       attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
@@ -274,6 +276,7 @@ export function ProjectDetail({
       projectKnowledge,
       crossSurfaceContext: crossSurfaceContext || undefined,
       apiKey: anthropicApiKey || undefined,
+      providerConfig: providerModel?.providerConfig,
     });
   }
 
@@ -467,8 +470,9 @@ export function ProjectDetail({
             />
             <div className="flex items-center gap-2">
               <ModelSelector
-                value={model}
+                value={providerModel ? providerModel.id : model}
                 onChange={setModel}
+                onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
                 className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
               />
               <Button

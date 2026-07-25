@@ -7,6 +7,7 @@ import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
+import type { ModelOption } from '@/lib/models/client-options';
 
 export interface CanvasArtifact {
   id: string;
@@ -23,6 +24,8 @@ interface CoworkState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
   model: ModelId;
+  /** User-added-provider model override (in-memory); null ⇒ use `model`. */
+  providerModel: ModelOption | null;
   isStreaming: boolean;
   streamError: string | null;
   folderByChat: Record<string, string | null>;
@@ -42,6 +45,7 @@ interface CoworkActions {
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
   attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: A2UIDocument }) => void;
   setModel: (model: string) => void;
+  setProviderModel: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
   setCurrentChat: (chatId: string | null) => void;
@@ -75,6 +79,7 @@ export const useCoworkStore = create<CoworkStore>()(
       messages: {},
       currentChatId: null,
       model: 'opus',
+      providerModel: null,
       isStreaming: false,
       streamError: null,
       folderByChat: {},
@@ -141,11 +146,13 @@ export const useCoworkStore = create<CoworkStore>()(
 
       setModel: (model) => {
         if (VALID_MODELS.has(model)) {
-          set({ model: model as ModelId });
+          set({ model: model as ModelId, providerModel: null });
         } else {
           console.warn(`[CoworkStore] Invalid model "${model}", keeping current`);
         }
       },
+
+      setProviderModel: (opt) => set({ providerModel: opt }),
 
       startStreaming: (chatId) => set((state) => ({
         isStreaming: true,

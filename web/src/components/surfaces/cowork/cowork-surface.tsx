@@ -716,6 +716,7 @@ export function CoworkSurface() {
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
   const model = useCoworkStore((s) => s.model);
+  const providerModel = useCoworkStore((s) => s.providerModel);
   const isStreaming = useCoworkStore((s) => s.isStreaming);
   const storeFolder = useCoworkStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
   const folder = storeFolder || pendingFolder;
@@ -723,6 +724,7 @@ export function CoworkSurface() {
   const artifactFiles = useCoworkStore((s) => (chatId ? s.artifactFiles[chatId] : undefined) ?? EMPTY_FILES);
   const canvasArtifacts = useCoworkStore((s) => (chatId ? s.canvasArtifacts[chatId] : undefined) ?? EMPTY_CANVASES);
   const setModel = useCoworkStore((s) => s.setModel);
+  const setProviderModel = useCoworkStore((s) => s.setProviderModel);
   const setFolder = useCoworkStore((s) => s.setFolder);
   const addMessage = useCoworkStore((s) => s.addMessage);
   const appendToLastAssistant = useCoworkStore((s) => s.appendToLastAssistant);
@@ -1246,13 +1248,14 @@ export function CoworkSurface() {
             const currentControls = useCoworkStore.getState().sessionControls[chatId] ?? DEFAULT_SESSION_CONTROLS;
             const priorMsgs = useCoworkStore.getState().messages[chatId] || [];
             const hist = stripMessagesForHistory(priorMsgs.slice(0, -2));
-            void sendMessage(continuePrompt, chatId, "cowork", model, {
+            void sendMessage(continuePrompt, chatId, "cowork", providerModel ? providerModel.model : model, {
               personalPreferences: personalPreferences || undefined,
               displayName: displayName || undefined,
               cwd: folder || projectFolder || scratchDir || undefined,
               history: hist.length > 0 ? hist : undefined,
               sessionControls: currentControls,
               apiKey: anthropicApiKey || undefined,
+              providerConfig: providerModel?.providerConfig,
             });
           }, 1500);
           return; // skip "task complete" notification
@@ -1393,9 +1396,10 @@ export function CoworkSurface() {
       }
 
       const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
-      await sendMessage(trimmed, id, "cowork", model, {
+      await sendMessage(trimmed, id, "cowork", providerModel ? providerModel.model : model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
+        providerConfig: providerModel?.providerConfig,
         projectInstructions: projectInstructions || undefined,
         projectKnowledge: projectKnowledge || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
@@ -1456,11 +1460,12 @@ export function CoworkSurface() {
       addMessage(bgId, { id: crypto.randomUUID(), role: 'user', content: prompt, timestamp: Date.now() });
       addMessage(bgId, { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: Date.now(), isLoading: true, isStreaming: true });
       startStreaming(bgId);
-      void sendMessage(prompt, bgId, 'cowork', model, {
+      void sendMessage(prompt, bgId, 'cowork', providerModel ? providerModel.model : model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         apiKey: anthropicApiKey || undefined,
         cwd: folder || projectFolder || scratchDir || undefined,
+        providerConfig: providerModel?.providerConfig,
       });
     },
     [addConversation, addMessage, startStreaming, sendMessage, model, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
@@ -1474,7 +1479,7 @@ export function CoworkSurface() {
         const resp = await fetch('/api/chat/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model, apiKey: anthropicApiKey || undefined }),
+          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: providerModel ? providerModel.model : model, apiKey: anthropicApiKey || undefined, ...(providerModel?.providerConfig ? { providerConfig: providerModel.providerConfig } : {}) }),
         });
         if (!resp.ok || !resp.body) return;
         const reader = resp.body.getReader();
@@ -1707,8 +1712,9 @@ export function CoworkSurface() {
                 </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
-                    value={model}
+                    value={providerModel ? providerModel.id : model}
                     onChange={setModel}
+                    onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
                     className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                   />
                   <Button
@@ -1792,8 +1798,9 @@ export function CoworkSurface() {
                     </div>
                     <div className="flex items-center gap-2">
                       <ModelSelector
-                        value={model}
+                        value={providerModel ? providerModel.id : model}
                         onChange={setModel}
+                        onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
                         className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                       />
                       <Button

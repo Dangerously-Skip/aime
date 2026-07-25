@@ -49,9 +49,16 @@ export function ModelSelector({ value, onChange, onSelectModel, className }: Mod
 
   const handleChange = (v: string | null) => {
     if (!v) return;
-    onChange(v);
     const opt = findOption(options, v);
-    if (opt && onSelectModel) onSelectModel(opt);
+    // A provider model carries a composite id that is NOT a valid built-in
+    // enum value, so never push it through onChange — report it via
+    // onSelectModel only. Built-ins set the enum (and clear any override).
+    if (opt?.providerConfig) {
+      onSelectModel?.(opt);
+    } else {
+      onChange(v);
+      if (opt && onSelectModel) onSelectModel(opt);
+    }
   };
 
   return (
