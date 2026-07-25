@@ -127,6 +127,21 @@ export interface Goal {
   lastRunAt?: number;
   /** Consecutive failures — drives escalation and "this is broken" in the UI. */
   consecutiveFailures?: number;
+  /**
+   * Aggregates from before run records existed — e.g. a standing order that had
+   * already executed many times when it was adopted as a Goal. Kept separate
+   * from live Run data because it is a count without detail: we know it ran, not
+   * what happened. The UI shows it as context so a long-running order doesn't
+   * read as "never run", but must not fold it into success rates it can't
+   * substantiate.
+   */
+  prior?: {
+    runCount: number;
+    errorCount: number;
+    totalUsd?: number;
+  };
+  /** Where this Goal came from, when it wasn't created directly. */
+  sourceId?: string;
 }
 
 /** Aggregate health for a Goal, for a Cockpit tile or a scheduled-runs list. */

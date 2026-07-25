@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRunStore } from "@/stores/run-store";
+import { useAssistantStore } from "@/stores/assistant-store";
+import { standingOrdersToGoals } from "@/lib/runs/standing-order-goal";
 import { summarizeRuns } from "@/lib/runs/runs";
 import {
   byNewest,
@@ -187,6 +189,12 @@ function GoalCard({ goal, runs, now }: { goal: Goal; runs: Run[]; now: number })
         <span className="text-xs text-muted-foreground tabular-nums">
           {summary.total} run{summary.total === 1 ? "" : "s"}
           {summary.medianDurationMs != null && ` · ~${formatDuration(summary.medianDurationMs)}`}
+          {/* History from before run tracking existed. Shown as context so a
+              long-standing order doesn't read as "never run", but kept out of
+              the success rate — we know it ran, not what happened. */}
+          {summary.total === 0 && goal.prior && (
+            <> · {goal.prior.runCount} before tracking</>
+          )}
         </span>
         {runs.length > 0 && (
           <Button
@@ -212,7 +220,17 @@ function GoalCard({ goal, runs, now }: { goal: Goal; runs: Run[]; now: number })
 }
 
 export function Cockpit() {
-  const goals = useRunStore((s) => s.goals);
+  const ownGoals = useRunStore((s) => s.goals);
+  // Standing orders ARE goals — a durable instruction with a schedule, a
+  // completion condition and a run history. Adapting them means the Cockpit
+  // reflects what the user has already set up instead of asking them to
+  // recreate it. Adapted on read (not copied into the store) so the order
+  // remains the single source of truth and cannot drift.
+  const orders = useAssistantStore((s) => s.orders);
+  const goals = useMemo(
+    () => [...standingOrdersToGoals(orders), ...ownGoals],
+    [orders, ownGoals],
+  );
   const liveRuns = useRunStore((s) => s.runs);
   const [logged, setLogged] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
