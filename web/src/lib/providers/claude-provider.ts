@@ -2,7 +2,6 @@ import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { getSurfaceConfig } from '../surfaces';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
-import { getClaudeSDKPath } from './sdk-path';
 import { waitForAnswer } from '../pending-questions';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { waitForBrowserToolResult } from '../pending-browser-tools';

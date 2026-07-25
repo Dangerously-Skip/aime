@@ -10,7 +10,6 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Brain, Check } from "lucide-react";
 import { useMemoryStore } from "@/stores/memory-store";
-import { useProjectStore } from "@/stores/project-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { suggestCategory, MEMORY_CATEGORIES, type MemoryCategory } from "@/lib/memory/types";
 

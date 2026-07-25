@@ -19,7 +19,8 @@
     "dist": "next build && electron-builder --mac",
     "dist:win": "next build && electron-builder --win",
     "dist:linux": "next build && electron-builder --linux",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "lint:strict": "eslint --max-warnings 30"
   },
   "build": {
     "appId": "com.aime.app",

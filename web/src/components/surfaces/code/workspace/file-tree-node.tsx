@@ -1,6 +1,6 @@
 "use client";
 
-import { type MouseEvent } from "react";
+import { type ComponentType, type MouseEvent } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -33,25 +33,23 @@ interface FileTreeNodeProps {
   onDiffClick?: (node: FsNode) => void;
 }
 
-/** Best-effort icon for a file extension. Falls back to generic FileIcon. */
-function fileIconFor(name: string) {
-  const ext = getExt(name);
-  if ([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"].includes(ext)) return FileImage;
-  if ([".json", ".jsonc"].includes(ext)) return FileJson;
-  if ([".md", ".mdx", ".txt", ".log", ".csv", ".tsv"].includes(ext)) return FileText;
-  if (
-    [
+/** Best-effort icon per file extension. A lookup (rather than a function that
+ *  returns a component) so the JSX tag below resolves to a stable module-level
+ *  reference — a component produced by a call during render is treated as newly
+ *  created and would remount every render. */
+const EXT_ICON: Record<string, ComponentType<{ className?: string; strokeWidth?: number }>> =
+  Object.fromEntries([
+    ...[".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"].map((e) => [e, FileImage]),
+    ...[".json", ".jsonc"].map((e) => [e, FileJson]),
+    ...[".md", ".mdx", ".txt", ".log", ".csv", ".tsv"].map((e) => [e, FileText]),
+    ...[
       ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
       ".py", ".rb", ".go", ".rs", ".java", ".kt", ".swift",
       ".c", ".cpp", ".h", ".hpp", ".cs", ".php", ".sh",
       ".css", ".scss", ".less", ".html", ".vue", ".svelte",
       ".yml", ".yaml", ".toml", ".xml",
-    ].includes(ext)
-  ) {
-    return FileCode2;
-  }
-  return FileIcon;
-}
+    ].map((e) => [e, FileCode2]),
+  ]);
 
 /**
  * One row of the file tree. The parent owns expand/collapse state and child
@@ -78,7 +76,11 @@ export function FileTreeNode({
   onDiffClick,
 }: FileTreeNodeProps) {
   const isDir = node.type === "dir";
-  const Icon = isDir ? (expanded ? FolderOpen : Folder) : fileIconFor(node.name);
+  const Icon = isDir
+    ? expanded
+      ? FolderOpen
+      : Folder
+    : EXT_ICON[getExt(node.name)] ?? FileIcon;
 
   function handleClick(e: MouseEvent<HTMLButtonElement>) {
     if (isDir) {

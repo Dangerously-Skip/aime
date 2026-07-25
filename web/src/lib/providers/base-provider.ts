@@ -158,7 +158,7 @@ export abstract class BaseProvider {
   /**
    * Abort an active query for a given chatId.
    */
-  abort(chatId: string, surfaceId?: string): boolean {
+  abort(_chatId: string, _surfaceId?: string): boolean {
     // Override in subclass to implement abort functionality
     return false;
   }

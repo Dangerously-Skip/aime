@@ -47,7 +47,7 @@ export function ToolCallsSummaryBar({
   onPreviewUrl,
   onCancel,
 }: ToolCallsSummaryBarProps) {
-  const { running, completed, errored, label, icon, runningStartTime } = useMemo(() => {
+  const { running, label, icon, runningStartTime } = useMemo(() => {
     const running = toolCalls.filter((t) => t.status === "running");
     const completed = toolCalls.filter((t) => t.status === "complete");
     const errored = toolCalls.filter((t) => t.status === "error");
@@ -75,7 +75,7 @@ export function ToolCallsSummaryBar({
       icon = "wrench";
     }
 
-    return { running, completed, errored, label, icon, runningStartTime };
+    return { running, label, icon, runningStartTime };
   }, [toolCalls]);
 
   const isRunning = running.length > 0;

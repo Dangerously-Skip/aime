@@ -4,8 +4,11 @@ import type { Conversation } from '@/stores/conversation-store';
 /**
  * Get a surface-specific store for reading messages.
  * Uses lazy imports to avoid circular dependencies — this module is imported
- * by hooks/components that also import from these stores.
+ * by hooks/components that also import from these stores. Deliberately
+ * require() rather than static import: static imports are hoisted to module
+ * load and reintroduce the cycle.
  */
+/* eslint-disable @typescript-eslint/no-require-imports */
 function getMessagesForConversation(conversationId: string, surface: string): Array<{ role: string; content: string }> {
   switch (surface) {
     case 'chat': {
@@ -28,6 +31,7 @@ function getMessagesForConversation(conversationId: string, surface: string): Ar
       return [];
   }
 }
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 /**
  * Generate a brief summary of a conversation by taking the first user message
@@ -93,6 +97,9 @@ export function buildProjectContext(
 
   // Cross-surface conversation summaries
   // Primary: find conversations linked via conversation.projectId
+  // Lazy require (see getMessagesForConversation above) — a static import of the
+  // conversation store here would reintroduce the import cycle.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { useConversationStore } = require('@/stores/conversation-store');
   const allConversations = useConversationStore.getState().conversations;
   const projectConversations: Conversation[] = allConversations.filter(

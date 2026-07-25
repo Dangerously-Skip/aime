@@ -78,7 +78,7 @@ export const useAppStore = create<AppStore>()(
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
       partialize: (state) => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        // These four are transient view state — dropped from the persisted slice.
         const { viewingProjectId, selectedSkillId, selectedConnectorId, selectedAgentName, ...rest } = state;
         return rest;
       },

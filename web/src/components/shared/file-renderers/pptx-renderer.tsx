@@ -35,6 +35,7 @@ export function PptxRenderer({ content, encoding, name }: PptxRendererProps) {
 
   useEffect(() => {
     if (!content) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- early-out of the same async parse pipeline that sets these below
       setLoading(false);
       setError("No file content available");
       return;

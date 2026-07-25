@@ -70,7 +70,8 @@ function Row({
  * Single-click → preview tab. Double-click → pin. Cmd/Ctrl-click → open in
  * an additional pinned tab without replacing the current preview.
  */
-export function FileTree({ workspace, onClose }: FileTreeProps) {
+// onClose is part of the props contract but this view has no close affordance.
+export function FileTree({ workspace }: FileTreeProps) {
   const tree = useFileTree(workspace);
   const { openTab } = useCodeWorkspace(workspace);
   const { status: gitStatus } = useGitStatus(workspace);

@@ -8,8 +8,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Github, Search, Loader2, Lock, Check } from "lucide-react";
+import { Github, Search, Loader2, Lock } from "lucide-react";
 import { REPOS_DIR_NAME } from "@/config/branding";
 
 interface Repo {

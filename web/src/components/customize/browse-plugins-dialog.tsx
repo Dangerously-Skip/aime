@@ -29,6 +29,7 @@ export function BrowsePluginsDialog({ open, onOpenChange }: BrowsePluginsDialogP
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- spinner for the fetch this effect starts; nothing to derive during render
       setLoading(true);
       fetch("/api/customize/plugins")
         .then((r) => r.json())

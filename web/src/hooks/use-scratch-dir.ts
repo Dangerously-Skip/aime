@@ -25,6 +25,7 @@ export function useScratchDir(conversationId: string): string | null {
 
   useEffect(() => {
     if (!conversationId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- same effect resolves the path via the Electron homeDir IPC, unavailable during render/SSR
       setScratchDir(null);
       return;
     }

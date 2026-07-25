@@ -243,7 +243,7 @@ export function CanvasPanel({
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <LayoutDashboard className="h-8 w-8 mb-2 opacity-40" />
             <p className="text-sm">No canvas yet</p>
-            <p className="text-xs mt-1">Ask the agent to "show a canvas with..."</p>
+            <p className="text-xs mt-1">Ask the agent to &ldquo;show a canvas with...&rdquo;</p>
           </div>
         )}
       </div>

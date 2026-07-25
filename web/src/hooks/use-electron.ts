@@ -46,6 +46,9 @@ export function useElectron(): UseElectronReturn {
   const [isElectron, setIsElectron] = useState(false);
 
   useEffect(() => {
+    // Must run after mount: window.electronAPI is injected by the preload and
+    // is absent during SSR, so reading it during render would hydrate-mismatch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsElectron(typeof window !== 'undefined' && !!window.electronAPI);
   }, []);
 

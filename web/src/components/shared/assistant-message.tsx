@@ -196,9 +196,10 @@ export function AssistantMessage({
       }
       if (tc.name === "Bash" && typeof tc.input.command === "string") {
         const cmd = tc.input.command;
-        BASH_ARTIFACT_EXT.lastIndex = 0;
-        let m: RegExpExecArray | null;
-        while ((m = BASH_ARTIFACT_EXT.exec(cmd)) !== null) {
+        // Own regex instance: BASH_ARTIFACT_EXT is /g and module-scoped, so
+        // resetting its lastIndex would mutate state shared with other scanners.
+        const re = new RegExp(BASH_ARTIFACT_EXT.source, BASH_ARTIFACT_EXT.flags);
+        for (const m of cmd.matchAll(re)) {
           const candidate = m[1];
           if (!candidate || candidate.length < 3 || candidate.startsWith(".")) continue;
           if (!isValidSidebarEntry(candidate)) continue;

@@ -29,6 +29,14 @@ jobs:
         working-directory: web
         run: npm run typecheck
 
+      # Errors are a hard gate. They were driven from 62 to 0 on 2026-07-26 and
+      # this keeps them there — without a gate the count silently re-rots.
+      # Warnings are still allowed; `npm run lint:strict` is the local ratchet
+      # for tightening that allowance as the remaining ones get cleared.
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+
       - name: Unit tests
         working-directory: web
         run: npm test

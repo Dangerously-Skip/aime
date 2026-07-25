@@ -84,6 +84,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
   useEffect(() => {
     if (messages.length > 0) {
       userScrolledUpRef.current = false;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- must run after mount: paired with the scrollIntoView DOM effect below
       setUserScrolledUp(false);
       requestAnimationFrame(() => {
         endRef.current?.scrollIntoView({ behavior: "instant" });

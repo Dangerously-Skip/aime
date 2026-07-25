@@ -28,6 +28,9 @@ function setHydrated() {
 export function useHydrated() {
   const [ready, setReady] = useState(hydrated);
   useEffect(() => {
+    // Race guard: rehydration can complete between the useState read above and
+    // this effect running, in which case no listener would ever fire.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- required for that race; removing it can leave the app stuck on the loading spinner
     if (hydrated) { setReady(true); return; }
     const cb = () => setReady(true);
     listeners.add(cb);

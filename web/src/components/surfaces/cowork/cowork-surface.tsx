@@ -19,7 +19,6 @@ import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { summarizeConversation } from "@/lib/memory/summarizer";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
-import { useAutoProject } from "@/hooks/use-auto-project";
 import { sendConversationCompletedEvent, sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useCronStore } from "@/stores/cron-store";
 import { useScratchDir } from "@/hooks/use-scratch-dir";
@@ -27,7 +26,6 @@ import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { DropOverlay } from "@/components/shared/drop-overlay";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import type { Message } from "@/stores/chat-store";
@@ -57,18 +55,14 @@ import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
 import { useCanvasStore } from "@/stores/canvas-store";
-import type { A2UIDocument } from "@/lib/a2ui/types";
 import { CanvasOverlay } from "@/components/shared/canvas-overlay";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
-import { useHeartbeat } from "@/hooks/use-heartbeat";
-import { useCron } from "@/hooks/use-cron";
 import {
   BASH_WRITE_PATTERNS,
   BASH_NOISE,
   BASH_ARTIFACT_EXT,
   isValidSidebarEntry,
 } from "@/lib/artifact-tracker";
-import { useReminderStore, playDing } from "@/stores/reminder-store";
 import { useHeartbeatStore } from "@/stores/heartbeat-store";
 import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
 import {
@@ -115,53 +109,6 @@ interface SearchResult {
 interface SearchQueryGroup {
   query: string;
   results: SearchResult[];
-}
-
-function parseSearchResults(output: string): SearchResult[] {
-  // Helper to extract results from a parsed object
-  const extract = (data: Record<string, unknown>): SearchResult[] => {
-    // Direct array of results
-    if (Array.isArray(data)) {
-      return data.slice(0, 10).map((r: Record<string, unknown>) => ({
-        title: String(r.title || ''),
-        url: String(r.url || r.link || ''),
-        snippet: String(r.content || r.snippet || r.description || '').slice(0, 200),
-      })).filter((r: SearchResult) => r.title && r.url);
-    }
-    // { results: [...] } wrapper (searxng structured response)
-    if (data.results && Array.isArray(data.results)) {
-      return data.results.slice(0, 10).map((r: Record<string, unknown>) => ({
-        title: String(r.title || ''),
-        url: String(r.url || r.link || ''),
-        snippet: String(r.content || r.snippet || r.description || '').slice(0, 200),
-      })).filter((r: SearchResult) => r.title && r.url);
-    }
-    return [];
-  };
-
-  try {
-    const data = JSON.parse(output);
-
-    // MCP content blocks: [{type:"text", text:"..."}] — unwrap the text payload
-    if (Array.isArray(data) && data.length > 0 && data[0]?.type === 'text' && typeof data[0]?.text === 'string') {
-      try {
-        const inner = JSON.parse(data[0].text);
-        const results = extract(inner);
-        if (results.length > 0) return results;
-      } catch { /* inner text wasn't JSON, fall through */ }
-    }
-
-    // Direct JSON (already-unwrapped by SDK)
-    const results = extract(data);
-    if (results.length > 0) return results;
-  } catch {
-    // Not JSON — try to extract URLs from text
-    const urls = output.match(/https?:\/\/[^\s)>"]+/g);
-    if (urls) {
-      return urls.slice(0, 10).map(url => ({ title: new URL(url).hostname, url, snippet: '' }));
-    }
-  }
-  return [];
 }
 
 function categorizeToolCall(
@@ -779,7 +726,6 @@ export function CoworkSurface() {
   const scratchDir = useScratchDir(chatId);
   // Auto-project creation disabled — users create projects manually
   const { showNotification } = useElectron();
-  const showReminder = useReminderStore((s) => s.showReminder);
 
   /**
    * What to send for the picker's current selection: a tier route resolves here
@@ -1462,6 +1408,22 @@ export function CoworkSurface() {
       projectInstructions,
       projectKnowledge,
       attachments,
+      // Read inside the callback and previously missing, so a slash command, a
+      // project switch or a security-setting change did not take effect until
+      // another dep changed. All are primitives or stable store references.
+      sessionControls,
+      setSessionControls,
+      pendingFolder,
+      setFolder,
+      currentProjectId,
+      crossSurfaceContext,
+      projectFolder,
+      scratchDir,
+      anthropicApiKey,
+      blockDangerousCommands,
+      blockNetworkCommands,
+      restrictToProjectFolder,
+      disableBashTool,
     ]
   );
 
@@ -1473,6 +1435,7 @@ export function CoworkSurface() {
   );
 
   // Fire a background agent run on the cowork surface (used by heartbeat + cron)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentionally retained dead code; see the note below the runSilentHeartbeat definition
   const fireBackgroundRun = useCallback(
     (prompt: string) => {
       const bgId = crypto.randomUUID();
@@ -1501,6 +1464,7 @@ export function CoworkSurface() {
   );
 
   // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentionally retained dead code; see the note below this definition
   const runSilentHeartbeat = useCallback(
     async (prompt: string) => {
       try {

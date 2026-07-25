@@ -22,6 +22,7 @@ export function BlameView({ workspace, filePath, onSelectHash }: BlameViewProps)
 
   useEffect(() => {
     if (!workspace || !filePath) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the previously fetched blame; same async pipeline as the fetch below
       setLines([]);
       return;
     }

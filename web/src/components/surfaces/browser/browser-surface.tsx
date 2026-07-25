@@ -25,7 +25,6 @@ import {
   getInspectorPollScript,
   getSelectionScript,
   getSelectionListenerScript,
-  getSelectionCleanupScript,
   captureScreenshot,
   formatElementContext,
   type InspectorResult,
@@ -615,7 +614,9 @@ export function BrowserSurface() {
 
       await runAgentLoop(text, model, wv, context.length > 0 ? context : undefined);
     },
-    [model, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext, attachments]
+    // sessionControls is read for slash-command handling and was previously
+    // missing, so chained slash commands applied against a stale value.
+    [model, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext, attachments, sessionControls]
   );
 
   const handleVoiceTranscript = useCallback(

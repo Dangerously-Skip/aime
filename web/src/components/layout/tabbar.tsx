@@ -33,6 +33,9 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
   const goForward = useConversationStore((s) => s.goForward);
   const canGoBack = useConversationStore((s) => s.canGoBack());
   const canGoForward = useConversationStore((s) => s.canGoForward());
+  // Subscribed once here (not per-tab inside the map below) — hooks must not be
+  // called conditionally or in a loop. Badge counts are derived per surface.
+  const busEvents = useContextBusStore((s) => s.events);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -108,9 +111,9 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
       >
         {SURFACES.map((surface) => {
           const isActive = activeSurface === surface.id;
-          const unreadCount = useContextBusStore((s) =>
-            s.events.filter(e => !e.consumed && (e.priority === 'p0' || e.priority === 'p1') && (!e.targetSurface || e.targetSurface === surface.id)).length
-          );
+          const unreadCount = busEvents.filter(
+            e => !e.consumed && (e.priority === 'p0' || e.priority === 'p1') && (!e.targetSurface || e.targetSurface === surface.id)
+          ).length;
           return (
             <button
               key={surface.id}

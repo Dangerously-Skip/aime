@@ -1,7 +1,5 @@
 import { NextRequest } from 'next/server';
 import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { getMcpConfigPath } from '@/lib/app-paths';
 
 export const runtime = 'nodejs';

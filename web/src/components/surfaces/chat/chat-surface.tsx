@@ -11,7 +11,7 @@ import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, Sparkles, X, ImageIcon, FileText, File, FilePen, PanelRight, PanelRightClose, LayoutDashboard } from "lucide-react";
+import { ArrowUp, Square, X, ImageIcon, FileText, File, FilePen, PanelRight, PanelRightClose, LayoutDashboard } from "lucide-react";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import type { Message } from "@/stores/chat-store";
@@ -32,7 +32,7 @@ import { VoiceButton } from "@/components/shared/voice-button";
 import { parseSlashCommand, applySlashCommand, getSlashSuggestions, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
 import type { SessionControls } from "@/lib/slash-commands";
 import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
-import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
+import { useAtSuggestions, removeAtQuery } from "@/hooks/use-at-suggestions";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasOverlay } from "@/components/shared/canvas-overlay";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
@@ -83,7 +83,7 @@ export function ChatSurface() {
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
   const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
-  const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
+  const { fileSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
     useAtSuggestions();
   // Cron jobs now route to standing orders via useAssistantStore (see cron_create handler)
   // Artifact tracking — files created by Write/Edit/Bash tool calls
@@ -112,6 +112,7 @@ export function ChatSurface() {
     if (!chatId) return;
     if (lastChatIdRef.current === chatId) return;
     lastChatIdRef.current = chatId;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ref-guarded, fires only on an actual conversation switch; artifacts accumulate from stream events so they can't be derived
     setArtifactFiles([]);
   }, [chatId]);
   const messages = useChatStore(
@@ -198,6 +199,7 @@ export function ChatSurface() {
         summarizeConversation(prevId, prevMessages);
       }
       // Clear artifact state for the new conversation
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- ref-guarded conversation switch; paired with the stream abort + summarize side effects above
       setArtifactFiles([]);
       setPreviewPath(null);
     }
@@ -526,6 +528,16 @@ export function ChatSurface() {
       webSearchEnabled,
       projectInstructions,
       projectKnowledge,
+      // Read inside the callback and previously missing, so a slash command or a
+      // project change did not take effect until some other dep changed. All
+      // six are primitives or stable store references, so adding them only
+      // affects this callback's identity — it is never used in an effect.
+      sessionControls,
+      setSessionControlsInStore,
+      clearSuggestions,
+      currentProjectId,
+      crossSurfaceContext,
+      toolProfile,
     ]
   );
 

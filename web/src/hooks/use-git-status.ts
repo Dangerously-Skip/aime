@@ -54,6 +54,7 @@ export function useGitStatus(
     }
     // `baseRef` is in the dep list for future use — Agent C will pass it
     // through to the IPC handler.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- baseRef is deliberately retained ahead of that IPC change
   }, [workspace, baseRef]);
 
   // Debounced refresh — never more than once per 500ms during a watcher

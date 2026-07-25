@@ -7,6 +7,15 @@ import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Module-scoped: reads the wall clock, which must not happen in a component body. */
+function shouldShowWizard(
+  onboardingComplete: boolean,
+  onboardingSkippedAt: number | null
+): boolean {
+  if (onboardingComplete) return false;
+  return onboardingSkippedAt === null || Date.now() - onboardingSkippedAt > ONE_DAY_MS;
+}
+
 export default function Home() {
   const hydrated = useHydrated();
   const onboardingComplete = useSettingsStore((s) => s.onboardingComplete);
@@ -20,12 +29,7 @@ export default function Home() {
     );
   }
 
-  const showWizard =
-    !onboardingComplete &&
-    (onboardingSkippedAt === null ||
-      Date.now() - onboardingSkippedAt > ONE_DAY_MS);
-
-  if (showWizard) {
+  if (shouldShowWizard(onboardingComplete, onboardingSkippedAt)) {
     return <OnboardingWizard />;
   }
 

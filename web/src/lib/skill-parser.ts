@@ -48,8 +48,12 @@ export function evaluateSkillRequires(requires: SkillRequires | undefined): Skil
   }
 
   if (requires.bins) {
-    // Synchronously check for binary availability via PATH
+    // Synchronously check for binary availability via PATH.
+    // Lazy require so this module stays importable from client bundles — a
+    // static `import 'child_process'` would pull a node builtin into every
+    // consumer of parseSkillMd/serializeSkillMd.
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { execSync } = require('child_process');
       for (const bin of requires.bins) {
         try {

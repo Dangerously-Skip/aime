@@ -76,8 +76,6 @@ export async function POST(req: NextRequest) {
 
       const stream = client.messages.stream(streamParams);
 
-      let currentToolUseId = '';
-      let currentToolName = '';
       let toolInputJson = '';
 
       stream.on('text', (text) => {
@@ -90,8 +88,6 @@ export async function POST(req: NextRequest) {
 
       stream.on('contentBlock', (block) => {
         if (block.type === 'tool_use') {
-          currentToolUseId = block.id;
-          currentToolName = block.name;
           let parsedInput = {};
           try {
             parsedInput = JSON.parse(toolInputJson);

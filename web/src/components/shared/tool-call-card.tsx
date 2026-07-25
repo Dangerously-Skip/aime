@@ -117,17 +117,18 @@ export function ToolCallCard({
   onCancel,
 }: ToolCallCardProps) {
   const [isOpen, setIsOpen] = useState(status === "running");
-  // Re-render every second while running so the inline cancel button can
-  // appear once the tool is past ELAPSED_TIMEOUT_S — the elapsed badge
-  // already ticks via its own state, but the trigger row needs to know
-  // when to show the button.
-  const [, setNow] = useState(Date.now());
+  // Tick once a second while running so the inline cancel button can appear
+  // once the tool is past ELAPSED_TIMEOUT_S — the elapsed badge already ticks
+  // via its own state, but the trigger row needs to know when to show the
+  // button. The clock is read in the effect, never during render.
+  const [elapsedS, setElapsedS] = useState(0);
   useEffect(() => {
     if (status !== "running" || !startTime) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const tick = () => setElapsedS(Math.floor((Date.now() - startTime) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [status, startTime]);
-  const elapsedS = startTime && status === "running" ? Math.floor((Date.now() - startTime) / 1000) : 0;
   const showCancel = status === "running" && !!onCancel && elapsedS >= ELAPSED_TIMEOUT_S;
   const [showFullOutput, setShowFullOutput] = useState(false);
   const preview = formatToolPreview(input);

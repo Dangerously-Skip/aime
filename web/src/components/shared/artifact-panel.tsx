@@ -125,6 +125,7 @@ export function ArtifactPanel({
   // Reset state when artifact changes
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the auto-save result on close, paired with the ref reset below
       setSaveStatus({ state: "idle" });
       autoSavedRef.current = null;
     }

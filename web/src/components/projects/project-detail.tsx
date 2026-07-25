@@ -66,6 +66,28 @@ const SURFACE_CONFIG: Record<
 
 const SURFACE_ORDER: Surface[] = ["chat", "cowork", "code", "browser", "assistant"];
 
+const NEW_CONVERSATION_LABELS: Record<Surface, string> = {
+  chat: "New Chat",
+  cowork: "New Cowork Task",
+  code: "New Code Session",
+  browser: "New Browser Session",
+  assistant: "New Assistant Session",
+};
+
+/** Module-scoped: reads the wall clock, which must not happen in a component body. */
+function newSurfaceConversation(surface: Surface, projectId: string): Conversation {
+  const now = Date.now();
+  return {
+    id: crypto.randomUUID(),
+    title: NEW_CONVERSATION_LABELS[surface],
+    surface,
+    lastMessage: "",
+    createdAt: now,
+    updatedAt: now,
+    projectId,
+  };
+}
+
 function formatTimeAgo(timestamp: number): string {
   const diff = Date.now() - timestamp;
   const mins = Math.floor(diff / 60000);
@@ -101,7 +123,8 @@ interface ProjectDetailProps {
 export function ProjectDetail({
   projectId,
   onBack,
-  onOpenSettings,
+  // onOpenSettings is part of the props contract but unused here — project
+  // settings are reached from the sidebar, not this view.
   onOpenConversation,
 }: ProjectDetailProps) {
   const project = useProjectStore((s) => s.projects.find((p) => p.id === projectId));
@@ -298,22 +321,7 @@ export function ProjectDetail({
   }
 
   function handleStartInSurface(surface: Surface) {
-    const labels: Record<Surface, string> = {
-      chat: "New Chat",
-      cowork: "New Cowork Task",
-      code: "New Code Session",
-      browser: "New Browser Session",
-      assistant: "New Assistant Session",
-    };
-    const conv: Conversation = {
-      id: crypto.randomUUID(),
-      title: labels[surface],
-      surface,
-      lastMessage: "",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      projectId,
-    };
+    const conv = newSurfaceConversation(surface, projectId);
     addConversation(conv);
     setActiveConversation(conv.id);
     onOpenConversation(conv.id);
