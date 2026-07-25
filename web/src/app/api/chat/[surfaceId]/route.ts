@@ -474,8 +474,13 @@ export async function POST(
         || null;
       let effectiveModel = explicitModel || surfaceConfig.model;
 
-      if (!explicitModel && (capability || tier)) {
+      if (!explicitModel) {
+        // No pinned model → this surface's default comes from the registry, not
+        // a hardcoded name. The surface supplies the (capability, tier) intent
+        // (SURFACE_ROUTES); an explicit request capability/tier overrides it —
+        // that's how a user's per-surface tier preference arrives.
         const { resolveRoute, createDefaultRegistry } = await import('@/lib/models/registry');
+        const { getSurfaceRoute } = await import('@/lib/models/surface-routes');
         const { isBedrockConfigured } = await import('@/lib/bedrock-env');
         // Availability for the default (Claude) registry: an API key (BYOK/env)
         // makes the anthropic provider usable; a region makes Bedrock usable.
@@ -483,17 +488,22 @@ export async function POST(
         if (apiKey || process.env.ANTHROPIC_API_KEY) availableIds.add('anthropic');
         if (isBedrockConfigured()) availableIds.add('bedrock');
 
+        const route = getSurfaceRoute(surfaceId);
+        const wantCapability = capability ?? route.capability;
+        const wantTier = tier ?? route.tier;
+
         const resolved = resolveRoute(
           createDefaultRegistry(),
-          capability ?? 'chat',
-          tier ?? 'good',
+          wantCapability,
+          wantTier,
           (p) => availableIds.has(p.id),
         );
         if (resolved) {
           effectiveModel = resolved.model.driverModel;
-          console.log('[CHAT] Registry resolved', capability, tier, '→', effectiveModel,
+          console.log('[CHAT] Registry resolved', wantCapability, wantTier, '→', effectiveModel,
             resolved.degraded ? '(degraded)' : '');
         }
+        // else: keep surfaceConfig.model as the last-resort fallback.
       }
 
       // ── Execution resolution (user-added providers) ────────────────────

@@ -76,8 +76,18 @@ describe('settings migrations', () => {
     expect((s as unknown as Record<string, unknown>).nibGatewayApiKey).toBeUndefined();
   });
 
+  it('v7 → v8: backfills per-surface tier overrides', async () => {
+    await rehydrateWith(7, { fullName: 'Ash' });
+    expect(useSettingsStore.getState().surfaceTiers).toEqual({});
+  });
+
+  it('v8 preserves a stored tier override', async () => {
+    await rehydrateWith(8, { fullName: 'Ira', surfaceTiers: { cowork: 'stallion' } });
+    expect(useSettingsStore.getState().surfaceTiers).toEqual({ cowork: 'stallion' });
+  });
+
   it('current version passes through untouched', async () => {
-    await rehydrateWith(7, { fullName: 'Zoe', devHourlyRate: 200, onboardingComplete: true });
+    await rehydrateWith(8, { fullName: 'Zoe', devHourlyRate: 200, onboardingComplete: true });
 
     const s = useSettingsStore.getState();
     expect(s.fullName).toBe('Zoe');

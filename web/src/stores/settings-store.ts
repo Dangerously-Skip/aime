@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import type { Tier } from '@/lib/models/types';
 
 export type ChatFont = 'default' | 'sans' | 'mono' | 'system';
 export type ToolAccessMode = 'onDemand' | 'alwaysLoaded';
@@ -85,10 +86,19 @@ interface SettingsState {
 
   // ROI / Telemetry
   devHourlyRate: number;
+
+  /**
+   * Per-surface quality/cost tier override, keyed by surfaceId. Absent ⇒ use the
+   * surface's default from SURFACE_ROUTES. The capability is a property of the
+   * surface and is never user-overridable.
+   */
+  surfaceTiers: Record<string, Tier>;
 }
 
 interface SettingsActions {
   setDevHourlyRate: (rate: number) => void;
+  /** Set (or clear, with null) a surface's tier override. */
+  setSurfaceTier: (surfaceId: string, tier: Tier | null) => void;
   setFullName: (name: string) => void;
   setDisplayName: (name: string) => void;
   setWorkFunction: (fn: string) => void;
@@ -157,6 +167,7 @@ const initialState: SettingsState = {
   onboardingSkippedAt: null,
   teamId: null,
   devHourlyRate: 150,
+  surfaceTiers: {},
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -220,13 +231,21 @@ export const useSettingsStore = create<SettingsStore>()(
       setTeamId: (teamId) => set({ teamId }),
       setDevHourlyRate: (devHourlyRate) => set({ devHourlyRate }),
 
+      setSurfaceTier: (surfaceId, tier) =>
+        set((state) => {
+          const next = { ...state.surfaceTiers };
+          if (tier === null) delete next[surfaceId];
+          else next[surfaceId] = tier;
+          return { surfaceTiers: next };
+        }),
+
       resetAll: () => set(initialState),
     }),
     {
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 7,
+      version: 8,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         // v7 rename (applies to every pre-v7 payload regardless of source
@@ -235,6 +254,12 @@ export const useSettingsStore = create<SettingsStore>()(
         if (version < 7 && state.nibGatewayApiKey !== undefined && state.anthropicApiKey === undefined) {
           state.anthropicApiKey = state.nibGatewayApiKey;
           delete state.nibGatewayApiKey;
+        }
+        // v8: per-surface tier overrides. Backfilled up front (not as a
+        // per-version branch) because the branches below return early, so only
+        // an up-front write is guaranteed to apply to every source version.
+        if (version < 8 && state.surfaceTiers === undefined) {
+          state.surfaceTiers = {};
         }
         if (version === 0) {
           return { ...initialState, ...state } as unknown as SettingsState & SettingsActions;
@@ -317,6 +342,7 @@ export const useSettingsStore = create<SettingsStore>()(
         onboardingSkippedAt: state.onboardingSkippedAt,
         teamId: state.teamId,
         devHourlyRate: state.devHourlyRate,
+        surfaceTiers: state.surfaceTiers,
       }),
     }
   )

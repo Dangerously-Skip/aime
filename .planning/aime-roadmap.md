@@ -104,19 +104,20 @@ Shared project scope between humans. Everything today is localStorage/
 Zustand on one machine — sharing needs a sync layer (server or CRDT).
 Sequence after P1 + Projects hardening. Interacts with DR-3 ($ tier/auth).
 
-## Decision records (open)
+## Decision records
 
-| # | Question | Options / lean |
-|---|----------|----------------|
-| DR-1 | **"Clawish"** — what is it? | Always-on low-friction personal assistant mode. Fifth surface vs. Chat+Assistant merge. UNDECIDED |
-| DR-2 | **Cockpit** | Likely = evolution of Assistant surface (widgets + standing orders + ROI dashboard). UNDECIDED |
+| # | Question | Status |
+|---|----------|--------|
+| DR-1 | **"Clawish"** — what is it? | **RESOLVED (2026-07-25): not a surface — an always-on, event-driven runtime + goal/outcome jobs.** Reference points: **OpenClaw** (self-hosted always-on agent — gateway daemon, disk-backed session store, 30-min heartbeat, multi-source event router where messages/webhooks/hooks/timers/cron all trigger the *same* turn loop) and **openworker** (outcome-oriented — user declares a deliverable, agent decomposes + executes, **approval-gated** before consequential actions, returns finished work). See `clawish.md`. |
+| DR-2 | **Cockpit** | **RESOLVED (2026-07-25): evolve the Assistant surface** into a widget dashboard — declarative A2UI widget tiles (Burnbox pattern) + all scheduled runs + viewable per-run outcomes/history. A widget is a stored natural-language **recipe** re-run on a schedule. See `cockpit.md`. |
 | DR-3 | **"$7 setup"** — hosted/sub tier alongside BYOK? | Implies auth+billing; couples to P5. UNDECIDED |
-| DR-4 | **"Warmth"** | Temperature (model setting) vs. persona tone (voice creator). UNDECIDED |
-| DR-5 | **Mesh (3D)** | Capability slot in RoutingTable now; FAL integration later when a use case pulls. LEAN: slot only |
-| DR-6 | **Auto-update chain break** | New appId means nib installs won't auto-update to AIME. LEAN: intentional — it's a fork |
-| DR-7 | **User-data migration** | localStorage keys `nibcowork:*` → `aime:*` with migration; `~/.quarry` → `~/.aime` with fallback read. LEAN: migrate (cheap, machinery tested) |
-| DR-8 | **Opencode provider** | Dormant (unreachable from UI; `initializeProviders()` never called). LEAN: delete with gateway-provider; revisit under P1 registry if a second engine is wanted |
+| DR-4 | **"Warmth"** | **RESOLVED (P1.7): temperature** (a sampling lever, `warmthToTemperature`). Persona/voice stays a SOUL.md concern. |
+| DR-5 | **Mesh (3D)** | **RESOLVED (P1.5): implemented**, beyond a slot — real FAL mesh capability calls outside the agent loop. |
+| DR-6 | **Auto-update chain break** | **ACCEPTED: intentional** — new appId, nib installs don't auto-update to AIME. It's a fork. |
+| DR-7 | **User-data migration** | **DONE (P0.2): migrated** — `nibcowork:*` → `aime:*`, `~/.quarry` → `~/.aime` with fallback read. |
+| DR-8 | **Opencode provider** | **DONE (P0.4): deleted** with the gateway provider. Revisit only if a second engine is ever wanted. |
 | DR-9 | **Composio integration** | Managed tool-integration platform vs built-in connectors vs Nango. Evaluate in P3. UNDECIDED |
+| DR-13 | **Tier vs. model as the primary control** | The dropdown pins a model, which *suppresses* tier routing. Is the user-facing lever a tier (Cheap/Good/Smort/Stallion, model-pinning as advanced) or a model (tier stays internal fallback)? LEAN: tier-primary. UNDECIDED |
 
 ## Phasing
 
