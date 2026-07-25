@@ -114,8 +114,10 @@ export function ChatSurface() {
       EMPTY_MESSAGES
   );
   const model = useChatStore((s) => s.model);
+  const providerModel = useChatStore((s) => s.providerModel);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const setModel = useChatStore((s) => s.setModel);
+  const setProviderModel = useChatStore((s) => s.setProviderModel);
   const addMessage = useChatStore((s) => s.addMessage);
   const appendToLastAssistant = useChatStore(
     (s) => s.appendToLastAssistant
@@ -471,7 +473,7 @@ export function ChatSurface() {
       // Clear prompt suggestions when user sends a new message
       if (chatId) clearSuggestions(chatId);
 
-      await sendMessage(trimmed, id, "chat", model, {
+      await sendMessage(trimmed, id, "chat", providerModel ? providerModel.model : model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
@@ -484,11 +486,13 @@ export function ChatSurface() {
         crossSurfaceContext: crossSurfaceContext || undefined,
         sessionControls: sessionControls,
         toolProfile: toolProfile,
+        providerConfig: providerModel?.providerConfig,
       });
     },
     [
       chatId,
       model,
+      providerModel,
       addMessage,
       startStreaming,
       sendMessage,
@@ -726,8 +730,9 @@ export function ChatSurface() {
                 </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
-                    value={model}
+                    value={providerModel ? providerModel.id : model}
                     onChange={setModel}
+                    onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
                     className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                   />
                   <Button
@@ -864,8 +869,9 @@ export function ChatSurface() {
                       </div>
                       <div className="flex items-center gap-2">
                         <ModelSelector
-                          value={model}
+                          value={providerModel ? providerModel.id : model}
                           onChange={setModel}
+                          onSelectModel={(opt) => setProviderModel(opt.providerConfig ? opt : null)}
                           className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                         />
                         <Button
