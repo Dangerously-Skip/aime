@@ -44,6 +44,7 @@ import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
+import { useRunRecorder } from "@/hooks/use-run-recorder";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -211,10 +212,15 @@ export function ChatSurface() {
   // This causes chunks to be written to chatId "" instead of the new ID.
   const getChatId = () => useChatStore.getState().currentChatId ?? "";
 
+  // Records a Run per turn so every execution leaves a durable trace with its
+  // cost attached (P6 substrate — see lib/runs).
+  const runRecorder = useRunRecorder("chat");
+
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
     setStreamError,
+    onUsage: runRecorder.onUsage,
     onChunk(event) {
       const cid = getChatId();
       switch (event.type) {
@@ -344,6 +350,7 @@ export function ChatSurface() {
       }
     },
     onDone() {
+      runRecorder.succeed();
       const doneId = getChatId();
       completeRunningTools(doneId);
       stopStreaming(doneId);
@@ -371,6 +378,7 @@ export function ChatSurface() {
       }
     },
     onError(error) {
+      runRecorder.fail(error.message);
       stopStreaming(getChatId());
       appendToLastAssistant(getChatId(), `\n\n**Error:** ${error.message}`);
     },
@@ -492,6 +500,9 @@ export function ChatSurface() {
         hasAnthropicKey: !!anthropicApiKey,
       });
 
+      // Open the run record before the turn starts so an immediate failure is
+      // still attributed rather than lost.
+      runRecorder.begin({ trigger: "chat", model: route?.model ?? model });
       await sendMessage(trimmed, id, "chat", route?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
@@ -511,6 +522,7 @@ export function ChatSurface() {
     [
       chatId,
       model,
+      runRecorder,
       modelRoute,
       providers,
       tierModels,

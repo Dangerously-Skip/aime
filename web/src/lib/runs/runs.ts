@@ -90,6 +90,27 @@ export function costFromUsage(usage?: {
   return { inputTokens, outputTokens, totalUsd };
 }
 
+/**
+ * Build a RunCost from `StreamUsage` — the shape `use-sse-stream` has ALREADY
+ * normalized from the raw `done` event. Kept separate from `costFromUsage`
+ * rather than making one function sniff between camelCase and snake_case: the
+ * two shapes come from different layers (client hook vs raw server event) and a
+ * silent mismatch here would record zero cost on every run, which is worse than
+ * a type error.
+ */
+export function costFromStreamUsage(usage?: {
+  inputTokens?: number;
+  outputTokens?: number;
+  cost?: number;
+}): RunCost | undefined {
+  if (!usage) return undefined;
+  const inputTokens = usage.inputTokens ?? 0;
+  const outputTokens = usage.outputTokens ?? 0;
+  const totalUsd = usage.cost ?? 0;
+  if (!inputTokens && !outputTokens && !totalUsd) return undefined;
+  return { inputTokens, outputTokens, totalUsd };
+}
+
 function median(values: number[]): number | null {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
