@@ -67,9 +67,11 @@ rebuild onboarding around P1 provider paths.
 ### P2 — Surface clarity
 
 Per-surface default models via the RoutingTable ✅ (2026-07-25, `808ac26`);
-onboarding rework around provider paths (outstanding); tier-vs-model as the
-primary control (DR-13, open). DR-1/DR-2 resolved out of this pillar into **P6**
-— they turned out to be substrate + a dashboard, not surface naming.
+onboarding rework around provider paths ✅ (2026-07-26, `59805e6` — the last
+pre-open-sourcing item); tier-vs-model as the primary control resolved in code
+(DR-13 — the picker selects a route, `7998b5a`). DR-1/DR-2 resolved out of this
+pillar into **P6** — they turned out to be substrate + a dashboard, not surface
+naming. **P2 is complete.**
 
 ### P3 — Extensibility: MCPs, Skills, Widgets
 
