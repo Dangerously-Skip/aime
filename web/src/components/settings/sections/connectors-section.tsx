@@ -9,6 +9,29 @@ import { Eye, EyeOff, X, Check, KeyRound } from 'lucide-react'
 import { ProviderManager } from './provider-manager'
 import { TierGrid } from './tier-grid'
 
+
+/**
+ * Mirror the Anthropic key into the OS-keychain-backed credential store under
+ * providerId 'anthropic'. The renderer's localStorage copy is invisible to the
+ * server process, and the C5 scheduler runs there — without this mirror,
+ * scheduled widget refreshes silently fail for BYOK users. Fire-and-forget:
+ * the mirror must never block saving the key locally.
+ */
+function mirrorKeyToKeychain(key: string | null) {
+  const req = key
+    ? fetch('/api/models/providers/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId: 'anthropic', values: { apiKey: key } }),
+      })
+    : fetch('/api/models/providers/credentials', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId: 'anthropic' }),
+      });
+  void req.catch(() => {});
+}
+
 export function ConnectorsSection() {
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey)
   const setAnthropicApiKey = useSettingsStore((s) => s.setAnthropicApiKey)
@@ -28,6 +51,7 @@ export function ConnectorsSection() {
   function handleSelectTeam(team: TeamConfig) {
     setTeamId(team.id)
     setAnthropicApiKey(team.key)
+    mirrorKeyToKeychain(team.key)
   }
 
   function handleSaveKey() {
@@ -36,6 +60,7 @@ export function ConnectorsSection() {
       setAnthropicApiKey(trimmed)
       setTeamId(null)
       setKeyInput('')
+      mirrorKeyToKeychain(trimmed)
     }
   }
 
@@ -44,6 +69,7 @@ export function ConnectorsSection() {
     setTeamId(null)
     setKeyInput('')
     setShowKey(false)
+    mirrorKeyToKeychain(null)
   }
 
   return (
