@@ -144,9 +144,23 @@ happen and are recorded with every window closed ✅.
 
 Remaining: **C5b** — standing orders while-closed (their outputs — cards,
 context bus, notifications — are renderer-bound and need a results-inbox
-pipeline); **C6** external channels (deliberately not building for now);
-retry/escalation is decided (decideRetry) but not yet auto-invoked by the
-scheduler. **Not** building: external messaging channels, Burnbox's crypto.
+pipeline); retry/escalation is decided (decideRetry) but not yet auto-invoked
+by the scheduler. **Not** building: Burnbox's crypto.
+
+**C6 RESOLVED (2026-07-26): a first-party mobile companion app, not messaging
+channels.** The hard part of remote access was never the chat UI — it is the
+transport (the desktop is behind NAT). OpenClaw's WhatsApp/Telegram channels
+are really free relay infrastructure: both ends dial OUT to the platform.
+A companion app needs the same relay — which is exactly the P5 hosted-edition
+server — and once that exists it beats messaging channels on every axis that
+matters here: Cockpit on the phone, real push (run outcomes, failures),
+remote APPROVALS for C3's paused consequential actions, proper paired auth
+instead of "anyone who can message this number", no third-party ToS/creds.
+Remote access via the companion app is a fair hosted-edition feature (the relay
+is real infrastructure). Ship order: push notifications → remote approvals →
+Cockpit view → remote instructions. Interim recipe for power users: Tailscale +
+the headless server's web UI — BLOCKED on adding auth to the local API routes,
+which currently have none and must never listen beyond localhost until they do.
 
 ## Decision records
 
