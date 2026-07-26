@@ -5,6 +5,8 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { getTeamById } from "@/config/teams";
 import { StepWelcome } from "./step-welcome";
 import { StepTeam } from "./step-team";
+import { StepProviders } from "./step-providers";
+import { getTeams } from "@/config/teams";
 import { StepConnectors } from "./step-connectors";
 import { StepDone } from "./step-done";
 import { StepFeedback } from "./step-feedback";
@@ -107,16 +109,22 @@ export function OnboardingWizard() {
                 onContinue={handleStep1Continue}
               />
             )}
-            {step === 1 && (
-              <StepTeam
-                teamId={teamId}
-                onTeamChange={setTeamId}
-                manualApiKey={manualApiKey}
-                onManualApiKeyChange={setManualApiKey}
-                onContinue={handleStep2Continue}
-                onBack={prev}
-              />
-            )}
+            {step === 1 &&
+              (getTeams().length > 0 ? (
+                // Org build: a teams.json is configured, keep the team picker.
+                <StepTeam
+                  teamId={teamId}
+                  onTeamChange={setTeamId}
+                  manualApiKey={manualApiKey}
+                  onManualApiKeyChange={setManualApiKey}
+                  onContinue={handleStep2Continue}
+                  onBack={prev}
+                />
+              ) : (
+                // Open-source build: provider paths (P2 onboarding rework).
+                // The step saves directly to settings/provider stores itself.
+                <StepProviders onContinue={next} onBack={prev} />
+              ))}
             {step === 2 && (
               <StepConnectors
                 onConnectorConnected={handleConnectorConnected}
