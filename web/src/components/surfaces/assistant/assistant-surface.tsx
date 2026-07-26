@@ -56,6 +56,8 @@ import { TemplateDialog } from "./template-dialog";
 import { OrderEditor } from "./order-editor";
 import { exportOrdersToJson } from "@/lib/standing-order-yaml";
 import { Cockpit } from "./cockpit";
+import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
+import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -461,6 +463,7 @@ export function AssistantSurface() {
 
   // Standing order trigger engine
   useStandingOrders();
+  useWidgetRefresh();
 
   // Auto-refresh dashboard widgets on the heartbeat
   useAssistantWidgets();
@@ -556,6 +559,8 @@ export function AssistantSurface() {
               useAssistantStore.setState((s) => ({
                 cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: fullText } : c),
               }));
+            } else if (event.type === 'widget_create' && event.input) {
+              handleWidgetCreateEvent(event as Record<string, unknown>);
             } else if (event.type === 'standing_order_create' && event.input) {
               const input = event.input as {
                 instruction: string; trigger_type: string; expression?: string;

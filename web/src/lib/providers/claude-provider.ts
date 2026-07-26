@@ -160,6 +160,16 @@ export class ClaudeProvider extends BaseProvider {
       expiresInHours?: number;
     }> = [];
 
+    // Widgets requested via the WidgetCreate MCP tool (the chat → Cockpit
+    // pin loop, P6/K5). Flow mirrors StandingOrderCreate: queue here, emit as
+    // widget_create chunks after the stream, client adds to widget-store.
+    const pendingWidgets: Array<{
+      title: string;
+      recipe: string;
+      refreshEvery?: string;
+      allowWeb?: boolean;
+    }> = [];
+
     // In-process MCP server exposing CronCreate so the model can schedule reminders
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const z = (await import('zod/v3') as any).z ?? (await import('zod/v3') as any).default ?? await import('zod/v3');
@@ -205,6 +215,23 @@ export class ClaudeProvider extends BaseProvider {
             const triggerDesc = input.trigger_type === 'cron' ? `cron: ${input.expression}` : `every ${input.expression}`;
             return {
               content: [{ type: 'text' as const, text: `Standing order created: "${input.instruction}" (${triggerDesc}). It will appear in the Assistant surface sidebar and fire automatically.` }],
+            };
+          }
+        ),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'WidgetCreate',
+          'Pin a live dashboard widget to the user\'s Cockpit. Use when the user asks for a widget, dashboard, tracker, or an "at a glance" view of something. The recipe is re-run on each refresh to regenerate the tile, so describe WHAT to show, not the data itself.',
+          {
+            title: z.string().describe('Short tile title, e.g. "AAPL price"'),
+            recipe: z.string().describe('What the tile should show, as an instruction — e.g. "Top 5 Hacker News stories about AI with their points"'),
+            refreshEvery: z.string().optional().describe('Refresh interval like "30m", "2h", "1d". Omit for manual refresh only.'),
+            allowWeb: z.boolean().optional().describe('Whether refreshes may search/fetch the web'),
+          },
+          async (input: { title: string; recipe: string; refreshEvery?: string; allowWeb?: boolean }) => {
+            if (input.title && input.recipe) pendingWidgets.push(input);
+            return {
+              content: [{ type: 'text' as const, text: `Widget "${input.title}" pinned to the Cockpit${input.refreshEvery ? ` (refreshes every ${input.refreshEvery})` : ''}. It will populate on its first refresh.` }],
             };
           }
         ),
@@ -820,6 +847,16 @@ export class ClaudeProvider extends BaseProvider {
           type: 'standing_order_create',
           input: order,
           id: `so_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          provider: this.name,
+        };
+      }
+
+      // Emit widget_create events for widgets pinned via WidgetCreate (P6/K5)
+      for (const widget of pendingWidgets) {
+        yield {
+          type: 'widget_create',
+          input: widget,
+          id: `wg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           provider: this.name,
         };
       }
