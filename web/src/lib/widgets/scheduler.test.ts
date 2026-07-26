@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { runDueWidgets } from './scheduler';
+import { runDueWidgets, refreshWithRetry } from './scheduler';
 import { readManifest, writeManifest, patchManifestWidget, __resetManifestPath } from './schedule-manifest';
 import type { Widget } from './widget';
 import type { RefreshResult } from './refresh-service';
@@ -83,7 +83,7 @@ describe('runDueWidgets', () => {
     const acted = await runDueWidgets(Date.now(), refresh);
 
     expect(acted).toEqual(['w1']);
-    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ id: 'w1' }), 'cron');
+    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ id: 'w1' }), 'cron', { model: 'haiku' });
     const [saved] = await readManifest();
     expect(saved.render).toEqual({ type: 'divider' });
     expect(saved.refreshedAt).toBeTruthy();
@@ -137,5 +137,78 @@ describe('runDueWidgets', () => {
     const refresh = vi.fn(async () => okResult());
     const acted = await runDueWidgets(Date.now(), refresh);
     expect(acted.sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('refreshWithRetry — the C4 policy, auto-invoked', () => {
+  const failRenderable = (model?: string): RefreshResult => ({
+    node: null,
+    run: { id: `r-${model}`, goalId: 'widget:w1', trigger: 'cron', status: 'failed', startedAt: 1, deliverables: [], model } as Run,
+    error: "The refresh didn't produce a renderable widget — try a more specific recipe",
+    status: 502,
+  });
+  const failTransient = (model?: string): RefreshResult => ({
+    node: null,
+    run: { id: `r-${model}`, goalId: 'widget:w1', trigger: 'cron', status: 'failed', startedAt: 1, deliverables: [], model } as Run,
+    error: 'upstream 502',
+    status: 502,
+  });
+
+  type Args = [Widget, 'cron', { model?: string }?];
+
+  it('starts on the cheap tier', async () => {
+    const refresh = vi.fn<(...a: Args) => Promise<RefreshResult>>(async () => okResult());
+    await refreshWithRetry(widget(), refresh);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh.mock.calls[0][2]).toEqual({ model: 'haiku' });
+  });
+
+  // A non-renderable reply is a CAPABILITY failure: the cheap model answered
+  // and couldn't do the job. Re-asking it is pointless — escalate.
+  it('escalates the model when a cheap attempt cannot produce a renderable node', async () => {
+    const refresh = vi.fn<(...a: Args) => Promise<RefreshResult>>()
+      .mockResolvedValueOnce(failRenderable('haiku'))
+      .mockResolvedValueOnce(okResult());
+    const result = await refreshWithRetry(widget(), refresh);
+
+    expect(result.status).toBe(200);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh.mock.calls[0][2]).toEqual({ model: 'haiku' });   // cheap
+    expect(refresh.mock.calls[1][2]).toEqual({ model: 'sonnet' });  // good
+  });
+
+  it('retries a transient failure on the SAME tier', async () => {
+    const refresh = vi.fn<(...a: Args) => Promise<RefreshResult>>()
+      .mockResolvedValueOnce(failTransient('haiku'))
+      .mockResolvedValueOnce(okResult());
+    await refreshWithRetry(widget(), refresh);
+
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh.mock.calls[1][2]).toEqual({ model: 'haiku' }); // unchanged
+  });
+
+  // Retries cost real money on someone else's schedule — the ceiling is hard.
+  it('never exceeds MAX_ATTEMPTS', async () => {
+    const refresh = vi.fn(async () => failTransient('haiku'));
+    const result = await refreshWithRetry(widget(), refresh);
+    expect(refresh.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(result.status).toBe(502);
+  });
+
+  it('a first-attempt success makes exactly one call', async () => {
+    const refresh = vi.fn(async () => okResult());
+    await refreshWithRetry(widget(), refresh);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('the scheduler pass stores the render from a successful RETRY', async () => {
+    await writeManifest([widget()]);
+    const refresh = vi.fn()
+      .mockResolvedValueOnce(failRenderable('haiku'))
+      .mockResolvedValueOnce(okResult({ type: 'divider' }));
+
+    await runDueWidgets(Date.now(), refresh);
+    const [saved] = await readManifest();
+    expect(saved.render).toEqual({ type: 'divider' });
   });
 });
