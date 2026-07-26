@@ -45,6 +45,7 @@ import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useRunRecorder } from "@/hooks/use-run-recorder";
+import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -309,6 +310,15 @@ export function ChatSurface() {
             }
           } catch (e) {
             console.error('[Chat] CronCreate parse error:', e);
+          }
+          break;
+        }
+        case "widget_create": {
+          // The chat → Cockpit pin loop (P6/K5): the model called WidgetCreate.
+          try {
+            handleWidgetCreateEvent(event as Record<string, unknown>);
+          } catch (e) {
+            console.error('[Chat] WidgetCreate parse error:', e);
           }
           break;
         }

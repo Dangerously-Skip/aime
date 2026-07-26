@@ -22,7 +22,8 @@ export type ChunkType =
   | 'document_extracted'
   | 'prompt_suggestion'
   | 'cron_create'
-  | 'standing_order_create';
+  | 'standing_order_create'
+  | 'widget_create';
 
 /**
  * A single streaming chunk yielded by a provider's query() method.

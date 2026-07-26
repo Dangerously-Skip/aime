@@ -19,6 +19,7 @@ import {
   type StatusTone,
 } from "@/lib/runs/format";
 import type { Goal, Run } from "@/lib/runs/types";
+import { WidgetGrid } from "@/components/widgets/widget-grid";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -332,6 +333,8 @@ export function Cockpit() {
 
       <ScrollArea className="flex-1">
         <div className="space-y-5 p-5">
+          <WidgetGrid />
+
           <section className="space-y-2">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Scheduled work
