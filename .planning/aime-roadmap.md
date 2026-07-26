@@ -154,10 +154,11 @@ widget tiles in the Cockpit grid + WidgetCreate pin-from-chat ✅ · **C5**
 widget schedules run in the SERVER process via a manifest + ticker — refreshes
 happen and are recorded with every window closed ✅.
 
-Remaining: **C5b** — standing orders while-closed (their outputs — cards,
-context bus, notifications — are renderer-bound and need a results-inbox
-pipeline); retry/escalation is decided (decideRetry) but not yet auto-invoked
-by the scheduler. **Not** building: Burnbox's crypto.
+**C5b** ✅ (2026-07-26, `cbed577`) — standing orders execute server-side; the
+results inbox replays cards/bus/notifications into the renderer, ack-after-
+apply. Retry/escalation auto-invoked by the scheduler ✅ (`fa922b7`), with the
+BYOK key mirrored to the keychain so unattended runs have credentials.
+P6 is functionally complete. **Not** building: Burnbox's crypto.
 
 **C6 RESOLVED (2026-07-26): a first-party mobile companion app, not messaging
 channels.** The hard part of remote access was never the chat UI — it is the
