@@ -132,10 +132,21 @@ what they actually produced*. OpenClaw has no economics or dashboard; openworker
 has no scheduling, verification, or history; Burnbox has tiles but discards run
 outcomes (`eprintln!` and gone).
 
-Order: **Runs first** (shared substrate: C2 = K3) → Cockpit view over them →
-widget catalog + recipe refresh → verification/retry (beats openworker) →
-approval policy → move the loop out of the renderer (real "works while you
-sleep"). **Not** building: external messaging channels, Burnbox's crypto.
+Status (2026-07-26): **C1/C2** Goals+Runs substrate + durable JSONL log ✅ ·
+**K3** Cockpit over runs (cost, health, outcomes) ✅ · standing orders adapted
+to Goals ✅ · **K1/K2** widget catalogue + coercer + renderer + recipe refresh ✅
+· **C4** verification + retry ("ran, but unmet" is now a visible state) ✅ ·
+**C3** approval policy by effect + honest deny; verification wired into the
+standing-order executor (the keyword completion hack is dead) ✅ · **K4/K5**
+widget tiles in the Cockpit grid + WidgetCreate pin-from-chat ✅ · **C5**
+widget schedules run in the SERVER process via a manifest + ticker — refreshes
+happen and are recorded with every window closed ✅.
+
+Remaining: **C5b** — standing orders while-closed (their outputs — cards,
+context bus, notifications — are renderer-bound and need a results-inbox
+pipeline); **C6** external channels (deliberately not building for now);
+retry/escalation is decided (decideRetry) but not yet auto-invoked by the
+scheduler. **Not** building: external messaging channels, Burnbox's crypto.
 
 ## Decision records
 
