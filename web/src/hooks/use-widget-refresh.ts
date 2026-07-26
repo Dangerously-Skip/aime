@@ -2,66 +2,92 @@
 
 import { useEffect, useRef } from 'react';
 import { useWidgetStore } from '@/stores/widget-store';
-import { useRunStore } from '@/stores/run-store';
-import { isIntervalDue } from '@/lib/runs/runs';
-import { widgetToGoal } from '@/lib/widgets/widget';
-import type { Run } from '@/lib/runs/types';
+import type { Widget } from '@/lib/widgets/widget';
 
 /**
- * Scheduled widget refresh. On each minute tick, refresh every enabled widget
- * whose interval has elapsed — through the same /api/widgets/refresh path as a
- * manual refresh, so scheduled and manual runs are indistinguishable in the log.
+ * Widget schedule SYNC (P6/C5). This hook used to fire scheduled refreshes from
+ * the renderer's minute tick — meaning a closed window stopped every schedule.
+ * Scheduled execution now lives in the server process (lib/widgets/scheduler,
+ * started from instrumentation.ts), which outlives the window.
  *
- * Same discipline as useStandingOrders: register the tick listener ONCE for the
- * hook's lifetime (re-registering leaked ipcRenderer listeners in older
- * preloads), read the store at tick time, and hold a per-widget in-flight set so
- * a slow refresh can't overlap itself.
+ * The renderer's remaining jobs, both directions of a sync:
+ *  - PUSH: mirror the widget list to the server manifest whenever it changes,
+ *    so the scheduler always executes current state.
+ *  - PULL: on launch and on each minute tick, merge back renders the scheduler
+ *    produced — including everything that happened while the window was closed.
+ *
+ * Ownership rule: the server owns interval execution; the renderer never fires
+ * a scheduled refresh. One owner means a widget can't double-fire across the
+ * IPC boundary. Manual refreshes (the tile button) still run client-initiated.
  */
 export function useWidgetRefresh() {
-  const inFlightRef = useRef<Set<string>>(new Set());
+  const pushInFlight = useRef(false);
+  const lastPushed = useRef<string>('');
 
+  // PULL, then subscribe for PUSH. Registered once for the hook's lifetime —
+  // the same listener discipline as useCron/useStandingOrders.
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => void } }).electronAPI;
-    if (!api?.onMinuteTick) return;
+    let cancelled = false;
 
-    const handler = async (ts: number) => {
-      const widgets = useWidgetStore.getState().widgets;
-      for (const widget of widgets) {
-        if (inFlightRef.current.has(widget.id)) continue;
-        if (!isIntervalDue(widgetToGoal(widget), ts)) continue;
+    const pull = async () => {
+      try {
+        const res = await fetch('/api/schedule/widgets');
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { widgets?: Widget[] };
+        if (!Array.isArray(data.widgets)) return;
 
-        inFlightRef.current.add(widget.id);
-        try {
-          const res = await fetch('/api/widgets/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ widget }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.node) {
-            useWidgetStore.getState().setRender(widget.id, data.node, Date.now());
-          } else {
-            // The failed run is already in the durable log (the route records
-            // it), so the Cockpit shows the failure — the thing Burnbox's
-            // eprintln-and-vanish never could. Still stamp refreshedAt via the
-            // run so the widget doesn't re-fire every single tick.
-            useWidgetStore.getState().updateWidget(widget.id, { refreshedAt: Date.now() });
+        const server = new Map(data.widgets.map((w) => [w.id, w]));
+        const local = useWidgetStore.getState().widgets;
+        for (const widget of local) {
+          const remote = server.get(widget.id);
+          // Newer refreshedAt wins: the scheduler rendered while we were away.
+          if (remote && (remote.refreshedAt ?? 0) > (widget.refreshedAt ?? 0)) {
+            useWidgetStore.getState().updateWidget(widget.id, {
+              render: remote.render,
+              refreshedAt: remote.refreshedAt,
+            });
           }
-          if (data.run) {
-            const run = data.run as Run;
-            useRunStore.setState((s) => ({ runs: [run, ...s.runs.filter((r) => r.id !== run.id)] }));
-          }
-        } catch {
-          // Offline / server down: stamp so we retry next interval, not next tick.
-          useWidgetStore.getState().updateWidget(widget.id, { refreshedAt: Date.now() });
-        } finally {
-          inFlightRef.current.delete(widget.id);
         }
+      } catch {
+        // Offline / server starting — the next pull will catch up.
       }
     };
 
-    api.onMinuteTick(handler);
-    // NOTE: same caveat as useStandingOrders — older preloads had no
-    // unsubscribe; registering once per app lifetime is the contract.
+    const push = async () => {
+      if (pushInFlight.current) return;
+      const widgets = useWidgetStore.getState().widgets;
+      const snapshot = JSON.stringify(widgets.map((w) => [w.id, w.recipe, w.enabled, w.refreshEverySeconds, w.refreshedAt]));
+      if (snapshot === lastPushed.current) return; // nothing material changed
+      pushInFlight.current = true;
+      try {
+        await fetch('/api/schedule/widgets', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ widgets }),
+        });
+        lastPushed.current = snapshot;
+      } catch {
+        // Retry on the next change or tick.
+      } finally {
+        pushInFlight.current = false;
+      }
+    };
+
+    // Initial sync once the store has rehydrated (rehydrate may be sync).
+    void Promise.resolve(useWidgetStore.persist.rehydrate()).then(() => {
+      void pull().then(push);
+    });
+
+    // PUSH on every store change (debounced by the snapshot comparison).
+    const unsub = useWidgetStore.subscribe(() => void push());
+
+    // PULL on the minute tick so renders land while the window is open too.
+    const api = (window as unknown as { electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => void } }).electronAPI;
+    api?.onMinuteTick?.(() => void pull());
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, []);
 }
