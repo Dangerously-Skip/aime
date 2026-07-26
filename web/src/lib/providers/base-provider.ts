@@ -75,6 +75,11 @@ export interface QueryParams {
   onInputRequest?: (toolUseId: string, questions: unknown) => Promise<void>;
   /** Callback to send a browser_tool_use event to the client during streaming. */
   onBrowserToolUse?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => Promise<void>;
+  /**
+   * Approval policy for this run (P6/C3). Unset ⇒ the provider infers:
+   * unattended runs gate consequential actions, interactive sessions don't.
+   */
+  approvalPolicy?: import('../runs/types').ApprovalPolicy;
 }
 
 /**

@@ -49,13 +49,16 @@ describe('standingOrderToGoal', () => {
       id: 'so:o1',
       sourceId: 'o1',
       objective: 'Watch main for build failures and summarise them',
-      successCriteria: 'a summary was posted',
       constraints: 'only on weekdays',
       enabled: true,
       createdAt: 1_000,
       lastRunAt: 5_000,
       approvalPolicy: 'consequential',
     });
+    // A completion condition is a STOP-condition, not a per-run success
+    // criterion — mapping it to successCriteria would make every watch-type
+    // order read as failing nightly until the day it completes.
+    expect(g.successCriteria).toBeUndefined();
   });
 
   it('carries a cron schedule through verbatim', () => {

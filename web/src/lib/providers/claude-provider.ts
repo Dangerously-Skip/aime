@@ -362,17 +362,24 @@ export class ClaudeProvider extends BaseProvider {
     const LOOP_WARN_THRESHOLD = 3;
     const LOOP_DENY_THRESHOLD = 5;
 
-    // Write tools that require approval in background/scheduled execution contexts
-    const GOVERNED_WRITE_TOOLS = new Set([
-      'Write', 'Edit', 'NotebookEdit',
-      'gmail_send', 'gmail_create_draft',
-      'slack_post', 'slack_send',
-      'jira_create', 'jira_update',
-      'confluence_create', 'confluence_update',
-    ]);
-
     // Detect if this is a background/scheduled execution (not interactive)
-    const isBackgroundRun = chatId.startsWith('standing-order-') || chatId.startsWith('subagent_') || chatId.startsWith('hb-');
+    const isBackgroundRun = chatId.startsWith('standing-order-') || chatId.startsWith('subagent_') || chatId.startsWith('hb-') || chatId.startsWith('widget-');
+
+    /**
+     * Approval policy (P6/C3). Explicit per-query when provided (a Goal carries
+     * one); otherwise unattended runs gate consequential actions and
+     * interactive sessions gate nothing — in an interactive session the human
+     * is watching the stream and holds the abort button, which IS the approval
+     * mechanism.
+     *
+     * This replaced a hardcoded ten-name tool list. That list was wrong in both
+     * directions — every newly added MCP connector tool sailed through
+     * ungoverned, and its deny message claimed "an approval card has been
+     * created" when no such machinery existed. The classifier judges by effect
+     * (world-side vs in-app vs read) and its deny message promises nothing it
+     * doesn't do.
+     */
+    const approvalPolicy = params.approvalPolicy ?? (isBackgroundRun ? 'consequential' : 'never');
 
     // Intercept AskUserQuestion, browser tools, canvas tool, and loop detection via canUseTool.
     queryOptions.canUseTool = async (
@@ -380,16 +387,13 @@ export class ClaudeProvider extends BaseProvider {
       input: Record<string, unknown>,
       { toolUseID }: { toolUseID: string },
     ) => {
-      // ── Governance: deny write tools in background runs ─────────────────
-      if (isBackgroundRun) {
-        // Check if the tool name matches any governed write tool (handle MCP prefixes)
-        const baseName = toolName.includes('__') ? toolName.split('__').pop()! : toolName.includes(':') ? toolName.split(':').pop()! : toolName;
-        if (GOVERNED_WRITE_TOOLS.has(baseName)) {
-          console.warn('[Governance] Denied write tool in background run:', toolName, 'chatId:', chatId);
-          return {
-            behavior: 'deny' as const,
-            message: `This tool (${baseName}) requires user approval for background/scheduled execution. An approval card has been created in the Assistant surface. The user can approve and re-run.`,
-          };
+      // ── Governance: approval policy for unattended runs ─────────────────
+      if (approvalPolicy !== 'never') {
+        const { evaluateApproval } = await import('../runs/approval');
+        const outcome = evaluateApproval(approvalPolicy, toolName, input);
+        if (!outcome.allow) {
+          console.warn('[Governance] Paused', outcome.class, 'tool in unattended run:', toolName, 'chatId:', chatId);
+          return { behavior: 'deny' as const, message: outcome.reason! };
         }
       }
       // ── Loop detection ─────────────────────────────────────────────────

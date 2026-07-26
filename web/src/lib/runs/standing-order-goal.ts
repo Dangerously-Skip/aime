@@ -73,9 +73,14 @@ export function standingOrderToGoal(order: StandingOrderLike): Goal {
     id: `so:${order.id}`,
     sourceId: order.id,
     objective: order.instruction,
-    // A completion condition IS a success criterion — this is what lets a
-    // standing order be verified rather than merely "not errored".
-    successCriteria: order.completionCondition,
+    /**
+     * Deliberately NOT mapped to successCriteria. A completion condition is a
+     * STOP-condition ("when X happens, this order is done"), not a per-run
+     * success criterion. Conflating them would make every watch-type order
+     * read as a failing run every night until the day it completes. The
+     * executor uses the verifier against the completion condition separately —
+     * to decide completion, never to grade the run.
+     */
     constraints: order.condition,
     // Standing orders predate approval policy. 'consequential' is the safe
     // default: unattended work still pauses before side effects.
