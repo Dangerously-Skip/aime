@@ -7,7 +7,6 @@ import {
   summarizeRuns,
   isIntervalDue,
   applyRunToGoal,
-  needsVerification,
 } from './runs';
 import { isTerminal, type Goal, type Run } from './types';
 
@@ -145,6 +144,25 @@ describe('summarizeRuns', () => {
     expect(s.lastRun?.id).toBe('b'); // most recent overall, in-flight included
   });
 
+  // A goal achieving nothing every night must not report 100% success.
+  it('does not count a verified-unmet run as a success', () => {
+    const s = summarizeRuns([
+      run({ id: 'a', status: 'succeeded', verification: { passed: true } }),
+      run({ id: 'b', status: 'succeeded', verification: { passed: false } }),
+    ]);
+    expect(s.succeeded).toBe(1);
+    expect(s.failed).toBe(1);
+    expect(s.successRate).toBe(0.5);
+  });
+
+  it('flags currentlyFailing when the latest run ran cleanly but missed its criteria', () => {
+    const s = summarizeRuns([
+      run({ id: 'old', status: 'succeeded', startedAt: 1_000 }),
+      run({ id: 'new', status: 'succeeded', startedAt: 5_000, verification: { passed: false } }),
+    ]);
+    expect(s.currentlyFailing).toBe(true);
+  });
+
   it('flags currentlyFailing from the latest TERMINAL run, not the latest overall', () => {
     const failingNow = summarizeRuns([
       run({ id: 'old', status: 'succeeded', startedAt: 1_000 }),
@@ -199,12 +217,21 @@ describe('applyRunToGoal', () => {
     const g = goal({ consecutiveFailures: 1 });
     expect(applyRunToGoal(g, run({ status: 'running' }))).toBe(g);
   });
-});
 
-describe('needsVerification', () => {
-  it('is true only when the goal states real criteria', () => {
-    expect(needsVerification(goal({ successCriteria: 'a PDF exists' }))).toBe(true);
-    expect(needsVerification(goal({ successCriteria: '   ' }))).toBe(false);
-    expect(needsVerification(goal())).toBe(false);
+  // A goal that runs cleanly every night while achieving nothing must NOT
+  // report a zero failure streak — that blind spot is why verification exists.
+  it('counts a clean run that missed its criteria as a failure', () => {
+    const g = applyRunToGoal(goal(), run({ status: 'succeeded', verification: { passed: false } }));
+    expect(g.consecutiveFailures).toBe(1);
+  });
+
+  it('resets the streak only when the run actually met its criteria', () => {
+    const g = applyRunToGoal(
+      goal({ consecutiveFailures: 4 }),
+      run({ status: 'succeeded', verification: { passed: true } }),
+    );
+    expect(g.consecutiveFailures).toBe(0);
   });
 });
+
+// needsVerification now lives in ./verification, tested in verification.test.ts

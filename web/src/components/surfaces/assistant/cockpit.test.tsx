@@ -213,4 +213,48 @@ describe('Cockpit', () => {
     const dot = await screen.findByTitle('Paused');
     expect(dot).toBeTruthy();
   });
+
+  // C4: the state no reference tool surfaces — it ran fine and did not do the job.
+  it('shows a clean-but-unmet run as "Ran, but unmet", not as a success', async () => {
+    serveRuns([
+      run({
+        id: 'unmet',
+        goalId: null,
+        status: 'succeeded',
+        verification: { passed: false, note: 'no message was posted' },
+      }),
+    ]);
+    render(<Cockpit />);
+    expect(await screen.findByText('Ran, but unmet')).toBeTruthy();
+    expect(screen.queryByText('Succeeded')).toBeNull();
+  });
+
+  it('reveals the verifier reasoning when expanded', async () => {
+    serveRuns([
+      run({
+        id: 'unmet',
+        goalId: null,
+        status: 'succeeded',
+        verification: { passed: false, note: 'no message was posted' },
+      }),
+    ]);
+    render(<Cockpit />);
+    fireEvent.click((await screen.findByText('Ran, but unmet')).closest('button')!);
+    expect(await screen.findByText(/Criteria not met: no message was posted/i)).toBeTruthy();
+  });
+
+  it('labels a verified run as Verified', async () => {
+    serveRuns([run({ id: 'ok', goalId: null, verification: { passed: true, note: 'found it' } })]);
+    render(<Cockpit />);
+    expect(await screen.findByText('Verified')).toBeTruthy();
+  });
+
+  // A goal whose latest run achieved nothing must not read as healthy.
+  it('treats a goal whose latest run was unmet as failing', async () => {
+    useRunStore.setState({ goals: [goal()] });
+    serveRuns([run({ id: 'u', status: 'succeeded', verification: { passed: false } })]);
+    render(<Cockpit />);
+    await waitFor(() => expect(screen.getByText(/^1 failing$/i)).toBeTruthy());
+    expect(screen.queryByText(/Healthy/i)).toBeNull();
+  });
 });

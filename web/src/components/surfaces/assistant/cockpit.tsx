@@ -5,6 +5,7 @@ import { useRunStore } from "@/stores/run-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { standingOrdersToGoals } from "@/lib/runs/standing-order-goal";
 import { summarizeRuns } from "@/lib/runs/runs";
+import { outcomeLabel, isUnmet } from "@/lib/runs/verification";
 import {
   byNewest,
   formatDuration,
@@ -15,7 +16,6 @@ import {
   healthLine,
   nextRunAt,
   statusTone,
-  STATUS_LABEL,
   type StatusTone,
 } from "@/lib/runs/format";
 import type { Goal, Run } from "@/lib/runs/types";
@@ -58,9 +58,12 @@ const TONE_DOT: Record<StatusTone, string> = {
 };
 
 function StatusIcon({ run }: { run: Run }) {
-  const tone = statusTone(run.status);
+  // A run that completed cleanly but missed its criteria must NOT get a tick —
+  // that conflation is the whole thing verification exists to prevent.
+  const tone = isUnmet(run) ? "warn" : statusTone(run.status);
   const cls = `h-3.5 w-3.5 shrink-0 ${TONE_CLASS[tone]}`;
   if (run.status === "running") return <Loader2 className={`${cls} animate-spin`} />;
+  if (isUnmet(run)) return <AlertTriangle className={cls} />;
   if (run.status === "succeeded") return <CheckCircle2 className={cls} />;
   if (run.status === "failed") return <XCircle className={cls} />;
   if (run.status === "timeout" || run.status === "awaiting_approval")
@@ -77,10 +80,10 @@ function RunStrip({ runs }: { runs: Run[] }) {
       {recent.map((r) => (
         <span
           key={r.id}
-          title={`${STATUS_LABEL[r.status]} · ${formatDuration(r.durationMs)} · ${formatUsd(r.cost?.totalUsd)}`}
-          className={`w-1.5 rounded-sm ${TONE_DOT[statusTone(r.status)]} ${
-            r.status === "succeeded" ? "h-3" : "h-4"
-          }`}
+          title={`${outcomeLabel(r)} · ${formatDuration(r.durationMs)} · ${formatUsd(r.cost?.totalUsd)}`}
+          className={`w-1.5 rounded-sm ${
+            TONE_DOT[isUnmet(r) ? "warn" : statusTone(r.status)]
+          } ${r.status === "succeeded" && !isUnmet(r) ? "h-3" : "h-4"}`}
         />
       ))}
     </div>
@@ -89,7 +92,7 @@ function RunStrip({ runs }: { runs: Run[] }) {
 
 function RunRow({ run, now }: { run: Run; now: number }) {
   const [open, setOpen] = useState(false);
-  const hasDetail = Boolean(run.error || run.deliverables.length);
+  const hasDetail = Boolean(run.error || run.deliverables.length || run.verification?.note);
   return (
     <div className="border-b border-border/40 last:border-0">
       <button
@@ -105,8 +108,12 @@ function RunRow({ run, now }: { run: Run; now: number }) {
           <span className="w-3 shrink-0" />
         )}
         <StatusIcon run={run} />
-        <span className={`w-24 shrink-0 font-medium ${TONE_CLASS[statusTone(run.status)]}`}>
-          {STATUS_LABEL[run.status]}
+        <span
+          className={`w-24 shrink-0 font-medium ${
+            TONE_CLASS[isUnmet(run) ? "warn" : statusTone(run.status)]
+          }`}
+        >
+          {outcomeLabel(run)}
         </span>
         <span className="w-20 shrink-0 text-muted-foreground capitalize">{run.trigger}</span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={run.model}>
@@ -126,6 +133,12 @@ function RunRow({ run, now }: { run: Run; now: number }) {
       {open && (
         <div className="space-y-1.5 border-t border-border/30 bg-muted/20 px-3 py-2 pl-11 text-xs">
           {run.error && <p className="text-red-600 dark:text-red-400">{run.error}</p>}
+          {run.verification?.note && (
+            <p className={isUnmet(run) ? TONE_CLASS.warn : "text-muted-foreground"}>
+              {isUnmet(run) ? "Criteria not met: " : "Verified: "}
+              {run.verification.note}
+            </p>
+          )}
           {run.cost && (
             <p className="text-muted-foreground tabular-nums">
               {formatTokens(run.cost.inputTokens)} in · {formatTokens(run.cost.outputTokens)} out
