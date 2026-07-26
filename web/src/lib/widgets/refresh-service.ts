@@ -23,22 +23,7 @@ export interface RefreshOpts {
   model?: string;
 }
 
-/**
- * Credentials for an unattended refresh. The scheduler has no renderer, so a
- * BYOK key living only in renderer localStorage is invisible here — without
- * this fallback every scheduled refresh fails silently for BYOK users. The
- * Settings key is mirrored into the OS-keychain-backed credential store under
- * providerId 'anthropic'; env still wins when present.
- */
-async function resolveApiKey(): Promise<string | undefined> {
-  if (process.env.ANTHROPIC_API_KEY) return undefined; // provider uses env
-  try {
-    const { getCredentialStore } = await import('@/lib/models/credentials');
-    return await getCredentialStore().getField('anthropic', 'apiKey');
-  } catch {
-    return undefined;
-  }
-}
+
 
 /**
  * Re-run a widget's recipe and validate the result. Always records a Run —
@@ -85,7 +70,8 @@ export async function refreshWidget(
   try {
     const { getProvider } = await import('@/lib/providers');
     const provider = getProvider('claude');
-    const apiKey = await resolveApiKey();
+    const { getServerAnthropicKey } = await import('@/lib/models/credentials');
+    const apiKey = await getServerAnthropicKey();
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), WIDGET_REFRESH_TIMEOUT_MS);

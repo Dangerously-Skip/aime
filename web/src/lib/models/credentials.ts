@@ -125,3 +125,18 @@ export function getCredentialStore(): CredentialStore {
   const key = Buffer.from(hexKey, 'hex');
   return createCredentialStore(key, path.join(getDataDir(), 'credentials.enc'));
 }
+
+/**
+ * The Anthropic key available to SERVER-SIDE unattended work (schedulers,
+ * verify passes). Env wins; otherwise the key the Settings UI mirrored into
+ * the credential store under providerId 'anthropic'. Returns undefined when
+ * neither exists — callers let the provider fail with its normal error.
+ */
+export async function getServerAnthropicKey(): Promise<string | undefined> {
+  if (process.env.ANTHROPIC_API_KEY) return undefined; // provider reads env itself
+  try {
+    return await getCredentialStore().getField('anthropic', 'apiKey');
+  } catch {
+    return undefined;
+  }
+}
