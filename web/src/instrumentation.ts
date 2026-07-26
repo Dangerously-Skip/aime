@@ -27,4 +27,12 @@ export async function register() {
     const { startBufferFlushTimer } = await import('./lib/telemetry/event-buffer');
     startBufferFlushTimer();
   }
+
+  // Widget scheduler (P6/C5): scheduled refreshes run HERE, in the server
+  // process, which outlives the window — so a due widget refreshes and its run
+  // is recorded even with every window closed. The renderer only syncs state.
+  if (isNodeRuntime) {
+    const { startWidgetScheduler } = await import('./lib/widgets/scheduler');
+    startWidgetScheduler();
+  }
 }
