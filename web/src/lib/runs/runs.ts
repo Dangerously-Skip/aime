@@ -125,7 +125,15 @@ function median(values: number[]): number | null {
  */
 export function summarizeRuns(runs: Run[]): RunSummary {
   const terminal = runs.filter((r) => isTerminal(r.status));
-  const succeeded = terminal.filter((r) => r.status === 'succeeded').length;
+  /**
+   * "Succeeded" means it finished cleanly AND met its criteria where criteria
+   * exist. Counting a verified-unmet run as a success would let a goal that
+   * achieves nothing every night report a 100% success rate and read as
+   * healthy — the same blind spot verification was added to remove, one layer up.
+   */
+  const isSuccess = (r: Run) =>
+    r.status === 'succeeded' && !(r.verification && !r.verification.passed);
+  const succeeded = terminal.filter(isSuccess).length;
   const failed = terminal.length - succeeded;
   const totalUsd = runs.reduce((sum, r) => sum + (r.cost?.totalUsd ?? 0), 0);
 
@@ -147,7 +155,7 @@ export function summarizeRuns(runs: Run[]): RunSummary {
     totalUsd,
     medianDurationMs: median(terminal.map((r) => r.durationMs ?? 0)),
     lastRun,
-    currentlyFailing: Boolean(lastTerminal && lastTerminal.status !== 'succeeded'),
+    currentlyFailing: Boolean(lastTerminal && !isSuccess(lastTerminal)),
   };
 }
 
@@ -174,19 +182,17 @@ export function isIntervalDue(goal: Goal, now: number): boolean {
  */
 export function applyRunToGoal(goal: Goal, run: Run): Goal {
   if (!isTerminal(run.status)) return goal;
-  const failed = run.status !== 'succeeded';
+  /**
+   * A run that completed cleanly but did NOT meet its success criteria counts
+   * as a failure for the streak. Without this, a goal that runs happily every
+   * night while achieving nothing reports a zero failure streak and reads as
+   * healthy — which is precisely the blind spot verification exists to remove.
+   */
+  const unmet = Boolean(run.verification && !run.verification.passed);
+  const failed = run.status !== 'succeeded' || unmet;
   return {
     ...goal,
     lastRunAt: run.startedAt,
     consecutiveFailures: failed ? (goal.consecutiveFailures ?? 0) + 1 : 0,
   };
-}
-
-/**
- * Did the run meet its Goal's criteria? Returns undefined when the Goal states
- * no criteria — the caller should surface that as "unverified" rather than
- * silently treating a non-error as success, which is openworker's weak spot.
- */
-export function needsVerification(goal: Goal): boolean {
-  return Boolean(goal.successCriteria?.trim());
 }
