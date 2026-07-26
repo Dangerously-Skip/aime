@@ -130,6 +130,13 @@ export function startWidgetScheduler(): void {
       await runDueWidgets(Date.now(), refreshWidget).catch((err) =>
         console.error('[scheduler] tick failed:', err),
       );
+      // Standing orders (C5b) share the tick: due orders execute here in the
+      // server process, results queue in the inbox for the renderer to replay.
+      const { runDueOrders } = await import('../orders/scheduler-pass');
+      const { executeOrderServerSide } = await import('../orders/execute-service');
+      await runDueOrders(Date.now(), executeOrderServerSide).catch((err) =>
+        console.error('[scheduler] order tick failed:', err),
+      );
     })();
   }, TICK_MS);
   // Never hold the process open just to tick — Electron owns the lifecycle.

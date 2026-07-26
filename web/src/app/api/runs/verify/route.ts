@@ -1,10 +1,6 @@
 import { NextRequest } from 'next/server';
-import {
-  needsVerification,
-  buildVerificationPrompt,
-  parseVerdict,
-  decideRetry,
-} from '@/lib/runs/verification';
+import { needsVerification, decideRetry } from '@/lib/runs/verification';
+import { verifyRunAgainstGoal } from '@/lib/runs/verify-service';
 import { appendRun } from '@/lib/runs/run-log';
 import type { Goal, Run } from '@/lib/runs/types';
 
@@ -40,10 +36,6 @@ interface Body {
   persist?: boolean;
 }
 
-/** A verification pass is a short judgement — never worth a premium model. */
-const VERIFIER_MODEL = 'haiku';
-const VERIFY_TIMEOUT_MS = 60_000;
-
 function isGoal(v: unknown): v is Goal {
   const g = v as Partial<Goal> | null;
   return Boolean(g && typeof g === 'object' && typeof g.id === 'string' && typeof g.objective === 'string');
@@ -77,41 +69,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const prompt = buildVerificationPrompt(goal, run, body.outputSummary ?? '');
-
-  let verdict;
-  try {
-    const { getProvider } = await import('@/lib/providers');
-    const provider = getProvider('claude');
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
-    let text = '';
-    try {
-      for await (const chunk of provider.query({
-        prompt,
-        chatId: `verify-${run.id}`,
-        surfaceId: 'assistant',
-        systemPrompt:
-          'You are a strict verifier. Answer only with the requested one-line JSON. Never explain outside it.',
-        model: VERIFIER_MODEL,
-        // A judgement, not an investigation — no tool loop.
-        maxTurns: 1,
-      })) {
-        if (chunk.type === 'text') text += (chunk.content as string) ?? '';
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-    verdict = parseVerdict(text);
-  } catch (err) {
-    // A broken verifier must not silently bless the run. Unverifiable is a
-    // fail-closed outcome, reported as such.
-    verdict = {
-      passed: false,
-      note: `Verification could not be completed (${err instanceof Error ? err.message : 'unknown error'}).`,
-    };
-  }
+  const verdict = await verifyRunAgainstGoal(goal, run, body.outputSummary ?? '');
 
   const verified: Run = { ...run, verification: verdict };
   const decision = decideRetry({ goal, run: verified, attempt: 1 });

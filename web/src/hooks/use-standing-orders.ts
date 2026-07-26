@@ -1,324 +1,208 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useAssistantStore } from '@/stores/assistant-store';
-import { useSettingsStore } from '@/stores/settings-store';
+import { useAssistantStore, type StandingOrder } from '@/stores/assistant-store';
 import { useContextBusStore } from '@/stores/context-bus-store';
-import { evaluateStandingOrders, hashSnapshot } from '@/lib/standing-order-engine';
-import { useRunStore } from '@/stores/run-store';
-import { costFromStreamUsage } from '@/lib/runs/runs';
-import { standingOrderToGoal } from '@/lib/runs/standing-order-goal';
+import type { InboxEntry, ManifestOrder } from '@/lib/orders/manifest';
 
 /**
- * Standing Order execution hook.
- * Subscribes to minute:tick, evaluates standing orders, executes matches,
- * and produces cards in the assistant store.
+ * Standing-order SYNC + results replay (C5b).
+ *
+ * This hook used to evaluate schedules and execute orders from the renderer's
+ * minute tick — so a closed window stopped every order. Execution now lives in
+ * the server scheduler (lib/orders/scheduler-pass, on the same ticker as
+ * widgets), which outlives the window. The renderer's remaining jobs:
+ *
+ *  - PUSH: mirror the order list to the server manifest whenever it changes.
+ *  - PULL manifest: merge back server-owned execution results (lastRun,
+ *    runCount, state, errors, terminal status) so counters survive a closed
+ *    window.
+ *  - REPLAY the inbox: a server-side execution can't touch renderer stores, so
+ *    its side effects (cards, context-bus posts, notifications, completion)
+ *    arrive as entries here, are applied, and are acknowledged AFTER applying —
+ *    a crash mid-replay redelivers rather than drops.
+ *
+ * Ownership rule: the server executes; the renderer never does. One owner per
+ * schedule, no double-fire across the IPC boundary.
  */
+
+/** The manifest projection of a store order. */
+function toManifestOrder(order: StandingOrder): ManifestOrder {
+  return {
+    id: order.id,
+    instruction: order.instruction,
+    trigger: order.trigger,
+    condition: order.condition,
+    completionCondition: order.completionCondition,
+    agentName: order.agentName,
+    notifyVia: order.notifyVia,
+    maxExecutions: order.maxExecutions,
+    expiresAt: order.expiresAt,
+    state: order.state,
+    status: order.status,
+    lastRun: order.lastRun,
+    runCount: order.runCount,
+    errorCount: order.errorCount,
+    lastSnapshotHash: order.lastSnapshotHash,
+    totalCost: order.totalCost,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
+  };
+}
+
+/** Apply one inbox entry to the renderer stores. Exported for tests. */
+export function applyInboxEntry(entry: InboxEntry): void {
+  const assistant = useAssistantStore.getState();
+
+  if (entry.kind === 'result') {
+    let doc: import('@/lib/a2ui/types').A2UIDocument | undefined;
+    if (entry.docJson) {
+      try {
+        doc = JSON.parse(entry.docJson);
+      } catch {
+        /* malformed doc — card still renders its text */
+      }
+    }
+    assistant.addCard({
+      orderId: entry.orderId,
+      title: entry.title,
+      summary: entry.summary ?? '',
+      ...(doc ? { doc } : {}),
+    });
+
+    const targetSurface = entry.notifyVia.startsWith('inject:') ? entry.notifyVia.slice(7) : undefined;
+    const priority = targetSurface ? 'p0' : 'p2';
+    useContextBusStore.getState().publish({
+      source: `standing-order:${entry.orderId}`,
+      priority: priority as 'p0' | 'p1' | 'p2',
+      targetSurface,
+      summary: `[${entry.title.slice(0, 40)}] ${(entry.summary ?? '').slice(0, 500)}`,
+      payload: { orderId: entry.orderId, fullText: (entry.summary ?? '').slice(0, 2000) },
+    });
+
+    if (
+      (priority === 'p0' || entry.notifyVia === 'toast') &&
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'granted'
+    ) {
+      new Notification(`Standing Order: ${entry.title.slice(0, 40)}`, {
+        body: (entry.summary ?? '').slice(0, 100),
+      });
+    }
+
+    assistant.addActivity({ type: 'order-fired', label: `Executed: ${entry.title.slice(0, 60)}`, orderId: entry.orderId });
+  } else if (entry.kind === 'completed') {
+    assistant.completeOrder(entry.orderId);
+    assistant.addActivity({ type: 'order-fired', label: `Completed: ${entry.title.slice(0, 60)}`, orderId: entry.orderId });
+  } else if (entry.kind === 'paused') {
+    assistant.pauseOrder(entry.orderId);
+    assistant.addCard({ orderId: entry.orderId, title: entry.title, summary: entry.summary ?? '' });
+    assistant.addActivity({ type: 'order-error', label: entry.summary?.slice(0, 100) ?? 'Order paused', orderId: entry.orderId });
+  } else if (entry.kind === 'error') {
+    assistant.addActivity({ type: 'order-error', label: `Error: ${(entry.error ?? 'unknown').slice(0, 100)}`, orderId: entry.orderId });
+  }
+}
+
+/** Merge server-owned execution results back onto the store's orders. */
+function mergeManifestIntoStore(manifest: ManifestOrder[]): void {
+  const byId = new Map(manifest.map((o) => [o.id, o]));
+  for (const order of useAssistantStore.getState().orders) {
+    const server = byId.get(order.id);
+    if (!server) continue;
+    if ((server.lastRun ?? 0) <= (order.lastRun ?? 0)) continue;
+
+    useAssistantStore.getState().updateOrder(order.id, {
+      lastRun: server.lastRun,
+      runCount: server.runCount,
+      state: server.state,
+      errorCount: server.errorCount,
+      lastSnapshotHash: server.lastSnapshotHash,
+      totalCost: server.totalCost,
+      // Terminal transitions the server made stick; user pause/resume intents
+      // travel the other way, via PUSH.
+      ...(server.status === 'completed' || server.status === 'expired' || server.status === 'paused'
+        ? { status: server.status }
+        : {}),
+    });
+  }
+}
+
 export function useStandingOrders() {
-  const executingRef = useRef<Set<string>>(new Set());
+  const pushInFlight = useRef(false);
+  const lastPushed = useRef('');
+  const replayInFlight = useRef(false);
 
   useEffect(() => {
-    const api = (window as unknown as { electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => void } }).electronAPI;
-    if (!api?.onMinuteTick) return;
-
-    const handler = async (ts: number) => {
-      const now = new Date(ts);
-      const orders = useAssistantStore.getState().orders;
-      const matched = evaluateStandingOrders(orders, now);
-
-      for (const order of matched) {
-        // Prevent concurrent execution of the same order
-        if (executingRef.current.has(order.id)) continue;
-        executingRef.current.add(order.id);
-
-        try {
-          await executeOrder(order);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error('[StandingOrders] Execution error:', order.id, msg);
-
-          // Track errors — auto-pause after 3 consecutive
-          const currentOrder = useAssistantStore.getState().getOrder(order.id);
-          const newErrorCount = (currentOrder?.errorCount ?? 0) + 1;
-          useAssistantStore.getState().updateOrder(order.id, { errorCount: newErrorCount });
-
-          if (newErrorCount >= 3) {
-            useAssistantStore.getState().pauseOrder(order.id);
-            useAssistantStore.getState().addCard({
-              title: `Order paused: ${order.instruction.slice(0, 40)}`,
-              summary: `Auto-paused after ${newErrorCount} consecutive errors. Last error: ${msg}`,
-            });
-          }
-
-          useAssistantStore.getState().addActivity({
-            type: 'order-error',
-            label: `Error: ${msg.slice(0, 100)}`,
-            orderId: order.id,
-          });
-        } finally {
-          executingRef.current.delete(order.id);
-        }
+    const push = async () => {
+      if (pushInFlight.current) return;
+      const orders = useAssistantStore.getState().orders.map(toManifestOrder);
+      const snapshot = JSON.stringify(orders);
+      if (snapshot === lastPushed.current) return;
+      pushInFlight.current = true;
+      try {
+        await fetch('/api/schedule/orders', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orders }),
+        });
+        lastPushed.current = snapshot;
+      } catch {
+        /* offline — retry on the next change or tick */
+      } finally {
+        pushInFlight.current = false;
       }
     };
 
-    api.onMinuteTick(handler);
-  }, []);
-}
-
-/**
- * Execute a single standing order: call the API, produce a card, update state.
- */
-/** Exported for tests. */
-export async function executeOrder(order: import('@/stores/assistant-store').StandingOrder): Promise<void> {
-  const anthropicApiKey = useSettingsStore.getState().anthropicApiKey;
-
-  // Build prompt with accumulated state context
-  let prompt = order.instruction;
-  if (Object.keys(order.state).length > 0) {
-    const stateJson = JSON.stringify(order.state, null, 2);
-    // If state is getting large, ask for compaction
-    if (stateJson.length > 40000) {
-      prompt += `\n\nPrevious context (LARGE — please consolidate and keep only what's still relevant):\n${stateJson}`;
-    } else {
-      prompt += `\n\nPrevious context from this standing order:\n${stateJson}`;
-    }
-  }
-  prompt += `\n\nThis is execution #${order.runCount + 1}.`;
-  prompt += `\n\nAfter your response, output a line starting with STATE: followed by a JSON object containing any facts worth remembering for the next execution (e.g., topics covered, values seen, items completed). Keep it under 1KB. Example: STATE: {"lastPrice": 198.50, "topicsCovered": ["transformers", "RLHF"]}`;
-
-  const chatId = `standing-order-${order.id}-${Date.now()}`;
-
-  // Every execution is a Run against the Goal this order is (P6). begin()
-  // before the request so an immediate failure is still attributed; the wrapper
-  // below closes it on both paths and persists it to the durable log.
-  const runId = globalThis.crypto.randomUUID();
-  useRunStore.getState().beginRun({
-    id: runId,
-    now: Date.now(),
-    goalId: `so:${order.id}`,
-    trigger: 'cron',
-    surfaceId: 'assistant',
-  });
-  const settleRun = async (
-    status: 'succeeded' | 'failed',
-    extra: { error?: string; usage?: { inputTokens?: number; outputTokens?: number; cost?: number } } = {},
-  ) => {
-    useRunStore.getState().endRun(runId, {
-      now: Date.now(),
-      status,
-      error: extra.error,
-      cost: costFromStreamUsage(extra.usage),
-    });
-    const finished = useRunStore.getState().getRun(runId);
-    if (finished) {
-      // Fire-and-forget: recording must never fail the order it describes.
-      void fetch('/api/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ run: finished }),
-      }).catch(() => {});
-    }
-  };
-
-  let response: Response;
-  try {
-    response = await fetch('/api/chat/assistant', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: prompt,
-        chatId,
-        model: 'sonnet',
-        apiKey: anthropicApiKey || undefined,
-      }),
-    });
-  } catch (err) {
-    await settleRun('failed', { error: err instanceof Error ? err.message : 'request failed' });
-    throw err;
-  }
-
-  if (!response.ok || !response.body) {
-    await settleRun('failed', { error: `API returned ${response.status}: ${response.statusText}` });
-    throw new Error(`API returned ${response.status}: ${response.statusText}`);
-  }
-
-  // Stream the response and collect full text
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let fullText = '';
-  let executionCost = 0;
-  let executionUsage: { inputTokens?: number; outputTokens?: number; cost?: number } | undefined;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
+    const pullManifest = async () => {
       try {
-        const event = JSON.parse(line.slice(6));
-        if (event.type === 'text' && typeof event.content === 'string') {
-          fullText += event.content;
-        } else if (event.type === 'done' && event.usage) {
-          executionUsage = event.usage as { inputTokens?: number; outputTokens?: number; cost?: number };
-          executionCost = executionUsage.cost || 0;
-        }
-      } catch { /* ignore */ }
-    }
-  }
+        const res = await fetch('/api/schedule/orders');
+        if (!res.ok) return;
+        const data = (await res.json()) as { orders?: ManifestOrder[] };
+        if (Array.isArray(data.orders)) mergeManifestIntoStore(data.orders);
+      } catch {
+        /* offline */
+      }
+    };
 
-  if (!fullText.trim()) {
-    await settleRun('failed', { error: 'Empty response from agent', usage: executionUsage });
-    throw new Error('Empty response from agent');
-  }
+    const replayInbox = async () => {
+      if (replayInFlight.current) return;
+      replayInFlight.current = true;
+      try {
+        const res = await fetch('/api/schedule/orders/inbox');
+        if (!res.ok) return;
+        const data = (await res.json()) as { entries?: InboxEntry[] };
+        const entries = Array.isArray(data.entries) ? data.entries : [];
+        if (!entries.length) return;
 
-  await settleRun('succeeded', { usage: executionUsage });
+        for (const entry of entries) applyInboxEntry(entry);
+        // Ack AFTER applying: redelivery beats silent loss.
+        await fetch('/api/schedule/orders/inbox', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: entries.map((e) => e.id) }),
+        });
+      } catch {
+        /* offline — entries stay queued */
+      } finally {
+        replayInFlight.current = false;
+      }
+    };
 
-  // Check if output changed from last run (snapshot diffing)
-  const newHash = hashSnapshot(fullText);
-  if (order.lastSnapshotHash === newHash && order.condition) {
-    // No change and order has a condition — skip card creation
-    useAssistantStore.getState().updateOrder(order.id, {
-      lastRun: Date.now(),
-      runCount: order.runCount + 1,
-      lastSnapshotHash: newHash,
-      errorCount: 0,
+    // Launch: reconcile counters, replay anything that happened while closed,
+    // then mirror the (possibly updated) order list.
+    void pullManifest().then(replayInbox).then(push);
+
+    // PUSH on every order change, debounced by snapshot comparison.
+    const unsub = useAssistantStore.subscribe(() => void push());
+
+    // Tick: replay new results while the window is open (registered once —
+    // the listener-leak discipline shared with the other minute-tick hooks).
+    const api = (window as unknown as { electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => void } }).electronAPI;
+    api?.onMinuteTick?.(() => {
+      void replayInbox().then(pullManifest);
     });
-    return;
-  }
 
-  // Extract state from output (STATE: {...} line)
-  const stateMatch = fullText.match(/STATE:\s*(\{[\s\S]*?\})\s*$/m);
-  let extractedState: Record<string, unknown> = {};
-  let displayText = fullText;
-  if (stateMatch) {
-    try {
-      extractedState = JSON.parse(stateMatch[1]);
-      // Remove STATE: line from display text
-      displayText = fullText.replace(/STATE:\s*\{[\s\S]*?\}\s*$/m, '').trim();
-    } catch { /* ignore parse errors */ }
-  }
-
-  // Try to parse A2UI document from output
-  let a2uiDoc: import('@/lib/a2ui/types').A2UIDocument | undefined;
-  const a2uiMatch = displayText.match(/```(?:a2ui|json)\s*\n([\s\S]*?)\n```/);
-  if (a2uiMatch) {
-    try {
-      const parsed = JSON.parse(a2uiMatch[1]);
-      if (parsed.version && parsed.components) {
-        a2uiDoc = parsed;
-        displayText = displayText.replace(/```(?:a2ui|json)\s*\n[\s\S]*?\n```/, '').trim();
-      }
-    } catch { /* not valid A2UI */ }
-  }
-
-  // Create card with the result
-  useAssistantStore.getState().addCard({
-    orderId: order.id,
-    title: order.instruction.slice(0, 60),
-    summary: displayText.slice(0, 2000),
-    ...(a2uiDoc ? { doc: a2uiDoc } : {}),
-  });
-
-  // Publish to context bus for cross-surface communication
-  const notifyVia = order.notifyVia || 'assistant';
-  const targetSurface = notifyVia.startsWith('inject:') ? notifyVia.slice(7) : undefined;
-  const priority = targetSurface ? 'p0' : 'p2';
-
-  useContextBusStore.getState().publish({
-    source: `standing-order:${order.id}`,
-    priority: priority as 'p0' | 'p1' | 'p2',
-    targetSurface,
-    summary: `[${order.instruction.slice(0, 40)}] ${fullText.slice(0, 500)}`,
-    payload: { orderId: order.id, fullText: fullText.slice(0, 2000) },
-  });
-
-  // Desktop notification for P0 events
-  if (priority === 'p0') {
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification(`Standing Order: ${order.instruction.slice(0, 40)}`, {
-        body: fullText.slice(0, 100),
-      });
-    }
-  }
-
-  // Update order state (merge extracted state + cost)
-  const mergedState = Object.keys(extractedState).length > 0
-    ? { ...order.state, ...extractedState }
-    : order.state;
-  useAssistantStore.getState().updateOrder(order.id, {
-    lastRun: Date.now(),
-    runCount: order.runCount + 1,
-    lastResult: displayText.slice(0, 1000),
-    lastSnapshotHash: newHash,
-    errorCount: 0,
-    state: mergedState,
-    totalCost: (order.totalCost || 0) + executionCost,
-  });
-
-  // Activity log
-  useAssistantStore.getState().addActivity({
-    type: 'order-fired',
-    label: `Executed: ${order.instruction.slice(0, 60)}`,
-    orderId: order.id,
-  });
-
-  // ── Completion check (P6/C4) ──────────────────────────────────────────
-  // Previously a keyword match: any output containing the word "done"
-  // completed the order. Now the verifier judges the completion condition
-  // against the actual output. persist:false because this verdict decides
-  // whether to STOP the order — it must not grade the run itself, or a
-  // watch-type order would read as failing every night until the day its
-  // condition finally occurs. Fails closed: an unreachable or confused
-  // verifier keeps the order running rather than silently completing it.
-  if (order.completionCondition) {
-    try {
-      const goal = {
-        ...standingOrderToGoal(order),
-        successCriteria: `The completion condition has now been met: ${order.completionCondition}`,
-      };
-      const finishedRun = useRunStore.getState().getRun(runId);
-      const verifyRes = await fetch('/api/runs/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          goal,
-          run: finishedRun,
-          outputSummary: fullText.slice(0, 4000),
-          persist: false,
-        }),
-      });
-      if (verifyRes.ok) {
-        const { verification } = (await verifyRes.json()) as { verification?: { passed: boolean } | null };
-        if (verification?.passed) {
-          useAssistantStore.getState().completeOrder(order.id);
-        }
-      }
-    } catch {
-      // Verifier unreachable — keep watching. Never complete on a guess.
-    }
-  }
-
-  // Check max executions
-  if (order.maxExecutions && order.runCount + 1 >= order.maxExecutions) {
-    useAssistantStore.getState().completeOrder(order.id);
-  }
-
-  // Check expiry
-  if (order.expiresAt && Date.now() >= order.expiresAt) {
-    useAssistantStore.getState().updateOrder(order.id, { status: 'expired' });
-  }
-
-  // Notification
-  if (order.notifyVia === 'toast') {
-    // Show desktop notification
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      new Notification(`Standing Order: ${order.instruction.slice(0, 40)}`, {
-        body: fullText.slice(0, 100),
-      });
-    }
-  }
+    return () => unsub();
+  }, []);
 }
