@@ -347,6 +347,44 @@ describe('canUseTool interception', () => {
     expect((await canUseTool('Write', { file_path: '/x' }, { toolUseID: 't1' })).behavior).toBe('allow');
   });
 
+  it('background runs allow read-only bash but pause acting bash (C3)', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42' });
+    expect((await canUseTool('Bash', { command: 'git status' }, { toolUseID: 't1' })).behavior).toBe('allow');
+    expect((await canUseTool('Bash', { command: 'rm -rf /tmp/x' }, { toolUseID: 't2' })).behavior).toBe('deny');
+  });
+
+  // The old list let any NEW connector tool sail through ungoverned.
+  it('background runs fail closed on unknown MCP tools', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'hb-7' });
+    expect((await canUseTool('mcp__custom__doTheThing', {}, { toolUseID: 't1' })).behavior).toBe('deny');
+  });
+
+  it('background runs still allow in-app orchestration (CronCreate, TodoWrite)', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42' });
+    expect((await canUseTool('TodoWrite', { todos: [] }, { toolUseID: 't1' })).behavior).toBe('allow');
+    // CronCreate is intercepted (allow + queued) further down the chain
+    expect((await canUseTool('CronCreate', { expression: '0 9 * * *', prompt: 'x' }, { toolUseID: 't2' })).behavior).toBe('allow');
+  });
+
+  it('an explicit approvalPolicy overrides the background inference', async () => {
+    // 'never' on a background chatId: the goal owner opted in to unattended writes.
+    const relaxed = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42', approvalPolicy: 'never' });
+    expect((await relaxed.canUseTool('Write', { file_path: '/x' }, { toolUseID: 't1' })).behavior).toBe('allow');
+
+    // 'always' on an interactive chatId: even in-app actions pause.
+    const strict = await captureOptions(new ClaudeProvider(), { chatId: 'regular-chat', approvalPolicy: 'always' });
+    expect((await strict.canUseTool('TodoWrite', { todos: [] }, { toolUseID: 't2' })).behavior).toBe('deny');
+    expect((await strict.canUseTool('Read', { file_path: '/x' }, { toolUseID: 't3' })).behavior).toBe('allow');
+  });
+
+  // The old message claimed "an approval card has been created" — false.
+  it('the deny message promises nothing that does not exist', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42' });
+    const denied = await canUseTool('Write', { file_path: '/x' }, { toolUseID: 't1' });
+    expect(denied.message).not.toMatch(/card has been created/i);
+    expect(denied.message).toMatch(/unattended/i);
+  });
+
   it('denies the 5th consecutive identical tool call (loop detection)', async () => {
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {});
     const input = { file_path: '/same.md' };

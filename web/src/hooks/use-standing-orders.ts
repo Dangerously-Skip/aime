@@ -5,6 +5,9 @@ import { useAssistantStore } from '@/stores/assistant-store';
 import { useSettingsStore } from '@/stores/settings-store';
 import { useContextBusStore } from '@/stores/context-bus-store';
 import { evaluateStandingOrders, hashSnapshot } from '@/lib/standing-order-engine';
+import { useRunStore } from '@/stores/run-store';
+import { costFromStreamUsage } from '@/lib/runs/runs';
+import { standingOrderToGoal } from '@/lib/runs/standing-order-goal';
 
 /**
  * Standing Order execution hook.
@@ -65,7 +68,8 @@ export function useStandingOrders() {
 /**
  * Execute a single standing order: call the API, produce a card, update state.
  */
-async function executeOrder(order: import('@/stores/assistant-store').StandingOrder): Promise<void> {
+/** Exported for tests. */
+export async function executeOrder(order: import('@/stores/assistant-store').StandingOrder): Promise<void> {
   const anthropicApiKey = useSettingsStore.getState().anthropicApiKey;
 
   // Build prompt with accumulated state context
@@ -84,18 +88,57 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
 
   const chatId = `standing-order-${order.id}-${Date.now()}`;
 
-  const response = await fetch('/api/chat/assistant', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: prompt,
-      chatId,
-      model: 'sonnet',
-      apiKey: anthropicApiKey || undefined,
-    }),
+  // Every execution is a Run against the Goal this order is (P6). begin()
+  // before the request so an immediate failure is still attributed; the wrapper
+  // below closes it on both paths and persists it to the durable log.
+  const runId = globalThis.crypto.randomUUID();
+  useRunStore.getState().beginRun({
+    id: runId,
+    now: Date.now(),
+    goalId: `so:${order.id}`,
+    trigger: 'cron',
+    surfaceId: 'assistant',
   });
+  const settleRun = async (
+    status: 'succeeded' | 'failed',
+    extra: { error?: string; usage?: { inputTokens?: number; outputTokens?: number; cost?: number } } = {},
+  ) => {
+    useRunStore.getState().endRun(runId, {
+      now: Date.now(),
+      status,
+      error: extra.error,
+      cost: costFromStreamUsage(extra.usage),
+    });
+    const finished = useRunStore.getState().getRun(runId);
+    if (finished) {
+      // Fire-and-forget: recording must never fail the order it describes.
+      void fetch('/api/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run: finished }),
+      }).catch(() => {});
+    }
+  };
+
+  let response: Response;
+  try {
+    response = await fetch('/api/chat/assistant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: prompt,
+        chatId,
+        model: 'sonnet',
+        apiKey: anthropicApiKey || undefined,
+      }),
+    });
+  } catch (err) {
+    await settleRun('failed', { error: err instanceof Error ? err.message : 'request failed' });
+    throw err;
+  }
 
   if (!response.ok || !response.body) {
+    await settleRun('failed', { error: `API returned ${response.status}: ${response.statusText}` });
     throw new Error(`API returned ${response.status}: ${response.statusText}`);
   }
 
@@ -105,6 +148,7 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
   let buffer = '';
   let fullText = '';
   let executionCost = 0;
+  let executionUsage: { inputTokens?: number; outputTokens?: number; cost?: number } | undefined;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -119,15 +163,19 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
         if (event.type === 'text' && typeof event.content === 'string') {
           fullText += event.content;
         } else if (event.type === 'done' && event.usage) {
-          executionCost = (event.usage as { cost?: number }).cost || 0;
+          executionUsage = event.usage as { inputTokens?: number; outputTokens?: number; cost?: number };
+          executionCost = executionUsage.cost || 0;
         }
       } catch { /* ignore */ }
     }
   }
 
   if (!fullText.trim()) {
+    await settleRun('failed', { error: 'Empty response from agent', usage: executionUsage });
     throw new Error('Empty response from agent');
   }
+
+  await settleRun('succeeded', { usage: executionUsage });
 
   // Check if output changed from last run (snapshot diffing)
   const newHash = hashSnapshot(fullText);
@@ -218,12 +266,39 @@ async function executeOrder(order: import('@/stores/assistant-store').StandingOr
     orderId: order.id,
   });
 
-  // Check completion condition (simple keyword match for now)
+  // ── Completion check (P6/C4) ──────────────────────────────────────────
+  // Previously a keyword match: any output containing the word "done"
+  // completed the order. Now the verifier judges the completion condition
+  // against the actual output. persist:false because this verdict decides
+  // whether to STOP the order — it must not grade the run itself, or a
+  // watch-type order would read as failing every night until the day its
+  // condition finally occurs. Fails closed: an unreachable or confused
+  // verifier keeps the order running rather than silently completing it.
   if (order.completionCondition) {
-    const lowerOutput = fullText.toLowerCase();
-    const lowerCondition = order.completionCondition.toLowerCase();
-    if (lowerOutput.includes('completed') || lowerOutput.includes('done') || lowerOutput.includes(lowerCondition)) {
-      useAssistantStore.getState().completeOrder(order.id);
+    try {
+      const goal = {
+        ...standingOrderToGoal(order),
+        successCriteria: `The completion condition has now been met: ${order.completionCondition}`,
+      };
+      const finishedRun = useRunStore.getState().getRun(runId);
+      const verifyRes = await fetch('/api/runs/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          goal,
+          run: finishedRun,
+          outputSummary: fullText.slice(0, 4000),
+          persist: false,
+        }),
+      });
+      if (verifyRes.ok) {
+        const { verification } = (await verifyRes.json()) as { verification?: { passed: boolean } | null };
+        if (verification?.passed) {
+          useAssistantStore.getState().completeOrder(order.id);
+        }
+      }
+    } catch {
+      // Verifier unreachable — keep watching. Never complete on a guess.
     }
   }
 

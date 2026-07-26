@@ -31,6 +31,13 @@ interface Body {
   goal?: Goal;
   run?: Run;
   outputSummary?: string;
+  /**
+   * When false, the verdict is returned but NOT appended to the run log. Used
+   * for completion-condition checks on standing orders, where the verdict
+   * decides whether to stop the order — grading the run with it would make a
+   * watch-type order read as failing every night until the day it completes.
+   */
+  persist?: boolean;
 }
 
 /** A verification pass is a short judgement — never worth a premium model. */
@@ -111,7 +118,9 @@ export async function POST(req: NextRequest) {
 
   // Durable: append the verified record. Best-effort — a failed write must not
   // fail the verification response.
-  await appendRun(verified).catch(() => false);
+  if (body.persist !== false) {
+    await appendRun(verified).catch(() => false);
+  }
 
   return Response.json({ verification: verdict, decision, run: verified });
 }
