@@ -18,20 +18,48 @@ export interface RefreshResult {
   status: 200 | 502 | 504;
 }
 
+export interface RefreshOpts {
+  /** Model override for retry escalation (default: haiku — cheap tier). */
+  model?: string;
+}
+
+/**
+ * Credentials for an unattended refresh. The scheduler has no renderer, so a
+ * BYOK key living only in renderer localStorage is invisible here — without
+ * this fallback every scheduled refresh fails silently for BYOK users. The
+ * Settings key is mirrored into the OS-keychain-backed credential store under
+ * providerId 'anthropic'; env still wins when present.
+ */
+async function resolveApiKey(): Promise<string | undefined> {
+  if (process.env.ANTHROPIC_API_KEY) return undefined; // provider uses env
+  try {
+    const { getCredentialStore } = await import('@/lib/models/credentials');
+    return await getCredentialStore().getField('anthropic', 'apiKey');
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Re-run a widget's recipe and validate the result. Always records a Run —
  * a reply that can't become a tile is a FAILED run, not a silent no-op, so a
  * widget that never renders can't look idle.
  */
-export async function refreshWidget(widget: Widget, trigger: RunTrigger = 'manual'): Promise<RefreshResult> {
+export async function refreshWidget(
+  widget: Widget,
+  trigger: RunTrigger = 'manual',
+  opts: RefreshOpts = {},
+): Promise<RefreshResult> {
   const goal = widgetToGoal(widget);
 
+  const model = opts.model ?? 'haiku';
   let run: Run = startRun({
     id: globalThis.crypto.randomUUID(),
     now: Date.now(),
     goalId: goal.id,
     trigger,
     surfaceId: 'assistant',
+    model,
   });
 
   const settle = async (
@@ -57,6 +85,7 @@ export async function refreshWidget(widget: Widget, trigger: RunTrigger = 'manua
   try {
     const { getProvider } = await import('@/lib/providers');
     const provider = getProvider('claude');
+    const apiKey = await resolveApiKey();
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), WIDGET_REFRESH_TIMEOUT_MS);
@@ -69,8 +98,11 @@ export async function refreshWidget(widget: Widget, trigger: RunTrigger = 'manua
         chatId: `widget-${widget.id}`,
         surfaceId: 'assistant',
         systemPrompt: system,
-        // Pinned cheap: short structured generation, not reasoning work.
-        model: 'haiku',
+        // Cheap by default (short structured generation); the scheduler may
+        // escalate the model on retry when a cheap attempt couldn't produce a
+        // renderable node — that is a capability failure, not a transient one.
+        model,
+        apiKey,
         maxTurns: grounded ? 6 : 1,
       })) {
         if (chunk.type === 'text') text += (chunk.content as string) ?? '';
