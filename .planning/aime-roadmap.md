@@ -100,11 +100,23 @@ idea earlier. Evaluate during P3.
 - **Push-to-talk transcription** — nearly free: `use-voice-input` (local
   Whisper) exists; needs a global hotkey via Electron main.
 
-### P5 — Collaboration (last; changes the app's shape)
+### P5 — Collaboration + companion app (last; changes the app's shape)
 
 Shared project scope between humans. Everything today is localStorage/
 Zustand on one machine — sharing needs a sync layer (server or CRDT).
 Sequence after P1 + Projects hardening. Interacts with DR-3 ($ tier/auth).
+
+**Mobile companion app (moved here from C6, 2026-07-26).** Rides the same P5
+relay/sync server — that shared dependency is exactly why C6 was resolved as
+"companion app at P5" rather than messaging channels now. Scope, in ship
+order: (1) push notifications for run outcomes and failing goals; (2) remote
+APPROVALS for C3's paused consequential actions — the killer feature, since
+approving unattended work is most natural from a phone; (3) Cockpit view
+(runs, spend, widget tiles — the widget renderer is already pure React and
+portable); (4) remote instructions (start a goal/chat from the phone).
+Desktop connects OUT to the relay; the phone is a peer client — nothing ever
+listens inbound on the user's machine. Remote access is a fair hosted-edition
+feature (DR-3): the relay is real infrastructure with real costs.
 
 ### P6 — Autonomy & observability (Goals, Runs, Cockpit, Clawish runtime)
 
