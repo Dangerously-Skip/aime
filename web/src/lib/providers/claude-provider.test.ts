@@ -664,3 +664,90 @@ describe('SkillCreate tool (P3.7)', () => {
     }
   });
 });
+
+describe('VoiceProfileSave tool (P4)', () => {
+  let homeDir: string;
+
+  async function handlerFor(name: string) {
+    await run(new ClaudeProvider(), {});
+    const captured = queryMock.mock.calls.at(-1)![0] as {
+      options: { mcpServers: Record<string, { tools?: Array<{ name: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }> };
+    };
+    const tool = captured.options.mcpServers.aime.tools!.find((t) => t.name === name);
+    if (!tool) throw new Error(`${name} not registered`);
+    return tool.handler;
+  }
+
+  beforeEach(async () => {
+    const fsp = await import('fs/promises');
+    homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aime-voice-tool-'));
+    homeRef.value = homeDir;
+    scriptChunks([]);
+  });
+
+  afterEach(async () => {
+    homeRef.value = null;
+    const fsp = await import('fs/promises');
+    await fsp.rm(homeDir, { recursive: true, force: true });
+  });
+
+  const readVoice = async () => {
+    const fsp = await import('fs/promises');
+    return fsp.readFile(path.join(homeDir, '.claude', 'VOICE.md'), 'utf-8');
+  };
+
+  it('writes a VOICE.md that the parser reads back', async () => {
+    const handler = await handlerFor('VoiceProfileSave');
+    const result = await handler({
+      tone: 'Dry and direct.',
+      sentenceRhythm: 'Short, 10-14 words.',
+      avoid: 'Semicolons.',
+    });
+
+    expect(result.content[0].text).toMatch(/Saved the writing voice/);
+
+    const { parseVoiceProfile } = await import('../identity/voice');
+    expect(parseVoiceProfile(await readVoice())).toEqual({
+      tone: 'Dry and direct.',
+      'sentence-rhythm': 'Short, 10-14 words.',
+      avoid: 'Semicolons.',
+    });
+  });
+
+  it('saves nothing when every field is blank, and says so', async () => {
+    const handler = await handlerFor('VoiceProfileSave');
+    const result = await handler({ tone: '   ', avoid: '' });
+
+    expect(result.content[0].text).toMatch(/Nothing was saved/);
+    const fsp = await import('fs/promises');
+    await expect(fsp.readFile(path.join(homeDir, '.claude', 'VOICE.md'), 'utf-8')).rejects.toThrow();
+  });
+
+  it('ignores non-string field values rather than writing them', async () => {
+    const handler = await handlerFor('VoiceProfileSave');
+    const result = await handler({ tone: 'Dry.', vocabulary: 42, structure: null });
+
+    const { parseVoiceProfile } = await import('../identity/voice');
+    expect(parseVoiceProfile(await readVoice())).toEqual({ tone: 'Dry.' });
+    expect(result.content[0].text).toContain('tone');
+  });
+
+  it('replaces a previous voice rather than appending to it', async () => {
+    const handler = await handlerFor('VoiceProfileSave');
+    await handler({ tone: 'Formal.' });
+    await handler({ tone: 'Casual.' });
+
+    const md = await readVoice();
+    expect(md).toContain('Casual.');
+    expect(md).not.toContain('Formal.');
+  });
+
+  it('is allowlisted, and the surface prompt tells the agent it exists', async () => {
+    const { getSurfaceConfig } = await import('../surfaces');
+    for (const surface of ['chat', 'cowork']) {
+      const config = getSurfaceConfig(surface);
+      expect(config.allowedTools).toContain('mcp__aime__VoiceProfileSave');
+      expect(config.systemPrompt as string).toContain('VoiceProfileSave');
+    }
+  });
+});

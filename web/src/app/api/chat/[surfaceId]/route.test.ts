@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from './route';
 import type { QueryParams, StreamChunk } from '@/lib/providers/base-provider';
@@ -11,7 +11,15 @@ const mocks = vi.hoisted(() => ({
   readAgentPromptMock: vi.fn(),
   extractMemoriesMock: vi.fn(),
   loadProvisionedMock: vi.fn(),
+  // Lets a test point homedir() at a temp dir so identity files (SOUL/USER/VOICE)
+  // can be exercised. Unset ⇒ the real home, leaving existing tests untouched.
+  homeRef: { value: null as string | null },
 }));
+
+vi.mock('os', async (orig) => {
+  const actual = await orig<typeof import('os')>();
+  return { ...actual, default: actual, homedir: () => mocks.homeRef.value ?? actual.homedir() };
+});
 
 vi.mock('@/lib/providers', () => ({
   getProvider: () => ({ name: 'claude', query: mocks.queryMock, abort: mocks.abortMock }),
@@ -366,5 +374,65 @@ describe('memory extraction', () => {
     const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(events.at(-1)?.type).toBe('done');
+  });
+});
+
+describe('writing voice injection (P4)', () => {
+  /**
+   * The claim is that VOICE.md reaches the model. Asserting on the system prompt
+   * the provider actually receives is the only way to know — a unit test of
+   * buildVoicePrompt would pass even if the route never called it.
+   */
+  let homeDir: string;
+
+  const writeVoice = async (markdown: string) => {
+    const { mkdtemp, mkdir, writeFile } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    homeDir = await mkdtemp(path.join(os.tmpdir(), 'aime-route-voice-'));
+    mocks.homeRef.value = homeDir;
+    await mkdir(path.join(homeDir, '.claude'), { recursive: true });
+    await writeFile(path.join(homeDir, '.claude', 'VOICE.md'), markdown, 'utf-8');
+  };
+
+  afterEach(async () => {
+    mocks.homeRef.value = null;
+    if (homeDir) {
+      const { rm } = await import('fs/promises');
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('injects a saved voice into the system prompt', async () => {
+    await writeVoice('# Writing voice\n\n## Tone\n\nDry and direct.\n\n## Never do this\n\nSemicolons.\n');
+
+    await post('chat', { message: 'draft an email' });
+
+    const prompt = promptText();
+    expect(prompt).toContain('Dry and direct.');
+    expect(prompt).toContain('Semicolons.');
+    // scoped so it governs drafts, not the assistant's own replies
+    expect(prompt).toContain('put their name to');
+  });
+
+  it('injects nothing when there is no voice file', async () => {
+    const { mkdtemp } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    homeDir = await mkdtemp(path.join(os.tmpdir(), 'aime-route-novoice-'));
+    mocks.homeRef.value = homeDir;
+
+    await post('chat', { message: 'hi' });
+
+    expect(promptText()).not.toContain('put their name to');
+  });
+
+  it('injects nothing for a voice file with no recognised sections', async () => {
+    // A user could empty the file, or write only their own notes into it.
+    await writeVoice('# Writing voice\n\nnothing structured here\n');
+
+    await post('chat', { message: 'hi' });
+
+    expect(promptText()).not.toContain('put their name to');
   });
 });

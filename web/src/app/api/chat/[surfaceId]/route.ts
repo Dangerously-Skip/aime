@@ -419,6 +419,7 @@ export async function POST(
       const soulMd = await readIdentityFile(pathJoin(homedir(), '.claude', 'SOUL.md'));
       const userMd = await readIdentityFile(pathJoin(homedir(), '.claude', 'USER.md'));
       const identityMd = cwd ? await readIdentityFile(pathJoin(cwd as string, 'IDENTITY.md')) : '';
+      const voiceMd = await readIdentityFile(pathJoin(homedir(), '.claude', 'VOICE.md'));
       const bootstrapMd = !onboardingComplete
         ? await readIdentityFile(pathJoin(homedir(), '.claude', 'BOOTSTRAP.md'))
         : '';
@@ -447,6 +448,15 @@ export async function POST(
       }
       if (userMd) {
         systemPrompt = appendToSystemPrompt(systemPrompt, `<user-context>\n${userMd}\n</user-context>`);
+      }
+      // The user's own writing voice (P4). Sits with the other "who the user is"
+      // material, and is explicitly scoped to prose they will put their name to.
+      if (voiceMd) {
+        const { parseVoiceProfile, buildVoicePrompt } = await import('@/lib/identity/voice');
+        const voicePrompt = buildVoicePrompt(parseVoiceProfile(voiceMd));
+        if (voicePrompt) {
+          systemPrompt = appendToSystemPrompt(systemPrompt, voicePrompt);
+        }
       }
 
       if (projectInstructions) {
