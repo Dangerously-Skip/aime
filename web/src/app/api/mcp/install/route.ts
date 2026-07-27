@@ -1,14 +1,31 @@
 export const runtime = 'nodejs';
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { readFile, mkdir, stat } from 'fs/promises';
+import { readFile, mkdir, stat, rm, rename } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import {
+  sanitizePluginName,
+  resolveInstallDir,
+  resolveSource,
+  buildCloneArgs,
+  type PluginSource,
+} from '@/lib/mcp/install-guard';
 
-const execAsync = promisify(exec);
+/**
+ * Plugin install — clones a plugin repo into ~/.claude/plugins/<name>/ and
+ * returns its MCP server definitions so the caller can trigger OAuth if needed.
+ *
+ * Uses execFile with an argv array: there is no shell, so nothing in the
+ * request can be interpreted as a command. All path and URL validation lives in
+ * install-guard.ts.
+ */
+
+const execFileAsync = promisify(execFile);
 
 const PLUGINS_DIR = join(homedir(), '.claude', 'plugins');
+const GIT_TIMEOUT_MS = 60_000;
 
 interface McpServerDef {
   type?: string;
@@ -25,40 +42,6 @@ interface PluginManifest {
   mcpServers?: string | Record<string, McpServerDef>;
 }
 
-/**
- * Resolve the plugin source into a git clone URL + optional subpath.
- */
-function resolveSource(
-  source: string | { source: string; url?: string; repo?: string; path?: string; ref?: string }
-): { cloneUrl: string; ref?: string; subpath?: string } | null {
-  if (typeof source === 'string') {
-    // Relative path into the official claude-plugins-public repo
-    const clean = source.replace(/^\.\//, '');
-    return {
-      cloneUrl: 'https://github.com/anthropics/claude-plugins-public.git',
-      subpath: clean,
-    };
-  }
-
-  if (source.source === 'url' && source.url) {
-    return { cloneUrl: source.url, ref: source.ref };
-  }
-
-  if (source.source === 'github' && source.repo) {
-    return { cloneUrl: `https://github.com/${source.repo}.git`, ref: source.ref };
-  }
-
-  if (source.source === 'git-subdir' && source.url) {
-    return {
-      cloneUrl: source.url,
-      ref: source.ref,
-      subpath: source.path,
-    };
-  }
-
-  return null;
-}
-
 async function dirExists(path: string): Promise<boolean> {
   try {
     const s = await stat(path);
@@ -68,27 +51,47 @@ async function dirExists(path: string): Promise<boolean> {
   }
 }
 
+async function git(args: string[]): Promise<void> {
+  await execFileAsync('git', args, {
+    timeout: GIT_TIMEOUT_MS,
+    // Never let git prompt for credentials — it would hang the request.
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' },
+  });
+}
+
 /**
  * POST /api/mcp/install
  * Body: { name, source }
- * Clones the plugin into ~/.claude/plugins/<name>/ and reads its manifest.
- * Returns the plugin's MCP server definitions (so the caller can trigger OAuth if needed).
  */
 export async function POST(request: Request) {
+  let tempDir: string | undefined;
   try {
-    const { name, source } = await request.json();
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return Response.json({ error: 'Invalid request body' }, { status: 400 });
+    }
+    const { name, source } = body as { name?: unknown; source?: unknown };
 
-    if (!name || !source) {
-      return Response.json({ error: 'Missing name or source' }, { status: 400 });
+    const safeName = sanitizePluginName(name);
+    if (!safeName.ok) {
+      return Response.json({ error: safeName.error }, { status: 400 });
+    }
+    if (source === undefined || source === null) {
+      return Response.json({ error: 'Missing source' }, { status: 400 });
     }
 
-    const resolved = resolveSource(source);
-    if (!resolved) {
-      return Response.json({ error: 'Unsupported plugin source' }, { status: 400 });
+    const plan = resolveSource(source as PluginSource);
+    if (!plan.ok) {
+      return Response.json({ error: plan.error }, { status: 400 });
     }
 
     await mkdir(PLUGINS_DIR, { recursive: true });
-    const targetDir = join(PLUGINS_DIR, name);
+
+    const target = resolveInstallDir(PLUGINS_DIR, safeName.value);
+    if (!target.ok) {
+      return Response.json({ error: target.error }, { status: 400 });
+    }
+    const targetDir = target.value;
 
     if (await dirExists(targetDir)) {
       // Already installed — just read the manifest
@@ -99,27 +102,24 @@ export async function POST(request: Request) {
       });
     }
 
-    if (resolved.subpath) {
-      // Sparse checkout for subdir sources
-      const tempDir = join(PLUGINS_DIR, `.tmp-${name}-${Date.now()}`);
-      const ref = resolved.ref || 'HEAD';
-      await execAsync(`git clone --depth 1 ${resolved.ref ? `--branch ${resolved.ref}` : ''} ${JSON.stringify(resolved.cloneUrl)} ${JSON.stringify(tempDir)}`, {
-        timeout: 60_000,
-      });
-      const srcDir = join(tempDir, resolved.subpath);
+    if (plan.value.subpath) {
+      // Clone to a scratch dir, then promote the requested subdirectory.
+      // The suffix keeps concurrent installs of different plugins apart; the
+      // name is already restricted to a single safe path segment.
+      tempDir = join(PLUGINS_DIR, `.tmp-${safeName.value}`);
+      await rm(tempDir, { recursive: true, force: true });
+      await git(buildCloneArgs(plan.value, tempDir));
+
+      const srcDir = join(tempDir, plan.value.subpath);
       if (!(await dirExists(srcDir))) {
-        await execAsync(`rm -rf ${JSON.stringify(tempDir)}`);
-        return Response.json({ error: `Subpath ${resolved.subpath} not found in repo` }, { status: 404 });
+        return Response.json(
+          { error: `Subpath ${plan.value.subpath} not found in repo` },
+          { status: 404 },
+        );
       }
-      await execAsync(`mv ${JSON.stringify(srcDir)} ${JSON.stringify(targetDir)}`);
-      await execAsync(`rm -rf ${JSON.stringify(tempDir)}`);
-      void ref;
+      await rename(srcDir, targetDir);
     } else {
-      const branchArg = resolved.ref ? `--branch ${JSON.stringify(resolved.ref)}` : '';
-      await execAsync(
-        `git clone --depth 1 ${branchArg} ${JSON.stringify(resolved.cloneUrl)} ${JSON.stringify(targetDir)}`,
-        { timeout: 60_000 }
-      );
+      await git(buildCloneArgs(plan.value, targetDir));
     }
 
     const manifest = await readManifest(targetDir);
@@ -131,10 +131,10 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error('[MCP Install] Error:', error);
-    return Response.json(
-      { error: error instanceof Error ? error.message : 'Install failed' },
-      { status: 500 }
-    );
+    // Don't hand git's stderr (which can include local paths) to the caller.
+    return Response.json({ error: 'Install failed' }, { status: 500 });
+  } finally {
+    if (tempDir) await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -157,14 +157,20 @@ async function readManifest(pluginDir: string): Promise<{
 
   if (plugin?.mcpServers) {
     if (typeof plugin.mcpServers === 'string') {
-      // Path to a .mcp.json file
-      try {
-        const mcpPath = join(pluginDir, plugin.mcpServers);
-        const content = await readFile(mcpPath, 'utf-8');
-        const parsed = JSON.parse(content) as { mcpServers?: Record<string, McpServerDef> };
-        mcpServers = parsed.mcpServers || {};
-      } catch (err) {
-        console.warn('[MCP Install] Failed to read mcpServers file:', err);
+      // Path to a .mcp.json file, relative to the plugin. Confined to the
+      // plugin directory so a hostile manifest can't read arbitrary files.
+      const { validateSubpath } = await import('@/lib/mcp/install-guard');
+      const rel = validateSubpath(plugin.mcpServers);
+      if (rel.ok && rel.value) {
+        try {
+          const content = await readFile(join(pluginDir, rel.value), 'utf-8');
+          const parsed = JSON.parse(content) as { mcpServers?: Record<string, McpServerDef> };
+          mcpServers = parsed.mcpServers || {};
+        } catch (err) {
+          console.warn('[MCP Install] Failed to read mcpServers file:', err);
+        }
+      } else {
+        console.warn('[MCP Install] Ignoring out-of-tree mcpServers path:', plugin.mcpServers);
       }
     } else {
       mcpServers = plugin.mcpServers;

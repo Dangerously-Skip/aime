@@ -130,6 +130,10 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
         'https://www.googleapis.com/auth/userinfo.profile',
       ],
       pkce: true,
+      // Google only returns a refresh_token when access_type=offline is asked
+      // for, and only reissues one when prompt=consent is forced. Without both,
+      // the connection stops working ~1h after connecting and cannot recover.
+      extraAuthParams: { access_type: 'offline', prompt: 'consent' },
     },
     mcp: {
       transport: 'stdio',
@@ -158,6 +162,8 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
       ],
       pkce: true,
       byoCredentials: true,
+      // See google-workspace: without these the token cannot be refreshed.
+      extraAuthParams: { access_type: 'offline', prompt: 'consent' },
       hint:
         'Create your own Google OAuth client (10 min):\n' +
         '1. Go to console.cloud.google.com → select or create a project\n' +

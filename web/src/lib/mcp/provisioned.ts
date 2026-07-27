@@ -98,8 +98,24 @@ async function refreshTokenIfNeeded(
     if (entry) {
       if (entry.env && typeof entry.env === 'object') {
         const envObj = entry.env as Record<string, string>;
-        for (const key of Object.keys(envObj)) {
-          if (key.includes('TOKEN') || key.includes('ACCESS')) envObj[key] = newAccessToken;
+        // Replace only the variable this connector declares as its token.
+        // The previous rule — every key containing TOKEN or ACCESS — happened to
+        // be correct while entries carried exactly one env var, but it would
+        // overwrite unrelated credentials (AWS_ACCESS_KEY_ID,
+        // SUMOLOGIC_ACCESS_KEY) in any entry carrying more than one.
+        const { CONNECTOR_MAP } = await import('@/lib/connectors/registry');
+        const injection = CONNECTOR_MAP[connectorId as string]?.mcp.tokenInjection;
+        const keys = Object.keys(envObj);
+        if (injection?.method === 'env' && injection.envVar in envObj) {
+          envObj[injection.envVar] = newAccessToken;
+        } else if (keys.length === 1) {
+          // Unknown connector (hand-written or legacy entry) but only one
+          // variable, so the target is unambiguous.
+          envObj[keys[0]] = newAccessToken;
+        } else {
+          console.warn(
+            `[Token Refresh] ${label}: cannot tell which of ${keys.length} env vars holds the token; leaving them unchanged`,
+          );
         }
       }
       if (entry.headers && typeof entry.headers === 'object') {
