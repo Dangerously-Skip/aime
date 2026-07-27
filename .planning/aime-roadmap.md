@@ -205,15 +205,66 @@ Pillar numbers are identities, not execution order. Actual sequence:
 2. **P1** provider/model registry — ✅ complete (P1.1–P1.7, `928fad2..d3f4878`)
 3. **P2** surface clarity — per-surface defaults ✅ (`808ac26`); provider
    management + model selection ✅ (`63482c1`, `178ae3f`, `0f6952b`)
-4. **P2d** ⟵ *in progress*: effective registry (user models into the
-   capability×tier grid, price-band inference), tier grid UI, route-selecting
-   dropdown. Resolves DR-13 and the 345-model scan flood.
-5. **P6** autonomy & observability — Runs substrate → Cockpit → widgets →
-   verification → approval policy → out-of-renderer runtime
-6. **P2** remainder — onboarding rework around provider paths
-7. **P3** skills/widgets/MCP polish + Composio evaluation (DR-9)
-8. **P4** memory graph + voice + PTT + doc service
-9. **P5** shared projects (needs a sync layer; interacts with DR-3)
+4. **P2d** effective registry (user models into the capability×tier grid,
+   price-band inference), tier grid UI, route-selecting dropdown — ✅ complete.
+   Resolves DR-13 and the 345-model scan flood.
+5. **P6** autonomy & observability — ✅ complete. Runs substrate → Cockpit →
+   widgets → verification → approval policy → out-of-renderer runtime
+6. **P2** remainder — onboarding rework around provider paths — ✅ (`59805e6`)
+7. **P3** extensibility — ✅ complete (`1160aad..fc03d19`). Resolved DR-9
+   (MCP-native, not Composio) and DR-14 (secrets encrypted at rest).
+   - P3.1 security floor: registry-validated provisioning (was a local RCE),
+     shell injection + traversal in the install route, 0600 everywhere, and
+     `access_type=offline` so Google connections survive past the hour
+   - P3.2 connectability classification + a shared connect orchestrator.
+     Onboarding used to *abandon itself* for 4 of its 5 featured connectors.
+   - P3.3 connect at the moment of need — the agent pauses mid-task, an inline
+     card connects, and the same turn resumes
+   - P3.4 connection health + reconnect; a dead connection no longer reads alive
+   - P3.5 the enable/disable toggle made real (it had never done anything), plus
+     a visible tool budget
+   - P3.6 DCR generalised: add-by-URL behind an SSRF guard, per-tool policy from
+     the C3 classifier, and a **probe-verified catalogue of 20 one-click
+     servers** (was 3). Re-verify with `npx tsx scripts/probe-dcr.ts`.
+   - P3.7 skill generation from a conversation
+   - P3.8 DR-14 — see `dr-14-secret-storage.md`
+8. **P4** output & intelligence — ✅ complete (`7bb6ff3..399e8bc`)
+   - P4.1 push-to-talk via an Electron global shortcut
+   - P4.2 document service: markdown → themed HTML → Chromium `printToPDF`,
+     replacing "pip install fpdf2 and improvise". Four themes over one base
+     stylesheet; CSS *is* the design system.
+   - P4.3 memory graph: entities, temporal edges, traversal — Graphiti's ideas
+     without Python+Neo4j, as an additive boost over the TF-IDF retriever
+   - Writing voice profile (`VOICE.md`), injected like SOUL/USER
+9. **P5** shared projects + mobile companion (needs a sync layer; interacts with
+   DR-3) ⟵ *next, and different in kind: real infrastructure, real cost*
+
+### Known limitations carried into P5
+
+Recorded because these are the first questions an open-source reader asks.
+
+- **PDF printing needs a connected client.** The Next server is a child process
+  of Electron and cannot call `ipcMain`, so printing relays through the renderer.
+  A *scheduled* run with no window open produces themed HTML, not a PDF.
+- **The credential master key sits in the server's environment.** Encryption at
+  rest defends the file once it leaves the machine (backups, sync, stolen disk);
+  it does not defend against a same-user process. See `dr-14-secret-storage.md`.
+- **Entity extraction is heuristic and precision-biased.** It anchors on
+  relationship phrasing rather than capitalisation, so it misses mentions like
+  "Sarah reviewed the migration". A wrong edge misleads retrieval; a missing one
+  only leaves it at keyword parity.
+- **Per-tool MCP policy cannot cover stdio servers.** `McpStdioServerConfig` has
+  no `tools` field — an SDK constraint. The 7 stdio connectors stay covered by
+  `canUseTool` alone.
+- **The first session after adding an MCP server has no SDK-level tool policy**,
+  since tool names are only known once a session has connected. Closing it needs
+  a `tools/list` call at connect time.
+- **The voice profile is global only.** The project model says per-project
+  defaults should include it; not yet implemented.
+- **Naming: "Cowork" needs a decision.** The docs have to disclaim it ("means
+  co-working with the AI — NOT the multiplayer feature"), and P5 introduces
+  genuine human collaboration alongside it. A name that requires a disclaimer is
+  a support burden; renaming is cheap now and expensive after release.
 
 ## De-nib checklist (P0) — ✅ COMPLETE (2026-07-24, commits 90fe812..01903c9)
 
