@@ -130,19 +130,50 @@ describe('OnboardingWizard — navigation', () => {
   });
 });
 
-describe('OnboardingWizard — skip link', () => {
-  it('offers "Skip for now" through the setup steps and drops it on the tail', () => {
+describe('OnboardingWizard — the escape hatch', () => {
+  /**
+   * Onboarding renders in front of the entire app, so a step with no way out
+   * locks the user out of the product. A report of being unable to get past the
+   * summary screen reproduced on neither Chromium nor real Electron, so the
+   * cause is still unknown — which is exactly why every step must have an exit
+   * that does not depend on the step's own primary button working.
+   */
+  it('offers an escape on EVERY step, so onboarding can never trap the user', () => {
     render(<OnboardingWizard />);
-    expect(screen.getByText('Skip for now')).toBeTruthy(); // welcome
-    nameAndContinue();
-    expect(screen.getByText('Skip for now')).toBeTruthy(); // providers
-    fireEvent.click(screen.getByText(/Skip — set up later/));
-    expect(screen.getByText('Skip for now')).toBeTruthy(); // connectors
+    const escapes = () =>
+      screen.queryAllByText(/Skip for now|Go to /).length;
 
+    expect(escapes()).toBeGreaterThan(0); // welcome
+    nameAndContinue();
+    expect(escapes()).toBeGreaterThan(0); // providers
+    fireEvent.click(screen.getByText(/Skip — set up later/));
+    expect(escapes()).toBeGreaterThan(0); // connectors
     fireEvent.click(screen.getByText('Continue'));
-    expect(screen.queryByText('Skip for now')).toBeNull(); // done — summary
+    expect(escapes()).toBeGreaterThan(0); // done — the reported screen
     fireEvent.click(screen.getByText('Continue'));
-    expect(screen.queryByText('Skip for now')).toBeNull(); // feedback
+    expect(escapes()).toBeGreaterThan(0); // feedback
+  });
+
+  it('defers on the setup steps and COMPLETES on the tail', () => {
+    render(<OnboardingWizard />);
+    // Setup steps: "Skip for now" only postpones, so the wizard returns later.
+    expect(screen.getByText('Skip for now')).toBeTruthy();
+    fireEvent.click(screen.getByText('Skip for now'));
+    expect(useSettingsStore.getState().onboardingSkippedAt).not.toBeNull();
+    expect(useSettingsStore.getState().onboardingComplete).toBe(false);
+  });
+
+  it('the summary screen can reach the app without using its Continue button', () => {
+    // The specific trap: if Continue fails on "Nice work human!", this is the
+    // only remaining way in.
+    render(<OnboardingWizard />);
+    nameAndContinue();
+    fireEvent.click(screen.getByText(/Skip — set up later/));
+    fireEvent.click(screen.getByText('Continue')); // -> done
+    expect(screen.getByText(/Nice work human/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText(/^Go to /));
+    expect(useSettingsStore.getState().onboardingComplete).toBe(true);
   });
 });
 
