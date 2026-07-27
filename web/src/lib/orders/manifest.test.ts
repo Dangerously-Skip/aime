@@ -127,10 +127,18 @@ describe('isOrderDue', () => {
 
   it('cron orders need the matcher and guard against same-minute double-fire', () => {
     const o = order({ trigger: { type: 'cron', expression: '* * * * *' } });
-    const now = Date.now();
+    // A FIXED instant, 30s into a minute. With Date.now() this failed roughly 8%
+    // of runs: when the real clock landed in the first 5 seconds of a minute,
+    // `now - 5_000` fell into the PREVIOUS minute, so the same-minute guard
+    // correctly did not apply and the assertion below was simply wrong. The code
+    // was right; the test's assumption was not.
+    const now = new Date('2026-07-27T12:34:30.000Z').getTime();
     expect(isOrderDue(o, now, cron)).toBe(true);
     expect(isOrderDue(o, now, null)).toBe(false); // matcher unavailable ⇒ skip, not crash
     expect(isOrderDue({ ...o, lastRun: now - 5_000 }, now, cron)).toBe(false); // same minute
+
+    // …and the guard really is minute-scoped: a run a minute ago is due again.
+    expect(isOrderDue({ ...o, lastRun: now - 60_000 }, now, cron)).toBe(true);
   });
 
   it('event triggers are never fired by the clock', () => {

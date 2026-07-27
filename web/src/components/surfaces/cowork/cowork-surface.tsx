@@ -79,6 +79,7 @@ import type { Capability } from "@/lib/models/types";
 import { useRunRecorder } from "@/hooks/use-run-recorder";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
+import { usePushToTalk } from "@/hooks/use-push-to-talk";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("cowork").capability;
@@ -713,6 +714,7 @@ export function CoworkSurface() {
   const activeConvId = useConversationStore((s) => s.activeId);
   const conversations = useConversationStore((s) => s.conversations);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
+  const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
   const displayName = useSettingsStore((s) => s.displayName);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
@@ -1476,6 +1478,19 @@ export function CoworkSurface() {
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
     []
   );
+
+
+  // Push-to-talk: the global hotkey routes to the same handler as the mic
+
+  // button, so dictation works without focusing the window (P4.1).
+
+  usePushToTalk({
+
+    onTranscript: handleVoiceTranscript,
+
+    enabled: pushToTalkEnabled,
+
+  });
 
   // Fire a background agent run on the cowork surface (used by heartbeat + cron)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentionally retained dead code; see the note below the runSilentHeartbeat definition

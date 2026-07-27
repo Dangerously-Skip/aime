@@ -47,6 +47,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("minute:tick", listener);
   },
 
+  // ── Push-to-talk (P4.1) ──────────────────────────────────────────────
+  // Main owns the global shortcut; the renderer only learns that it fired.
+  onVoiceToggle: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("voice:toggle", listener);
+    return () => ipcRenderer.removeListener("voice:toggle", listener);
+  },
+  setPushToTalkEnabled: (enabled, accelerator) =>
+    ipcRenderer.invoke("voice:set-push-to-talk", { enabled, accelerator }),
+
   // ── IDE workspace IPC ────────────────────────────────────────────────
   // Wave 1 declares; Wave 2 agents fill the main-side implementations.
   // Stubs in main-web.js return safe defaults so the renderer doesn't

@@ -1,6 +1,8 @@
 'use client'
 
 import { useSettingsStore } from '@/stores/settings-store'
+import { Switch } from '@/components/ui/switch'
+import { formatAcceleratorForDisplay } from '@/lib/voice/accelerator'
 import { useChatStore } from '@/stores/chat-store'
 import { useCoworkStore } from '@/stores/cowork-store'
 import { useCodeStore } from '@/stores/code-store'
@@ -35,6 +37,10 @@ export function CapabilitiesSection() {
   const browserModel = useBrowserStore((s) => s.model)
   const setBrowserModel = useBrowserStore((s) => s.setModel)
 
+  const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled)
+  const setPushToTalkEnabled = useSettingsStore((s) => s.setPushToTalkEnabled)
+  const pushToTalkAccelerator = useSettingsStore((s) => s.pushToTalkAccelerator)
+
   const [surfaces, setSurfaces] = useState<SurfaceConfig[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -67,6 +73,22 @@ export function CapabilitiesSection() {
 
   return (
     <div className="space-y-6">
+      {/* Push-to-talk (P4.1) — off by default; enabling claims a system-wide key. */}
+      <div className="flex items-center justify-between rounded-lg border p-3">
+        <div>
+          <div className="text-sm font-medium">Dictate with a global hotkey</div>
+          <p className="text-xs text-muted-foreground">
+            Press{' '}
+            <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px]">
+              {formatAcceleratorForDisplay(pushToTalkAccelerator)}
+            </kbd>{' '}
+            anywhere to start and stop dictation. Transcribed on this machine; nothing is uploaded.
+            While on, no other app can use that combination.
+          </p>
+        </div>
+        <Switch checked={pushToTalkEnabled} onCheckedChange={setPushToTalkEnabled} />
+      </div>
+
       {/* Tool Access Mode */}
       <div>
         <label className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">

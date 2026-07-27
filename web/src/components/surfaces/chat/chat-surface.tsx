@@ -48,6 +48,7 @@ import { useRunRecorder } from "@/hooks/use-run-recorder";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
+import { usePushToTalk } from "@/hooks/use-push-to-talk";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -159,6 +160,7 @@ export function ChatSurface() {
     (s) => s.setActiveConversation
   );
   const displayName = useSettingsStore((s) => s.displayName);
+  const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const toolProfile = useSettingsStore((s) => s.toolProfile);
@@ -609,6 +611,19 @@ export function ChatSurface() {
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
     []
   );
+
+
+  // Push-to-talk: the global hotkey routes to the same handler as the mic
+
+  // button, so dictation works without focusing the window (P4.1).
+
+  usePushToTalk({
+
+    onTranscript: handleVoiceTranscript,
+
+    enabled: pushToTalkEnabled,
+
+  });
 
   // Merged suggestions: slash takes priority
   const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0

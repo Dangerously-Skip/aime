@@ -150,3 +150,36 @@ describe('settings actions', () => {
     expect(s().devHourlyRate).toBe(150);
   });
 });
+
+describe('v10 — push-to-talk settings', () => {
+  it('a v9 payload gains the new fields with safe defaults', async () => {
+    // Additive migration: the absent fields must arrive as off + the default
+    // accelerator rather than undefined, since an undefined accelerator would
+    // reach globalShortcut.register.
+    await rehydrateWith(9, { displayName: 'Ada', toolProfile: 'full' });
+
+    const s = useSettingsStore.getState();
+    expect(s.displayName).toBe('Ada');
+    expect(s.pushToTalkEnabled).toBe(false);
+    expect(s.pushToTalkAccelerator).toBe('CommandOrControl+Shift+Space');
+  });
+
+  it('never claims a global hotkey by default', async () => {
+    // A system-wide key grabbed uninvited makes users think another app broke.
+    await rehydrateWith(10, {});
+    expect(useSettingsStore.getState().pushToTalkEnabled).toBe(false);
+  });
+
+  it('stores the canonical accelerator form, not what was typed', () => {
+    const result = useSettingsStore.getState().setPushToTalkAccelerator('shift + ctrl + k');
+    expect(result.ok).toBe(true);
+    expect(useSettingsStore.getState().pushToTalkAccelerator).toBe('Control+Shift+K');
+  });
+
+  it('refuses an invalid accelerator and leaves the stored one alone', () => {
+    useSettingsStore.getState().setPushToTalkAccelerator('Ctrl+Shift+J');
+    const result = useSettingsStore.getState().setPushToTalkAccelerator('V');
+    expect(result.ok).toBe(false);
+    expect(useSettingsStore.getState().pushToTalkAccelerator).toBe('Control+Shift+J');
+  });
+});
