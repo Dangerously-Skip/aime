@@ -11,6 +11,7 @@ import { startOAuthFlow } from "@/lib/connectors/oauth";
 import { runMcpOAuthFlow } from "@/lib/mcp/oauth-flow";
 import { provisionConnector, deprovisionConnector } from "@/lib/connectors/provisioner";
 import { useConnectorHealth } from "@/hooks/use-connector-health";
+import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ConnectionHealth } from "@/lib/connectors/health";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useMarketplace } from "@/lib/use-marketplace";
@@ -98,6 +99,9 @@ export function BrowseConnectors() {
     [connectorStates],
   );
   const { healthOf, refresh: refreshHealth } = useConnectorHealth(claimedConnectedIds);
+  // How many tools the last session actually mounted (P3.5). Only knowable from a
+  // live session, but this is the screen where the user can do something about it.
+  const toolBudget = useToolBudgetStore((s2) => s2.report);
 
   // Re-check health whenever a connect attempt finishes. Reconnecting a service
   // that already reads as authenticated does not change the claimed set, so the
@@ -717,6 +721,19 @@ export function BrowseConnectors() {
           <p className="text-xs text-muted-foreground">
             Connect Claude to your apps, files, and services.
           </p>
+          {toolBudget && (
+            <p
+              className={`mt-0.5 text-xs ${
+                toolBudget.overBudget ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground"
+              }`}
+            >
+              {toolBudget.overBudget
+                ? toolBudget.advice
+                : `${toolBudget.total} tools mounted across ${toolBudget.perServer.length} service${
+                    toolBudget.perServer.length === 1 ? "" : "s"
+                  }.`}
+            </p>
+          )}
         </div>
         <div className="relative w-52">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />

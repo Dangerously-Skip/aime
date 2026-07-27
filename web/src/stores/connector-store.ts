@@ -37,6 +37,8 @@ interface ConnectorStoreActions {
   isAuthenticated: (id: string) => boolean;
   getConnectorState: (id: string) => ConnectorState;
   getEnabledConnectorIds: () => string[];
+  /** Connected but disabled — mounted MCP servers are filtered by this (P3.5). */
+  getDisabledConnectorIds: () => string[];
   getTokenMeta: (id: string) => TokenInfo | undefined;
   setOAuthClientCreds: (id: string, creds: OAuthClientCreds) => void;
   clearOAuthClientCreds: (id: string) => void;
@@ -133,6 +135,18 @@ export const useConnectorStore = create<ConnectorStore>()(
         const { connectorStates } = get();
         return Object.values(connectorStates)
           .filter((s) => s.enabled && s.authenticated)
+          .map((s) => s.id);
+      },
+
+      /**
+       * Connected but switched OFF — the deny list sent with each chat request so
+       * their MCP servers are not mounted (P3.5). Until this was wired, the
+       * enable/disable toggle had no effect on anything.
+       */
+      getDisabledConnectorIds: () => {
+        const { connectorStates } = get();
+        return Object.values(connectorStates)
+          .filter((s) => s.authenticated && !s.enabled)
           .map((s) => s.id);
       },
 

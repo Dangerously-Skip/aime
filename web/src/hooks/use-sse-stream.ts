@@ -2,6 +2,7 @@
 
 import { useCallback, useRef } from 'react';
 import { streamRegistry } from '@/lib/stream-registry';
+import { useConnectorStore } from '@/stores/connector-store';
 
 /**
  * Strip store messages to a lightweight {role, content} array suitable for the history param.
@@ -72,7 +73,8 @@ interface UseSSEStreamReturn {
         reasoningVisible?: boolean
         modelOverride?: string | null
       }
-      toolProfile?: string
+      toolProfile?: string;
+      disabledConnectors?: string[]
       contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
       capability?: string
       tier?: string
@@ -170,7 +172,8 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           reasoningVisible?: boolean
           modelOverride?: string | null
         }
-        toolProfile?: string
+        toolProfile?: string;
+        disabledConnectors?: string[]
         capability?: string
         tier?: string
         providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
@@ -226,6 +229,15 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.capability ? { capability: extra.capability } : {}),
             ...(extra?.tier ? { tier: extra.tier } : {}),
             ...(extra?.providerConfig ? { providerConfig: extra.providerConfig } : {}),
+            // Connectors the user switched off must not have their MCP servers
+            // mounted (P3.5). Resolved HERE rather than at each call site: there
+            // are five of them across four surfaces, and one forgetting would
+            // silently mount a disabled service.
+            ...(() => {
+              const ids = extra?.disabledConnectors
+                ?? useConnectorStore.getState().getDisabledConnectorIds();
+              return ids.length ? { disabledConnectors: ids } : {};
+            })(),
           }),
           signal: controller.signal,
         });

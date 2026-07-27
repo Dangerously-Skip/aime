@@ -149,6 +149,7 @@ export async function POST(
     capability = null,
     tier = null,
     providerConfig = null,
+    disabledConnectors = null,
   } = body as {
     message?: string;
     chatId?: string;
@@ -180,6 +181,8 @@ export async function POST(
     capability?: import('@/lib/models/types').Capability | null;
     tier?: import('@/lib/models/types').Tier | null;
     providerConfig?: import('@/lib/models/execution').ProviderExecConfig | null;
+    /** Connector ids the user has switched off in the Connectors screen (P3.5). */
+    disabledConnectors?: string[] | null;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -253,9 +256,21 @@ export async function POST(
       const provider = getProvider(providerName as string);
 
       // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
-      const mcpServers = await loadProvisionedMcpServers();
+      const allProvisionedServers = await loadProvisionedMcpServers();
+      // Honour the Connectors screen's enable/disable toggle (P3.5). Until now
+      // nothing read it, so every provisioned connector was mounted regardless and
+      // the switch did nothing. A deny list means an absent value mounts
+      // everything, so a scheduled run with no UI state keeps its tools.
+      const { filterMcpServers } = await import('@/lib/mcp/filter');
+      const { servers: mcpServers, removed: unmountedServers } = filterMcpServers(
+        allProvisionedServers,
+        Array.isArray(disabledConnectors) ? (disabledConnectors as string[]) : undefined,
+      );
       if (Object.keys(mcpServers).length > 0) {
         console.log('[CHAT] Loaded provisioned connector servers:', Object.keys(mcpServers).join(', '));
+      }
+      if (unmountedServers.length > 0) {
+        console.log('[CHAT] Skipped disabled connectors:', unmountedServers.join(', '));
       }
 
       // Get surface-specific config
