@@ -49,6 +49,7 @@ import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { usePushToTalk } from "@/hooks/use-push-to-talk";
+import { useDocumentPrint } from "@/hooks/use-document-print";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -161,6 +162,7 @@ export function ChatSurface() {
   );
   const displayName = useSettingsStore((s) => s.displayName);
   const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
+  const printDocument = useDocumentPrint();
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const toolProfile = useSettingsStore((s) => s.toolProfile);
@@ -303,6 +305,15 @@ export function ChatSurface() {
           if (event.toolBudget) {
             useToolBudgetStore.getState().setReport(event.toolBudget as ToolBudgetReport);
           }
+          break;
+        case "document_print":
+          // Relay to Electron main, which owns Chromium (P4.2b).
+          void printDocument({
+            toolUseId: event.toolUseId as string,
+            html: event.html as string,
+            outputPath: event.outputPath as string,
+            printOptions: event.printOptions as Record<string, unknown> | undefined,
+          });
           break;
         case "connector_request":
           addMessage(cid, {

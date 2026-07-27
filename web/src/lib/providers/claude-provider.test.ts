@@ -764,8 +764,8 @@ describe('DocumentCreate tool (P4.2)', () => {
    */
   let workDir: string;
 
-  async function documentHandler() {
-    await run(new ClaudeProvider(), { cwd: workDir });
+  async function documentHandler(params: Partial<QueryParams> = {}) {
+    await run(new ClaudeProvider(), { cwd: workDir, ...params });
     const captured = queryMock.mock.calls.at(-1)![0] as {
       options: { mcpServers: Record<string, { tools?: Array<{ name: string; description: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }> };
     };
@@ -803,7 +803,7 @@ describe('DocumentCreate tool (P4.2)', () => {
     expect(html).toContain('margin: 24mm');
   });
 
-  it('does not claim a PDF exists when there is no print bridge', async () => {
+  it('does not claim a PDF exists when no client can print (e.g. a scheduled run)', async () => {
     const tool = await documentHandler();
     const result = await tool.handler({ title: 'R', markdown: 'x' });
 
@@ -838,5 +838,91 @@ describe('DocumentCreate tool (P4.2)', () => {
     for (const surface of ['chat', 'cowork']) {
       expect(getSurfaceConfig(surface).allowedTools).toContain('mcp__aime__DocumentCreate');
     }
+  });
+});
+
+describe('DocumentCreate — the print hop (P4.2b)', () => {
+  /**
+   * The server cannot call ipcMain, so printing is relayed through the client.
+   * These assert the hop: the request goes out, the turn WAITS, and the reported
+   * outcome reaches the model.
+   */
+  let workDir: string;
+
+  async function toolWith(onDocumentPrint?: QueryParams['onDocumentPrint']) {
+    await run(new ClaudeProvider(), { cwd: workDir, onDocumentPrint });
+    const captured = queryMock.mock.calls.at(-1)![0] as {
+      options: { mcpServers: Record<string, { tools?: Array<{ name: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }> };
+    };
+    return captured.options.mcpServers.aime.tools!.find((t) => t.name === 'DocumentCreate')!.handler;
+  }
+
+  beforeEach(async () => {
+    const fsp = await import('fs/promises');
+    workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aime-dochop-'));
+    scriptChunks([]);
+  });
+
+  afterEach(async () => {
+    const fsp = await import('fs/promises');
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  it('asks the client to print, waits, and reports the PDF', async () => {
+    const { resolveDocumentPrint } = await import('../pending-documents');
+    const requests: Array<{ toolUseId: string; outputPath: string }> = [];
+
+    const handler = await toolWith(async (toolUseId, payload) => {
+      requests.push({ toolUseId, outputPath: payload.outputPath });
+      // Stand in for the client round trip.
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true, path: payload.outputPath, bytes: 1234 }), 0);
+    });
+
+    const result = await handler({ title: 'Report', markdown: '# Hi' });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].outputPath).toBe(path.join(workDir, 'report.pdf'));
+    expect(result.content[0].text).toContain('report.pdf');
+    expect(result.content[0].text).toContain('PDF');
+  });
+
+  it('sends the theme-derived print options, not defaults', async () => {
+    const { resolveDocumentPrint } = await import('../pending-documents');
+    let sent: Record<string, unknown> | null = null;
+
+    const handler = await toolWith(async (toolUseId, payload) => {
+      sent = payload.printOptions;
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true, path: payload.outputPath }), 0);
+    });
+    await handler({ title: 'R', markdown: 'x', theme: 'proposal' });
+
+    // 24mm margins in inches — proving the theme reached Chromium's options.
+    expect(sent).toMatchObject({ pageSize: 'A4', printBackground: true });
+    expect((sent as unknown as { margins: { top: number } }).margins.top).toBeCloseTo(24 / 25.4, 5);
+  });
+
+  it('reports the HTML outcome when printing fails, without claiming a PDF', async () => {
+    const { resolveDocumentPrint } = await import('../pending-documents');
+    const handler = await toolWith(async (toolUseId) => {
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: false, error: 'no chromium' }), 0);
+    });
+
+    const result = await handler({ title: 'R', markdown: 'x' });
+    expect(result.content[0].text).toContain('no chromium');
+    expect(result.content[0].text).not.toContain('r.pdf');
+    // the HTML is still there and still said to be usable
+    expect(result.content[0].text).toContain('r.html');
+  });
+
+  it('still writes the HTML before printing is attempted', async () => {
+    const { resolveDocumentPrint } = await import('../pending-documents');
+    const fsp = await import('fs/promises');
+    const handler = await toolWith(async (toolUseId) => {
+      // The HTML must already exist by the time the print request goes out, so a
+      // crashed client cannot lose the document.
+      await expect(fsp.access(path.join(workDir, 'r.html'))).resolves.toBeUndefined();
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: false }), 0);
+    });
+    await handler({ title: 'R', markdown: 'x' });
   });
 });

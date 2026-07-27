@@ -30,6 +30,12 @@ interface ElectronAPI {
   onVoiceToggle?: (callback: () => void) => (() => void) | void;
   /** Ask main to hold or release the shortcut. Resolves to the accelerator held, or null. */
   setPushToTalkEnabled?: (enabled: boolean, accelerator?: string) => Promise<string | null>;
+  /** Print a rendered document to PDF via Electron main (P4.2b). */
+  printDocumentPdf?: (args: {
+    html: string;
+    outputPath: string;
+    printOptions?: Record<string, unknown>;
+  }) => Promise<{ ok: boolean; path?: string; bytes?: number; error?: string }>;
 }
 
 declare global {

@@ -101,18 +101,19 @@ export function renderDocument(opts: RenderOptions): string {
     ? `<p class="doc-meta">${escapeHtml(opts.subtitle)}</p>`
     : '';
 
-  // @page gives Chromium the size and margins; the footer counter is CSS-native
-  // so it stays correct however the content paginates.
+  // @page carries size and margins only.
+  //
+  // NOT page numbers: Chromium does not implement CSS paged-media margin boxes
+  // (@bottom-center) or position:running(). Verified by printing with real
+  // Chromium — a running() footer rendered INLINE as stray text at the top of the
+  // body instead of repeating at the foot of each page. Page numbers and footer
+  // text therefore come from printToPDF's footerTemplate; see
+  // printOptionsForTheme.
   const pageCss = `
     @page {
       size: ${theme.page.size};
       margin: ${theme.page.marginMm}mm;
-      ${theme.pageNumbers ? `@bottom-center { content: counter(page); }` : ''}
     }`;
-
-  const footer = theme.pageNumbers && opts.footer
-    ? `<div class="doc-footer">${escapeHtml(opts.footer)}</div>`
-    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -122,37 +123,67 @@ export function renderDocument(opts: RenderOptions): string {
 <style>
 ${pageCss}
 ${theme.css}
-.doc-footer {
-  position: running(footer);
-  color: var(--muted);
-  font-size: 0.85em;
-}
 </style>
 </head>
 <body>
 <h1 class="doc-title">${title}</h1>
 ${subtitle}
-${footer}
 ${body}
 </body>
 </html>
 `;
 }
 
-/** Chromium printToPDF options derived from the theme, for the Electron side. */
-export function printOptionsForTheme(themeId: ThemeId | string | undefined): {
+export interface PrintOptions {
+  /** Index signature so this can flow into the generic IPC payload unchanged. */
+  [key: string]: unknown;
   pageSize: 'A4' | 'Letter';
   printBackground: boolean;
   margins: { top: number; bottom: number; left: number; right: number };
-} {
+  displayHeaderFooter: boolean;
+  headerTemplate?: string;
+  footerTemplate?: string;
+}
+
+/**
+ * Chromium printToPDF options derived from the theme.
+ *
+ * Page numbers live HERE rather than in CSS because Chromium implements neither
+ * `@bottom-center` nor `position: running()`; `footerTemplate` with its
+ * `pageNumber`/`totalPages` classes is the mechanism it actually supports.
+ * Verified by printing with real Chromium rather than assumed.
+ */
+export function printOptionsForTheme(
+  themeId: ThemeId | string | undefined,
+  footerText?: string,
+): PrintOptions {
   const theme = getTheme(themeId);
   // printToPDF margins are inches; the theme speaks millimetres.
   const inches = theme.page.marginMm / 25.4;
-  return {
+
+  const base: PrintOptions = {
     pageSize: theme.page.size,
     // Backgrounds off would drop rules, table shading and code blocks — the
     // parts that make a themed document look themed.
     printBackground: true,
     margins: { top: inches, bottom: inches, left: inches, right: inches },
+    displayHeaderFooter: false,
+  };
+  if (!theme.pageNumbers) return base;
+
+  // The template is HTML rendered by Chromium, so caller-supplied text is
+  // escaped — it reaches a real renderer just as the document body does.
+  const label = footerText ? escapeHtml(footerText) : '';
+  return {
+    ...base,
+    displayHeaderFooter: true,
+    // An empty header still needs a template, or Chromium supplies its own
+    // title-and-URL default, which looks like a browser printout.
+    headerTemplate: '<div></div>',
+    footerTemplate:
+      `<div style="width:100%;font-size:9px;color:#666;padding:0 ${theme.page.marginMm}mm;` +
+      `display:flex;justify-content:${label ? 'space-between' : 'center'};">` +
+      (label ? `<span>${label}</span>` : '') +
+      `<span class="pageNumber"></span></div>`,
   };
 }
