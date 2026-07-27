@@ -12,6 +12,7 @@ import { runMcpOAuthFlow } from "@/lib/mcp/oauth-flow";
 import { provisionConnector, deprovisionConnector } from "@/lib/connectors/provisioner";
 import { useConnectorHealth } from "@/hooks/use-connector-health";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
+import { AddMcpServer } from "./add-mcp-server";
 import type { ConnectionHealth } from "@/lib/connectors/health";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useMarketplace } from "@/lib/use-marketplace";
@@ -734,6 +735,9 @@ export function BrowseConnectors() {
                   }.`}
             </p>
           )}
+        </div>
+        <div className="mr-2 shrink-0">
+          <AddMcpServer onAdded={() => void refreshHealth()} />
         </div>
         <div className="relative w-52">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />

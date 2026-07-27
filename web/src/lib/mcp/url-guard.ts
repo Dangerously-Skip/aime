@@ -91,6 +91,35 @@ function parseIPv4(host: string): [number, number, number, number] | null {
   return nums as [number, number, number, number];
 }
 
+/**
+ * A short, stable, filesystem-safe name for a server the user added by URL.
+ *
+ * The name becomes a directory lookup, a clients-file key and the provisioned
+ * MCP entry key, so it must satisfy the same allowlist the install route uses.
+ * Derived from the host so it is recognisable, and suffixed on collision by the
+ * caller rather than here (this stays pure).
+ */
+export function deriveServerName(rawUrl: string): string | null {
+  let host: string;
+  try {
+    host = new URL(rawUrl.trim()).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  // First label that isn't a service prefix: mcp.atlassian.com → atlassian,
+  // mcp.acme.co.uk → acme. Deliberately NOT the registrable domain — picking
+  // that correctly needs the Public Suffix List, and "second-to-last label"
+  // yields `co` for a .co.uk host. This is a display/key name, not an identity
+  // claim, so the simpler rule is the right trade.
+  const labels = host.replace(/^\[|\]$/g, '').split('.').filter(Boolean);
+  const meaningful = labels.filter((l) => !['mcp', 'api', 'www'].includes(l));
+  const candidate = meaningful[0] ?? labels[0];
+  if (!candidate) return null;
+
+  const slug = candidate.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '');
+  return slug.length > 0 ? slug.slice(0, 40) : null;
+}
+
 export function validateMcpServerUrl(raw: unknown): UrlVerdict {
   if (typeof raw !== 'string' || raw.trim() === '') {
     return { ok: false, reason: 'not-a-url', message: 'Enter the MCP server URL.' };
