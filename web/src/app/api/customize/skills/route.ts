@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { parseSkillMd, serializeSkillMd, type SkillFrontmatter } from '@/lib/skill-parser';
+import { slugifySkillName, resolveSkillDir } from '@/lib/skills/create';
 
 export const runtime = 'nodejs';
 
@@ -92,9 +93,19 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'name is required' }, { status: 400 });
   }
 
-  // Sanitize name for directory
-  const dirName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-');
-  const skillDir = path.join(SKILLS_DIR, dirName);
+  // Shared with the agent-callable SkillCreate tool (P3.7), so both produce the
+  // same folder name and both prove the result is a single safe segment —
+  // flattening alone can yield '-' or '' for a name like '...'.
+  const slug = slugifySkillName(name);
+  if (!slug.ok) {
+    return Response.json({ error: slug.error }, { status: 400 });
+  }
+  const dirName = slug.slug;
+  const resolved = resolveSkillDir(SKILLS_DIR, dirName);
+  if (!resolved.ok) {
+    return Response.json({ error: resolved.error }, { status: 400 });
+  }
+  const skillDir = resolved.dir;
 
   if (fs.existsSync(skillDir)) {
     return Response.json({ error: 'Skill directory already exists' }, { status: 409 });

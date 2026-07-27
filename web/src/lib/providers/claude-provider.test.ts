@@ -6,7 +6,17 @@ import { resolveAnswer } from '../pending-questions';
 import type { StreamChunk, QueryParams } from './base-provider';
 import type { SessionControls } from '../slash-commands';
 
-const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+const { queryMock, homeRef } = vi.hoisted(() => ({
+  queryMock: vi.fn(),
+  // Lets a test point homedir() at a temp dir. Unset ⇒ the real home, so every
+  // pre-existing test is unaffected.
+  homeRef: { value: null as string | null },
+}));
+
+vi.mock('os', async (orig) => {
+  const actual = await orig<typeof import('os')>();
+  return { ...actual, default: actual, homedir: () => homeRef.value ?? actual.homedir() };
+});
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (args: unknown) => queryMock(args),
@@ -542,5 +552,115 @@ describe('abort bookkeeping', () => {
     const provider = new ClaudeProvider();
     expect(provider.getAbortKey('c1', 'chat')).toBe('chat:c1');
     expect(provider.getAbortKey('c1')).toBe('c1');
+  });
+});
+
+describe('SkillCreate tool (P3.7)', () => {
+  /**
+   * The handler writes a real SKILL.md, so these tests give it a real temp HOME
+   * and read the file back. Mocking fs would only prove the handler calls write.
+   */
+  let homeDir: string;
+  let skillsDir: string;
+
+  /** Reach the tool the provider registered on its in-process MCP server. */
+  async function skillCreateHandler() {
+    await run(new ClaudeProvider(), {});
+    const options = queryMock.mock.calls.at(-1)![0] as {
+      options: { mcpServers: Record<string, { tools?: Array<{ name: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }> };
+    };
+    const tool = options.options.mcpServers.aime.tools!.find((t) => t.name === 'SkillCreate');
+    if (!tool) throw new Error('SkillCreate not registered');
+    return tool.handler;
+  }
+
+  beforeEach(async () => {
+    const fsp = await import('fs/promises');
+    homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aime-skill-'));
+    skillsDir = path.join(homeDir, '.claude', 'skills');
+    homeRef.value = homeDir;
+    scriptChunks([]);
+  });
+
+  afterEach(async () => {
+    homeRef.value = null;
+    const fsp = await import('fs/promises');
+    await fsp.rm(homeDir, { recursive: true, force: true });
+  });
+
+  const readSkill = async (slug: string) => {
+    const fsp = await import('fs/promises');
+    return fsp.readFile(path.join(skillsDir, slug, 'SKILL.md'), 'utf-8');
+  };
+
+  it('writes a parseable SKILL.md and reports the slug back to the model', async () => {
+    const handler = await skillCreateHandler();
+    const result = await handler({
+      name: 'Weekly Board Pack',
+      description: 'Compiles the weekly board pack',
+      body: '# Steps\n\n1. Pull the metrics\n2. Draft the summary\n',
+    });
+
+    expect(result.content[0].text).toContain('weekly-board-pack');
+
+    const { parseSkillMd } = await import('../skill-parser');
+    const parsed = parseSkillMd(await readSkill('weekly-board-pack'));
+    expect(parsed.frontmatter.name).toBe('Weekly Board Pack');
+    expect(parsed.frontmatter.description).toBe('Compiles the weekly board pack');
+    expect(parsed.body).toContain('Pull the metrics');
+  });
+
+  it('carries argumentHint and allowedTools through', async () => {
+    const handler = await skillCreateHandler();
+    await handler({
+      name: 'Report',
+      description: 'd',
+      body: 'b',
+      argumentHint: '<month>',
+      allowedTools: ['Read', 'Grep'],
+    });
+
+    const { parseSkillMd } = await import('../skill-parser');
+    const parsed = parseSkillMd(await readSkill('report'));
+    expect(parsed.frontmatter['argument-hint']).toBe('<month>');
+    expect(parsed.frontmatter['allowed-tools']).toEqual(['Read', 'Grep']);
+  });
+
+  it('refuses to clobber an existing skill', async () => {
+    const handler = await skillCreateHandler();
+    await handler({ name: 'Report', description: 'first', body: 'original body' });
+    const second = await handler({ name: 'Report', description: 'second', body: 'replacement' });
+
+    expect(second.content[0].text).toMatch(/already exists/i);
+    // the original survives — losing the user's work silently would be the worst
+    // possible outcome here
+    expect(await readSkill('report')).toContain('original body');
+  });
+
+  it('does not write outside the skills directory', async () => {
+    const handler = await skillCreateHandler();
+    const result = await handler({ name: '../../../evil', description: 'd', body: 'b' });
+
+    // slugify flattens it to a harmless single segment
+    expect(result.content[0].text).toContain('evil');
+    const fsp = await import('fs/promises');
+    const entries = await fsp.readdir(skillsDir);
+    expect(entries).toEqual(['evil']);
+  });
+
+  it('reports a name with nothing usable rather than creating a junk folder', async () => {
+    const handler = await skillCreateHandler();
+    const result = await handler({ name: '...', description: 'd', body: 'b' });
+
+    expect(result.content[0].text).toMatch(/Could not save the skill/);
+    const fsp = await import('fs/promises');
+    await expect(fsp.readdir(skillsDir)).rejects.toThrow();
+  });
+
+  it('is allowlisted on the surfaces that can show the result', async () => {
+    const { getSurfaceConfig } = await import('../surfaces');
+    for (const surface of ['chat', 'cowork']) {
+      expect(getSurfaceConfig(surface).allowedTools).toContain('mcp__aime__SkillCreate');
+    }
   });
 });

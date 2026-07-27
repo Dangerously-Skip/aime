@@ -310,6 +310,65 @@ export class ClaudeProvider extends BaseProvider {
             return { content: [{ type: 'text' as const, text: `Canvas rendered (${label}). The user sees it now in the canvas panel.` }] };
           }
         ),
+        // Author a reusable skill from the conversation and save it (P3.7).
+        // Unlike CronCreate/WidgetCreate this needs no client round-trip: skills
+        // are files on disk and this server runs server-side, so it writes
+        // directly and reports the real outcome to the model.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'SkillCreate',
+          'Save a reusable skill so the user can run this same procedure again later. Use when the user asks you to remember how to do something, turn what you just did into a repeatable command, or "make me a skill". Write the body as clear step-by-step instructions addressed to yourself for next time — it becomes a SKILL.md the user can invoke by name.',
+          {
+            name: z.string().describe('Short human name, e.g. "Weekly Board Pack". Becomes the folder name in slug form.'),
+            description: z.string().describe('One line explaining when this skill should be used. Shown in the skills list and used by the model to decide relevance.'),
+            body: z.string().describe('The skill instructions in Markdown — the actual procedure, written as steps.'),
+            argumentHint: z.string().optional().describe('Placeholder shown when the user invokes it, e.g. "<report-name>".'),
+            allowedTools: z.array(z.string()).optional().describe('Restrict the skill to these tools. Omit to allow all.'),
+          },
+          async (input: Record<string, unknown>) => {
+            try {
+              const { slugifySkillName, buildSkillMd, resolveSkillDir } = await import('../skills/create');
+              const os = await import('os');
+              const path = await import('path');
+              const fsp = await import('fs/promises');
+
+              const slug = slugifySkillName(input.name);
+              if (!slug.ok) {
+                return { content: [{ type: 'text' as const, text: `Could not save the skill: ${slug.error}` }] };
+              }
+              const skillsDir = path.join(os.homedir(), '.claude', 'skills');
+              const resolved = resolveSkillDir(skillsDir, slug.slug);
+              if (!resolved.ok) {
+                return { content: [{ type: 'text' as const, text: `Could not save the skill: ${resolved.error}` }] };
+              }
+
+              // Refuse to clobber an existing skill — the user would lose work
+              // with no way to tell it had happened.
+              try {
+                await fsp.access(path.join(resolved.dir, 'SKILL.md'));
+                return { content: [{ type: 'text' as const, text: `A skill named "${slug.slug}" already exists. Ask the user whether to replace it, or pick a different name.` }] };
+              } catch { /* does not exist — good */ }
+
+              const md = buildSkillMd({
+                name: String(input.name),
+                description: typeof input.description === 'string' ? input.description : '',
+                body: typeof input.body === 'string' ? input.body : '',
+                argumentHint: typeof input.argumentHint === 'string' ? input.argumentHint : undefined,
+                allowedTools: Array.isArray(input.allowedTools)
+                  ? (input.allowedTools as unknown[]).filter((t): t is string => typeof t === 'string')
+                  : undefined,
+              });
+
+              await fsp.mkdir(resolved.dir, { recursive: true });
+              await fsp.writeFile(path.join(resolved.dir, 'SKILL.md'), md, 'utf-8');
+              console.log('[Claude] SkillCreate wrote', resolved.dir);
+              return { content: [{ type: 'text' as const, text: `Saved as the skill "${slug.slug}". The user can run it from the skills list, or by name in chat. It is available from the next message.` }] };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { content: [{ type: 'text' as const, text: `Could not save the skill: ${msg}` }] };
+            }
+          }
+        ),
         // Ask the user to connect a service the current task needs. Intercepted
         // in canUseTool, which pauses the turn until they answer — see
         // pending-connectors.ts. The handler only reports the outcome that the
