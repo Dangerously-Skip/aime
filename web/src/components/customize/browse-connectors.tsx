@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { APP_NAME } from "@/config/branding";
 import { useAppStore } from "@/stores/app-store";
 import { useConnectorStore } from "@/stores/connector-store";
@@ -10,6 +10,8 @@ import type { ConnectorDefinition } from "@/lib/connectors/types";
 import { startOAuthFlow } from "@/lib/connectors/oauth";
 import { runMcpOAuthFlow } from "@/lib/mcp/oauth-flow";
 import { provisionConnector, deprovisionConnector } from "@/lib/connectors/provisioner";
+import { useConnectorHealth } from "@/hooks/use-connector-health";
+import type { ConnectionHealth } from "@/lib/connectors/health";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useMarketplace } from "@/lib/use-marketplace";
 import { CONNECTOR_LOGOS } from "./connector-logos";
@@ -30,6 +32,7 @@ import {
   Power,
   KeyRound,
   Unplug,
+  RefreshCw,
 } from "lucide-react";
 
 type CategoryFilter = "all" | ConnectorDefinition["category"];
@@ -86,6 +89,24 @@ export function BrowseConnectors() {
   }
 
   const { plugins: marketplacePlugins, loading: mpLoading } = useMarketplace();
+
+  // Which connections are actually still usable (P3.4). The client store and the
+  // provisioned MCP config are separate copies of the same fact; the config is
+  // what the agent uses, so it decides what the badge says.
+  const claimedConnectedIds = useMemo(
+    () => Object.entries(connectorStates).filter(([, st]) => st?.authenticated).map(([id]) => id),
+    [connectorStates],
+  );
+  const { healthOf, refresh: refreshHealth } = useConnectorHealth(claimedConnectedIds);
+
+  // Re-check health whenever a connect attempt finishes. Reconnecting a service
+  // that already reads as authenticated does not change the claimed set, so the
+  // hook would not refetch on its own and the stale badge would linger.
+  const prevConnectingId = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevConnectingId.current && !connectingId) void refreshHealth();
+    prevConnectingId.current = connectingId;
+  }, [connectingId, refreshHealth]);
 
   // Hydrate connector state from the provisioned MCP config on mount. This reflects
   // MCPs connected via the marketplace (plugin install) or external means.
@@ -756,6 +777,7 @@ export function BrowseConnectors() {
                   onConnect={() => handleConnect(connector)}
                   onToggle={(enabled) => handleToggle(connector, enabled)}
                   onDisconnect={() => handleDisconnect(connector.id)}
+                  health={healthOf(connector.id)}
                 />
               ))}
             </div>
@@ -801,6 +823,7 @@ function ConnectorRow({
   onConnect,
   onToggle,
   onDisconnect,
+  health,
 }: {
   connector: ConnectorDefinition;
   state?: { enabled: boolean; authenticated: boolean };
@@ -808,10 +831,14 @@ function ConnectorRow({
   onConnect: () => void;
   onToggle: (currentlyEnabled: boolean) => void;
   onDisconnect: () => void;
+  health?: ConnectionHealth;
 }) {
   const Logo = CONNECTOR_LOGOS[connector.id];
   const isAuthenticated = state?.authenticated ?? false;
   const isEnabled = state?.enabled ?? false;
+  // Provisioned but unusable: the tools are mounted and will fail with a 401,
+  // so showing a plain green toggle here would be a lie (P3.4).
+  const isStale = isAuthenticated && (health?.needsReconnect ?? false);
 
   return (
     <div className="group flex items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 hover:border-border/80 hover:bg-accent/30 transition-colors">
@@ -832,6 +859,9 @@ function ConnectorRow({
         <p className="text-xs text-muted-foreground mt-0.5 truncate">
           {connector.description}
         </p>
+        {isStale && health && (
+          <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-500">{health.detail}</p>
+        )}
       </div>
 
       {/* Actions */}
@@ -857,6 +887,24 @@ function ConnectorRow({
             )}
             Connect
           </button>
+        ) : isStale ? (
+          <>
+            <button
+              onClick={onConnect}
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+              title={health?.detail}
+            >
+              <RefreshCw className="h-3 w-3" />
+              Reconnect
+            </button>
+            <button
+              onClick={onDisconnect}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+              title="Disconnect"
+            >
+              <Unplug className="h-3 w-3" />
+            </button>
+          </>
         ) : (
           <>
             {/* Toggle on/off */}

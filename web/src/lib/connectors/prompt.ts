@@ -42,11 +42,17 @@ function line(c: ClassifiedConnector): string {
 export function buildConnectorsPrompt(
   catalog: ClassifiedConnector[],
   connectedIds: Set<string>,
-  opts: { canRequest: boolean } = { canRequest: true },
+  opts: { canRequest: boolean; staleIds?: Set<string> } = { canRequest: true },
 ): string {
   if (catalog.length === 0) return '';
 
-  const connected = catalog.filter((c) => connectedIds.has(c.id));
+  const stale = opts.staleIds ?? new Set<string>();
+  // A connection whose token has expired with no way to renew is provisioned but
+  // useless: its tools are mounted and will fail with a 401. Describing it as
+  // connected sends the agent down a path that cannot work, so it is listed
+  // separately as needing reconnection.
+  const connected = catalog.filter((c) => connectedIds.has(c.id) && !stale.has(c.id));
+  const staleConnected = catalog.filter((c) => connectedIds.has(c.id) && stale.has(c.id));
   const offerable = catalog.filter(
     (c) => !connectedIds.has(c.id) && c.available && !c.comingSoon,
   );
@@ -63,8 +69,20 @@ export function buildConnectorsPrompt(
       'Already connected — use their tools directly, do not ask the user to connect them again:',
       ...connected.map(line),
     );
-  } else {
+  } else if (staleConnected.length === 0) {
     parts.push('Nothing is connected yet.');
+  }
+
+  if (staleConnected.length > 0) {
+    parts.push(
+      '',
+      'Connected but EXPIRED — their tools are mounted and will fail with an ' +
+        'authorisation error. Do not use them. If a task needs one, say the ' +
+        'connection expired and ask the user to reconnect it' +
+        (opts.canRequest ? ' (you may use `RequestConnector` to offer that)' : '') +
+        ':',
+      ...staleConnected.map(line),
+    );
   }
 
   if (opts.canRequest && oneClick.length > 0) {

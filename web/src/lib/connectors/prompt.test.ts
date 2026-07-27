@@ -113,3 +113,59 @@ describe('buildConnectorsPrompt', () => {
     expect(buildConnectorsPrompt(withSecret, new Set())).not.toContain('SECRET-GUID');
   });
 });
+
+describe('buildConnectorsPrompt — expired connections (P3.4)', () => {
+  it('does not present an expired connection as usable', () => {
+    // Its tools ARE mounted, so silence here would send the agent into a 401.
+    const p = buildConnectorsPrompt(catalog(), new Set(['github']), {
+      canRequest: true,
+      staleIds: new Set(['github']),
+    });
+    const usable = p.slice(0, p.indexOf('EXPIRED'));
+    expect(usable).not.toContain('GitHub');
+    expect(p).toMatch(/Connected but EXPIRED/);
+    expect(p).toMatch(/Do not use them/);
+  });
+
+  it('tells the agent to ask for a reconnect', () => {
+    const p = buildConnectorsPrompt(catalog(), new Set(['github']), {
+      canRequest: true,
+      staleIds: new Set(['github']),
+    });
+    expect(p).toMatch(/ask the user to reconnect/i);
+    expect(p).toContain('RequestConnector');
+  });
+
+  it('omits the reconnect offer when the surface has no card', () => {
+    const p = buildConnectorsPrompt(catalog(), new Set(['github']), {
+      canRequest: false,
+      staleIds: new Set(['github']),
+    });
+    expect(p).toMatch(/Connected but EXPIRED/);
+    expect(p).not.toContain('RequestConnector');
+  });
+
+  it('keeps healthy connections in the usable list alongside expired ones', () => {
+    const p = buildConnectorsPrompt(catalog(), new Set(['github', 'atlassian']), {
+      canRequest: true,
+      staleIds: new Set(['github']),
+    });
+    const usable = p.slice(0, p.indexOf('EXPIRED'));
+    expect(usable).toContain('Atlassian');
+    expect(usable).not.toContain('GitHub');
+  });
+
+  it('does not claim "nothing is connected" when the only connection is expired', () => {
+    const p = buildConnectorsPrompt(catalog(), new Set(['github']), {
+      canRequest: true,
+      staleIds: new Set(['github']),
+    });
+    expect(p).not.toContain('Nothing is connected yet.');
+  });
+
+  it('behaves as before when no staleIds are supplied', () => {
+    const p = buildConnectorsPrompt(catalog(), new Set(['github']), { canRequest: true });
+    expect(p).not.toContain('EXPIRED');
+    expect(p).toContain('GitHub');
+  });
+});
