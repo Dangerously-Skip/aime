@@ -6,7 +6,7 @@ export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector',
+      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'mcp__aime__SkillCreate',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__web-search__web_search',
     ],
@@ -57,7 +57,13 @@ ${PPT_PROMPT}
 Incorporate information naturally. Summarize and highlight key points rather than dumping raw output.
 
 ## Multi-turn Context
-Reference prior topics naturally without asking the user to repeat themselves.`,
+Reference prior topics naturally without asking the user to repeat themselves.
+## Saving a reusable skill
+When the user asks you to remember how to do something, turn what you just did
+into a repeatable command, or "make me a skill", call \`SkillCreate\`. Write the
+body as step-by-step instructions addressed to yourself for next time, not as a
+description of what you did. Do not offer unprompted after every task.
+`,
     model: 'sonnet',
     maxTurns: 20,
     maxBudgetUsd: 1.0,

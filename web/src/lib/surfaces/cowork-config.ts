@@ -6,7 +6,7 @@ export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): Surface
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash',
-      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'spawn_agent',
+      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'mcp__aime__SkillCreate', 'spawn_agent',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__web-search__web_search',
     ],
@@ -60,7 +60,13 @@ You have web search available via the web-search MCP server (tool: web_search). 
 
 ## Tone
 - Prefer prose over bullet points for conversational responses.
-- Do not use emojis unless the user does first.`,
+- Do not use emojis unless the user does first.
+## Saving a reusable skill
+When the user asks you to remember how to do something, turn what you just did
+into a repeatable command, or "make me a skill", call \`SkillCreate\`. Write the
+body as step-by-step instructions addressed to yourself for next time, not as a
+description of what you did. Do not offer unprompted after every task.
+`,
     settingSources: ['user', 'project'],
     enableFileCheckpointing: true,
     model: 'opus',
