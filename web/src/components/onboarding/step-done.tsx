@@ -1,12 +1,12 @@
 "use client";
 
-import { getTeamById } from "@/config/teams";
+import { useSettingsStore } from "@/stores/settings-store";
+import { useProviderStore } from "@/stores/provider-store";
 import { ArrowLeft, Check } from "lucide-react";
 import Image from "next/image";
 
 interface StepDoneProps {
   displayName: string;
-  teamId: string | null;
   connectedApps: string[];
   onContinue: () => void;
   onBack: () => void;
@@ -14,20 +14,27 @@ interface StepDoneProps {
 
 export function StepDone({
   displayName,
-  teamId,
   connectedApps,
   onContinue,
   onBack,
 }: StepDoneProps) {
-  const team = teamId ? getTeamById(teamId) : null;
+  // Read the provider state rather than taking it as a prop: the provider step
+  // writes straight to these stores, so this is the actual configured truth.
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  const providers = useProviderStore((s) => s.providers);
+
+  const providerNames = [
+    ...(anthropicApiKey ? ["Anthropic"] : []),
+    ...providers.map((p) => p.label),
+  ];
 
   const summaryItems: { label: string; value: string }[] = [];
 
   if (displayName.trim()) {
     summaryItems.push({ label: "Name", value: displayName.trim() });
   }
-  if (team) {
-    summaryItems.push({ label: "Team", value: team.name });
+  if (providerNames.length > 0) {
+    summaryItems.push({ label: "Model access", value: providerNames.join(", ") });
   }
   if (connectedApps.length > 0) {
     summaryItems.push({

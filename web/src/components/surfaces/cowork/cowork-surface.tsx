@@ -48,8 +48,20 @@ import {
   LayoutDashboard,
   Eye,
   EyeOff,
+  Search,
+  Zap,
+  Terminal as TerminalIcon,
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
+import {
+  AGENT_PREFIX,
+  SEARCH_PREFIX,
+  COMMAND_PREFIX,
+  classifyContextEntry,
+  contextEntryDisplayName,
+  isOpenableEntry,
+  isSearchEntry,
+} from "@/lib/cowork/context-entry";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
@@ -125,8 +137,8 @@ function categorizeToolCall(
     const agentName = typeof toolInput.agentName === "string" ? toolInput.agentName : null;
     const task = typeof toolInput.task === "string" ? toolInput.task : "";
     const label = agentName
-      ? `⚡ ${agentName}: ${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`
-      : `⚡ subagent: ${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`;
+      ? `${AGENT_PREFIX}${agentName}: ${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`
+      : `${AGENT_PREFIX}subagent: ${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`;
     return { category: "context", path: label };
   }
 
@@ -142,7 +154,7 @@ function categorizeToolCall(
   // MCP search tools — categorize as context with the query
   if (toolName.includes("web_search") || toolName.includes("searxng") || toolName === "WebSearch") {
     const raw = toolInput.query || toolInput.q;
-    return typeof raw === "string" ? { category: "context", path: `🔍 ${raw}` } : null;
+    return typeof raw === "string" ? { category: "context", path: `${SEARCH_PREFIX}${raw}` } : null;
   }
 
   // WebFetch — never add to sidebar (URLs aren't files; search results go to SearchResultsCard)
@@ -198,15 +210,14 @@ function categorizeToolCall(
 
     // Other Bash commands — context with a short description of the command
     const short = cmd.length > 60 ? cmd.substring(0, 57) + "..." : cmd;
-    return { category: "context", path: `bash: ${short}` };
+    return { category: "context", path: `${COMMAND_PREFIX}${short}` };
   }
 
   return null;
 }
 
 function fileDisplayName(path: string) {
-  const parts = path.split("/");
-  return parts[parts.length - 1] || path;
+  return contextEntryDisplayName(path);
 }
 
 function openFile(path: string) {
@@ -281,7 +292,15 @@ function SidebarCard({
                     className="flex flex-1 items-center gap-2 min-w-0"
                     title={path}
                   >
-                    <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    {(() => {
+                      const { kind } = classifyContextEntry(path);
+                      const RowIcon =
+                        kind === "search" ? Search
+                        : kind === "agent" ? Zap
+                        : kind === "command" ? TerminalIcon
+                        : Icon;
+                      return <RowIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />;
+                    })()}
                     <span className="truncate group-hover:text-foreground">{fileDisplayName(path)}</span>
                   </button>
                   {onItemRemove && (
@@ -979,8 +998,8 @@ export function CoworkSurface() {
           // Categorize into sidebar panels
           const categorized = categorizeToolCall(toolName, toolInput);
           if (categorized && chatId && isValidSidebarEntry(categorized.path)) {
-            // Skip 🔍 search query entries — redundant with SearchResultsCard
-            if (categorized.path.startsWith("🔍 ")) {
+            // Skip search query entries — redundant with SearchResultsCard
+            if (isSearchEntry(categorized.path)) {
               // Don't add search queries to either panel
             } else if (categorized.category === "context") {
               // Don't add to Context if this path is already in Artifacts
@@ -1902,7 +1921,7 @@ export function CoworkSurface() {
             }}
             onContextClick={(path) => {
               // Non-file entries: search queries, bash commands, agent labels — no-op
-              if (path.startsWith("🔍 ") || path.startsWith("bash: ") || path.startsWith("⚡ ")) return;
+              if (!isOpenableEntry(path)) return;
               // URLs open in browser
               if (path.startsWith("http")) {
                 window.open(path, "_blank");

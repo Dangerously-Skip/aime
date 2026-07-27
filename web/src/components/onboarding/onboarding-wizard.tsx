@@ -2,26 +2,34 @@
 
 import { useState, useCallback } from "react";
 import { useSettingsStore } from "@/stores/settings-store";
-import { getTeamById } from "@/config/teams";
 import { StepWelcome } from "./step-welcome";
-import { StepTeam } from "./step-team";
 import { StepProviders } from "./step-providers";
-import { getTeams } from "@/config/teams";
 import { StepConnectors } from "./step-connectors";
 import { StepDone } from "./step-done";
 import { StepFeedback } from "./step-feedback";
 
-const TOTAL_STEPS = 5;
+/**
+ * Step order, single source of truth. Indices are derived from this list rather
+ * than written as literals so that adding or removing a step can't leave an
+ * off-by-N behind in the progress dots or the skip link — which is exactly what
+ * the old `step < TOTAL_STEPS - 2` skip condition encoded.
+ */
+const STEPS = ["welcome", "providers", "connectors", "done", "feedback"] as const;
+type StepId = (typeof STEPS)[number];
+
+const TOTAL_STEPS = STEPS.length;
+
+/**
+ * "Skip for now" only makes sense while there is setup left to skip. The summary
+ * and feedback steps are the tail of the flow, so they show no skip link.
+ */
+const SKIPPABLE_STEPS: readonly StepId[] = ["welcome", "providers", "connectors"];
 
 export function OnboardingWizard() {
   const [step, setStep] = useState(0);
   const [displayName, setDisplayName] = useState(
     useSettingsStore.getState().displayName || ""
   );
-  const [teamId, setTeamId] = useState<string | null>(
-    useSettingsStore.getState().teamId || null
-  );
-  const [manualApiKey, setManualApiKey] = useState("");
   const [connectedApps, setConnectedApps] = useState<string[]>([]);
 
   const settingsStore = useSettingsStore();
@@ -34,24 +42,13 @@ export function OnboardingWizard() {
   }, [settingsStore]);
 
   const handleComplete = useCallback(() => {
-    // Save display name
+    // Display name is the only thing this wizard owns; the provider step writes
+    // its own credentials (settings + keychain) as it goes.
     if (displayName.trim()) {
       settingsStore.setDisplayName(displayName.trim());
     }
-
-    // Save team & API key
-    if (teamId) {
-      settingsStore.setTeamId(teamId);
-      const team = getTeamById(teamId);
-      if (team) {
-        settingsStore.setAnthropicApiKey(team.key);
-      }
-    } else if (manualApiKey.trim()) {
-      settingsStore.setAnthropicApiKey(manualApiKey.trim());
-    }
-
     settingsStore.setOnboardingComplete(true);
-  }, [displayName, teamId, manualApiKey, settingsStore]);
+  }, [displayName, settingsStore]);
 
   const handleConnectorConnected = useCallback((connectorId: string) => {
     setConnectedApps((prev) =>
@@ -59,35 +56,29 @@ export function OnboardingWizard() {
     );
   }, []);
 
-  // Save name + team on step transitions (so they persist even if user skips later)
-  const handleStep1Continue = useCallback(() => {
+  // Save the name on the step transition so it persists even if the user skips
+  // the rest of the flow from a later step.
+  const handleWelcomeContinue = useCallback(() => {
     if (displayName.trim()) {
       settingsStore.setDisplayName(displayName.trim());
     }
     next();
   }, [displayName, settingsStore, next]);
 
-  const handleStep2Continue = useCallback(() => {
-    if (teamId) {
-      settingsStore.setTeamId(teamId);
-      const team = getTeamById(teamId);
-      if (team) {
-        settingsStore.setAnthropicApiKey(team.key);
-      }
-    } else if (manualApiKey.trim()) {
-      settingsStore.setAnthropicApiKey(manualApiKey.trim());
-    }
-    next();
-  }, [teamId, manualApiKey, settingsStore, next]);
+  const current: StepId = STEPS[step];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
       <div className="w-full max-w-[480px] mx-4">
         {/* Step indicator dots */}
-        <div className="flex items-center justify-center gap-2 mb-6">
-          {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
+        <div
+          className="flex items-center justify-center gap-2 mb-6"
+          data-testid="onboarding-progress"
+        >
+          {STEPS.map((id, i) => (
             <div
-              key={i}
+              key={id}
+              data-testid="onboarding-step-dot"
               className={`h-1.5 rounded-full transition-all duration-300 ${
                 i === step
                   ? "w-6 bg-primary"
@@ -102,55 +93,40 @@ export function OnboardingWizard() {
         {/* Card */}
         <div className="rounded-2xl border border-border bg-card shadow-lg overflow-hidden">
           <div className="p-8">
-            {step === 0 && (
+            {current === "welcome" && (
               <StepWelcome
                 displayName={displayName}
                 onDisplayNameChange={setDisplayName}
-                onContinue={handleStep1Continue}
+                onContinue={handleWelcomeContinue}
               />
             )}
-            {step === 1 &&
-              (getTeams().length > 0 ? (
-                // Org build: a teams.json is configured, keep the team picker.
-                <StepTeam
-                  teamId={teamId}
-                  onTeamChange={setTeamId}
-                  manualApiKey={manualApiKey}
-                  onManualApiKeyChange={setManualApiKey}
-                  onContinue={handleStep2Continue}
-                  onBack={prev}
-                />
-              ) : (
-                // Open-source build: provider paths (P2 onboarding rework).
-                // The step saves directly to settings/provider stores itself.
-                <StepProviders onContinue={next} onBack={prev} />
-              ))}
-            {step === 2 && (
+            {current === "providers" && (
+              // Inference-provider setup: Anthropic BYOK / OpenRouter / local.
+              // The step writes to the settings + provider stores itself.
+              <StepProviders onContinue={next} onBack={prev} />
+            )}
+            {current === "connectors" && (
               <StepConnectors
                 onConnectorConnected={handleConnectorConnected}
                 onContinue={next}
                 onBack={prev}
               />
             )}
-            {step === 3 && (
+            {current === "done" && (
               <StepDone
                 displayName={displayName}
-                teamId={teamId}
                 connectedApps={connectedApps}
                 onContinue={next}
                 onBack={prev}
               />
             )}
-            {step === 4 && (
-              <StepFeedback
-                onComplete={handleComplete}
-                onBack={prev}
-              />
+            {current === "feedback" && (
+              <StepFeedback onComplete={handleComplete} onBack={prev} />
             )}
           </div>
 
           {/* Skip link */}
-          {step < TOTAL_STEPS - 2 && (
+          {SKIPPABLE_STEPS.includes(current) && (
             <div className="px-8 pb-6 pt-0 text-center">
               <button
                 onClick={handleSkip}

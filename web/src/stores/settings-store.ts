@@ -87,7 +87,6 @@ interface SettingsState {
   // Onboarding
   onboardingComplete: boolean;
   onboardingSkippedAt: number | null;
-  teamId: string | null;
 
   // ROI / Telemetry
   devHourlyRate: number;
@@ -146,7 +145,6 @@ interface SettingsActions {
   setDisableBashTool: (enabled: boolean) => void;
   setOnboardingComplete: (complete: boolean) => void;
   setOnboardingSkippedAt: (timestamp: number | null) => void;
-  setTeamId: (id: string | null) => void;
   resetAll: () => void;
 }
 
@@ -184,7 +182,6 @@ export const INITIAL_SETTINGS: SettingsState = {
   disableBashTool: false,
   onboardingComplete: false,
   onboardingSkippedAt: null,
-  teamId: null,
   devHourlyRate: 150,
   surfaceTiers: {},
   tierModels: {},
@@ -236,7 +233,6 @@ export const PERSISTED_SETTINGS_KEYS = [
   'disableBashTool',
   'onboardingComplete',
   'onboardingSkippedAt',
-  'teamId',
   'devHourlyRate',
   'surfaceTiers',
   'tierModels',
@@ -322,7 +318,6 @@ export const useSettingsStore = create<SettingsStore>()(
 
       setOnboardingComplete: (onboardingComplete) => set({ onboardingComplete }),
       setOnboardingSkippedAt: (onboardingSkippedAt) => set({ onboardingSkippedAt }),
-      setTeamId: (teamId) => set({ teamId }),
       setDevHourlyRate: (devHourlyRate) => set({ devHourlyRate }),
 
       setSurfaceTier: (surfaceId, tier) =>
@@ -347,9 +342,17 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 10,
+      version: 11,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
+        // v11: the org "select your team" concept moved to a separate product.
+        // DROP the key rather than leaving it: zustand's default merge splices
+        // every persisted field into state, so an orphan `teamId` would sit in
+        // the live store (invisible to `partialize`, and typed as absent)
+        // until the next write happened to overwrite the payload.
+        if (version < 11) {
+          delete state.teamId;
+        }
         // v7 rename (applies to every pre-v7 payload regardless of source
         // version): nibGatewayApiKey → anthropicApiKey. Done up front so the
         // per-version branches below stay additive-only.
@@ -384,7 +387,6 @@ export const useSettingsStore = create<SettingsStore>()(
             ...state,
             onboardingComplete: false,
             onboardingSkippedAt: null,
-            teamId: null,
           } as unknown as SettingsState & SettingsActions;
         }
         if (version === 3) {
