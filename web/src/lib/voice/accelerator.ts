@@ -123,8 +123,54 @@ export function validateAccelerator(raw: unknown): AcceleratorVerdict {
   return { ok: true, accelerator: [...modifiers, keys[0]].join('+') };
 }
 
-/** For display: `CommandOrControl` is protocol, not something to show a user. */
-export function formatAcceleratorForDisplay(accelerator: string, platform: string = process.platform): string {
+/**
+ * The platform, resolved from the renderer.
+ *
+ * NOT `process.platform`. This module runs in the browser bundle, where Next
+ * substitutes `process/browser.js` — an object with `env`, `nextTick` and a few
+ * others, and no `platform` key at all. So `process.platform` was `undefined`
+ * there, `isMac` was always false, and macOS Settings advertised
+ * `Ctrl+Shift+Space` for a binding that is really ⌘⇧Space. Worse, the same
+ * expression IS `'darwin'` during Next's server render of a client component, so
+ * the two renders could disagree and produce a hydration mismatch.
+ *
+ * Returns Electron's vocabulary (`darwin` / `win32` / `linux`), or `''` when
+ * there is nothing to read — during SSR, or in an exotic runtime. Callers that
+ * are server-rendered should still pass the platform explicitly and resolve it
+ * after mount, so the first client render matches the server's.
+ */
+export function detectPlatform(): string {
+  if (typeof window === 'undefined') return '';
+
+  // The preload bridge reports main's real process.platform.
+  const fromBridge = (window as unknown as { electronAPI?: { getPlatform?: () => string } })
+    .electronAPI?.getPlatform?.();
+  if (typeof fromBridge === 'string' && fromBridge !== '') return fromBridge;
+
+  if (typeof navigator === 'undefined') return '';
+  const hint =
+    (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform ||
+    navigator.platform ||
+    navigator.userAgent ||
+    '';
+  // `darwin` covers jsdom and Electron builds that leak the OS name into the UA.
+  if (/mac|darwin|iphone|ipad|ipod/i.test(hint)) return 'darwin';
+  if (/win/i.test(hint)) return 'win32';
+  if (/linux|x11|android|cros/i.test(hint)) return 'linux';
+  return '';
+}
+
+/**
+ * For display: `CommandOrControl` is protocol, not something to show a user.
+ *
+ * The platform defaults to an explicit function call rather than an ambient
+ * global, so what it resolves to no longer depends on which bundle this file
+ * ended up in.
+ */
+export function formatAcceleratorForDisplay(
+  accelerator: string,
+  platform: string = detectPlatform(),
+): string {
   const isMac = platform === 'darwin';
   return accelerator
     .split('+')

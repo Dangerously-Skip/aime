@@ -1063,7 +1063,15 @@ ipcMain.handle("documents:print-pdf", async (_event, { html, outputPath, printOp
 //
 // Toggle semantics, not hold-to-talk: globalShortcut delivers a press only —
 // there is no keyup — so press-to-start / press-to-stop is what actually works.
+//
+// The registration is OWNED. `heldAccelerator` alone was not enough: the
+// renderer mounts every surface at once, and each one asked main to release the
+// shortcut on the way past, so whichever asked last unregistered the hotkey the
+// active surface was holding. Tracking who asked lets main refuse a release from
+// anyone who is not the owner, whatever the renderer does.
+const DEFAULT_PUSH_TO_TALK = "CommandOrControl+Shift+Space";
 let heldAccelerator = null;
+let heldBy = null;
 
 function releasePushToTalk() {
   if (!heldAccelerator) return;
@@ -1073,16 +1081,33 @@ function releasePushToTalk() {
     console.warn("[AIME] Could not unregister push-to-talk:", err.message);
   }
   heldAccelerator = null;
+  heldBy = null;
 }
 
-ipcMain.handle("voice:set-push-to-talk", (_event, { enabled, accelerator } = {}) => {
-  const wanted = typeof accelerator === "string" && accelerator ? accelerator : "CommandOrControl+Shift+Space";
+ipcMain.handle("voice:set-push-to-talk", (_event, { enabled, accelerator, ownerId } = {}) => {
+  const wanted = typeof accelerator === "string" && accelerator ? accelerator : DEFAULT_PUSH_TO_TALK;
+  const owner = typeof ownerId === "string" && ownerId ? ownerId : null;
+  const notOwner = heldAccelerator && heldBy && owner && heldBy !== owner;
 
   if (!enabled) {
+    if (notOwner) {
+      // Somebody who never registered anything is asking us to let go.
+      return { ok: false, accelerator: heldAccelerator, reason: "not-owner" };
+    }
     releasePushToTalk();
-    return null;
+    return { ok: true, accelerator: null };
   }
-  if (heldAccelerator === wanted) return heldAccelerator;
+  if (heldAccelerator === wanted && heldBy === owner) {
+    return { ok: true, accelerator: heldAccelerator };
+  }
+  if (notOwner) {
+    return {
+      ok: false,
+      accelerator: null,
+      reason: "owned-elsewhere",
+      message: "Another window already holds the push-to-talk shortcut.",
+    };
+  }
 
   releasePushToTalk();
   try {
@@ -1095,15 +1120,26 @@ ipcMain.handle("voice:set-push-to-talk", (_event, { enabled, accelerator } = {})
     });
     if (!registered) {
       console.warn("[AIME] Push-to-talk shortcut is already taken:", wanted);
-      return null;
+      return {
+        ok: false,
+        accelerator: null,
+        reason: "taken",
+        message: `${wanted} is already in use by another application.`,
+      };
     }
     heldAccelerator = wanted;
-    return heldAccelerator;
+    heldBy = owner;
+    return { ok: true, accelerator: heldAccelerator };
   } catch (err) {
     // A malformed accelerator throws; the renderer validates first, but a stored
     // setting from an older build could still be bad.
     console.warn("[AIME] Invalid push-to-talk accelerator", wanted, err.message);
-    return null;
+    return {
+      ok: false,
+      accelerator: null,
+      reason: "invalid",
+      message: `${wanted} is not a key combination this system accepts.`,
+    };
   }
 });
 
@@ -1112,6 +1148,7 @@ ipcMain.handle("voice:set-push-to-talk", (_event, { enabled, accelerator } = {})
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   heldAccelerator = null;
+  heldBy = null;
 });
 
 ipcMain.handle("select-folder", async () => {

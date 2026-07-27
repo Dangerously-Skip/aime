@@ -297,3 +297,97 @@ describe('loadProvisionedMcpServers — per-tool policy (P3.6b)', () => {
     expect(servers['aime-mcp-acme'].tools).toBeUndefined();
   });
 });
+
+describe('loadProvisionedMcpServers — stored per-tool decisions (the always_deny path)', () => {
+  const observedPath = () => join(dir, '.aime-mcp-tools.json');
+  const decisionsPath = () => join(dir, '.aime-mcp-decisions.json');
+
+  const acme = () =>
+    write({
+      'aime-mcp-acme': {
+        transport: 'streamable-http',
+        url: 'https://mcp.acme.com/mcp',
+        headers: { Authorization: 'Bearer t' },
+      },
+    });
+
+  const observed = () =>
+    writeFile(
+      observedPath(),
+      JSON.stringify({
+        'aime-mcp-acme': [
+          'mcp__aime-mcp-acme__getIssue',
+          'mcp__aime-mcp-acme__deleteIssue',
+          'mcp__aime-mcp-acme__sendEmail',
+        ],
+      }),
+    );
+
+  const policyOf = (servers: Record<string, Record<string, unknown>>, name: string) =>
+    (servers['aime-mcp-acme'].tools as Array<{ name: string; permission_policy: string }>).find(
+      (t) => t.name === name,
+    )?.permission_policy;
+
+  it('emits always_deny for a tool the user blocked', async () => {
+    // Before this, nothing in production ever populated `denied`, so the
+    // documented "always_deny, outranking everything" was unreachable.
+    await acme();
+    await observed();
+    await writeFile(decisionsPath(), JSON.stringify({ 'aime-mcp-acme': { denied: ['sendEmail'] } }));
+
+    const { loadProvisionedMcpServers } = await import('./provisioned');
+    const servers = (await loadProvisionedMcpServers()) as Record<string, Record<string, unknown>>;
+
+    expect(policyOf(servers, 'sendEmail')).toBe('always_deny');
+    expect(policyOf(servers, 'deleteIssue')).toBe('always_ask');
+    expect(policyOf(servers, 'getIssue')).toBe('always_allow');
+  });
+
+  it('emits always_allow for a tool the user approved for good', async () => {
+    await acme();
+    await observed();
+    await writeFile(decisionsPath(), JSON.stringify({ 'aime-mcp-acme': { approved: ['deleteIssue'] } }));
+
+    const { loadProvisionedMcpServers } = await import('./provisioned');
+    const servers = (await loadProvisionedMcpServers()) as Record<string, Record<string, unknown>>;
+
+    expect(policyOf(servers, 'deleteIssue')).toBe('always_allow');
+  });
+
+  it('survives a corrupt decisions file without weakening the policy', async () => {
+    await acme();
+    await observed();
+    await writeFile(decisionsPath(), '{{{not json');
+
+    const { loadProvisionedMcpServers } = await import('./provisioned');
+    const servers = (await loadProvisionedMcpServers()) as Record<string, Record<string, unknown>>;
+    expect(policyOf(servers, 'deleteIssue')).toBe('always_ask');
+  });
+
+  it('does not log a gate it cannot enforce by itself', async () => {
+    // The old line said "N tool(s) require approval" while, under
+    // bypassPermissions, zero did — the log certified protection that was absent.
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logs.push(args.map(String).join(' '));
+    });
+    try {
+      await acme();
+      await observed();
+      await writeFile(decisionsPath(), JSON.stringify({ 'aime-mcp-acme': { denied: ['sendEmail'] } }));
+
+      const { loadProvisionedMcpServers } = await import('./provisioned');
+      await loadProvisionedMcpServers();
+
+      const line = logs.find((l) => l.includes('Tool policy'));
+      expect(line).toBeDefined();
+      expect(line).not.toMatch(/require approval/);
+      // It must say WHERE the gate lives, and count the blocked tools too.
+      expect(line).toMatch(/canUseTool/);
+      expect(line).toMatch(/1 ask/);
+      expect(line).toMatch(/1 block/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

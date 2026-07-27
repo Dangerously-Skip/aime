@@ -5,6 +5,9 @@ import {
   classifyBash,
   classifyToolCall,
   evaluateApproval,
+  READ_ONLY_BINARIES,
+  EXCLUDED_BINARIES,
+  GIT_READ_SUBCOMMANDS,
 } from './approval';
 
 describe('baseToolName', () => {
@@ -77,7 +80,7 @@ describe('classifyBash', () => {
       'git log --oneline -5',
       'ps aux',
       'du -sh .',
-      'FOO=bar env',
+      'LC_ALL=C sort in.txt',
     ]) {
       expect(classifyBash(cmd), cmd).toBe('read');
     }
@@ -485,5 +488,369 @@ describe('classifyToolCall — camelCase tool names (regression)', () => {
     // on every lookup because the read classified as unknown.
     expect(evaluateApproval('consequential', 'mcp__x__getIssue').allow).toBe(true);
     expect(evaluateApproval('consequential', 'mcp__x__deleteIssue').allow).toBe(false);
+  });
+});
+
+// ── Argument-level escapes from a "read-only" binary (regression) ──────────
+
+/**
+ * The separator fix closed the hole where a SECOND command rode along after a
+ * `;`, `&` or newline. This is the same hole one level down: ONE command, whose
+ * binary is on the read-only list, that writes/deletes/executes through its own
+ * ARGUMENTS. `READ_ONLY_BINARIES` trusted the binary by name alone, so all of
+ * these classified 'read' — and 'read' is ungated under EVERY policy, so no
+ * setting stopped them and `tool-policy.ts` would even push them into the SDK
+ * as `always_allow`.
+ */
+const ARGUMENT_ESCAPE_PAYLOADS = [
+  'find . -exec rm -rf {} \\;',
+  'find . -name x -delete',
+  'env rm -rf ~',
+  'sed -i "" s/a/b/ file',
+  'yq -i ".a = 1" f.yaml',
+  "awk 'BEGIN{system(\"rm -rf ~\")}'",
+  'sort -o out.txt in.txt',
+];
+
+describe('classifyBash — a read-only binary that acts through its arguments', () => {
+  it('never classifies the known escapes as read', () => {
+    for (const cmd of ARGUMENT_ESCAPE_PAYLOADS) {
+      expect(classifyBash(cmd), cmd).not.toBe('read');
+    }
+  });
+
+  it('gates every other exec/write flag on the guarded binaries', () => {
+    for (const cmd of [
+      // find: every flag that runs a command or writes a path
+      'find . -execdir rm {} +',
+      'find . -ok rm {} \\;',
+      'find . -okdir rm {} \\;',
+      'find . -fprint /tmp/out',
+      'find . -fprintf /tmp/out %p',
+      'find . -fls /tmp/out',
+      // fd is find's replacement and has the same escape
+      'fd -x rm',
+      'fd --exec rm',
+      'fd -X rm',
+      'fd --exec-batch rm',
+      // ripgrep runs an arbitrary preprocessor per file
+      'rg --pre sh pattern',
+      'rg --hostname-bin /tmp/evil pattern',
+      // sed in place, and sed reading its script from an unbounded file
+      'sed --in-place s/a/b/ file',
+      'sed -f script.sed file',
+      'sed --file=script.sed file',
+      // GNU sed's script language writes and executes without any flag
+      'sed "w /tmp/out" file',
+      'sed "s/a/b/w /tmp/out" file',
+      'sed "s/a/b/gw /tmp/out" file',
+      'sed "s/a/b/e" file',
+      'sed "1e rm -rf ~" file',
+      'sed "/x/w /tmp/out" file',
+      // sort writes, and runs an arbitrary compressor
+      'sort --output=out.txt in.txt',
+      'sort --compress-program=/tmp/evil big.txt',
+      // yq / jq in place, and yq splitting output into files
+      'yq --inplace ".a = 1" f.yaml',
+      'yq -s ".a" f.yaml',
+      'yq --split-exp ".a" f.yaml',
+      'jq -i ".a" f.json',
+      'jq --in-place ".a" f.json',
+      // tree writes its listing to a file
+      'tree -o /tmp/out',
+      // uniq and xxd take an OUTPUT FILE as a positional, not a flag
+      'uniq in.txt out.txt',
+      'xxd -r dump.hex restored.bin',
+      // hostname and date MUTATE THE SYSTEM from an argument
+      'hostname evil.local',
+      'date -s "2020-01-01"',
+      'date --set "2020-01-01"',
+    ]) {
+      expect(classifyBash(cmd), cmd).not.toBe('read');
+    }
+  });
+
+  it('catches a forbidden short flag hidden in a bundle', () => {
+    // `sort -uo out.txt` and `sed -ni` are valid: the dangerous letter rides
+    // inside a cluster, so matching whole argv words is not enough.
+    for (const cmd of ['sort -uo out.txt in.txt', 'sed -ni s/a/b/ f', 'fd -Ix rm', 'sed -Ei s/a/b/ f']) {
+      expect(classifyBash(cmd), cmd).not.toBe('read');
+    }
+  });
+
+  it('gates the interpreter-style binaries entirely, however they are invoked', () => {
+    // No flag guard can help: the program text is unbounded, so the write or
+    // exec lives in the argument itself.
+    for (const cmd of [
+      'awk "{print}" file',
+      'awk \'BEGIN{print "x" > "/tmp/out"}\'',
+      'env ls',
+      'env -i rm -rf ~',
+      'less file',
+      'more file',
+    ]) {
+      expect(classifyBash(cmd), cmd).not.toBe('read');
+    }
+  });
+
+  it('gates a dangerous leading env assignment, which used to be stripped', () => {
+    // Assignment words were filtered out and the NEXT word was trusted, so a
+    // variable that redirects execution rode along invisibly.
+    for (const cmd of [
+      'PATH=/tmp/evil ls',
+      'LESSOPEN="|sh -c \\"rm -rf ~\\"" cat file',
+      'LD_PRELOAD=/tmp/evil.so ls',
+      'DYLD_INSERT_LIBRARIES=/tmp/evil.dylib ls',
+      'GIT_EXTERNAL_DIFF=rm git diff',
+      'BASH_ENV=/tmp/evil.sh grep x f',
+      'IFS=x ls',
+    ]) {
+      expect(classifyBash(cmd), cmd).not.toBe('read');
+    }
+    // Formatting-only variables stay allowed — they cannot redirect execution.
+    for (const cmd of ['LC_ALL=C sort in.txt', 'LANG=C grep x f', 'TZ=UTC date', 'NO_COLOR=1 ls']) {
+      expect(classifyBash(cmd), cmd).toBe('read');
+    }
+  });
+
+  it('the safe forms of every guarded binary STAY read', () => {
+    for (const cmd of [
+      "find . -name '*.ts'",
+      'find . -type f -newer package.json -print',
+      'fd -e ts',
+      'sed s/a/b/ file',
+      "sed -n '5,10p' file",
+      "sed -E 's/(a)/[\\1]/g' file",
+      "sed 's/error/warning/' file", // contains e, w and r — must not trip the script guard
+      'sort in.txt',
+      'sort -u -k2 in.txt',
+      "jq '.a' f.json",
+      "yq '.a' f.yaml",
+      'tree -L 2',
+      'uniq -c',
+      'sort in.txt | uniq -c',
+      'xxd file',
+      'hostname',
+      'hostname -f',
+      'date',
+      'date +%Y-%m-%d',
+      'ls',
+      'cat package.json',
+      'grep -rn foo src',
+      'rg foo',
+      'rg --json foo',
+      'head -20 file',
+      'wc -l file',
+      'git status',
+      'git log --oneline',
+      'printenv',
+      'printenv PATH',
+    ]) {
+      expect(classifyBash(cmd), cmd).toBe('read');
+    }
+  });
+
+  it('property: any argv containing a guarded binary\'s forbidden flag is never read', () => {
+    const guarded = Object.entries(READ_ONLY_BINARIES).flatMap(([bin, rule]) =>
+      rule.kind === 'guarded' && rule.forbidden.length ? [[bin, rule.forbidden] as const] : [],
+    );
+    expect(guarded.length).toBeGreaterThan(5);
+
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...guarded),
+        fc.nat({ max: 32 }),
+        fc.array(fc.constantFrom('file', 'src', '.', 'pattern', '-n', '-r'), { maxLength: 3 }),
+        fc.array(fc.constantFrom('file', 'out.txt', 'x', '-l'), { maxLength: 3 }),
+        ([bin, forbidden], pick, before, after) => {
+          const flag = forbidden[pick % forbidden.length];
+          const cmd = [bin, ...before, flag, ...after].join(' ');
+          expect(classifyBash(cmd), cmd).not.toBe('read');
+        },
+      ),
+      { numRuns: 1_000 },
+    );
+  });
+
+  it('property: an excluded binary is never read, with any arguments', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...Object.keys(EXCLUDED_BINARIES)),
+        fc.array(fc.constantFrom('-n', 'file', '.', 'ls', 'x=1'), { maxLength: 4 }),
+        (bin, args) => {
+          const cmd = [bin, ...args].join(' ');
+          expect(classifyBash(cmd), cmd).not.toBe('read');
+        },
+      ),
+      { numRuns: 1_000 },
+    );
+  });
+});
+
+describe('classifyBash — git subcommands that mutate through their arguments', () => {
+  /**
+   * The same hole as the binary list: `branch`, `tag`, `remote` and `reflog`
+   * were on the read-only SUBCOMMAND list, but each of them writes as soon as it
+   * is given an operand or a delete flag. `git branch -D main` and
+   * `git tag -d v1` destroyed refs and classified 'read'.
+   */
+  it('never classifies a mutating form of a read subcommand as read', () => {
+    for (const cmd of [
+      'git branch -D main',
+      'git branch -d feature',
+      'git branch --delete feature',
+      'git branch newthing',
+      'git branch -m old new',
+      'git tag -d v1',
+      'git tag v9.9.9',
+      'git tag --delete v1',
+      'git remote add evil https://evil.example',
+      'git remote remove origin',
+      'git remote set-url origin https://evil.example',
+      'git remote prune origin',
+      'git reflog expire --expire=now --all',
+      'git reflog delete HEAD@{0}',
+      'git diff --output=/tmp/out',
+      'git log --output=/tmp/out',
+      'git show --output=/tmp/out HEAD',
+    ]) {
+      expect(classifyBash(cmd), cmd).not.toBe('read');
+    }
+  });
+
+  it('keeps the genuinely read-only git forms as read', () => {
+    for (const cmd of [
+      'git status',
+      'git status --short',
+      'git log --oneline -5',
+      'git diff',
+      'git diff --stat HEAD~1',
+      'git show HEAD',
+      'git blame file.ts',
+      'git rev-parse HEAD',
+      'git ls-files',
+      'git branch',
+      'git branch -a',
+      'git branch -vv',
+      'git tag',
+      'git remote',
+      'git remote -v',
+      'git reflog',
+    ]) {
+      expect(classifyBash(cmd), cmd).toBe('read');
+    }
+  });
+});
+
+describe('evaluateApproval — no policy allows an argument-level escape (regression)', () => {
+  for (const policy of ['consequential', 'always'] as const) {
+    it(`'${policy}' refuses them`, () => {
+      for (const command of [...ARGUMENT_ESCAPE_PAYLOADS, 'git branch -D main', 'git tag -d v1']) {
+        const out = evaluateApproval(policy, 'Bash', { command });
+        expect(out.allow, `${policy}: ${command}`).toBe(false);
+        expect(out.class, `${policy}: ${command}`).not.toBe('read');
+      }
+    });
+  }
+
+  it('still allows the ordinary reads unattended', () => {
+    for (const command of ['ls -la', "find . -name '*.ts'", 'git log --oneline', 'sort in.txt | uniq -c']) {
+      expect(evaluateApproval('consequential', 'Bash', { command }).allow, command).toBe(true);
+    }
+  });
+});
+
+// ── Structural guard on the trust tables ──────────────────────────────────
+
+describe('read-only binary table is a record of decisions (structural)', () => {
+  /**
+   * This test exists to FAIL when a binary is added to the read-only table
+   * without a decision being recorded for it. The list below is the decision
+   * record: adding a name to `READ_ONLY_BINARIES` without adding it here — and
+   * therefore without stating whether it is a pure reader or a reader with
+   * forbidden flags — breaks the build. That is the point. The class of bug this
+   * closes (trusting a binary by name while its arguments write) reappears
+   * silently the moment the table can grow unreviewed.
+   */
+  const DECIDED_PURE_READERS = [
+    'basename', 'cat', 'column', 'cut', 'df', 'diff', 'dirname', 'du', 'echo',
+    'egrep', 'fgrep', 'file', 'grep', 'head', 'id', 'ls', 'md5', 'md5sum',
+    'nl', 'od', 'printenv', 'printf', 'ps', 'pwd', 'realpath', 'sha256sum',
+    'shasum', 'stat', 'strings', 'tail', 'top', 'tr', 'type', 'uname',
+    'uptime', 'wc', 'which', 'whoami',
+  ];
+
+  const DECIDED_GUARDED = [
+    'date', 'fd', 'find', 'hostname', 'jq', 'rg', 'sed', 'sort', 'tree',
+    'uniq', 'xxd', 'yq',
+  ];
+
+  it('contains exactly the binaries that have been decided on', () => {
+    const pure = Object.entries(READ_ONLY_BINARIES)
+      .filter(([, r]) => r.kind === 'reader')
+      .map(([n]) => n)
+      .sort();
+    const guarded = Object.entries(READ_ONLY_BINARIES)
+      .filter(([, r]) => r.kind === 'guarded')
+      .map(([n]) => n)
+      .sort();
+
+    expect(pure).toEqual([...DECIDED_PURE_READERS].sort());
+    expect(guarded).toEqual([...DECIDED_GUARDED].sort());
+  });
+
+  it('every entry records WHY it is trusted', () => {
+    for (const [name, rule] of Object.entries(READ_ONLY_BINARIES)) {
+      expect(rule.why, name).toBeTruthy();
+      // Prose, not a placeholder: a one-word "safe" is not a decision.
+      expect(rule.why.length, name).toBeGreaterThan(24);
+    }
+  });
+
+  it('a guarded entry must name at least one forbidden flag or bound its operands', () => {
+    for (const [name, rule] of Object.entries(READ_ONLY_BINARIES)) {
+      if (rule.kind !== 'guarded') continue;
+      const bounded = rule.forbidden.length > 0 || rule.maxOperands !== undefined;
+      expect(bounded, `${name} is guarded but guards nothing`).toBe(true);
+      for (const flag of rule.forbidden) {
+        expect(flag.startsWith('-'), `${name}: ${flag}`).toBe(true);
+      }
+    }
+  });
+
+  it('every excluded binary records why it is NOT trusted', () => {
+    for (const [name, why] of Object.entries(EXCLUDED_BINARIES)) {
+      expect(why, name).toBeTruthy();
+      expect(why.length, name).toBeGreaterThan(24);
+    }
+  });
+
+  it('a binary is never both trusted and excluded', () => {
+    for (const name of Object.keys(EXCLUDED_BINARIES)) {
+      expect(READ_ONLY_BINARIES[name], name).toBeUndefined();
+    }
+  });
+
+  it('records the interpreters and writers considered and rejected', () => {
+    // Named in the review that prompted the fail-closed decision. If one of
+    // these is ever added to the trusted table, the disjointness test above
+    // fails — which is the structural half of "this cannot silently reappear".
+    for (const n of [
+      'awk', 'env', 'xargs', 'perl', 'python', 'python3', 'ruby', 'node',
+      'sh', 'bash', 'zsh', 'vim', 'vi', 'ex', 'nc', 'netcat', 'ssh', 'docker',
+      'make', 'less', 'more', 'tee',
+    ]) {
+      expect(EXCLUDED_BINARIES[n], n).toBeTruthy();
+    }
+  });
+
+  it('git subcommands are decided the same way', () => {
+    for (const [name, rule] of Object.entries(GIT_READ_SUBCOMMANDS)) {
+      expect(rule.why, name).toBeTruthy();
+      expect(rule.why.length, name).toBeGreaterThan(24);
+      if (rule.kind === 'guarded') {
+        expect(rule.forbidden.length > 0 || rule.maxOperands !== undefined, name).toBe(true);
+      }
+    }
   });
 });

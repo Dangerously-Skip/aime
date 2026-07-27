@@ -2,238 +2,338 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, cleanup, waitFor } from '@testing-library/react';
 import { usePushToTalk } from './use-push-to-talk';
+import { DEFAULT_PUSH_TO_TALK } from '@/lib/voice/accelerator';
+import { getVoiceSnapshot, resetVoiceSession, registerTranscriptSink } from '@/lib/voice/voice-session';
+import { installFakeMediaStack, type FakeMediaStack } from '@/lib/voice/__fixtures__/fake-media';
+import {
+  createFakeMain,
+  installFakeElectron,
+  uninstallFakeElectron,
+  type FakeMain,
+} from '@/lib/voice/__fixtures__/fake-main';
 
 /**
- * Covers the half of push-to-talk that vitest can reach: the toggle state
- * machine and the lifecycle contract with Electron main.
+ * Push-to-talk: the renderer half of the contract with Electron main.
  *
- * NOT covered here, and stated plainly rather than implied: the actual
- * `globalShortcut.register` call in main-web.js. Registering a system-wide
- * shortcut needs a real Electron main process, so that line is verified by
- * running the app, not by this suite. What IS pinned is everything the renderer
- * promises main — including that disabling genuinely releases the combination,
- * which is the failure a user would notice (a hotkey stolen from every other app).
+ * Everything the renderer promises main is pinned here, and pinned by OUTCOME —
+ * is an accelerator actually registered, would the OS deliver a press — because
+ * `createFakeMain` models main's single accelerator slot and its owner.
+ *
+ * That modelling is the whole reason this file was rewritten. The previous
+ * version stubbed `setPushToTalkEnabled` with a bare `vi.fn()`, which holds no
+ * registration state, and fired the toggle callback directly instead of asking
+ * whether the OS would ever deliver it. Two shipped defects were invisible to it
+ * and it passed anyway.
+ *
+ * WHAT STILL CANNOT BE COVERED HERE, stated plainly rather than implied:
+ *
+ *  - `globalShortcut.register` / `unregister` themselves. Claiming a system-wide
+ *    key needs a real Electron main process. `createFakeMain` is kept in step
+ *    with main-web.js by hand, so a change there needs a change here.
+ *  - Whether macOS actually withholds keyup for a global shortcut — the reason
+ *    this is a toggle rather than hold-to-talk. That is an OS behaviour.
+ *  - Whether the OS delivers the press while AIME is unfocused, which is the
+ *    entire point of the feature. jsdom has no concept of focus.
+ *  - Real Whisper output. The model is faked; what is real is that exactly one
+ *    recording happens, is decoded once, and is delivered to exactly one sink.
+ *
+ * The settings UI, the platform-specific key labels, and persistence across a
+ * reload are covered in a real browser by `e2e/push-to-talk.spec.ts`.
  */
 
-const startListening = vi.fn();
-const stopListening = vi.fn();
-let voiceState = { isListening: false, isTranscribing: false, isSupported: true };
-
-vi.mock('./use-voice-input', () => ({
-  useVoiceInput: () => ({ ...voiceState, startListening, stopListening }),
+const transcribe = vi.fn(async (_input: Float32Array) => ({ text: ' dictated words ' }));
+vi.mock('@huggingface/transformers', () => ({
+  pipeline: vi.fn(async () => (input: Float32Array) => transcribe(input)),
 }));
+vi.mock('@/lib/telemetry/events', () => ({ sendFeatureAdoptionEvent: vi.fn() }));
 
-let fireToggle: (() => void) | null = null;
-const unsubscribe = vi.fn();
-const setPushToTalkEnabled = vi.fn().mockResolvedValue('CommandOrControl+Shift+Space');
-const onVoiceToggle = vi.fn((cb: () => void) => {
-  fireToggle = cb;
-  return unsubscribe;
-});
-
-const onTranscript = vi.fn();
-
-function installElectron(partial = false) {
-  (window as unknown as { electronAPI?: unknown }).electronAPI = partial
-    ? { onVoiceToggle }
-    : { onVoiceToggle, setPushToTalkEnabled };
-}
+let main: FakeMain;
+let media: FakeMediaStack;
+let transcripts: string[];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  voiceState = { isListening: false, isTranscribing: false, isSupported: true };
-  fireToggle = null;
-  installElectron();
+  transcribe.mockResolvedValue({ text: ' dictated words ' });
+  resetVoiceSession();
+  media = installFakeMediaStack();
+  main = createFakeMain();
+  transcripts = [];
+  registerTranscriptSink(null, (text) => transcripts.push(text));
+  installFakeElectron(main);
 });
 
 afterEach(() => {
   cleanup();
-  delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  resetVoiceSession();
+  vi.unstubAllGlobals();
+  uninstallFakeElectron();
 });
 
-const render = (enabled = true) => renderHook(() => usePushToTalk({ onTranscript, enabled }));
+const mount = (enabled = true, accelerator = DEFAULT_PUSH_TO_TALK) =>
+  renderHook(() => usePushToTalk({ enabled, accelerator }));
 
 describe('usePushToTalk — holding and releasing the shortcut', () => {
-  it('asks main to hold the shortcut when enabled', async () => {
-    render(true);
-    await waitFor(() => expect(setPushToTalkEnabled).toHaveBeenCalledWith(true));
-    expect(onVoiceToggle).toHaveBeenCalled();
+  it('registers the shortcut with the OS when enabled', async () => {
+    mount(true);
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
+    expect(main.pressHotkey()).toBe(true);
   });
 
-  it('does not register anything when disabled', async () => {
-    render(false);
-    await waitFor(() => expect(setPushToTalkEnabled).toHaveBeenCalledWith(false));
-    // A hotkey must never be claimed behind the user's back.
-    expect(onVoiceToggle).not.toHaveBeenCalled();
+  it('claims nothing at all when disabled — not even a release', async () => {
+    mount(false);
+    await Promise.resolve();
+    // A hotkey must never be claimed behind the user's back, AND a disabled
+    // instance must not talk to main: see the mount-order regression below.
+    expect(main.setPushToTalkEnabled).not.toHaveBeenCalled();
+    expect(main.onVoiceToggle).not.toHaveBeenCalled();
+    expect(main.held).toBeNull();
   });
 
-  it('releases the shortcut on unmount, not merely stops listening for it', async () => {
-    // Otherwise the combination stays stolen from every other application.
-    const { unmount } = render(true);
-    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalled());
-    setPushToTalkEnabled.mockClear();
+  it('gives the combination back on unmount', async () => {
+    const { unmount } = mount(true);
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
 
     unmount();
-    expect(unsubscribe).toHaveBeenCalled();
-    expect(setPushToTalkEnabled).toHaveBeenCalledWith(false);
+    await waitFor(() => expect(main.held).toBeNull());
+    // Otherwise the combination stays stolen from every other application.
+    expect(main.pressHotkey()).toBe(false);
   });
 
-  it('releases when the setting is turned off', async () => {
+  it('gives it back when the setting is turned off', async () => {
     const { rerender } = renderHook(
-      ({ enabled }) => usePushToTalk({ onTranscript, enabled }),
+      ({ enabled }) => usePushToTalk({ enabled, accelerator: DEFAULT_PUSH_TO_TALK }),
       { initialProps: { enabled: true } },
     );
-    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalled());
-    setPushToTalkEnabled.mockClear();
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
 
     rerender({ enabled: false });
-    await waitFor(() => expect(setPushToTalkEnabled).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(main.held).toBeNull());
   });
 
   it('reports unavailable outside Electron', () => {
-    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
-    const { result } = render(true);
+    installFakeElectron(undefined);
+    const { result } = mount(true);
     expect(result.current.isAvailable).toBe(false);
   });
 
   it('reports unavailable when the bridge is only partly present', async () => {
     // An older preload without setPushToTalkEnabled must not half-work.
-    installElectron(true);
-    const { result } = render(true);
-    await waitFor(() => expect(result.current.isAvailable).toBe(false));
-    expect(onVoiceToggle).not.toHaveBeenCalled();
+    installFakeElectron({ onVoiceToggle: main.onVoiceToggle });
+    const { result } = mount(true);
+    await waitFor(() => expect(result.current.hotkey.state).toBe('unavailable'));
+    expect(result.current.isAvailable).toBe(false);
+    expect(main.onVoiceToggle).not.toHaveBeenCalled();
+  });
+});
+
+describe('usePushToTalk — DEFECT 1 regression: a disabled instance releasing the enabled one', () => {
+  /**
+   * surface-router mounts all five surfaces at once (its own comment says so),
+   * chat first, and React runs mount effects in tree order. The shipped hook
+   * called `setPushToTalkEnabled(enabled)` BEFORE its `if (!enabled) return`
+   * guard, and main released whatever was held with no idea who was asking — so
+   * whichever surface mounted second unregistered the first one's shortcut.
+   *
+   * The fix is structural (one owner, mounted above the surfaces), but these
+   * assertions are on the OUTCOME — is a shortcut actually registered, and would
+   * the OS deliver a press — so they hold regardless of how ownership is arranged.
+   */
+  it('an instance mounted enabled keeps the shortcut when a disabled one mounts after it', async () => {
+    renderHook(() => usePushToTalk({ enabled: true, accelerator: DEFAULT_PUSH_TO_TALK }));
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
+
+    renderHook(() => usePushToTalk({ enabled: false, accelerator: DEFAULT_PUSH_TO_TALK }));
+    await Promise.resolve();
+
+    expect(main.held).toBe(DEFAULT_PUSH_TO_TALK);
+    // And the press still arrives: the shipped bug left the enabled instance
+    // holding a live listener for an event that could never be delivered.
+    expect(main.pressHotkey()).toBe(true);
+    await waitFor(() => expect(media.getUserMedia).toHaveBeenCalledTimes(1));
   });
 
-  it('reports unavailable when the browser cannot record', async () => {
-    voiceState = { ...voiceState, isSupported: false };
-    const { result } = render(true);
-    await waitFor(() => expect(result.current.isAvailable).toBe(false));
+  it('and in the other mount order too', async () => {
+    // This is the order that accidentally worked, so it must not be the only one tested.
+    renderHook(() => usePushToTalk({ enabled: false, accelerator: DEFAULT_PUSH_TO_TALK }));
+    renderHook(() => usePushToTalk({ enabled: true, accelerator: DEFAULT_PUSH_TO_TALK }));
+
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
+    expect(main.pressHotkey()).toBe(true);
+  });
+
+  it('refuses a second enabled owner rather than letting it steal or release the first', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderHook(() => usePushToTalk({ enabled: true, accelerator: DEFAULT_PUSH_TO_TALK }));
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
+    const firstOwner = main.heldBy;
+
+    const second = renderHook(() => usePushToTalk({ enabled: true, accelerator: DEFAULT_PUSH_TO_TALK }));
+    await Promise.resolve();
+
+    expect(main.held).toBe(DEFAULT_PUSH_TO_TALK);
+    expect(main.heldBy).toBe(firstOwner);
+    expect(warn).toHaveBeenCalled();
+
+    // …and when the interloper goes away it must not take the shortcut with it.
+    second.unmount();
+    await Promise.resolve();
+    expect(main.held).toBe(DEFAULT_PUSH_TO_TALK);
+    warn.mockRestore();
+  });
+
+  it('main ignores a release from a non-owner (defence in depth)', async () => {
+    // Belt to the renderer's braces: even if some future caller sends a stray
+    // `false`, main is the one holding the OS registration and can refuse.
+    mount(true);
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
+
+    await main.setPushToTalkEnabled(false, DEFAULT_PUSH_TO_TALK, 'some-other-component');
+    expect(main.held).toBe(DEFAULT_PUSH_TO_TALK);
+  });
+});
+
+describe('usePushToTalk — DEFECT 4 regression: the accelerator reaching the OS', () => {
+  it('passes the configured accelerator across the IPC boundary', async () => {
+    mount(true, 'Control+Alt+K');
+    await waitFor(() =>
+      expect(main.setPushToTalkEnabled).toHaveBeenCalledWith(true, 'Control+Alt+K', expect.any(String)),
+    );
+    // The shipped call passed one argument, so main always fell back to its
+    // hardcoded default and a user-configured hotkey did nothing.
+    expect(main.held).toBe('Control+Alt+K');
+  });
+
+  it('re-registers when the accelerator changes', async () => {
+    const { rerender } = renderHook(
+      ({ accelerator }) => usePushToTalk({ enabled: true, accelerator }),
+      { initialProps: { accelerator: DEFAULT_PUSH_TO_TALK } },
+    );
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
+
+    rerender({ accelerator: 'Control+Alt+J' });
+    await waitFor(() => expect(main.held).toBe('Control+Alt+J'));
+  });
+
+  it('surfaces a combination another app already owns', async () => {
+    // The exact distinction accelerator.ts's docblock says the caller needs —
+    // and which the shipped hook threw away by `void`-ing main's return value.
+    main = createFakeMain({ takenByOtherApps: ['Control+Alt+K'] });
+    installFakeElectron(main);
+
+    const { result } = mount(true, 'Control+Alt+K');
+    await waitFor(() => expect(result.current.hotkey.state).toBe('failed'));
+    expect(result.current.hotkey).toMatchObject({ reason: 'taken', accelerator: 'Control+Alt+K' });
+    expect(result.current.hotkey.state === 'failed' && result.current.hotkey.message).toMatch(
+      /already in use/i,
+    );
+    // The user-visible failure mode being avoided: a switch that reads ON while
+    // no hotkey works. The status is shared state, so Settings sees it too.
+    expect(getVoiceSnapshot().hotkey.state).toBe('failed');
+  });
+
+  it('reports success so a working hotkey can be shown as working', async () => {
+    const { result } = mount(true, 'Control+Alt+K');
+    await waitFor(() => expect(result.current.hotkey).toEqual({ state: 'held', accelerator: 'Control+Alt+K' }));
+  });
+
+  it('survives a rejected IPC call without claiming success', async () => {
+    const boom = createFakeMain();
+    boom.setPushToTalkEnabled.mockRejectedValue(new Error('bridge gone'));
+    installFakeElectron(boom);
+
+    const { result } = mount(true);
+    await waitFor(() => expect(result.current.hotkey.state).toBe('failed'));
   });
 });
 
 describe('usePushToTalk — the toggle', () => {
-  it('starts recording on the first press', async () => {
-    render(true);
-    await waitFor(() => expect(fireToggle).not.toBeNull());
+  it('a press starts exactly one recording, a second press stops it', async () => {
+    mount(true);
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
 
-    act(() => fireToggle!());
-    expect(startListening).toHaveBeenCalledTimes(1);
-    expect(stopListening).not.toHaveBeenCalled();
-  });
+    await act(async () => {
+      main.pressHotkey();
+    });
+    expect(media.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(media.liveRecorders()).toHaveLength(1);
 
-  it('stops recording on the second press', async () => {
-    voiceState = { ...voiceState, isListening: true };
-    render(true);
-    await waitFor(() => expect(fireToggle).not.toBeNull());
-
-    act(() => fireToggle!());
-    expect(stopListening).toHaveBeenCalledTimes(1);
-    expect(startListening).not.toHaveBeenCalled();
+    await act(async () => {
+      main.pressHotkey();
+    });
+    expect(media.liveRecorders()).toHaveLength(0);
+    await waitFor(() => expect(transcripts).toEqual(['dictated words']));
   });
 
   it('ignores a press while the previous take is still transcribing', async () => {
     // Starting a new recording would discard a transcript the user is waiting on.
-    voiceState = { ...voiceState, isTranscribing: true };
-    render(true);
-    await waitFor(() => expect(fireToggle).not.toBeNull());
+    let releaseTranscription: (() => void) | undefined;
+    transcribe.mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseTranscription = () => resolve({ text: 'slow take' });
+      }),
+    );
 
-    act(() => fireToggle!());
-    expect(startListening).not.toHaveBeenCalled();
-    expect(stopListening).not.toHaveBeenCalled();
-  });
+    mount(true);
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
 
-  it('does nothing when recording is unsupported', async () => {
-    voiceState = { ...voiceState, isSupported: false };
-    const { result } = render(true);
-    act(() => result.current.toggle());
-    expect(startListening).not.toHaveBeenCalled();
+    await act(async () => {
+      main.pressHotkey();
+    });
+    await act(async () => {
+      main.pressHotkey();
+    });
+    await waitFor(() => expect(getVoiceSnapshot().status).toBe('transcribing'));
+
+    await act(async () => {
+      main.pressHotkey();
+    });
+    expect(media.getUserMedia).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseTranscription?.();
+    });
   });
 
   it('exposes the same path for a manual toggle', async () => {
-    const { result } = render(true);
-    act(() => result.current.toggle());
-    expect(startListening).toHaveBeenCalledTimes(1);
+    const { result } = mount(true);
+    await act(async () => {
+      result.current.toggle();
+    });
+    expect(media.getUserMedia).toHaveBeenCalledTimes(1);
   });
 
-  it('surfaces listening and transcribing state for the UI', () => {
-    voiceState = { isListening: true, isTranscribing: false, isSupported: true };
-    const { result } = render(true);
-    expect(result.current.isListening).toBe(true);
-    expect(result.current.isTranscribing).toBe(false);
+  it('stops capture when the setting is turned off mid-dictation', async () => {
+    // Otherwise the mic stays on with the hotkey that would stop it already gone.
+    const { rerender } = renderHook(
+      ({ enabled }) => usePushToTalk({ enabled, accelerator: DEFAULT_PUSH_TO_TALK }),
+      { initialProps: { enabled: true } },
+    );
+    await waitFor(() => expect(main.held).toBe(DEFAULT_PUSH_TO_TALK));
+    await act(async () => {
+      main.pressHotkey();
+    });
+    expect(media.liveRecorders()).toHaveLength(1);
+
+    await act(async () => {
+      rerender({ enabled: false });
+    });
+    expect(media.liveRecorders()).toHaveLength(0);
+    expect(media.tracks.every((t) => t.stopped)).toBe(true);
   });
 
   it('does not resubscribe when recording state changes', async () => {
     // Resubscribing on every state change would drop presses in the gap.
     const { rerender } = renderHook(
-      ({ enabled }) => usePushToTalk({ onTranscript, enabled }),
+      ({ enabled }) => usePushToTalk({ enabled, accelerator: DEFAULT_PUSH_TO_TALK }),
       { initialProps: { enabled: true } },
     );
-    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(main.onVoiceToggle).toHaveBeenCalledTimes(1));
 
-    voiceState = { ...voiceState, isListening: true };
+    await act(async () => {
+      main.pressHotkey();
+    });
     rerender({ enabled: true });
-    voiceState = { ...voiceState, isListening: false };
-    rerender({ enabled: true });
 
-    expect(onVoiceToggle).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('usePushToTalk — the duplication and stuck-mic bugs (regression)', () => {
-  /**
-   * Two defects a single-instance test could not see:
-   *
-   *  1. All five surfaces mount at once, and chat and cowork each enabled this
-   *     hook — so one hotkey press started TWO MediaRecorders, transcribed twice
-   *     against the shared Whisper pipeline, and appended to both composers. Either
-   *     instance's cleanup also released the OS shortcut for the other.
-   *  2. Disabling mid-dictation never stopped capture: `enabled` flips, so the
-   *     effect cleans up but the hook is not unmounted, meaning use-voice-input's
-   *     own teardown never runs either. The mic stayed on and the hotkey that would
-   *     have stopped it had just been released.
-   */
-  it('stops capture when it is disabled mid-recording', async () => {
-    voiceState = { ...voiceState, isListening: true };
-    const { rerender } = renderHook(
-      ({ enabled }) => usePushToTalk({ onTranscript, enabled }),
-      { initialProps: { enabled: true } },
-    );
-    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalled());
-
-    rerender({ enabled: false });
-    await waitFor(() => expect(stopListening).toHaveBeenCalled());
-  });
-
-  it('does not stop capture when it was not recording', async () => {
-    const { rerender } = renderHook(
-      ({ enabled }) => usePushToTalk({ onTranscript, enabled }),
-      { initialProps: { enabled: true } },
-    );
-    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalled());
-
-    rerender({ enabled: false });
-    await waitFor(() => expect(setPushToTalkEnabled).toHaveBeenCalledWith(false));
-    expect(stopListening).not.toHaveBeenCalled();
-  });
-
-  it('stops capture on unmount too', async () => {
-    voiceState = { ...voiceState, isListening: true };
-    const { unmount } = render(true);
-    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalled());
-
-    unmount();
-    expect(stopListening).toHaveBeenCalled();
-  });
-
-  it('only the enabled instance claims the shortcut, so two mounts record once', async () => {
-    // Mirrors production: both surfaces mount, only the active one is enabled.
-    renderHook(() => usePushToTalk({ onTranscript, enabled: true }));   // active
-    renderHook(() => usePushToTalk({ onTranscript, enabled: false }));  // background
-
-    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalledTimes(1));
-
-    act(() => fireToggle!());
-    // One press, one recorder — not two.
-    expect(startListening).toHaveBeenCalledTimes(1);
+    expect(main.onVoiceToggle).toHaveBeenCalledTimes(1);
   });
 });

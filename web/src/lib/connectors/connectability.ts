@@ -42,6 +42,35 @@ export function effortRank(effort: ConnectEffort): number {
 }
 
 /**
+ * Every documented way an AWS credential reaches a process without anyone typing
+ * anything into this app: static keys, a named profile, web identity (EKS/IRSA),
+ * the ECS/EKS container credential providers, and an explicitly relocated shared
+ * config or credentials file.
+ *
+ * NOT covered, and deliberately: the DEFAULT `~/.aws/{credentials,config}`
+ * locations. Detecting those means touching the filesystem, which this module
+ * must not do, so their absence from the env is treated as "unproven" rather than
+ * "absent" — see the aws_iam branch.
+ */
+const AWS_CREDENTIAL_ENV_VARS = [
+  'AWS_ACCESS_KEY_ID',
+  'AWS_PROFILE',
+  'AWS_DEFAULT_PROFILE',
+  'AWS_SESSION_TOKEN',
+  'AWS_WEB_IDENTITY_TOKEN_FILE',
+  'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+  'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+  'AWS_SHARED_CREDENTIALS_FILE',
+  'AWS_CONFIG_FILE',
+] as const;
+
+function hasAwsCredentialEnv(env: Record<string, string | undefined>): boolean {
+  // Set-but-empty is how a shell exports a variable it never assigned; treating
+  // that as a credential would put us straight back to promising one click.
+  return AWS_CREDENTIAL_ENV_VARS.some((name) => !!env[name]);
+}
+
+/**
  * Classify one connector.
  *
  * `env` is injected rather than read from process.env so this is testable and
@@ -62,10 +91,30 @@ export function classifyConnectability(
       };
 
     case 'aws_iam':
+      // "Instant" only if the credentials it depends on actually exist. The old
+      // verdict was unconditional, so the chat prompt advertised AWS as one click
+      // away on a laptop that had never run `aws configure` — and the connect
+      // flow then reported success without checking, which is how a promise the
+      // catalogue makes becomes a lie the agent repeats.
+      if (hasAwsCredentialEnv(env)) {
+        return {
+          effort: 'instant',
+          available: true,
+          detail: 'Uses the AWS credentials already on this machine.',
+        };
+      }
+      // Nothing in the environment. A profile in ~/.aws may still exist — only
+      // `aws sts get-caller-identity` settles that, and a pure classifier may not
+      // spawn a subprocess — so this reports the terminal step it may turn out to
+      // need rather than one click. Being wrong in this direction costs an offer
+      // the user can still make from Settings; being wrong the other way costs
+      // their trust in every other offer.
       return {
-        effort: 'instant',
-        available: true,
-        detail: 'Uses the AWS credentials already on this machine.',
+        effort: 'needs-config',
+        available: false,
+        detail:
+          'Needs AWS credentials on this machine — run `aws sso login` or ' +
+          '`aws configure` (or set AWS_PROFILE), then connect it from Settings.',
       };
 
     case 'mcp-self-auth':

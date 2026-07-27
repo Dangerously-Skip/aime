@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { onStreamAborted } from '@/lib/stream-registry';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import { type SessionControls } from '@/lib/slash-commands';
@@ -30,6 +31,7 @@ interface CoworkState {
    */
   modelRoute: ModelOption | null;
   isStreaming: boolean;
+  /** Write-only — see the note on `ChatState.streamError`. Nothing renders it. */
   streamError: string | null;
   folderByChat: Record<string, string | null>;
   contextFiles: Record<string, string[]>;
@@ -350,3 +352,16 @@ export const useCoworkStore = create<CoworkStore>()(
     }
   )
 );
+
+/**
+ * Finalise a turn whose stream was aborted — see the matching subscription in
+ * chat-store. Cowork reaches it from the Stop button, the conversation-switch
+ * abort, and its own 120s stuck-tool cancel; none of those run onDone/onError,
+ * so nothing else clears the per-message streaming flags.
+ */
+onStreamAborted(({ chatId }) => {
+  const state = useCoworkStore.getState();
+  if (!state.messages[chatId]?.length) return;
+  state.completeRunningTools(chatId);
+  state.stopStreaming(chatId);
+});

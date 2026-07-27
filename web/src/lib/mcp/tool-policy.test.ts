@@ -7,6 +7,12 @@ import {
   buildToolPolicies,
   applyToolPolicies,
   groupToolsByServer,
+  splitMcpToolName,
+  serverHandlesMoney,
+  buildToolGate,
+  buildApprovalQuestion,
+  readApprovalAnswer,
+  decisionOptions,
 } from './tool-policy';
 
 /**
@@ -31,9 +37,8 @@ describe('bareToolName', () => {
 });
 
 describe('policyForClass', () => {
-  it('allows reads and in-app actions', () => {
+  it('allows reads outright', () => {
     expect(policyForClass('read')).toBe('always_allow');
-    expect(policyForClass('app')).toBe('always_allow');
   });
 
   it('asks for outside-world effects', () => {
@@ -119,14 +124,14 @@ describe('buildToolPolicies', () => {
     );
   });
 
-  it('property: a tool is never silently allowed unless classified read/app or approved', () => {
+  it('property: a tool is never silently allowed unless classified read or approved', () => {
     fc.assert(
       fc.property(fc.array(fc.string({ minLength: 1 })), (names) => {
         const policies = buildToolPolicies(names);
         for (const p of policies) {
           if (p.permission_policy !== 'always_allow') continue;
           // must have been genuinely classified as harmless
-          expect(['read', 'app']).toContain(classifyToolCall(p.name));
+          expect(classifyToolCall(p.name)).toBe('read');
         }
       }),
       { numRuns: 500 },
@@ -269,5 +274,232 @@ describe('groupToolsByServer', () => {
     expect(groupToolsByServer(['mcp__web_search__query'])).toEqual({
       web_search: ['mcp__web_search__query'],
     });
+  });
+});
+
+// ── The runtime gate ────────────────────────────────────────────────────────
+
+describe('splitMcpToolName', () => {
+  it('splits a prefixed MCP tool name into server and tool', () => {
+    expect(splitMcpToolName('mcp__aime-mcp-acme__deleteIssue')).toEqual({
+      server: 'aime-mcp-acme',
+      tool: 'deleteIssue',
+    });
+    expect(splitMcpToolName('mcp__web_search__query')).toEqual({
+      server: 'web_search',
+      tool: 'query',
+    });
+  });
+
+  it('returns null for anything that is not an MCP tool call', () => {
+    expect(splitMcpToolName('Read')).toBeNull();
+    expect(splitMcpToolName('mcp__nounderscores')).toBeNull();
+    expect(splitMcpToolName('')).toBeNull();
+  });
+});
+
+describe('serverHandlesMoney', () => {
+  it('recognises the catalogue money servers by key', () => {
+    expect(serverHandlesMoney('aime-mcp-stripe')).toBe(true);
+    expect(serverHandlesMoney('aime-mcp-paypal')).toBe(true);
+    expect(serverHandlesMoney('aime-mcp-square')).toBe(true);
+    expect(serverHandlesMoney('aime-mcp-linear')).toBe(false);
+  });
+
+  it('recognises them by URL even when the key says nothing', () => {
+    // A key is not proof of identity, so the URL is the stronger signal.
+    expect(serverHandlesMoney('aime-mcp-payments', { type: 'http', url: 'https://mcp.stripe.com' })).toBe(true);
+    expect(serverHandlesMoney('aime-mcp-payments', { type: 'http', url: 'https://mcp.acme.com' })).toBe(false);
+  });
+});
+
+describe('buildToolGate', () => {
+  const servers = {
+    'aime-mcp-acme': { type: 'http', url: 'https://mcp.acme.com/mcp' },
+    'aime-connector-buildkite': { type: 'stdio', command: 'npx' },
+  };
+
+  it('gates by live classification, so session one is covered too', () => {
+    // The SDK-level policy needs names observed in a PREVIOUS session. canUseTool
+    // has the real name in hand, so it needs no observations at all.
+    const gate = buildToolGate(servers);
+    expect(gate.policyFor('mcp__aime-mcp-acme__deleteIssue')).toBe('always_ask');
+    expect(gate.policyFor('mcp__aime-mcp-acme__getIssue')).toBe('always_allow');
+  });
+
+  it('covers stdio servers, which the SDK config cannot', () => {
+    expect(buildToolGate(servers).policyFor('mcp__aime-connector-buildkite__triggerBuild')).toBe('always_ask');
+  });
+
+  it('returns null for tools outside the governed server set', () => {
+    const gate = buildToolGate(servers);
+    expect(gate.policyFor('Write')).toBeNull();
+    expect(gate.policyFor('mcp__aime__DocumentCreate')).toBeNull();
+    expect(gate.policyFor('mcp__web-search__web_search')).toBeNull();
+  });
+
+  it('honours an explicit policy already on the entry', () => {
+    const gate = buildToolGate({
+      'aime-mcp-acme': {
+        type: 'http',
+        url: 'https://x/mcp',
+        tools: [
+          { name: 'deleteIssue', permission_policy: 'always_allow' },
+          { name: 'getIssue', permission_policy: 'always_deny' },
+        ],
+      },
+    });
+    expect(gate.policyFor('mcp__aime-mcp-acme__deleteIssue')).toBe('always_allow');
+    expect(gate.policyFor('mcp__aime-mcp-acme__getIssue')).toBe('always_deny');
+  });
+
+  it('lets stored decisions outrank the classifier, with deny on top', () => {
+    const gate = buildToolGate(servers, {
+      'aime-mcp-acme': { approved: ['deleteIssue'], denied: ['getIssue', 'sendEmail'] },
+    });
+    expect(gate.policyFor('mcp__aime-mcp-acme__deleteIssue')).toBe('always_allow');
+    expect(gate.policyFor('mcp__aime-mcp-acme__getIssue')).toBe('always_deny');
+    expect(gate.policyFor('mcp__aime-mcp-acme__sendEmail')).toBe('always_deny');
+  });
+
+  it('never lets a stored approval un-gate a money-moving tool', () => {
+    const gate = buildToolGate(
+      { 'aime-mcp-stripe': { type: 'http', url: 'https://mcp.stripe.com' } },
+      { 'aime-mcp-stripe': { approved: ['create_refund'] } },
+    );
+    expect(gate.policyFor('mcp__aime-mcp-stripe__create_refund')).toBe('always_ask');
+    expect(gate.handlesMoney('aime-mcp-stripe')).toBe(true);
+  });
+
+  it('remembers a decision for the rest of the session', () => {
+    const gate = buildToolGate(servers);
+    expect(gate.policyFor('mcp__aime-mcp-acme__deleteIssue')).toBe('always_ask');
+    gate.remember('aime-mcp-acme', 'deleteIssue', 'always_allow');
+    expect(gate.policyFor('mcp__aime-mcp-acme__deleteIssue')).toBe('always_allow');
+    gate.remember('aime-mcp-acme', 'deleteIssue', 'always_deny');
+    expect(gate.policyFor('mcp__aime-mcp-acme__deleteIssue')).toBe('always_deny');
+  });
+
+  it('gates an alternative name shape rather than failing open', () => {
+    // The SDK emits mcp__server__tool, and the provider guards a server:tool form
+    // elsewhere. An unrecognised shape would mean an UNGATED call, so the left
+    // half is matched against the mounted server keys instead.
+    const gate = buildToolGate(servers);
+    expect(gate.policyFor('aime-mcp-acme:deleteIssue')).toBe('always_ask');
+    expect(gate.policyFor('aime-mcp-acme:getIssue')).toBe('always_allow');
+    expect(gate.policyFor('aime-mcp-acme__deleteIssue')).toBe('always_ask');
+    // ...and a server nobody mounted still claims nothing.
+    expect(gate.policyFor('other-server:deleteIssue')).toBeNull();
+  });
+
+  it('resolve reports which governed server and tool a call names', () => {
+    expect(buildToolGate(servers).resolve('mcp__aime-mcp-acme__deleteIssue')).toEqual({
+      server: 'aime-mcp-acme',
+      tool: 'deleteIssue',
+      policy: 'always_ask',
+    });
+    expect(buildToolGate(servers).resolve('Write')).toBeNull();
+  });
+
+  it('is inert when no servers are mounted', () => {
+    expect(buildToolGate({}).policyFor('mcp__anything__deleteIssue')).toBeNull();
+  });
+});
+
+describe('the approval question', () => {
+  it('names the tool and the server, and offers a remembered choice', () => {
+    const q = buildApprovalQuestion({ server: 'aime-mcp-acme', tool: 'deleteIssue' });
+    expect(q.question).toContain('deleteIssue');
+    expect(q.options.map((o) => o.label)).toEqual([
+      'Allow once',
+      'Always allow',
+      'Deny',
+      'Always deny',
+    ]);
+    expect(q.multiSelect).toBe(false);
+  });
+
+  it('withholds a blanket approval for money-moving tools', () => {
+    const q = buildApprovalQuestion({ server: 'aime-mcp-stripe', tool: 'create_refund', handlesMoney: true });
+    expect(q.options.map((o) => o.label)).toEqual(['Allow once', 'Deny', 'Always deny']);
+    expect(q.question).toMatch(/money|payment/i);
+  });
+
+  it('truncates a hostile tool name rather than rendering it whole', () => {
+    const q = buildApprovalQuestion({ server: 's', tool: 'x'.repeat(500) });
+    expect(q.question.length).toBeLessThan(400);
+  });
+});
+
+describe('readApprovalAnswer', () => {
+  const q = buildApprovalQuestion({ server: 's', tool: 'deleteIssue' }).question;
+
+  it('maps each label to its decision', () => {
+    expect(readApprovalAnswer({ [q]: 'Allow once' }, q)).toBe('allow-once');
+    expect(readApprovalAnswer({ [q]: 'Always allow' }, q)).toBe('always-allow');
+    expect(readApprovalAnswer({ [q]: 'Deny' }, q)).toBe('deny');
+    expect(readApprovalAnswer({ [q]: 'Always deny' }, q)).toBe('always-deny');
+  });
+
+  it('accepts a single answer under an unexpected key', () => {
+    expect(readApprovalAnswer({ whatever: 'Allow once' }, q)).toBe('allow-once');
+  });
+
+  it('fails closed on anything it does not recognise', () => {
+    expect(readApprovalAnswer({}, q)).toBe('deny');
+    expect(readApprovalAnswer({ [q]: '' }, q)).toBe('deny');
+    expect(readApprovalAnswer({ [q]: 'Allow once, Deny' }, q)).toBe('deny');
+    expect(readApprovalAnswer({ [q]: 'yes please' }, q)).toBe('deny');
+    expect(readApprovalAnswer(null, q)).toBe('deny');
+    expect(readApprovalAnswer({ a: 'Allow once', b: 'Deny' }, q)).toBe('deny');
+  });
+
+  it('degrades a blanket approval to allow-once for money-moving tools', () => {
+    expect(readApprovalAnswer({ [q]: 'Always allow' }, q, { handlesMoney: true })).toBe('allow-once');
+  });
+
+  it('property: only an exact known label can ever produce an allow', () => {
+    fc.assert(
+      fc.property(fc.string(), (answer) => {
+        const decision = readApprovalAnswer({ [q]: answer }, q);
+        if (decision === 'allow-once' || decision === 'always-allow') {
+          expect(['Allow once', 'Always allow']).toContain(answer);
+        }
+      }),
+      { numRuns: 500 },
+    );
+  });
+});
+
+describe('policyForClass — MCP tools cannot claim to be in-app', () => {
+  /**
+   * 'app' means "acts inside AIME, visible and reversible in the UI" — true of
+   * TodoWrite and the canvas tool, and never true of a remote server. Since the
+   * classifier matches on the bare name, any server could expose a tool called
+   * `canvas`, `Task` or `TodoWrite` and be handed always_allow.
+   */
+  it('only a read is allowed outright', () => {
+    expect(policyForClass('read')).toBe('always_allow');
+    expect(policyForClass('app')).toBe('always_ask');
+    expect(policyForClass('consequential')).toBe('always_ask');
+    expect(policyForClass('unknown')).toBe('always_ask');
+  });
+
+  it('a server impersonating a builtin name gets no free pass', () => {
+    const policies = buildToolPolicies([
+      'mcp__aime-mcp-stripe__canvas',
+      'mcp__aime-mcp-stripe__TodoWrite',
+      'mcp__aime-mcp-stripe__Task',
+      'mcp__aime-mcp-stripe__browser_click',
+    ]);
+    for (const p of policies) expect(p.permission_policy, p.name).toBe('always_ask');
+  });
+});
+
+describe('the decision store', () => {
+  it('turns stored decisions into per-server BuildPolicyOptions', () => {
+    const optsFor = decisionOptions({ 'aime-mcp-acme': { approved: ['a'], denied: ['b'] } });
+    expect(optsFor('aime-mcp-acme')).toEqual({ approved: ['a'], denied: ['b'] });
+    expect(optsFor('other')).toEqual({});
   });
 });

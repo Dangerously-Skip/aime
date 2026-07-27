@@ -1083,3 +1083,454 @@ describe('DocumentCreate — refuses to overwrite (regression)', () => {
     expect(result.content[0].text).toContain('fresh-report.html');
   });
 });
+
+/**
+ * Per-tool MCP approval gate (P3.6b, made enforceable).
+ *
+ * P3.5/P3.6b built `permission_policy: 'always_ask'` and pushed it into the SDK
+ * config — where `permissionMode: 'bypassPermissions'` plus
+ * `allowDangerouslySkipPermissions` turns the whole permission machinery off.
+ * So on chat and cowork, the exact surfaces the feature was written for, an
+ * `always_ask` tool executed with no prompt: identical to pre-P3.6b behaviour,
+ * while the load-time log certified that N tools "require approval".
+ *
+ * These tests assert on the REAL canUseTool the provider hands the SDK, because
+ * that is the only hook that runs regardless of permissionMode.
+ */
+describe('MCP per-tool approval gate — interactive surfaces', () => {
+  /** A remote server as loadProvisionedMcpServers would hand it over. */
+  const acme = { 'aime-mcp-acme': { type: 'http', url: 'https://mcp.acme.com/mcp' } };
+  /** Stripe from the one-click catalogue — handlesMoney: true. */
+  const stripe = { 'aime-mcp-stripe': { type: 'http', url: 'https://mcp.stripe.com' } };
+
+  it('does NOT execute an always_ask MCP tool until the user decides', async () => {
+    const asked: Array<{ toolUseId: string; questions: unknown }> = [];
+    const onInputRequest = async (toolUseId: string, questions: unknown) => {
+      asked.push({ toolUseId, questions });
+    };
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      surfaceId: 'chat',
+      mcpServers: acme,
+      onInputRequest,
+    });
+
+    let settled = false;
+    const pending = canUseTool(
+      'mcp__aime-mcp-acme__deleteIssue',
+      { id: 'ACME-1' },
+      { toolUseID: 'gate-1' },
+    ).then((r) => {
+      settled = true;
+      return r;
+    });
+
+    // the approval card reached the client...
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    // ...and the tool has NOT been allowed to run
+    expect(settled).toBe(false);
+
+    const question = (asked[0].questions as Array<{ question: string }>)[0].question;
+    resolveAnswer('gate-1', { [question]: 'Allow once' });
+    expect((await pending).behavior).toBe('allow');
+  });
+
+  it('denies when the user declines', async () => {
+    const asked: Array<{ questions: unknown }> = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+    });
+
+    const pending = canUseTool('mcp__aime-mcp-acme__sendEmail', {}, { toolUseID: 'gate-2' });
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    const question = (asked[0].questions as Array<{ question: string }>)[0].question;
+    resolveAnswer('gate-2', { [question]: 'Deny' });
+
+    const result = await pending;
+    expect(result.behavior).toBe('deny');
+    expect(result.message).toMatch(/did not approve|declined/i);
+  });
+
+  it('a create_refund-shaped money tool does not execute unprompted', async () => {
+    const asked: Array<{ questions: unknown }> = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      surfaceId: 'chat',
+      mcpServers: stripe,
+      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+    });
+
+    let settled = false;
+    const pending = canUseTool(
+      'mcp__aime-mcp-stripe__create_refund',
+      { charge: 'ch_1', amount: 50_000 },
+      { toolUseID: 'money-1' },
+    ).then((r) => { settled = true; return r; });
+
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    expect(settled).toBe(false);
+
+    const q = (asked[0].questions as Array<{ question: string; options: Array<{ label: string }> }>)[0];
+    // A money-moving tool must never be blanket-approved for all future turns.
+    expect(q.options.map((o) => o.label)).not.toContain('Always allow');
+    expect(q.question).toMatch(/create_refund/);
+
+    resolveAnswer('money-1', { [q.question]: 'Deny' });
+    expect((await pending).behavior).toBe('deny');
+  });
+
+  it('a tool name that impersonates an in-app builtin is still gated', async () => {
+    // Any MCP server can name a tool `canvas`, `Task` or `TodoWrite`; the
+    // classifier's exact-name table would otherwise hand it always_allow.
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: stripe,
+      onInputRequest: async () => {},
+    });
+
+    let settled = false;
+    const pending = canUseTool('mcp__aime-mcp-stripe__canvas', {}, { toolUseID: 'imp-1' })
+      .then((r) => { settled = true; return r; });
+    await vi.waitFor(() => expect(settled).toBe(false));
+    resolveAnswer('imp-1', { x: 'Deny' });
+    expect((await pending).behavior).toBe('deny');
+  });
+
+  it('read-classified MCP tools still run with no prompt (ergonomics)', async () => {
+    const onInputRequest = vi.fn().mockResolvedValue(undefined);
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+      onInputRequest,
+    });
+
+    for (const name of ['getIssue', 'listProjects', 'searchIssues']) {
+      const r = await canUseTool(`mcp__aime-mcp-acme__${name}`, { q: name }, { toolUseID: `r-${name}` });
+      expect(r.behavior, name).toBe('allow');
+    }
+    expect(onInputRequest).not.toHaveBeenCalled();
+  });
+
+  it('built-in tools and the in-process aime server are untouched', async () => {
+    const onInputRequest = vi.fn().mockResolvedValue(undefined);
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+      onInputRequest,
+    });
+
+    expect((await canUseTool('Write', { file_path: '/x' }, { toolUseID: 'b1' })).behavior).toBe('allow');
+    expect((await canUseTool('Bash', { command: 'rm -rf /tmp/x' }, { toolUseID: 'b2' })).behavior).toBe('allow');
+    expect((await canUseTool('mcp__aime__DocumentCreate', { title: 't' }, { toolUseID: 'b3' })).behavior).toBe('allow');
+    expect(onInputRequest).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the surface has no way to ask', async () => {
+    // No onInputRequest bridge ⇒ nothing can prompt, so an always_ask tool must
+    // not run. Allowing it is what the old code did.
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+    });
+    const result = await canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'nb-1' });
+    expect(result.behavior).toBe('deny');
+    expect(result.message).toMatch(/cannot ask|no way to ask/i);
+  });
+
+  it('honours an explicit always_allow policy already on the server entry', async () => {
+    const onInputRequest = vi.fn().mockResolvedValue(undefined);
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: {
+        'aime-mcp-acme': {
+          type: 'http',
+          url: 'https://mcp.acme.com/mcp',
+          tools: [{ name: 'deleteIssue', permission_policy: 'always_allow' }],
+        },
+      },
+      onInputRequest,
+    });
+    expect((await canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'e-1' })).behavior).toBe('allow');
+    expect(onInputRequest).not.toHaveBeenCalled();
+  });
+
+  it('blocks an always_deny tool with no prompt at all', async () => {
+    const onInputRequest = vi.fn().mockResolvedValue(undefined);
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: {
+        'aime-mcp-acme': {
+          type: 'http',
+          url: 'https://mcp.acme.com/mcp',
+          tools: [{ name: 'deleteIssue', permission_policy: 'always_deny' }],
+        },
+      },
+      onInputRequest,
+    });
+    const result = await canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'd-1' });
+    expect(result.behavior).toBe('deny');
+    expect(result.message).toMatch(/blocked/i);
+    expect(onInputRequest).not.toHaveBeenCalled();
+  });
+
+  it('enforces always_deny in unattended runs too', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'standing-order-9',
+      mcpServers: {
+        'aime-mcp-acme': {
+          type: 'http',
+          url: 'https://mcp.acme.com/mcp',
+          tools: [{ name: 'getIssue', permission_policy: 'always_deny' }],
+        },
+      },
+    });
+    // getIssue classifies 'read', so only the user's explicit denial can stop it.
+    expect((await canUseTool('mcp__aime-mcp-acme__getIssue', {}, { toolUseID: 'ud-1' })).behavior).toBe('deny');
+  });
+
+  it('leaves the unattended path to evaluateApproval, unchanged', async () => {
+    const onInputRequest = vi.fn().mockResolvedValue(undefined);
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'standing-order-42',
+      mcpServers: acme,
+      onInputRequest,
+    });
+
+    const denied = await canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'u-1' });
+    expect(denied.behavior).toBe('deny');
+    expect(denied.message).toMatch(/unattended/i);
+    // An unattended run must never sit waiting for a human.
+    expect(onInputRequest).not.toHaveBeenCalled();
+    expect((await canUseTool('mcp__aime-mcp-acme__getIssue', {}, { toolUseID: 'u-2' })).behavior).toBe('allow');
+  });
+
+  it('denies rather than running when the user never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        chatId: 'regular-chat',
+        mcpServers: acme,
+        onInputRequest: async () => {},
+      });
+      const pending = canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'to-1' });
+      await vi.advanceTimersByTimeAsync(400_000);
+      const result = await pending;
+      expect(result.behavior).toBe('deny');
+      expect(result.message).toMatch(/did not respond|timed out/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not re-ask after a denial in the same turn', async () => {
+    // Loop detection cannot help: a denial returns before the window is touched.
+    // Without this an agent could put the same card up until the user gave in.
+    const asked: Array<{ questions: unknown }> = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+    });
+
+    const first = canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'n-1' });
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    resolveAnswer('n-1', { x: 'Deny' });
+    expect((await first).behavior).toBe('deny');
+
+    // Different input, so loop detection would not catch it either.
+    const second = await canUseTool('mcp__aime-mcp-acme__deleteIssue', { id: 2 }, { toolUseID: 'n-2' });
+    expect(second.behavior).toBe('deny');
+    expect(second.message).toMatch(/already declined/i);
+    expect(asked).toHaveLength(1);
+  });
+
+  it('does not let the per-tool watchdog abort a turn that is waiting on a human', async () => {
+    // activeTools is populated from the tool_use block, so a tool paused for
+    // approval looked "hung" and the 90s watchdog aborted the whole query —
+    // which would make any gate unanswerable by a user who steps away.
+    vi.useFakeTimers();
+    try {
+      let aborted: boolean | undefined;
+      queryMock.mockImplementation(async function* (args: {
+        options: { canUseTool: CanUseTool };
+        abortSignal: AbortSignal;
+      }) {
+        yield {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'tool_use', id: 'w-1', name: 'mcp__aime-mcp-acme__deleteIssue', input: {} },
+            ],
+          },
+        };
+        const pending = args.options.canUseTool(
+          'mcp__aime-mcp-acme__deleteIssue',
+          {},
+          { toolUseID: 'w-1' },
+        );
+        await vi.advanceTimersByTimeAsync(150_000);
+        aborted = args.abortSignal.aborted;
+        resolveAnswer('w-1', { x: 'Deny' });
+        await pending;
+      });
+
+      await run(new ClaudeProvider(), {
+        chatId: 'regular-chat',
+        mcpServers: acme,
+        onInputRequest: async () => {},
+      });
+      expect(aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * "Always allow" / "Always deny" must SURVIVE the turn, or the gate is a nag
+ * that trains users to click through it. These use a real temp HOME and read
+ * the decision file back — the whole point is that it persists.
+ *
+ * This is also the production writer for BuildPolicyOptions.approved/denied,
+ * which previously had none, making always_deny unreachable.
+ */
+describe('MCP approval gate — remembered decisions', () => {
+  let homeDir: string;
+
+  const acme = { 'aime-mcp-acme': { type: 'http', url: 'https://mcp.acme.com/mcp' } };
+  const decisionsPath = () => path.join(homeDir, '.claude', '.aime-mcp-decisions.json');
+
+  beforeEach(async () => {
+    const fsp = await import('fs/promises');
+    homeDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aime-decisions-'));
+    await fsp.mkdir(path.join(homeDir, '.claude'), { recursive: true });
+    homeRef.value = homeDir;
+    scriptChunks([]);
+  });
+
+  afterEach(async () => {
+    homeRef.value = null;
+    const fsp = await import('fs/promises');
+    await fsp.rm(homeDir, { recursive: true, force: true });
+  });
+
+  const readDecisions = async () => {
+    const fsp = await import('fs/promises');
+    return JSON.parse(await fsp.readFile(decisionsPath(), 'utf-8')) as Record<
+      string,
+      { approved?: string[]; denied?: string[] }
+    >;
+  };
+
+  it('persists "Always allow" and stops asking for that tool', async () => {
+    const asked: Array<{ questions: unknown }> = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+    });
+
+    const pending = canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'aa-1' });
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    const q = (asked[0].questions as Array<{ question: string }>)[0].question;
+    resolveAnswer('aa-1', { [q]: 'Always allow' });
+    expect((await pending).behavior).toBe('allow');
+
+    await vi.waitFor(async () =>
+      expect((await readDecisions())['aime-mcp-acme'].approved).toContain('deleteIssue'),
+    );
+
+    // Same session: no second prompt.
+    const again = await canUseTool('mcp__aime-mcp-acme__deleteIssue', { n: 2 }, { toolUseID: 'aa-2' });
+    expect(again.behavior).toBe('allow');
+    expect(asked).toHaveLength(1);
+  });
+
+  it('persists "Always deny" and blocks silently from then on', async () => {
+    const asked: Array<{ questions: unknown }> = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+    });
+
+    const pending = canUseTool('mcp__aime-mcp-acme__sendEmail', {}, { toolUseID: 'ad-1' });
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    const q = (asked[0].questions as Array<{ question: string }>)[0].question;
+    resolveAnswer('ad-1', { [q]: 'Always deny' });
+    expect((await pending).behavior).toBe('deny');
+
+    await vi.waitFor(async () =>
+      expect((await readDecisions())['aime-mcp-acme'].denied).toContain('sendEmail'),
+    );
+
+    const again = await canUseTool('mcp__aime-mcp-acme__sendEmail', { n: 2 }, { toolUseID: 'ad-2' });
+    expect(again.behavior).toBe('deny');
+    expect(asked).toHaveLength(1);
+  });
+
+  it('writes the decision file 0600 — it decides whether a tool runs unasked', async () => {
+    const asked: Array<{ questions: unknown }> = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+    });
+    const pending = canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'perm-1' });
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    resolveAnswer('perm-1', { x: 'Always allow' });
+    await pending;
+
+    const fsp = await import('fs/promises');
+    await vi.waitFor(async () => {
+      const stat = await fsp.stat(decisionsPath());
+      expect(stat.mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it('reads a previously stored decision at the start of a new session', async () => {
+    const fsp = await import('fs/promises');
+    await fsp.writeFile(
+      decisionsPath(),
+      JSON.stringify({ 'aime-mcp-acme': { denied: ['deleteIssue'], approved: ['sendEmail'] } }),
+    );
+
+    const onInputRequest = vi.fn().mockResolvedValue(undefined);
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: acme,
+      onInputRequest,
+    });
+
+    expect((await canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'p-1' })).behavior).toBe('deny');
+    expect((await canUseTool('mcp__aime-mcp-acme__sendEmail', {}, { toolUseID: 'p-2' })).behavior).toBe('allow');
+    expect(onInputRequest).not.toHaveBeenCalled();
+  });
+
+  it('never remembers a blanket approval for a money-moving tool', async () => {
+    const asked: Array<{ questions: unknown }> = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: { 'aime-mcp-stripe': { type: 'http', url: 'https://mcp.stripe.com' } },
+      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+    });
+
+    const pending = canUseTool('mcp__aime-mcp-stripe__create_refund', {}, { toolUseID: 'm-1' });
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    const q = (asked[0].questions as Array<{ question: string }>)[0].question;
+    // Even if the answer claims a blanket approval, it degrades to allow-once.
+    resolveAnswer('m-1', { [q]: 'Always allow' });
+    expect((await pending).behavior).toBe('allow');
+
+    const fsp = await import('fs/promises');
+    await expect(fsp.readFile(decisionsPath(), 'utf-8')).rejects.toThrow();
+
+    // ...and the next refund asks again.
+    const second = canUseTool('mcp__aime-mcp-stripe__create_refund', { n: 2 }, { toolUseID: 'm-2' });
+    await vi.waitFor(() => expect(asked).toHaveLength(2));
+    resolveAnswer('m-2', { x: 'Deny' });
+    expect((await second).behavior).toBe('deny');
+  });
+});

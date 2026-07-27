@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { onStreamAborted } from '@/lib/stream-registry';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
@@ -84,6 +85,13 @@ interface ChatState {
    */
   modelRoute: ModelOption | null;
   isStreaming: boolean;
+  /**
+   * Last stream failure — WRITE-ONLY. `useSSEStream` sets it and no component
+   * reads it: stream errors reach the user through the surface's `onError`,
+   * which appends them to the transcript. Kept only because four surface files
+   * still pass `setStreamError` into the hook; it and they should go together.
+   * Do not build on it — render `messages` or add a real banner first.
+   */
   streamError: string | null;
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
@@ -360,3 +368,22 @@ export const useChatStore = create<ChatStore>()(
     }
   )
 );
+
+/**
+ * Finalise a turn whose stream was aborted.
+ *
+ * A Stop, a conversation switch, a stuck-tool cancel and the SSE inactivity
+ * timeout all abort the fetch, so the surface's onDone/onError never run — and
+ * those are the only callers of `stopStreaming`, the only thing that clears the
+ * per-message `isStreaming`/`isLoading` flags that render the spinner. (The
+ * store-level `isStreaming` boolean does not: it gates the composer.) Wiring it
+ * here makes it true for every abort call site instead of none of them.
+ */
+onStreamAborted(({ chatId }) => {
+  const state = useChatStore.getState();
+  // chatIds are conversation ids, so a stream that belongs to another surface's
+  // store has no messages here — and its flags are not ours to touch.
+  if (!state.messages[chatId]?.length) return;
+  state.completeRunningTools(chatId);
+  state.stopStreaming(chatId);
+});

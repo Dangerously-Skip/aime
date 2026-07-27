@@ -54,8 +54,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("voice:toggle", listener);
     return () => ipcRenderer.removeListener("voice:toggle", listener);
   },
-  setPushToTalkEnabled: (enabled, accelerator) =>
-    ipcRenderer.invoke("voice:set-push-to-talk", { enabled, accelerator }),
+  // `ownerId` lets main refuse a release from anyone who is not holding the
+  // registration — see the ownership note in main-web.js.
+  setPushToTalkEnabled: (enabled, accelerator, ownerId) =>
+    ipcRenderer.invoke("voice:set-push-to-talk", { enabled, accelerator, ownerId }),
 
   // ── Document printing (P4.2b) ────────────────────────────────────────
   // Main owns Chromium; the server relays through the renderer because it runs

@@ -16,9 +16,27 @@
  */
 import type { ConnectorDefinition } from './types';
 
+/**
+ * Non-secret markers for flows that produce no credential at all.
+ *
+ * They are NOT tokens and must never be injected into an MCP entry — the
+ * provision route refuses to, because `AWS_PROFILE=aws-iam` names a profile that
+ * does not exist and `Authorization: Bearer mcp-self-auth` is a 401 waiting to
+ * happen. They exist because the client store's `isAuthenticated()` requires a
+ * truthy token, so reporting `token: ''` for a successful connect left
+ * `connectorStates[id].authenticated === true` disagreeing with the accessor
+ * every badge reads. The Connectors screen has always written exactly these two
+ * strings for the same reason; the orchestrator now matches it.
+ */
+export const AMBIENT_CREDENTIAL_SENTINEL = 'aws-iam';
+export const DEFERRED_AUTH_SENTINEL = 'mcp-self-auth';
+
 export interface ConnectOutcome {
   status: 'connected' | 'cancelled' | 'unsupported' | 'error';
-  /** Present when status is 'connected' and the flow yielded a token. */
+  /**
+   * Present when status is 'connected'. Either the credential the flow yielded,
+   * or one of the sentinels above when the flow yields none.
+   */
   token?: string;
   refreshToken?: string;
   expiresAt?: number;
@@ -64,7 +82,16 @@ export interface ConnectDeps {
     mcpUrl: string,
     opts: { fallbackClientId?: string; fallbackClientIdEnv?: string },
   ) => Promise<{ accessToken: string; refreshToken?: string; expiresIn?: number }>;
-  /** Authenticate via ambient cloud credentials. */
+  /**
+   * PROVE the machine's ambient cloud credentials are usable.
+   *
+   * Contract: resolve only when a real check succeeded; REJECT with a
+   * user-facing message otherwise. There is no token to validate afterwards —
+   * this call is the entire evidence that connecting worked — so an
+   * implementation that resolves unconditionally makes the 'connected' outcome a
+   * lie. `verifyAwsCredentials` below is the implementation to pass; it runs
+   * `aws sts get-caller-identity` server-side.
+   */
   runAwsAuth?: () => Promise<void>;
   /** Resolve `{tenant_id}` / `{account}` style placeholders in an MCP URL. */
   resolveMcpUrl?: (connector: ConnectorDefinition, url: string) => Promise<string | null>;
@@ -73,6 +100,29 @@ export interface ConnectDeps {
 }
 
 const cancelled: ConnectOutcome = { status: 'cancelled' };
+
+/**
+ * The `runAwsAuth` implementation every surface should pass.
+ *
+ * `/api/connectors/aws/auth` runs `aws sts get-caller-identity` through the
+ * standard credential chain and answers non-2xx with an actionable message
+ * ("Run `aws sso login` or `aws configure`"). Lives here rather than being
+ * re-implemented per surface so no caller can accidentally supply a check that
+ * always passes — which is precisely how aws_iam came to fail open.
+ *
+ * Browser-side (it posts to a relative URL); `connectConnector` itself stays
+ * transport-free and testable.
+ */
+export async function verifyAwsCredentials(): Promise<void> {
+  const res = await fetch('/api/connectors/aws/auth', { method: 'POST' });
+  if (res.ok) return;
+  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+  throw new Error(
+    typeof body?.error === 'string' && body.error
+      ? body.error
+      : 'Could not verify the AWS credentials on this machine. Run `aws sso login` or `aws configure`, then try again.',
+  );
+}
 
 function expiryFrom(expiresIn: number | undefined, now: () => number): number | undefined {
   return expiresIn ? now() + expiresIn * 1000 : undefined;
@@ -115,15 +165,33 @@ export async function connectConnector(
       }
 
       case 'aws_iam': {
-        if (deps.runAwsAuth) await deps.runAwsAuth();
-        // The MCP server reads ambient credentials; no token is injected.
-        return { status: 'connected', token: '' };
+        // Fails CLOSED, like every other flow whose dependency is missing.
+        //
+        // This used to be `if (deps.runAwsAuth) await …` and then report success
+        // regardless — the only optional dep in the table whose absence was
+        // ignored. Neither the agent's connect card nor onboarding passes it, so
+        // clicking Connect opened no window, checked nothing, and told the paused
+        // turn the service was connected. Ambient credentials are the entire
+        // mechanism here: with nothing verifying them there is no evidence at all,
+        // so there is nothing to report as connected.
+        if (!deps.runAwsAuth) {
+          return {
+            status: 'unsupported',
+            message:
+              `${connector.name} uses the AWS credentials on this machine, and this ` +
+              `screen cannot check them — connect it from Settings.`,
+          };
+        }
+        await deps.runAwsAuth();
+        // The MCP server reads ambient credentials; no token is injected. The
+        // sentinel is a client-store marker, not a credential.
+        return { status: 'connected', token: AMBIENT_CREDENTIAL_SENTINEL };
       }
 
       case 'mcp-self-auth': {
         return {
           status: 'connected',
-          token: '',
+          token: DEFERRED_AUTH_SENTINEL,
           deferredAuthHint:
             auth.hint ??
             "Next: open a chat and use this service. You'll be asked to sign in the first time it's needed.",
