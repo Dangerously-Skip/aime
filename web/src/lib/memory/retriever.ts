@@ -1,6 +1,6 @@
 import type { Memory, MemoryCategory } from './types';
 
-interface RetrievalContext {
+export interface RetrievalContext {
   projectId?: string | null;
   query?: string;
   limit?: number;

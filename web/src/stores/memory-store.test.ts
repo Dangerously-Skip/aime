@@ -154,3 +154,53 @@ describe('cleanupMemories', () => {
     expect(store().memories.some((m) => m.id === 'keeper')).toBe(true);
   });
 });
+
+describe('getMemoriesForContext — graph boost wired at the choke point (P4.3)', () => {
+  /**
+   * Wired in the store rather than at each surface: chat, code and cowork all
+   * call through this one method. The P3.5 lesson was that per-call-site wiring
+   * is where one site silently gets forgotten.
+   */
+  it('surfaces a memory connected only through a shared entity', () => {
+    useMemoryStore.setState({
+      memories: [
+        memory({ id: 'sarah', content: 'Works with Sarah on the design system', tags: ['design-system'] }),
+        memory({ id: 'ds', content: 'The design system ships every Friday', tags: ['design-system'] }),
+        ...Array.from({ length: 10 }, (_, i) =>
+          memory({ id: `f${i}`, content: `Unrelated filler note ${i}` }),
+        ),
+      ],
+    });
+
+    const out = store().getMemoriesForContext({ query: 'what is Sarah working on?', limit: 3 });
+    const ids = out.map((m) => m.id);
+
+    // "ds" shares no keyword with the question — only an entity.
+    expect(ids).toContain('sarah');
+    expect(ids).toContain('ds');
+  });
+
+  it('still honours the limit and excludes superseded memories', () => {
+    useMemoryStore.setState({
+      memories: [
+        memory({ id: 'live', content: 'Works with Sarah on payments' }),
+        memory({ id: 'dead', content: 'Works with Sarah on the old ledger', supersededBy: 'live' }),
+      ],
+    });
+
+    const out = store().getMemoriesForContext({ query: 'Sarah', limit: 1 });
+    expect(out).toHaveLength(1);
+    expect(out.map((m) => m.id)).not.toContain('dead');
+  });
+
+  it('is unchanged for a query naming no entity', () => {
+    useMemoryStore.setState({
+      memories: [
+        memory({ id: 'a', content: 'Prefers tabs over spaces' }),
+        memory({ id: 'b', content: 'Likes concise commit messages' }),
+      ],
+    });
+    const out = store().getMemoriesForContext({ query: 'anything at all', limit: 5 });
+    expect(out.map((m) => m.id).sort()).toEqual(['a', 'b']);
+  });
+});

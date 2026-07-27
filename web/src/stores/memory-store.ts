@@ -5,6 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Memory, MemoryCategory } from '@/lib/memory/types';
 import { getMemoriesForContext, searchMemories, findSimilar } from '@/lib/memory/retriever';
+import { getMemoriesForContextWithGraph } from '@/lib/memory/graph/retrieve';
 
 const PRUNE_TRIGGER = 600;
 const PRUNE_TARGET = 500;
@@ -91,7 +92,11 @@ export const useMemoryStore = create<MemoryStore>()(
         })),
 
       getMemoriesForContext: (ctx) => {
-        return getMemoriesForContext(get().memories, ctx);
+        // Graph-boosted (P4.3). Wired here rather than at each surface: chat, code
+        // and cowork all call through this one method, and the P3.5 lesson was
+        // that per-call-site wiring is where one site silently gets forgotten.
+        // The boost is additive, so the worst case is the previous behaviour.
+        return getMemoriesForContextWithGraph(get().memories, ctx);
       },
 
       searchMemories: (query) => {
