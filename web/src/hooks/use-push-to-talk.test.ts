@@ -178,3 +178,62 @@ describe('usePushToTalk — the toggle', () => {
     expect(onVoiceToggle).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('usePushToTalk — the duplication and stuck-mic bugs (regression)', () => {
+  /**
+   * Two defects a single-instance test could not see:
+   *
+   *  1. All five surfaces mount at once, and chat and cowork each enabled this
+   *     hook — so one hotkey press started TWO MediaRecorders, transcribed twice
+   *     against the shared Whisper pipeline, and appended to both composers. Either
+   *     instance's cleanup also released the OS shortcut for the other.
+   *  2. Disabling mid-dictation never stopped capture: `enabled` flips, so the
+   *     effect cleans up but the hook is not unmounted, meaning use-voice-input's
+   *     own teardown never runs either. The mic stayed on and the hotkey that would
+   *     have stopped it had just been released.
+   */
+  it('stops capture when it is disabled mid-recording', async () => {
+    voiceState = { ...voiceState, isListening: true };
+    const { rerender } = renderHook(
+      ({ enabled }) => usePushToTalk({ onTranscript, enabled }),
+      { initialProps: { enabled: true } },
+    );
+    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalled());
+
+    rerender({ enabled: false });
+    await waitFor(() => expect(stopListening).toHaveBeenCalled());
+  });
+
+  it('does not stop capture when it was not recording', async () => {
+    const { rerender } = renderHook(
+      ({ enabled }) => usePushToTalk({ onTranscript, enabled }),
+      { initialProps: { enabled: true } },
+    );
+    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalled());
+
+    rerender({ enabled: false });
+    await waitFor(() => expect(setPushToTalkEnabled).toHaveBeenCalledWith(false));
+    expect(stopListening).not.toHaveBeenCalled();
+  });
+
+  it('stops capture on unmount too', async () => {
+    voiceState = { ...voiceState, isListening: true };
+    const { unmount } = render(true);
+    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalled());
+
+    unmount();
+    expect(stopListening).toHaveBeenCalled();
+  });
+
+  it('only the enabled instance claims the shortcut, so two mounts record once', async () => {
+    // Mirrors production: both surfaces mount, only the active one is enabled.
+    renderHook(() => usePushToTalk({ onTranscript, enabled: true }));   // active
+    renderHook(() => usePushToTalk({ onTranscript, enabled: false }));  // background
+
+    await waitFor(() => expect(onVoiceToggle).toHaveBeenCalledTimes(1));
+
+    act(() => fireToggle!());
+    // One press, one recorder — not two.
+    expect(startListening).toHaveBeenCalledTimes(1);
+  });
+});

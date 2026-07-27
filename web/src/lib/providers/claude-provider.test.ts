@@ -1022,3 +1022,64 @@ describe('RequestConnector — the OUTCOME reaches the model (regression)', () =
     expect((await handler({ connectorId: 'slack', reason: 'r' })).content[0].text).toContain('nope');
   });
 });
+
+describe('DocumentCreate — refuses to overwrite (regression)', () => {
+  /**
+   * It wrote blindly. Chat sends no cwd, so the target is ~/Documents: a document
+   * titled "Report" destroyed an existing Report.pdf with no warning, and in cowork
+   * a title of "Index" overwrote index.html in the project folder. SkillCreate in
+   * the same file already refused for exactly this reason.
+   */
+  let workDir: string;
+
+  async function handler() {
+    await run(new ClaudeProvider(), { cwd: workDir });
+    const captured = queryMock.mock.calls.at(-1)![0] as {
+      options: { mcpServers: Record<string, { tools?: Array<{ name: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }> };
+    };
+    return captured.options.mcpServers.aime.tools!.find((t) => t.name === 'DocumentCreate')!.handler;
+  }
+
+  beforeEach(async () => {
+    const fsp = await import('fs/promises');
+    workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aime-doc-overwrite-'));
+    scriptChunks([]);
+  });
+
+  afterEach(async () => {
+    const fsp = await import('fs/promises');
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  it('refuses when the html already exists, and leaves it untouched', async () => {
+    const fsp = await import('fs/promises');
+    await fsp.writeFile(path.join(workDir, 'report.html'), 'PRECIOUS', 'utf-8');
+
+    const result = await (await handler())({ title: 'Report', markdown: 'new content' });
+
+    expect(result.content[0].text).toMatch(/already exists/);
+    expect(await fsp.readFile(path.join(workDir, 'report.html'), 'utf-8')).toBe('PRECIOUS');
+  });
+
+  it('refuses when only the PDF exists — that is the file a user would mourn', async () => {
+    const fsp = await import('fs/promises');
+    await fsp.writeFile(path.join(workDir, 'report.pdf'), 'PDFBYTES', 'utf-8');
+
+    const result = await (await handler())({ title: 'Report', markdown: 'x' });
+    expect(result.content[0].text).toMatch(/already exists/);
+    // and it did not write the html either, so the pair stays consistent
+    await expect(fsp.access(path.join(workDir, 'report.html'))).rejects.toThrow();
+  });
+
+  it('tells the agent what to do rather than just failing', async () => {
+    const fsp = await import('fs/promises');
+    await fsp.writeFile(path.join(workDir, 'report.html'), 'x', 'utf-8');
+    const result = await (await handler())({ title: 'Report', markdown: 'x' });
+    expect(result.content[0].text).toMatch(/different title|whether to replace/);
+  });
+
+  it('still writes when nothing is in the way', async () => {
+    const result = await (await handler())({ title: 'Fresh Report', markdown: '## Hi' });
+    expect(result.content[0].text).toContain('fresh-report.html');
+  });
+});
