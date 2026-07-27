@@ -23,6 +23,14 @@ export interface ConnectorDefinition {
     hint?: string;       // Instruction text shown in the Connect dialog
     /** For mcp-oauth type: the HTTP MCP server URL that supports DCR. */
     mcpUrl?: string;
+    /**
+     * Whether the MCP server supports Dynamic Client Registration (RFC 7591).
+     * DCR is the fastest connect path — nobody pre-registers an OAuth app, the
+     * server issues a client on demand — so knowing which servers lack it is
+     * what lets the catalogue tell the user the truth before they click.
+     * Omitted means "assume it works, fall back if it doesn't".
+     */
+    dcr?: 'supported' | 'unsupported';
     /** For mcp-oauth type: fallback env var to read client_id from if server doesn't support DCR. */
     fallbackClientIdEnv?: string;
     /** For mcp-oauth type: literal pre-registered client_id used when DCR is unavailable (e.g. Slack's public MCP client). */

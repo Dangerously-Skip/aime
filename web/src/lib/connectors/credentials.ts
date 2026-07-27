@@ -82,3 +82,25 @@ export const OAUTH_CREDENTIALS: Record<string, OAuthCredentials> = {
 export function getCredentials(connectorId: string): OAuthCredentials | null {
   return OAUTH_CREDENTIALS[connectorId] || null;
 }
+
+/**
+ * The env var each connector's client_id is read from above. Kept beside the
+ * lookups themselves so the UI can name the *actual* variable to set — deriving
+ * a name from the connector id gets it wrong (google-workspace reads
+ * GOOGLE_CLIENT_ID, not GOOGLE_WORKSPACE_CLIENT_ID).
+ *
+ * Connectors with a hardcoded public client (m365-graph) are absent: nothing
+ * needs configuring for them.
+ */
+export const OAUTH_CLIENT_ID_ENV: Record<string, string> = {
+  github: 'GITHUB_CLIENT_ID',
+  slack: 'SLACK_CLIENT_ID',
+  jira: 'ATLASSIAN_CLIENT_ID',
+  confluence: 'ATLASSIAN_CLIENT_ID',
+  outlook: 'MS365_CLIENT_ID',
+  sharepoint: 'MS365_CLIENT_ID',
+  'google-workspace': 'GOOGLE_CLIENT_ID',
+  figma: 'FIGMA_CLIENT_ID',
+  miro: 'MIRO_CLIENT_ID',
+  zoom: 'ZOOM_CLIENT_ID',
+};
