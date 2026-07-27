@@ -6,7 +6,7 @@ export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas',
+      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__web-search__web_search',
     ],

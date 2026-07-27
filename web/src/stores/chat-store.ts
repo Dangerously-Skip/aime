@@ -45,6 +45,10 @@ export interface Message {
   questionToolUseId?: string;
   /** Whether the user has already answered this question */
   questionAnswered?: boolean;
+  /** Agent-initiated connect request (P3.3) — the turn is paused on it */
+  connectorRequest?: { connectorId: string; reason?: string; toolUseId: string };
+  /** Whether this connect request has already been answered */
+  connectorRequestSettled?: boolean;
   /** Auto-continue message injected by the system, not typed by the user */
   isAutoContinue?: boolean;
   /** Inline canvas chips — A2UI docs the agent rendered during this turn */

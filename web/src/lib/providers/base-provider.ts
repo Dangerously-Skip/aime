@@ -23,7 +23,8 @@ export type ChunkType =
   | 'prompt_suggestion'
   | 'cron_create'
   | 'standing_order_create'
-  | 'widget_create';
+  | 'widget_create'
+  | 'connector_request';
 
 /**
  * A single streaming chunk yielded by a provider's query() method.
@@ -74,6 +75,11 @@ export interface QueryParams {
   sessionControls?: import('../slash-commands').SessionControls;
   /** Callback to send an input_request event to the client during streaming. */
   onInputRequest?: (toolUseId: string, questions: unknown) => Promise<void>;
+  /**
+   * Callback to send a connector_request event to the client during streaming.
+   * Lets the agent pause mid-task and ask for a service it needs (P3.3).
+   */
+  onConnectorRequest?: (toolUseId: string, connectorId: string, reason: string) => Promise<void>;
   /** Callback to send a browser_tool_use event to the client during streaming. */
   onBrowserToolUse?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => Promise<void>;
   /**

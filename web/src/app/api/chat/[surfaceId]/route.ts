@@ -327,6 +327,32 @@ export async function POST(
         }
       }
 
+      // ── Connected services (P3.3) ─────────────────────────────────────
+      // Tell the agent what is connected and what it may offer to connect.
+      // Without this it cannot know Gmail is one click away, so the best it can
+      // do when asked to send mail is apologise.
+      {
+        const { classifyCatalog } = await import('@/lib/connectors/connectability');
+        const { CONNECTOR_REGISTRY } = await import('@/lib/connectors/registry');
+        const { buildConnectorsPrompt, connectedIdsFromServerKeys } = await import(
+          '@/lib/connectors/prompt'
+        );
+        const canRequest =
+          surfaceConfig.allowedTools?.includes('mcp__aime__RequestConnector') ?? false;
+        const connectorsPrompt = buildConnectorsPrompt(
+          classifyCatalog(CONNECTOR_REGISTRY),
+          connectedIdsFromServerKeys(Object.keys(mcpServers)),
+          { canRequest },
+        );
+        if (connectorsPrompt) {
+          surfaceConfig.systemPrompt = `${
+            typeof surfaceConfig.systemPrompt === 'string'
+              ? surfaceConfig.systemPrompt
+              : JSON.stringify(surfaceConfig.systemPrompt)
+          }\n\n${connectorsPrompt}`;
+        }
+      }
+
       // ── Security settings ──────────────────────────────────────────────
       // Filter Bash from allowedTools if disabled
       if (securitySettings?.disableBashTool && surfaceConfig.allowedTools) {
@@ -451,6 +477,18 @@ export async function POST(
           type: 'input_request',
           toolUseId,
           questions,
+        });
+      };
+
+      // Forward a connector request to the client (P3.3). The agent is paused
+      // in canUseTool while this card is outstanding; the heartbeat keeps the
+      // stream open until the user answers.
+      const onConnectorRequest = async (toolUseId: string, connectorId: string, reason: string) => {
+        await sse.writeEvent({
+          type: 'connector_request',
+          toolUseId,
+          connectorId,
+          reason,
         });
       };
 
@@ -701,6 +739,7 @@ export async function POST(
           sessionControls: sessionControls || undefined,
           onInputRequest,
           onBrowserToolUse,
+          onConnectorRequest,
         })) {
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);

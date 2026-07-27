@@ -408,6 +408,79 @@ describe('canUseTool interception', () => {
     expect(next.behavior).toBe('allow');
   });
 
+  // ── RequestConnector (P3.3) ──────────────────────────────────────────
+  // The agent needs a service mid-task. The turn must PAUSE until the user
+  // answers, then resume carrying the outcome — that pause is the whole point,
+  // so it is asserted by observing that canUseTool has not settled.
+  it('pauses the turn on RequestConnector and resumes with the outcome', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const requested: Array<{ toolUseId: string; connectorId: string; reason: string }> = [];
+    const onConnectorRequest = async (toolUseId: string, connectorId: string, reason: string) => {
+      requested.push({ toolUseId, connectorId, reason });
+    };
+
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), { onConnectorRequest });
+
+    let settled = false;
+    const pending = canUseTool(
+      'mcp__aime__RequestConnector',
+      { connectorId: 'atlassian', reason: 'to file the ticket' },
+      { toolUseID: 'rc-1' },
+    ).then((r) => {
+      settled = true;
+      return r;
+    });
+
+    // the card has been pushed to the client...
+    await vi.waitFor(() => expect(requested).toHaveLength(1));
+    expect(requested[0]).toEqual({
+      toolUseId: 'rc-1',
+      connectorId: 'atlassian',
+      reason: 'to file the ticket',
+    });
+    // ...and the agent is still waiting
+    expect(settled).toBe(false);
+
+    resolveConnectorRequest('rc-1', { connected: true });
+    const result = await pending;
+    expect(result.behavior).toBe('allow');
+    expect(result.updatedInput).toMatchObject({
+      connectorId: 'atlassian',
+      __connectorResult: { connected: true },
+    });
+  });
+
+  it('resumes with the decline reason so the agent can adapt', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      onConnectorRequest: async () => {},
+    });
+
+    const pending = canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'rc-2' });
+    await vi.waitFor(() => expect(resolveConnectorRequest('rc-2', { connected: false, reason: 'declined' })).toBe(true));
+
+    const result = await pending;
+    expect(result.updatedInput?.__connectorResult).toEqual({ connected: false, reason: 'declined' });
+  });
+
+  it('does not pause on a request with no connector id', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      onConnectorRequest: async () => {},
+    });
+    // Nothing will ever resolve this, so failing closed is the only safe answer.
+    const result = await canUseTool('RequestConnector', { reason: 'r' }, { toolUseID: 'rc-3' });
+    expect(result.behavior).toBe('allow');
+    expect(result.updatedInput?.__connectorResult).toMatchObject({ connected: false });
+  });
+
+  it('passes RequestConnector straight through when the surface cannot show a card', async () => {
+    // No onConnectorRequest callback ⇒ no UI ⇒ must not block forever.
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {});
+    const result = await canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'rc-4' });
+    expect(result.behavior).toBe('allow');
+    expect(result.updatedInput).toBeUndefined();
+  });
+
   it('queues CronCreate calls and emits deduplicated cron_create events after the stream', async () => {
     queryMock.mockImplementation(async function* (args: { options: { canUseTool: CanUseTool } }) {
       await args.options.canUseTool('CronCreate', { expression: '*/5 * * * *', prompt: 'poll' }, { toolUseID: 'c1' });

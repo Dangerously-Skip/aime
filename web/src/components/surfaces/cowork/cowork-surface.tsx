@@ -1097,6 +1097,22 @@ export function CoworkSurface() {
           }
           break;
         }
+        case "connector_request":
+          addMessage(chatId, {
+            id: (event.toolUseId as string) || `conn_${Date.now()}`,
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            connectorRequest: {
+              connectorId: event.connectorId as string,
+              reason: event.reason as string | undefined,
+              toolUseId: event.toolUseId as string,
+            },
+          });
+          if (!document.hasFocus()) {
+            showNotification("A connection is needed", "AIME is waiting to connect a service.");
+          }
+          break;
         case "canvas":
           onCanvasEvent(event as { doc?: unknown });
           break;
