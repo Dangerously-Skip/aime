@@ -191,3 +191,106 @@ describe('DR-14 — no master key is an honest fallback', () => {
     expect(describeSecretStorage().mode).toBe('encrypted');
   });
 });
+
+/**
+ * The sentinel must never leave the machine as if it were a credential.
+ *
+ * Everyday trigger: `scripts/dev-with-port.js` does not pass AIME_CRED_KEY but the
+ * packaged app does, and BOTH read ~/.claude/.aime-mcp.json. Run the packaged app
+ * once (which migrates secrets into the store) and then `npm run electron:dev`,
+ * and a keyless loader finds placeholdered entries with nothing to fill them —
+ * previously mounting them anyway, so `Bearer ${AIME_SECRET}` went to the service.
+ */
+describe('DR-14 — a placeholder must never be sent as a credential', () => {
+  const httpEntry = () => ({
+    'aime-mcp-atlassian': {
+      transport: 'streamable-http',
+      url: 'https://mcp.atlassian.com/v1/sse',
+      headers: { Authorization: `Bearer ${SECRETS.access}` },
+      _meta: {
+        mcpName: 'atlassian',
+        expiresAt: Date.now() + 3_600_000,
+        refreshToken: SECRETS.refresh,
+      },
+    },
+  });
+
+  const load = async () => {
+    const { loadProvisionedMcpServers } = await import('./provisioned');
+    return (await loadProvisionedMcpServers()) as Record<string, Record<string, unknown>>;
+  };
+
+  const expectNoSentinel = (servers: Record<string, Record<string, unknown>>) => {
+    for (const [key, entry] of Object.entries(servers)) {
+      expect(JSON.stringify(entry), `${key} was mounted carrying the sentinel`).not.toContain(
+        '${AIME_SECRET}',
+      );
+    }
+  };
+
+  it('drops a stdio entry whose secrets a keyless run cannot resolve', async () => {
+    await write(legacyEntry());
+    await load(); // keyed: secrets move into the store, config gets placeholders
+    expect(await onDisk()).toContain('${AIME_SECRET}');
+
+    delete process.env.AIME_CRED_KEY; // `npm run electron:dev` over the same config
+    const servers = await load();
+
+    expectNoSentinel(servers);
+    expect(servers['aime-connector-google-personal']).toBeUndefined();
+  });
+
+  it('drops an http entry rather than sending "Bearer ${AIME_SECRET}"', async () => {
+    await write(httpEntry());
+    await load();
+
+    delete process.env.AIME_CRED_KEY;
+    const servers = await load();
+
+    expectNoSentinel(servers);
+    expect(servers['aime-mcp-atlassian']).toBeUndefined();
+  });
+
+  it('drops the entry when the store exists but cannot be decrypted, and leaves the config alone', async () => {
+    await write(legacyEntry());
+    await load();
+    const configAfterMigration = await onDisk();
+
+    // A reinstall put a fresh master key beside the old ciphertext.
+    process.env.AIME_CRED_KEY = randomBytes(32).toString('hex');
+    const servers = await load(); // must not throw — this runs per chat request
+
+    expectNoSentinel(servers);
+    expect(servers['aime-connector-google-personal']).toBeUndefined();
+    // Nothing may be rewritten or cleared on the strength of a store we can't read.
+    expect(await onDisk()).toBe(configAfterMigration);
+  });
+
+  it('still mounts entries that never had a secret to begin with', async () => {
+    await write({
+      ...legacyEntry(),
+      'aime-mcp-public': { transport: 'streamable-http', url: 'https://mcp.public.dev/mcp' },
+    });
+    await load();
+
+    delete process.env.AIME_CRED_KEY;
+    const servers = await load();
+
+    expect(servers['aime-mcp-public']).toBeDefined();
+    expect(servers['aime-connector-google-personal']).toBeUndefined();
+  });
+
+  it('mounts everything normally once the store can be read', async () => {
+    await write({ ...legacyEntry(), ...httpEntry() });
+    await load();
+    const servers = await load();
+
+    expectNoSentinel(servers);
+    expect(servers['aime-connector-google-personal'].env).toEqual({
+      GOOGLE_ACCESS_TOKEN: SECRETS.access,
+    });
+    expect(servers['aime-mcp-atlassian'].headers).toEqual({
+      Authorization: `Bearer ${SECRETS.access}`,
+    });
+  });
+});

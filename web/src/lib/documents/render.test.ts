@@ -10,6 +10,108 @@ import { DOCUMENT_THEMES, themeIds, getTheme, describeThemes } from './themes';
  * rather than a cosmetic bug.
  */
 
+const bodyOf = (html: string) => html.slice(html.indexOf('<body>'));
+
+/**
+ * Tokenise the generated body the way an HTML parser does: an attribute value is
+ * DATA once quoted, so a `>` or an `on…=` sitting inside quotes is not markup.
+ *
+ * This exists because substring assertions cannot tell the two cases apart, and
+ * the difference is the whole vulnerability. Both of these contain the text
+ * `onerror=`:
+ *
+ *   <img src="…" alt="a" onerror="window.PWN=1">        ← a real event handler
+ *   <img src="…" alt="a&quot; onerror=&quot;window.PWN=1">  ← inert alt text
+ *
+ * A `not.toContain('onerror=')` check rejects both; a `not.toContain('<script')`
+ * check accepts both. Only a tokeniser answers the question the test is asking.
+ */
+function tagsIn(html: string): Array<{ name: string; attrs: Array<[string, string]> }> {
+  const src = bodyOf(html);
+  const tags: Array<{ name: string; attrs: Array<[string, string]> }> = [];
+  const ws = (i: number) => /\s/.test(src[i] ?? '');
+  let i = 0;
+  while (i < src.length) {
+    const lt = src.indexOf('<', i);
+    if (lt === -1) break;
+    i = lt + 1;
+    if (src[i] === '/') {
+      const gt = src.indexOf('>', i);
+      i = gt === -1 ? src.length : gt + 1;
+      continue;
+    }
+    const name = /^[a-zA-Z][a-zA-Z0-9]*/.exec(src.slice(i))?.[0];
+    if (!name) continue; // a bare `<` in text — data, not a tag
+    i += name.length;
+    const attrs: Array<[string, string]> = [];
+    for (;;) {
+      while (ws(i)) i++;
+      if (i >= src.length) break;
+      if (src[i] === '>') { i++; break; }
+      if (src[i] === '/') { i++; continue; }
+      const attr = /^[^\s=/>]+/.exec(src.slice(i))?.[0];
+      if (!attr) { i++; continue; }
+      i += attr.length;
+      while (ws(i)) i++;
+      let value = '';
+      if (src[i] === '=') {
+        i++;
+        while (ws(i)) i++;
+        const quote = src[i];
+        if (quote === '"' || quote === "'") {
+          const end = src.indexOf(quote, i + 1);
+          value = src.slice(i + 1, end === -1 ? src.length : end);
+          i = end === -1 ? src.length : end + 1;
+        } else {
+          value = /^[^\s>]*/.exec(src.slice(i))?.[0] ?? '';
+          i += value.length;
+        }
+      }
+      attrs.push([attr.toLowerCase(), value]);
+    }
+    tags.push({ name: name.toLowerCase(), attrs });
+  }
+  return tags;
+}
+
+/** Everything the generator is allowed to emit into the body. */
+const INERT_TAGS = new Set([
+  'body', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'li', 'a', 'code',
+  'pre', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'img',
+  'strong', 'em', 'del', 'br', 'input',
+]);
+const INERT_ATTRS = new Set([
+  'class', 'href', 'title', 'src', 'alt', 'align', 'start', 'type', 'checked', 'disabled',
+]);
+/** Attributes a browser dereferences — a leak even with scripting disabled. */
+const FETCHING_ATTRS = new Set([
+  'src', 'href', 'srcset', 'data', 'poster', 'background', 'action', 'formaction', 'style',
+]);
+
+/**
+ * The real invariant: nothing in the body can execute, and nothing but a link
+ * can reach the network. Asserted structurally rather than by grep.
+ */
+function assertInertBody(html: string, label = ''): void {
+  for (const { name, attrs } of tagsIn(html)) {
+    expect(INERT_TAGS.has(name), `${label} — <${name}> is not a tag the generator emits`).toBe(true);
+    for (const [attr, value] of attrs) {
+      expect(attr.startsWith('on'), `${label} — <${name} ${attr}=…> is an event handler`).toBe(false);
+      expect(INERT_ATTRS.has(attr), `${label} — <${name} ${attr}=…> is not an attribute the generator emits`).toBe(true);
+      const isImageSrc = name === 'img' && attr === 'src';
+      const isLinkHref = name === 'a' && attr === 'href';
+      if (isImageSrc) expect(value, `${label} — image src`).toMatch(/^data:image\//i);
+      else if (isLinkHref) expect(value, `${label} — link href`).toMatch(/^(https?:|mailto:|#|\/)/i);
+      else {
+        expect(
+          FETCHING_ATTRS.has(attr),
+          `${label} — <${name} ${attr}=…> would be dereferenced at print time`,
+        ).toBe(false);
+      }
+    }
+  }
+}
+
 describe('markdown conversion', () => {
   it('renders the ordinary constructs', () => {
     const html = markdownToHtml('# H\n\nsome **bold** and `code`\n\n- a\n- b\n');
@@ -88,17 +190,259 @@ describe('renderDocument — no executable content survives', () => {
 
   it('property: no script tag or inline handler ever reaches the output', () => {
     fc.assert(
-      fc.property(fc.string(), fc.string(), fc.string(), (title, markdown, subtitle) => {
+      fc.property(fc.string(), fc.string(), adversarialMarkdown(), (title, subtitle, markdown) => {
         const html = renderDocument({ title, markdown, subtitle });
         // Only the BODY matters — the head legitimately contains a <style>.
-        const body = html.slice(html.indexOf('<body>')).toLowerCase();
-        for (const tag of ['<script', '<iframe', '<object', '<embed', '<img', '<svg', '<link', '<style']) {
+        const body = bodyOf(html).toLowerCase();
+        // <img> is deliberately absent from this list: a data: image is LEGAL
+        // output, so "no img" is not the property. Which images and links are
+        // permitted is decided structurally by assertInertBody below.
+        for (const tag of ['<script', '<iframe', '<object', '<embed', '<svg', '<link', '<style']) {
           expect(body, `raw ${tag}`).not.toContain(tag);
         }
-        expect(body).not.toContain('javascript:');
+        // `javascript:` as a substring is not the property either — a document may
+        // legitimately discuss the scheme in prose. It must never be a URL.
+        assertInertBody(html, JSON.stringify(markdown));
       }),
       { numRuns: 1000 },
     );
+  });
+});
+
+/**
+ * The generator matters more than the property here.
+ *
+ * The property above was correct from the start and passed anyway, because
+ * `fc.string()` cannot realistically produce `![a" onerror="x](data:image/png…)`:
+ * a valid image needs matched brackets, a `data:` scheme AND a quote in the alt
+ * text. So a live XSS sat under a 1000-run property test for as long as the test
+ * existed. These arbitraries build the CONSTRUCTS and let fast-check choose the
+ * hostile payload inside them, which is where the attacker's freedom actually is.
+ */
+const BREAK_OUT_FRAGMENTS = [
+  'a" onerror="window.PWN=1',
+  'a"><script>window.PWN=1</script><b x="',
+  'a"><svg onload="window.PWN=1"><b x="',
+  'a"><iframe src="https://evil.example"><b x="',
+  'a"><link rel="stylesheet" href="https://evil.example/x.css"><b x="',
+  'a"><style>body{background:url(https://evil.example/x.png)}</style><b x="',
+  'a"><img src="https://evil.example/p.png"><b x="',
+  'a\\"b',
+  "a'><b onload='x",
+  'a>b',
+  '&quot; onerror=&quot;x',
+  '&#34; onerror=&#34;x',
+  '</p><script>window.PWN=1</script><p x="',
+  'javascript:alert(1)',
+  'Tom & Jerry',
+  'ordinary alt text',
+];
+const HREF_CANDIDATES = [
+  'data:image/png;base64,AAAA',
+  'data:image/svg+xml,<svg onload="window.PWN=1"/>',
+  'data:text/html,<script>window.PWN=1</script>',
+  'https://evil.example/p.png',
+  'https://example.com/a',
+  'javascript:alert(1)',
+  'vbscript:msgbox',
+  'file:///etc/passwd',
+  '#anchor',
+  'mailto:a@b.co',
+];
+
+function adversarialMarkdown(): fc.Arbitrary<string> {
+  const frag = fc.constantFrom(...BREAK_OUT_FRAGMENTS);
+  const href = fc.constantFrom(...HREF_CANDIDATES);
+  return fc.oneof(
+    // Keep the original broad-but-blind generator: it covers the parser, not the
+    // attribute sinks.
+    fc.string(),
+    fc.tuple(frag, href).map(([alt, h]) => `![${alt}](${h})`),
+    fc.tuple(frag, href, frag).map(([alt, h, t]) => `![${alt}](${h} '${t}')`),
+    fc.tuple(frag, href).map(([text, h]) => `[${text}](${h})`),
+    fc.tuple(frag, href, frag).map(([text, h, t]) => `[${text}](${h} '${t}')`),
+    // An image inside link text: two attribute sinks in one construct.
+    fc.tuple(frag, href).map(([alt, h]) => `[![${alt}](${h})](https://example.com/a)`),
+    // Table cells parse their content as inline markdown, so the same sink again.
+    fc.tuple(frag, href).map(([alt, h]) => `| head |\n|---|\n| ![${alt}](${h}) |`),
+    fc.tuple(frag, href).map(([text, h]) => `| a | b |\n|---|---|\n| [${text}](${h}) | x |`),
+    // Reference definitions reach the same renderers by a different route.
+    fc.tuple(frag, href, frag).map(([alt, h, t]) => `![${alt}][r]\n\n[r]: ${h} '${t}'\n`),
+    // Nested in a blockquote and a list, which re-enter the inline parser.
+    fc.tuple(frag, href).map(([alt, h]) => `> ![${alt}](${h})\n`),
+    fc.tuple(frag, href).map(([alt, h]) => `- ![${alt}](${h})\n`),
+    // Alongside the constructs FIX-3 was about, so a regression there shows up here.
+    fc.tuple(frag, href).map(([alt, h]) => `\`\`\`ts\nif (a < b) {}\n\`\`\`\n\n![${alt}](${h})\n`),
+  );
+}
+
+/**
+ * FIX-3 replaced `escapeHtml(opts.markdown)` with a renderer override for `html`
+ * tokens. That covers block and inline raw HTML — but NOT image alt text, which
+ * marked renders through its TextRenderer (returns text RAW) and interpolates
+ * straight into `alt="…"`. Verified executing in real Chromium at a file:// origin.
+ *
+ * A `>` alone does not break out — an unquoted `>` inside a double-quoted value
+ * does not end the tag. The `"` is what matters, which is exactly the character a
+ * naive "no <script> in the output" test never notices.
+ */
+describe('regression: break-out through image alt text (the gap FIX-3 left)', () => {
+  const IMG = 'data:image/png;base64,AAAA';
+
+  const executed: Array<[string, string]> = [
+    ['event handler on the img itself', `![a" onerror="window.PWN=1](${IMG})`],
+    ['a real script element', `![a"><script>window.PWN=1</script><b x="](${IMG})`],
+    ['an svg with onload', `![a"><svg onload="window.PWN=1"><b x="](${IMG})`],
+    ['inside a table cell', `| h |\n|---|\n| ![a"><script>window.PWN=1</script><b x="](${IMG}) |`],
+    ['inside link text', `[![a"><script>window.PWN=1</script><b x="](${IMG})](https://example.com/a)`],
+    ['inside a blockquote', `> ![a" onerror="window.PWN=1](${IMG})`],
+    ['inside a list item', `- ![a" onerror="window.PWN=1](${IMG})`],
+    ['via a backslash-escaped quote', `![a\\" onerror=\\"window.PWN=1](${IMG})`],
+    ['via the image title', `![alt](${IMG} 'a" onerror="window.PWN=1')`],
+    ['via the link title', `[x](https://example.com/a 'a" onmouseover="window.PWN=1')`],
+  ];
+
+  it.each(executed)('cannot execute: %s', (_label, markdown) => {
+    assertInertBody(renderDocument({ title: 'T', markdown }), markdown);
+  });
+
+  it.each(executed)('holds without constrainGeneratedHtml: %s', (_label, markdown) => {
+    // The guarantee must come from the renderer, not from the regex layer that
+    // runs after it — layer 3 is defence in depth, not the defence.
+    assertInertBody(`<body>${markdownToHtml(markdown)}`, markdown);
+  });
+
+  it('escapes the quote that would close the alt attribute', () => {
+    const body = bodyOf(renderDocument({ title: 'T', markdown: `![a" onerror="window.PWN=1](${IMG})` }));
+    // The ESCAPED form is the assertion: the payload is still visible as alt text
+    // (so the author sees what they wrote) and is a single attribute value.
+    expect(body).toContain('alt="a&quot; onerror=&quot;window.PWN=1"');
+    const img = tagsIn(`<body>${body}`).find((t) => t.name === 'img');
+    expect(img?.attrs.map(([a]) => a)).toEqual(['src', 'alt']);
+  });
+
+  it('escapes a whole injected element into the alt attribute', () => {
+    const body = bodyOf(renderDocument({ title: 'T', markdown: `![a"><script>window.PWN=1</script><b x="](${IMG})` }));
+    expect(body).toContain(
+      'alt="a&quot;&gt;&lt;script&gt;window.PWN=1&lt;/script&gt;&lt;b x=&quot;"',
+    );
+  });
+
+  it('escapes the title attribute too', () => {
+    const body = bodyOf(renderDocument({ title: 'T', markdown: `![alt](${IMG} 'a" onerror="window.PWN=1')` }));
+    expect(body).toContain('title="a&quot; onerror=&quot;window.PWN=1"');
+  });
+
+  it('does not treat an entity-smuggled quote as a second attribute', () => {
+    // `&quot;` inside a value is decoded AFTER tokenisation, so it is data — and
+    // re-escaping it would double-escape (the FIX-3 mistake). Both must hold.
+    const body = bodyOf(renderDocument({ title: 'T', markdown: `![&quot; onerror=&quot;x](${IMG})` }));
+    expect(body).toContain('alt="&quot; onerror=&quot;x"');
+    expect(body).not.toContain('&amp;quot;');
+    assertInertBody(`<body>${body}`);
+  });
+
+  it('does not double-escape an ampersand in alt text', () => {
+    const body = bodyOf(renderDocument({ title: 'T', markdown: `![Tom & Jerry](${IMG})` }));
+    expect(body).toContain('alt="Tom &amp; Jerry"');
+    expect(body).not.toContain('&amp;amp;');
+  });
+
+  /**
+   * Scripting is disabled on the print window, but these three still FETCHED a
+   * remote host during PDF rendering when injected through alt text — which
+   * defeats the stated anti-leak purpose of the whole exercise, script or no
+   * script. (A remote <img> was already dropped; these were not.)
+   */
+  const leaks: Array<[string, string]> = [
+    ['iframe', `![a"><iframe src="https://evil.example/x"><b x="](${IMG})`],
+    ['stylesheet link', `![a"><link rel="stylesheet" href="https://evil.example/x.css"><b x="](${IMG})`],
+    ['style with a remote url', `![a"><style>body{background:url(https://evil.example/x.png)}</style><b x="](${IMG})`],
+    ['remote img', `![a"><img src="https://evil.example/p.png"><b x="](${IMG})`],
+  ];
+
+  it.each(leaks)('cannot reach the network via %s', (_label, markdown) => {
+    const html = renderDocument({ title: 'T', markdown });
+    assertInertBody(html, markdown);
+    const body = bodyOf(html).toLowerCase();
+    for (const tag of ['<iframe', '<link', '<style', '<svg']) {
+      expect(body, `raw ${tag} survived`).not.toContain(tag);
+    }
+    // The host may still appear as escaped alt TEXT — that is data, and inert.
+    // What must not exist is an attribute that points at it.
+    for (const { name, attrs } of tagsIn(html)) {
+      for (const [attr, value] of attrs) {
+        if (name === 'a' && attr === 'href') continue;
+        expect(value, `<${name} ${attr}=…>`).not.toMatch(/^https?:/i);
+      }
+    }
+  });
+
+  it('drops an image whose src is not an inline image, keeping the alt text', () => {
+    for (const href of ['https://evil.example/p.png', 'data:text/html,<script>1</script>', 'javascript:alert(1)']) {
+      const body = bodyOf(renderDocument({ title: 'T', markdown: `![the caption](${href})` }));
+      expect(body.toLowerCase(), href).not.toContain('<img');
+      expect(body, href).toContain('the caption');
+    }
+  });
+
+  it('keeps an inline svg image, which cannot script or fetch through <img>', () => {
+    // The one src the allowlist permits that can CONTAIN active content. Verified
+    // in real Chromium: an SVG loaded through <img> is a non-scripted, non-
+    // interactive document — the inline <script>, the onload and an external
+    // <image href> all did nothing and fetched nothing. So it stays allowed; the
+    // rule matches the widget catalogue's `data:image/`.
+    const svg = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" onload="window.PWN=1"><script>window.PWN=2</script></svg>')}`;
+    const html = renderDocument({ title: 'T', markdown: `![diagram](${svg})` });
+    expect(bodyOf(html)).toContain('<img src="data:image/svg+xml,');
+    // Nothing about it reaches the HTML document as markup.
+    expect(bodyOf(html).toLowerCase()).not.toContain('<script');
+    expect(bodyOf(html).toLowerCase()).not.toContain('<svg');
+    assertInertBody(html);
+  });
+
+  it('still renders a legitimate inline image, link, table and code block', () => {
+    // The fix must not become "delete everything".
+    const html = renderDocument({
+      title: 'T',
+      markdown:
+        `![dot](data:image/gif;base64,R0lGODlhAQABAAAAACw= "a title")\n\n` +
+        `[docs](https://example.com/a "see also")\n\n` +
+        `| a | b |\n|:--|--:|\n| 1 | 2 |\n\n` +
+        '```ts\nif (a < b && c > d) { f("x"); }\n```\n',
+    });
+    const body = bodyOf(html);
+    expect(body).toContain('<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="dot" title="a title">');
+    expect(body).toContain('<a href="https://example.com/a" title="see also">docs</a>');
+    expect(body).toContain('<td align="left">1</td>');
+    expect(body).toContain('if (a &lt; b &amp;&amp; c &gt; d) { f(&quot;x&quot;); }');
+    assertInertBody(html);
+  });
+});
+
+/**
+ * `getTheme` guarded with `id in DOCUMENT_THEMES`, and `in` walks the prototype
+ * chain — so 'constructor' returned Object's constructor and 'toString' returned
+ * a function. The DocumentCreate tool takes `theme` as a free-form z.string(),
+ * so the documented "unknown ids fall back to report" was simply not true.
+ */
+describe('regression: prototype keys are not theme ids', () => {
+  const PROTOTYPE_KEYS = [
+    'constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf',
+  ];
+
+  it.each(PROTOTYPE_KEYS)('renders a document with theme %s instead of throwing', (theme) => {
+    const html = renderDocument({ title: 'T', markdown: '# H\n\ntext\n', theme });
+    // Falls back to the default theme, which is what the tool description promises.
+    expect(html).toContain('margin: 20mm');
+    expect(html).toContain('size: A4');
+    expect(html).toContain('Georgia');
+  });
+
+  it.each(PROTOTYPE_KEYS)('derives print options for theme %s instead of throwing', (theme) => {
+    const opts = printOptionsForTheme(theme, 'Footer');
+    expect(opts.pageSize).toBe('A4');
+    expect(opts.margins.top).toBeCloseTo(20 / 25.4, 5);
   });
 });
 
@@ -246,6 +590,22 @@ describe('constrainGeneratedHtml — markdown\'s own network-reaching output', (
       expect(html.toLowerCase(), scheme).not.toContain('href="file:');
       expect(html.toLowerCase(), scheme).not.toContain('href="data:text/html');
     }
+  });
+
+  it('still strips both, given output the renderer did not produce', () => {
+    // Layer 3 is now explicitly defence in depth: the image and link renderers
+    // never emit these. Test it directly anyway, because its whole job is to
+    // catch a FUTURE renderer that does — feed it the string a regression would
+    // produce rather than asserting it through a pipeline that cannot produce one.
+    const regressed =
+      '<p><img src="https://evil.example/p.png" alt="x">' +
+      '<a href="javascript:alert(1)">click</a>' +
+      '<img src="data:image/png;base64,AAAA" alt="keep"></p>';
+    const out = constrainGeneratedHtml(regressed);
+    expect(out).not.toContain('evil.example');
+    expect(out).not.toContain('javascript:');
+    expect(out).toContain('<img src="data:image/png;base64,AAAA" alt="keep">');
+    expect(out).toContain('click</a>');
   });
 
   it('property: no body link ever carries a non-web scheme', () => {

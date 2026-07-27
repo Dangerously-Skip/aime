@@ -4,7 +4,12 @@ import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2, Plus, ServerCog } from "lucide-react";
-import { validateMcpServerUrl, deriveServerName } from "@/lib/mcp/url-guard";
+import {
+  validateMcpServerUrl,
+  deriveServerName,
+  hostSlugName,
+  isNameTakenError,
+} from "@/lib/mcp/url-guard";
 import { runMcpOAuthFlow } from "@/lib/mcp/oauth-flow";
 
 /**
@@ -51,11 +56,27 @@ export function AddMcpServer({ onAdded }: AddMcpServerProps) {
     setError(null);
     try {
       // Discovery + DCR + browser consent + provisioning, all already built.
-      await runMcpOAuthFlow(derivedName, verdict.url, {});
-      setAddedName(derivedName);
+      let name = derivedName;
+      try {
+        await runMcpOAuthFlow(name, verdict.url, {});
+      } catch (err) {
+        // The friendly short name is already registered to a DIFFERENT origin —
+        // two vendors can share a label (mcp.acme.com and acme.io both derive
+        // `acme`). The server refuses rather than reusing that registration,
+        // because reusing it would show the consent screen of a server the user
+        // never typed. Retry under a name unique to this origin; the refusal
+        // happens during discovery, before any browser window opens, so this is
+        // invisible unless it also fails.
+        const message = err instanceof Error ? err.message : String(err);
+        const fallback = hostSlugName(verdict.url);
+        if (!isNameTakenError(message) || !fallback || fallback === name) throw err;
+        name = fallback;
+        await runMcpOAuthFlow(name, verdict.url, {});
+      }
+      setAddedName(name);
       setPhase("added");
       setUrl("");
-      onAdded?.(derivedName);
+      onAdded?.(name);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not connect to that server";
       // A server without DCR and without a published client_id genuinely cannot
@@ -119,6 +140,14 @@ export function AddMcpServer({ onAdded }: AddMcpServerProps) {
               <p className="text-xs text-muted-foreground">
                 Will be added as <code className="font-mono">{derivedName}</code>
                 {verdict.loopback ? " (local server)" : ""}
+              </p>
+            )}
+            {verdict?.ok && !derivedName && !error && (
+              // Reachable only when the host would name a service AIME already
+              // ships and nothing else can be derived from it. Saying so beats a
+              // disabled button with no explanation.
+              <p className="text-xs text-destructive">
+                That host cannot be named without clashing with a built-in connector.
               </p>
             )}
 

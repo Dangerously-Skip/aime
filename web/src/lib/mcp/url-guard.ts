@@ -28,6 +28,8 @@
  *
  * Pure and synchronous — no DNS, no network.
  */
+import { CONNECTOR_REGISTRY } from '@/lib/connectors/registry';
+import { MCP_CATALOG } from '@/lib/mcp/catalog';
 
 export type UrlRejection =
   | 'not-a-url'
@@ -91,13 +93,135 @@ function parseIPv4(host: string): [number, number, number, number] | null {
   return nums as [number, number, number, number];
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * Server identity.
+ *
+ * A server name is not decoration. It becomes the provisioned config key
+ * `aime-mcp-<name>`, and consumers map that key BACK to a built-in connector id:
+ * the chat route tells the agent "GitHub is already connected — use its tools
+ * directly", and the Connectors page turns the real GitHub row green. So the
+ * name is an identity claim, and "first hostname label that isn't mcp/api/www"
+ * let any host forge one — `https://mcp.github.evil.com/mcp` derived `github`.
+ *
+ * The only thing we actually know about a pasted URL is its origin, so identity
+ * is decided on the origin: a built-in id may be used only for a URL on an
+ * origin that built-in publishes. Everything else is named after its host.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Longest name we will produce; sanitizePluginName caps at 64. */
+const MAX_NAME_LEN = 40;
+
+const SLUGGABLE = (s: string) =>
+  s.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '');
+
+/**
+ * scheme://authority of a URL declared in the registry or catalogue.
+ *
+ * Declared URLs may carry `{placeholder}` segments substituted at connect time.
+ * Today every one of those sits in the path (`…/tenants/{tenant_id}/…`), so the
+ * origin is literal — but a placeholder in the host is a documented pattern in
+ * this codebase (Snowflake's `{account}`), so one is matched as a single label
+ * rather than making the connector unprovable.
+ */
+function declaredOrigin(raw: string): { literal: string } | { pattern: RegExp } | null {
+  const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]+)/.exec(raw.trim());
+  if (!m) return null;
+  const scheme = m[1].toLowerCase();
+  const authority = m[2].toLowerCase();
+  if (!authority.includes('{')) {
+    try {
+      return { literal: new URL(`${scheme}://${authority}`).origin.toLowerCase() };
+    } catch {
+      return null;
+    }
+  }
+  const body = authority
+    .split(/\{[^}]*\}/)
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[^./]+');
+  return { pattern: new RegExp(`^${scheme}://${body}$`) };
+}
+
+type OriginMatcher = { literal: string } | { pattern: RegExp };
+
+let ORIGIN_INDEX: Map<string, OriginMatcher[]> | null = null;
+
+/** id → the origins that id is allowed to speak for. Built once. */
+function originIndex(): Map<string, OriginMatcher[]> {
+  if (ORIGIN_INDEX) return ORIGIN_INDEX;
+  const index = new Map<string, OriginMatcher[]>();
+  const add = (id: string, url?: string) => {
+    const list = index.get(id) ?? [];
+    index.set(id, list);
+    if (!url) return;
+    const origin = declaredOrigin(url);
+    if (origin) list.push(origin);
+  };
+  for (const c of CONNECTOR_REGISTRY) {
+    // Every id is registered even with no URL: a connector with no remote MCP
+    // endpoint (stdio, paste-token) still owns its name, it just can never be
+    // proven by origin — which is the correct, fail-closed answer.
+    add(c.id, c.auth.mcpUrl);
+    add(c.id, c.mcp.url);
+  }
+  for (const s of MCP_CATALOG) add(s.id, s.url);
+  ORIGIN_INDEX = index;
+  return index;
+}
+
+/** True when `name` is the id of a connector or catalogue entry AIME ships. */
+export function isBuiltInServerId(name: string | null | undefined): boolean {
+  return typeof name === 'string' && originIndex().has(name.toLowerCase());
+}
+
+/**
+ * True when `url` sits on an origin the built-in `name` publishes — the only
+ * evidence available locally that a server really is who its name says.
+ *
+ * Origin only: the path, query and transport suffix vary between a vendor's
+ * discovery URL and its JSON-RPC URL (Miro serves them on `/mcp` and `/`), and
+ * none of that changes who answered.
+ */
+export function builtInIdOwnsUrl(name: string, url: string | null | undefined): boolean {
+  const declared = originIndex().get(name.toLowerCase());
+  if (!declared || declared.length === 0 || !url) return false;
+  let origin: string;
+  try {
+    origin = new URL(url.trim()).origin.toLowerCase();
+  } catch {
+    return false;
+  }
+  return declared.some((d) => ('literal' in d ? d.literal === origin : d.pattern.test(origin)));
+}
+
+/**
+ * The whole host (plus a non-default port) as a name: `mcp.github.evil.com` →
+ * `mcp-github-evil-com`.
+ *
+ * Dots become dashes because the name is embedded in MCP tool identifiers, which
+ * are far stricter than a filename. Two URLs share this name only when they
+ * share an origin, which is what makes it a safe disambiguator.
+ */
+export function hostSlugName(rawUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(rawUrl.trim());
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const withPort = url.port ? `${host}-${url.port}` : host;
+  const slug = SLUGGABLE(withPort.replace(/\./g, '-'));
+  return slug.length > 0 ? slug.slice(0, MAX_NAME_LEN) : null;
+}
+
 /**
  * A short, stable, filesystem-safe name for a server the user added by URL.
  *
  * The name becomes a directory lookup, a clients-file key and the provisioned
  * MCP entry key, so it must satisfy the same allowlist the install route uses.
- * Derived from the host so it is recognisable, and suffixed on collision by the
- * caller rather than here (this stays pure).
+ * Derived from the host so it is recognisable — but never in a form that claims
+ * a built-in connector the origin does not back up.
  */
 export function deriveServerName(rawUrl: string): string | null {
   let host: string;
@@ -109,15 +233,40 @@ export function deriveServerName(rawUrl: string): string | null {
   // First label that isn't a service prefix: mcp.atlassian.com → atlassian,
   // mcp.acme.co.uk → acme. Deliberately NOT the registrable domain — picking
   // that correctly needs the Public Suffix List, and "second-to-last label"
-  // yields `co` for a .co.uk host. This is a display/key name, not an identity
-  // claim, so the simpler rule is the right trade.
+  // yields `co` for a .co.uk host.
   const labels = host.replace(/^\[|\]$/g, '').split('.').filter(Boolean);
   const meaningful = labels.filter((l) => !['mcp', 'api', 'www'].includes(l));
   const candidate = meaningful[0] ?? labels[0];
   if (!candidate) return null;
 
-  const slug = candidate.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[^A-Za-z0-9]+/, '');
-  return slug.length > 0 ? slug.slice(0, 40) : null;
+  const slug = SLUGGABLE(candidate).slice(0, MAX_NAME_LEN);
+  if (slug.length === 0) return null;
+
+  // The short label happens to name something we ship. Allowed only if this URL
+  // is on that service's own origin; otherwise fall back to the full host, which
+  // is honest about what the user is actually connecting to.
+  if (isBuiltInServerId(slug) && !builtInIdOwnsUrl(slug, rawUrl)) {
+    const fromHost = hostSlugName(rawUrl);
+    // A host slug that ALSO collides has nothing left to fall back to, so refuse
+    // rather than hand out a borrowed identity.
+    if (!fromHost || isBuiltInServerId(fromHost)) return null;
+    return fromHost;
+  }
+  return slug;
+}
+
+/**
+ * The phrase both API routes use when a name is held by a different origin.
+ *
+ * The setup route's refusal reaches the UI as a plain Error message (that is all
+ * `runMcpOAuthFlow` preserves), so the recogniser lives here rather than being
+ * re-typed on each side.
+ */
+export const NAME_TAKEN_PHRASE = 'already connected to a different server';
+
+/** Is this failure the "that name belongs to another origin" refusal? */
+export function isNameTakenError(message: string): boolean {
+  return message.includes(NAME_TAKEN_PHRASE);
 }
 
 export function validateMcpServerUrl(raw: unknown): UrlVerdict {

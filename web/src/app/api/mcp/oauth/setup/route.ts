@@ -5,7 +5,12 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { discoverMcpOAuth, registerOAuthClient } from '@/lib/mcp/oauth-discovery';
 import { sanitizePluginName } from '@/lib/mcp/install-guard';
-import { validateMcpServerUrl } from '@/lib/mcp/url-guard';
+import {
+  validateMcpServerUrl,
+  isBuiltInServerId,
+  builtInIdOwnsUrl,
+  NAME_TAKEN_PHRASE,
+} from '@/lib/mcp/url-guard';
 import { getMcpClientsPath } from '@/lib/app-paths';
 import { APP_NAME } from '@/config/branding';
 
@@ -40,6 +45,31 @@ async function writeClients(clients: Record<string, StoredClient>) {
   const clientsPath = getMcpClientsPath();
   await writeFile(clientsPath, JSON.stringify(clients, null, 2), { encoding: 'utf-8', mode: 0o600 });
   await chmod(clientsPath, 0o600).catch(() => {});
+}
+
+/** Origin for a message, or the raw value if it will not parse. */
+function originOf(raw: string | undefined): string {
+  if (!raw) return 'an unknown address';
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Same scheme, host and port — the unit an OAuth registration actually belongs
+ * to. Compared on origin rather than the full URL because a vendor's discovery
+ * path and its JSON-RPC path differ (Miro: `/mcp` vs `/`) while the server does
+ * not. Unparseable on either side is never "same".
+ */
+function sameOrigin(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  try {
+    return new URL(a).origin.toLowerCase() === new URL(b).origin.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 interface PluginMcpHint {
@@ -150,10 +180,52 @@ export async function POST(request: Request) {
 
     const fallbackClientId = directClientId || envFallbackClientId || pluginClientIdHint;
 
-    // Reuse existing registration if we have one for this MCP
+    // ── The name is an identity claim ────────────────────────────────────────
+    // mcpName becomes the config key `aime-mcp-<name>`, and consumers map that
+    // key back to a built-in connector id — the chat prompt tells the agent the
+    // service is connected, the Connectors page turns the real row green. So a
+    // server answering on mcp.github.evil.com must not be allowed to register as
+    // `github`. The UI already derives a non-colliding name (url-guard), but this
+    // is the boundary, and a plugin manifest or a direct API call reaches it too.
+    if (isBuiltInServerId(mcpName) && !builtInIdOwnsUrl(mcpName, mcpUrl)) {
+      return Response.json(
+        {
+          error:
+            `"${mcpName}" is the name of a service ${APP_NAME} ships, and ${originOf(mcpUrl)} ` +
+            `is not one of its endpoints. Add this server under a different name — ` +
+            `reusing the name would make it look like the built-in connector.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // ── Reuse is per origin, never per name ──────────────────────────────────
+    // This branch used to return whatever was stored under mcpName without ever
+    // comparing URLs. Two unrelated vendors derive one name (mcp.acme.com and
+    // acme.io both → `acme`), so the second request was handed the FIRST one's
+    // authorization endpoint and client_id: the user saw vendor A's consent
+    // screen, granted A a fresh token, and was told "Connected acme". Silently
+    // re-registering instead would be no better — it would destroy A's
+    // credentials — so a mismatch is refused and the caller picks another name.
     const clients = await readClients();
     const existing = clients[mcpName];
-    if (existing) {
+    // A stub with no recorded URL predates mcpUrl being persisted. It cannot be
+    // vouched for OR conflicted with — and exchange already refuses it ("No MCP
+    // URL registered") — so discovery runs again and replaces it.
+    if (existing?.mcpUrl) {
+      if (!sameOrigin(existing.mcpUrl, mcpUrl)) {
+        console.warn(
+          `[MCP OAuth Setup] "${mcpName}" is registered to ${originOf(existing.mcpUrl)}; refusing to reuse it for ${originOf(mcpUrl)}`,
+        );
+        return Response.json(
+          {
+            error:
+              `"${mcpName}" is ${NAME_TAKEN_PHRASE} (${originOf(existing.mcpUrl)}). ` +
+              `Disconnect that one first, or add this server under another name.`,
+          },
+          { status: 409 }
+        );
+      }
       console.log(`[MCP OAuth Setup] Reusing existing client for ${mcpName}`);
       return Response.json({
         authorizationEndpoint: existing.authorizationEndpoint,

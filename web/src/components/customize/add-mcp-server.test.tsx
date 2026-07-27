@@ -115,3 +115,84 @@ describe('AddMcpServer — failures', () => {
     expect(runMcpOAuthFlow).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The name shown here becomes the config key that the chat prompt and the
+ * Connectors page read back as a connector identity, so a hostname that merely
+ * *contains* a vendor's name must not be offered that vendor's name.
+ */
+describe('AddMcpServer — a lookalike host cannot borrow a built-in name', () => {
+  const lookalikes: Array<[string, string]> = [
+    ['https://mcp.github.evil.com/mcp', 'mcp-github-evil-com'],
+    ['https://api.slack.attacker.net/mcp', 'api-slack-attacker-net'],
+    ['https://mcp.notion.com.evil.io/mcp', 'mcp-notion-com-evil-io'],
+    ['https://www.atlassian.badguy.dev/mcp', 'www-atlassian-badguy-dev'],
+  ];
+
+  it.each(lookalikes)('adds %s as %s', async (url, expected) => {
+    const input = openForm();
+    type(input, url);
+
+    // the preview must show the honest name…
+    expect(screen.getByText(expected)).toBeTruthy();
+    fireEvent.click(screen.getByText('Connect'));
+    // …and that is the name the flow is run under
+    await waitFor(() => expect(runMcpOAuthFlow).toHaveBeenCalledWith(expected, url, {}));
+    await waitFor(() => expect(onAdded).toHaveBeenCalledWith(expected));
+  });
+
+  it('still uses the canonical name for the vendor’s real endpoint', async () => {
+    const input = openForm();
+    type(input, 'https://mcp.atlassian.com/v1/mcp');
+    expect(screen.getByText('atlassian')).toBeTruthy();
+    fireEvent.click(screen.getByText('Connect'));
+    await waitFor(() =>
+      expect(runMcpOAuthFlow).toHaveBeenCalledWith('atlassian', 'https://mcp.atlassian.com/v1/mcp', {}),
+    );
+  });
+});
+
+describe('AddMcpServer — a name already taken by another origin', () => {
+  it('retries under a host-specific name instead of joining someone else’s server', async () => {
+    // Setup refuses the friendly name because `acme` already points at
+    // https://mcp.acme.com. Silently reusing it would show the user vendor A's
+    // consent screen for a URL they never typed, so we re-run under a name that
+    // is unique to this origin.
+    runMcpOAuthFlow.mockRejectedValueOnce(
+      new Error(
+        '“acme” is already connected to a different server (https://mcp.acme.com). Disconnect it first, or add this one under another name.',
+      ),
+    );
+    const input = openForm();
+    type(input, 'https://acme.io/mcp');
+    fireEvent.click(screen.getByText('Connect'));
+
+    await waitFor(() => expect(runMcpOAuthFlow).toHaveBeenCalledTimes(2));
+    expect(runMcpOAuthFlow).toHaveBeenNthCalledWith(1, 'acme', 'https://acme.io/mcp', {});
+    expect(runMcpOAuthFlow).toHaveBeenNthCalledWith(2, 'acme-io', 'https://acme.io/mcp', {});
+    expect(await screen.findByText(/Connected acme-io/)).toBeTruthy();
+    expect(onAdded).toHaveBeenCalledWith('acme-io');
+  });
+
+  it('reports the conflict when even the host-specific name is taken', async () => {
+    runMcpOAuthFlow.mockRejectedValue(
+      new Error('“acme” is already connected to a different server (https://mcp.acme.com).'),
+    );
+    const input = openForm();
+    type(input, 'https://acme.io/mcp');
+    fireEvent.click(screen.getByText('Connect'));
+
+    expect(await screen.findByText(/already connected to a different server/)).toBeTruthy();
+    expect(onAdded).not.toHaveBeenCalled();
+  });
+
+  it('does not retry an unrelated failure', async () => {
+    runMcpOAuthFlow.mockRejectedValue(new Error('Discovery failed: 404'));
+    const input = openForm();
+    type(input, 'https://acme.io/mcp');
+    fireEvent.click(screen.getByText('Connect'));
+
+    expect(await screen.findByText(/Discovery failed: 404/)).toBeTruthy();
+    expect(runMcpOAuthFlow).toHaveBeenCalledTimes(1);
+  });
+});

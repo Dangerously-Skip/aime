@@ -134,6 +134,51 @@ describe('buildToolPolicies', () => {
   });
 });
 
+describe('buildToolPolicies — compound names are not pre-approved (regression)', () => {
+  /**
+   * This path is the sharper edge of the classifier bug. `always_allow` is
+   * pushed down INTO THE SDK, so a tool that classifies 'read' is pre-approved
+   * and canUseTool never runs for it — there is no second line of defence.
+   * A name whose first segment reads and whose later segments mutate
+   * (`findAndReplace`, `checkAndSendInvoice`) must therefore never reach
+   * always_allow.
+   */
+  it('asks for a name whose later segment acts on the world', () => {
+    const policies = buildToolPolicies([
+      'mcp__aime-mcp-docs__findAndReplace',
+      'mcp__aime-mcp-docs__findAndReplaceText',
+      'mcp__aime-mcp-acme__checkAndSendInvoice',
+      'mcp__aime-mcp-acme__getOrCreateChannel',
+      'mcp__aime-mcp-acme__queryAndDeleteRows',
+      'mcp__aime-mcp-acme__listAndArchiveThreads',
+      'mcp__aime-mcp-acme__readFileAndWrite',
+      'mcp__aime-mcp-acme__showAndDeleteEverything',
+    ]);
+    expect(policies).toHaveLength(8);
+    for (const p of policies) {
+      expect(p.permission_policy, p.name).toBe('always_ask');
+    }
+  });
+
+  it('asks when the second operation is unrecognisable', () => {
+    expect(policyOf(buildToolPolicies(['mcp__x__findAndFrobnicate']), 'findAndFrobnicate')).toBe(
+      'always_ask',
+    );
+  });
+
+  it('still allows genuine reads, so the gate stays usable', () => {
+    const policies = buildToolPolicies([
+      'mcp__aime-mcp-atlassian__searchJiraIssuesUsingJql',
+      'mcp__aime-mcp-atlassian__getTransitionsForJiraIssue',
+      'mcp__aime-mcp-acme__getOrders',
+      'mcp__aime-mcp-acme__searchAndListThreads',
+    ]);
+    for (const p of policies) {
+      expect(p.permission_policy, p.name).toBe('always_allow');
+    }
+  });
+});
+
 describe('applyToolPolicies', () => {
   const servers = {
     'aime-mcp-acme': { type: 'http', url: 'https://mcp.acme.com/mcp', headers: { Authorization: 'Bearer x' } },

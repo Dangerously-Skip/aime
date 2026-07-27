@@ -4,6 +4,7 @@ import { readFile, writeFile, mkdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { getMcpConfigPath, getMcpClientsPath } from '@/lib/app-paths';
+import { isBuiltInServerId, builtInIdOwnsUrl } from '@/lib/mcp/url-guard';
 
 const QUARRY_DIR = join(homedir(), '.claude');
 // Resolved per request, not at module load: Electron sets its paths after the
@@ -38,6 +39,25 @@ export async function POST(request: Request) {
 
     if (!mcpUrl) {
       return Response.json({ error: 'No MCP URL registered for this plugin' }, { status: 400 });
+    }
+
+    // This route writes the key `aime-mcp-<mcpName>`, which consumers map back to
+    // a built-in connector id. Setup refuses an impostor name, but the clients
+    // file is the input here and an older build (or a hand edit) can still hold
+    // one — so the last step before provisioning re-checks the claim rather than
+    // trusting a file to have been written by a fixed version.
+    if (isBuiltInServerId(mcpName) && !builtInIdOwnsUrl(mcpName, mcpUrl)) {
+      console.warn(
+        `[MCP OAuth Exchange] Refusing to provision "${mcpName}" for ${mcpUrl} — not one of its endpoints`,
+      );
+      return Response.json(
+        {
+          error:
+            `The registration stored for "${mcpName}" points at ${mcpUrl}, which is not one of ` +
+            `that service's endpoints. Remove it and add the server under a different name.`,
+        },
+        { status: 400 }
+      );
     }
 
     // The authorization code and (for confidential clients) our client secret are

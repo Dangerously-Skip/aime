@@ -3,7 +3,7 @@ import fc from 'fast-check';
 import {
   extractSecrets,
   injectSecrets,
-  hasInlineSecrets,
+  hasUnresolvedSecrets,
   isEmptySecrets,
   secretKeyForServer,
   SECRET_PLACEHOLDER,
@@ -259,10 +259,42 @@ describe('properties', () => {
   });
 });
 
-describe('hasInlineSecrets / secretKeyForServer', () => {
-  it('detects an unmigrated entry and a migrated one', () => {
-    expect(hasInlineSecrets(stdio())).toBe(true);
-    expect(hasInlineSecrets(extractSecrets(stdio()).entry)).toBe(false);
+describe('hasUnresolvedSecrets / secretKeyForServer', () => {
+  it('flags an entry whose sentinel survived injection', () => {
+    // Nothing to inject: this is the shape that used to be mounted, sending
+    // `${AIME_SECRET}` to the service as the credential.
+    const stripped = extractSecrets(stdio()).entry;
+    expect(hasUnresolvedSecrets(stripped)).toBe(true);
+    expect(hasUnresolvedSecrets(injectSecrets(stripped, undefined))).toBe(true);
+    expect(hasUnresolvedSecrets(injectSecrets(stripped, { env: {} }))).toBe(true);
+  });
+
+  it('flags a header whose sentinel survived, prefix and all', () => {
+    const { entry, secrets } = extractSecrets(http());
+    expect(hasUnresolvedSecrets(entry)).toBe(true);
+    // and clears once the real credential is back
+    expect(hasUnresolvedSecrets(injectSecrets(entry, secrets))).toBe(false);
+  });
+
+  it('clears once the stored secrets are injected back', () => {
+    const { entry, secrets } = extractSecrets(stdio());
+    expect(hasUnresolvedSecrets(injectSecrets(entry, secrets))).toBe(false);
+  });
+
+  it('is false for entries that never carried a secret', () => {
+    expect(hasUnresolvedSecrets({ transport: 'streamable-http', url: 'https://x/mcp' })).toBe(false);
+    expect(hasUnresolvedSecrets(stdio())).toBe(false); // real token inline, not a sentinel
+    expect(hasUnresolvedSecrets({ env: { A: '' }, headers: {} })).toBe(false);
+  });
+
+  it('flags a partially resolved entry — one credential back, one missing', () => {
+    const multi = {
+      transport: 'stdio',
+      env: { A_TOKEN: 'real-a', B_TOKEN: 'real-b' },
+    };
+    const { entry, secrets } = extractSecrets(multi);
+    const partial = injectSecrets(entry, { env: { A_TOKEN: secrets.env!.A_TOKEN } });
+    expect(hasUnresolvedSecrets(partial)).toBe(true);
   });
 
   it('namespaces store keys so they cannot collide with provider credentials', () => {

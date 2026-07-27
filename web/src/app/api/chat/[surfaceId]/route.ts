@@ -365,7 +365,11 @@ export async function POST(
         const staleIds = await staleConnectorIds();
         const connectorsPrompt = buildConnectorsPrompt(
           classifyCatalog(CONNECTOR_REGISTRY),
-          connectedIdsFromServerKeys(Object.keys(mcpServers)),
+          // The ENTRIES, not just the keys: a key like `aime-mcp-github` is a name
+          // the user's URL derived, not proof of who answered, so the id is only
+          // recovered for an entry whose stored url is on that connector's own
+          // origin. Passing keys alone leaves that unprovable and fails closed.
+          connectedIdsFromServerKeys(mcpServers),
           { canRequest, staleIds },
         );
         if (connectorsPrompt) {
