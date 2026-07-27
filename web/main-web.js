@@ -2,7 +2,7 @@
  * Electron main process for the Next.js web version.
  * Opens a single BrowserWindow pointing at a dynamically selected localhost port.
  */
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, globalShortcut } = require("electron");
 const os = require("os");
 const path = require("path");
 const fs = require("fs");
@@ -1016,6 +1016,64 @@ app.on("activate", async () => {
 });
 
 // IPC handlers
+// ── Push-to-talk global shortcut (P4.1) ────────────────────────────────
+// The renderer asks main to hold or release the combination. Registering here
+// rather than in the renderer is not a preference: a global shortcut has to be
+// claimed from the OS, which only the main process can do.
+//
+// Toggle semantics, not hold-to-talk: globalShortcut delivers a press only —
+// there is no keyup — so press-to-start / press-to-stop is what actually works.
+let heldAccelerator = null;
+
+function releasePushToTalk() {
+  if (!heldAccelerator) return;
+  try {
+    globalShortcut.unregister(heldAccelerator);
+  } catch (err) {
+    console.warn("[AIME] Could not unregister push-to-talk:", err.message);
+  }
+  heldAccelerator = null;
+}
+
+ipcMain.handle("voice:set-push-to-talk", (_event, { enabled, accelerator } = {}) => {
+  const wanted = typeof accelerator === "string" && accelerator ? accelerator : "CommandOrControl+Shift+Space";
+
+  if (!enabled) {
+    releasePushToTalk();
+    return null;
+  }
+  if (heldAccelerator === wanted) return heldAccelerator;
+
+  releasePushToTalk();
+  try {
+    // register() returns false when another application already owns the
+    // combination — a silent no-op unless we check, so the renderer is told.
+    const registered = globalShortcut.register(wanted, () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("voice:toggle");
+      }
+    });
+    if (!registered) {
+      console.warn("[AIME] Push-to-talk shortcut is already taken:", wanted);
+      return null;
+    }
+    heldAccelerator = wanted;
+    return heldAccelerator;
+  } catch (err) {
+    // A malformed accelerator throws; the renderer validates first, but a stored
+    // setting from an older build could still be bad.
+    console.warn("[AIME] Invalid push-to-talk accelerator", wanted, err.message);
+    return null;
+  }
+});
+
+// Global shortcuts outlive the window, so they must be given back explicitly or
+// the combination stays stolen until the process exits.
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
+  heldAccelerator = null;
+});
+
 ipcMain.handle("select-folder", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openDirectory", "createDirectory"],

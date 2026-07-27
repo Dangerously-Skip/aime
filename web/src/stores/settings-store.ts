@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { DEFAULT_PUSH_TO_TALK, validateAccelerator } from '@/lib/voice/accelerator';
 import type { Tier } from '@/lib/models/types';
 
 export type ChatFont = 'default' | 'sans' | 'mono' | 'system';
@@ -42,6 +43,10 @@ interface SettingsState {
   // Capabilities
   toolAccessMode: ToolAccessMode;
   toolProfile: ToolProfile;
+  /** Push-to-talk global hotkey (P4.1). Off by default — never claim a system-wide key uninvited. */
+  pushToTalkEnabled: boolean;
+  /** Electron accelerator held while push-to-talk is on. */
+  pushToTalkAccelerator: string;
 
   // Automation
   heartbeatEnabled: boolean;
@@ -116,6 +121,8 @@ interface SettingsActions {
   setChatFont: (font: ChatFont) => void;
   setToolAccessMode: (mode: ToolAccessMode) => void;
   setToolProfile: (profile: ToolProfile) => void;
+  setPushToTalkEnabled: (enabled: boolean) => void;
+  setPushToTalkAccelerator: (raw: string) => import('@/lib/voice/accelerator').AcceleratorVerdict;
   setHeartbeatEnabled: (enabled: boolean) => void;
   setHeartbeatIntervalMinutes: (minutes: number) => void;
   setHeartbeatMode: (mode: keyof HeartbeatModes, config: Partial<HeartbeatMode>) => void;
@@ -153,6 +160,8 @@ const initialState: SettingsState = {
   chatFont: 'default',
   toolAccessMode: 'onDemand',
   toolProfile: 'full',
+  pushToTalkEnabled: false,
+  pushToTalkAccelerator: DEFAULT_PUSH_TO_TALK,
   heartbeatEnabled: false,
   heartbeatIntervalMinutes: 30,
   heartbeatModes: DEFAULT_HEARTBEAT_MODES,
@@ -193,6 +202,13 @@ export const useSettingsStore = create<SettingsStore>()(
       setChatFont: (chatFont) => set({ chatFont }),
       setToolAccessMode: (toolAccessMode) => set({ toolAccessMode }),
       setToolProfile: (toolProfile) => set({ toolProfile }),
+      setPushToTalkEnabled: (pushToTalkEnabled) => set({ pushToTalkEnabled }),
+      /** Stores the CANONICAL form, so the same combination never persists two ways. */
+      setPushToTalkAccelerator: (raw) => {
+        const verdict = validateAccelerator(raw);
+        if (verdict.ok) set({ pushToTalkAccelerator: verdict.accelerator });
+        return verdict;
+      },
       setHeartbeatEnabled: (heartbeatEnabled) => set({ heartbeatEnabled }),
       setHeartbeatIntervalMinutes: (heartbeatIntervalMinutes) => set({ heartbeatIntervalMinutes }),
       setHeartbeatMode: (mode, config) =>
@@ -264,7 +280,7 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 9,
+      version: 10,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
         // v7 rename (applies to every pre-v7 payload regardless of source

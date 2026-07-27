@@ -26,6 +26,10 @@ interface ElectronAPI {
   onOpenSettings: (callback: () => void) => void;
   /** Subscribes to the minute heartbeat. Returns an unsubscribe function (older preloads returned void). */
   onMinuteTick?: (callback: (ts: number) => void) => (() => void) | void;
+  /** Push-to-talk (P4.1): main owns the global shortcut and emits on press. */
+  onVoiceToggle?: (callback: () => void) => (() => void) | void;
+  /** Ask main to hold or release the shortcut. Resolves to the accelerator held, or null. */
+  setPushToTalkEnabled?: (enabled: boolean, accelerator?: string) => Promise<string | null>;
 }
 
 declare global {
