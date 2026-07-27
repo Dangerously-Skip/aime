@@ -7,6 +7,7 @@ import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
 import { waitForConnector } from '../pending-connectors';
 import { expandCanvasTemplate } from '../canvas/templates';
+import { describeThemes as describeThemesForPrompt } from '../documents/themes';
 
 /** Canvas tool name — intercepted to push A2UI documents to client. */
 const CANVAS_TOOL_NAME = 'canvas';
@@ -308,6 +309,71 @@ export class ClaudeProvider extends BaseProvider {
               ? `template "${input.templateId}"`
               : 'raw A2UI document';
             return { content: [{ type: 'text' as const, text: `Canvas rendered (${label}). The user sees it now in the canvas panel.` }] };
+          }
+        ),
+        // Produce a themed document (P4.2). Replaces "pip install fpdf2 and
+        // improvise": the model writes markdown, a theme decides how it looks.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          "DocumentCreate",
+          "Produce a designed document (PDF) from markdown you write. Use when the user asks for a report, memo, proposal, invoice, brief or any deliverable they will share or print — NOT for a chat answer. Write the content as markdown; a theme handles all typography, spacing and page layout, so do not attempt to style anything yourself and do not write code to generate the file. Themes: " + describeThemesForPrompt(),
+          {
+            title: z.string().describe("Document title, shown as the heading and used for the filename."),
+            markdown: z.string().describe("The document body as markdown. Headings, lists, tables and code all render. Inline HTML is not supported and will be shown as literal text."),
+            theme: z.string().optional().describe("One of the theme ids listed above. Defaults to \"report\"."),
+            subtitle: z.string().optional().describe("Shown beneath the title — a date, author or reference."),
+          },
+          async (input: Record<string, unknown>) => {
+            try {
+              const { renderDocument, printOptionsForTheme } = await import("../documents/render");
+              const { resolveDocumentTarget, canPrintPdf, describeOutcome } = await import("../documents/write");
+              const os = await import("os");
+              const path = await import("path");
+              const fsp = await import("fs/promises");
+
+              const title = typeof input.title === "string" ? input.title : "";
+              const baseDir = cwd ? String(cwd) : path.join(os.homedir(), "Documents");
+              const resolved = resolveDocumentTarget(baseDir, title);
+              if (!resolved.ok) {
+                return { content: [{ type: "text" as const, text: `Could not create the document: ${resolved.error}` }] };
+              }
+
+              const html = renderDocument({
+                title,
+                markdown: typeof input.markdown === "string" ? input.markdown : "",
+                theme: typeof input.theme === "string" ? input.theme : undefined,
+                subtitle: typeof input.subtitle === "string" ? input.subtitle : undefined,
+              });
+
+              await fsp.mkdir(resolved.target.dir, { recursive: true });
+              // The HTML always lands, so there is a usable document even when
+              // Chromium is not available to print.
+              await fsp.writeFile(resolved.target.htmlPath, html, "utf-8");
+
+              const bridge = (globalThis as unknown as { aimeDocumentBridge?: unknown }).aimeDocumentBridge;
+              if (!canPrintPdf(bridge)) {
+                return { content: [{ type: "text" as const, text: describeOutcome({ title, htmlPath: resolved.target.htmlPath }) }] };
+              }
+
+              const result = await bridge.printPdf({
+                html,
+                outputPath: resolved.target.pdfPath,
+                printOptions: printOptionsForTheme(typeof input.theme === "string" ? input.theme : undefined),
+              });
+              return {
+                content: [{
+                  type: "text" as const,
+                  text: describeOutcome({
+                    title,
+                    htmlPath: resolved.target.htmlPath,
+                    ...(result.ok ? { pdfPath: resolved.target.pdfPath } : { pdfError: result.error }),
+                  }),
+                }],
+              };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { content: [{ type: "text" as const, text: `Could not create the document: ${msg}` }] };
+            }
           }
         ),
         // Save the user's writing voice, usually after analysing samples they

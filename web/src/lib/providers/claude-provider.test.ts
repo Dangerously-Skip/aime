@@ -751,3 +751,92 @@ describe('VoiceProfileSave tool (P4)', () => {
     }
   });
 });
+
+describe('DocumentCreate tool (P4.2)', () => {
+  /**
+   * The tool writes a real file, so it gets a real temp cwd.
+   *
+   * PDF printing is NOT exercised: the Next server is a child process of Electron
+   * and cannot call ipcMain, so no print bridge is installed yet (the main-side
+   * printToPDF handler exists and is reached in a later increment). These tests
+   * therefore pin the path that runs TODAY — themed HTML plus a message that says
+   * so rather than implying a PDF exists.
+   */
+  let workDir: string;
+
+  async function documentHandler() {
+    await run(new ClaudeProvider(), { cwd: workDir });
+    const captured = queryMock.mock.calls.at(-1)![0] as {
+      options: { mcpServers: Record<string, { tools?: Array<{ name: string; description: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }> };
+    };
+    const tool = captured.options.mcpServers.aime.tools!.find((t) => t.name === 'DocumentCreate');
+    if (!tool) throw new Error('DocumentCreate not registered');
+    return tool;
+  }
+
+  beforeEach(async () => {
+    const fsp = await import('fs/promises');
+    workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aime-doc-'));
+    scriptChunks([]);
+  });
+
+  afterEach(async () => {
+    const fsp = await import('fs/promises');
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  it('writes themed HTML and reports the path', async () => {
+    const tool = await documentHandler();
+    const result = await tool.handler({
+      title: 'Q3 Board Pack',
+      markdown: '## Summary\n\nRevenue grew.\n',
+      theme: 'proposal',
+    });
+
+    expect(result.content[0].text).toContain('q3-board-pack.html');
+
+    const fsp = await import('fs/promises');
+    const html = await fsp.readFile(path.join(workDir, 'q3-board-pack.html'), 'utf-8');
+    expect(html).toContain('<title>Q3 Board Pack</title>');
+    expect(html).toContain('Revenue grew.');
+    // the proposal theme's margin, proving the theme was applied
+    expect(html).toContain('margin: 24mm');
+  });
+
+  it('does not claim a PDF exists when there is no print bridge', async () => {
+    const tool = await documentHandler();
+    const result = await tool.handler({ title: 'R', markdown: 'x' });
+
+    expect(result.content[0].text).not.toContain('.pdf');
+    expect(result.content[0].text).toMatch(/needs the desktop app/);
+  });
+
+  it('neutralises markup in the document body', async () => {
+    const tool = await documentHandler();
+    await tool.handler({ title: 'R', markdown: '<script>alert(1)</script>' });
+
+    const fsp = await import('fs/promises');
+    const html = await fsp.readFile(path.join(workDir, 'r.html'), 'utf-8');
+    expect(html.slice(html.indexOf('<body>'))).not.toContain('<script');
+  });
+
+  it('refuses a title with no usable filename rather than writing junk', async () => {
+    const tool = await documentHandler();
+    const result = await tool.handler({ title: '...', markdown: 'x' });
+    expect(result.content[0].text).toMatch(/Could not create the document/);
+  });
+
+  it('lists the available themes in its description, so the model can choose', async () => {
+    const tool = await documentHandler();
+    for (const id of ['report', 'memo', 'proposal', 'plain']) {
+      expect(tool.description, id).toContain(`"${id}"`);
+    }
+  });
+
+  it('is allowlisted on the surfaces that produce deliverables', async () => {
+    const { getSurfaceConfig } = await import('../surfaces');
+    for (const surface of ['chat', 'cowork']) {
+      expect(getSurfaceConfig(surface).allowedTools).toContain('mcp__aime__DocumentCreate');
+    }
+  });
+});

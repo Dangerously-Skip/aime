@@ -6,7 +6,7 @@ export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): Surface
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash',
-      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'mcp__aime__SkillCreate', 'mcp__aime__VoiceProfileSave', 'spawn_agent',
+      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'mcp__aime__SkillCreate', 'mcp__aime__VoiceProfileSave', 'mcp__aime__DocumentCreate', 'spawn_agent',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__web-search__web_search',
     ],
