@@ -1,17 +1,18 @@
 export const runtime = 'nodejs';
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
-import { homedir } from 'os';
+import { readFile, writeFile, mkdir, chmod } from 'fs/promises';
+import { dirname } from 'path';
 import { getMcpConfigPath } from '@/lib/app-paths';
+import { decideProvision } from '@/lib/connectors/provision-guard';
 
 /**
- * MCP provisioner API route.
- * Manages connector entries in ~/.claude/.mcp.json
+ * MCP provisioner API route — manages connector entries in the MCP config.
+ *
+ * The request supplies a connector id and its OAuth token; the *entry* is built
+ * server-side from the connector registry (see provision-guard). The route
+ * never accepts transport, command, args or url from the caller — those decide
+ * what the agent executes.
  */
-
-const MCP_CONFIG_DIR = join(homedir(), '.claude');
-const MCP_CONFIG_PATH = getMcpConfigPath();
 
 /**
  * Resolve the directory the app's bundled MCP servers live in. Dev: web/.
@@ -29,48 +30,49 @@ function resolveAppDir(): string {
   return process.cwd();
 }
 
-function substituteArgs(args: string[] | undefined): string[] | undefined {
-  if (!args) return args;
-  const appDir = resolveAppDir();
-  return args.map((a) => a.replace(/\{appDir\}/g, appDir));
-}
-
 interface McpConfig {
   mcpServers?: Record<string, unknown>;
 }
 
 async function readMcpConfig(): Promise<McpConfig> {
   try {
-    const content = await readFile(MCP_CONFIG_PATH, 'utf-8');
+    const content = await readFile(getMcpConfigPath(), 'utf-8');
     return JSON.parse(content);
   } catch {
     return { mcpServers: {} };
   }
 }
 
+/**
+ * The config holds live access tokens, refresh tokens and client secrets, so it
+ * is owner-only. `mode` on writeFile only applies when the file is created, so
+ * the explicit chmod re-tightens configs written before this was enforced.
+ *
+ * The directory is derived from the config path rather than hardcoded, so it
+ * cannot drift from getMcpConfigPath().
+ */
 async function writeMcpConfig(config: McpConfig): Promise<void> {
-  await mkdir(MCP_CONFIG_DIR, { recursive: true });
-  await writeFile(MCP_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+  const path = getMcpConfigPath();
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  await chmod(path, 0o600).catch(() => {});
 }
 
 /**
- * POST — Add/update a connector's MCP server entry
+ * POST — Add/update a connector's MCP server entry.
+ * Body: { connectorId, token, refreshToken?, expiresAt?, oauthClientId?,
+ *         oauthClientSecret?, oauthTokenEndpoint? }
  */
 export async function POST(request: Request) {
   try {
-    const {
-      connectorId,
-      connectorName,
-      mcpEntry,
-      refreshToken,
-      expiresAt,
-      oauthClientId,
-      oauthClientSecret,
-      oauthTokenEndpoint,
-    } = await request.json();
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return Response.json({ error: 'Invalid request body' }, { status: 400 });
+    }
 
-    if (!connectorId || !mcpEntry) {
-      return Response.json({ error: 'Missing connectorId or mcpEntry' }, { status: 400 });
+    const decision = decideProvision(body, { appDir: resolveAppDir() });
+    if (!decision.ok) {
+      return Response.json({ error: decision.error }, { status: 400 });
     }
 
     const config = await readMcpConfig();
@@ -78,40 +80,25 @@ export async function POST(request: Request) {
       config.mcpServers = {};
     }
 
-    const entryWithArgs = mcpEntry as { args?: string[] };
-    const resolvedMcpEntry = {
-      ...mcpEntry,
-      ...(entryWithArgs.args ? { args: substituteArgs(entryWithArgs.args) } : {}),
-    };
-
-    // Use a prefixed key so we can identify our entries
-    const serverKey = `aime-connector-${connectorId}`;
-    config.mcpServers[serverKey] = {
-      ...resolvedMcpEntry,
+    config.mcpServers[decision.serverKey] = {
+      ...decision.entry,
       _meta: {
-        connectorId,
-        connectorName,
+        connectorId: body.connectorId,
+        connectorName: decision.connectorName,
         managedBy: 'aime',
-        // Token refresh metadata — used by loadProvisionedMcpServers() to auto-refresh
-        ...(refreshToken && { refreshToken }),
-        ...(expiresAt && { expiresAt }),
-        // For byoCredentials connectors, persist the user's OAuth client so
-        // server-side refresh can run without them re-authenticating.
-        ...(oauthClientId && { clientId: oauthClientId }),
-        ...(oauthClientSecret && { clientSecret: oauthClientSecret }),
-        ...(oauthTokenEndpoint && { tokenEndpoint: oauthTokenEndpoint }),
+        // Token refresh metadata — used by loadProvisionedMcpServers() to
+        // auto-refresh. For byoCredentials connectors this includes the user's
+        // own OAuth client so refresh runs without re-authenticating.
+        ...decision.meta,
       },
     };
 
     await writeMcpConfig(config);
 
-    return Response.json({ success: true, serverKey });
+    return Response.json({ success: true, serverKey: decision.serverKey });
   } catch (error) {
     console.error('[Provisioner] POST error:', error);
-    return Response.json(
-      { error: error instanceof Error ? error.message : 'Failed to provision connector' },
-      { status: 500 }
-    );
+    return Response.json({ error: 'Failed to provision connector' }, { status: 500 });
   }
 }
 
@@ -144,9 +131,6 @@ export async function DELETE(request: Request) {
     return Response.json({ success: true });
   } catch (error) {
     console.error('[Provisioner] DELETE error:', error);
-    return Response.json(
-      { error: error instanceof Error ? error.message : 'Failed to deprovision connector' },
-      { status: 500 }
-    );
+    return Response.json({ error: 'Failed to deprovision connector' }, { status: 500 });
   }
 }

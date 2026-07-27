@@ -35,6 +35,47 @@ export interface OAuthResult {
 }
 
 /**
+ * Build the provider's authorization URL. Extracted from startOAuthFlow so the
+ * per-provider parameter rules — Slack's comma-separated scopes, Google's
+ * access_type=offline — are testable without standing up a browser flow.
+ */
+export function buildAuthorizeUrl(
+  connector: ConnectorDefinition,
+  opts: { clientId: string; redirectUri: string; state: string; codeChallenge?: string },
+): string {
+  const authUrl = connector.auth.authUrl;
+  if (!authUrl) throw new Error(`Connector ${connector.id} has no authUrl`);
+
+  // Slack v2 OAuth uses comma-separated scopes; all other providers use space-separated.
+  const isSlackV2 = authUrl.includes('slack.com/oauth/v2');
+  const scopeSep = isSlackV2 ? ',' : ' ';
+  const params = new URLSearchParams({
+    client_id: opts.clientId,
+    redirect_uri: opts.redirectUri,
+    state: `${connector.id}:${opts.state}`,
+    ...(connector.auth.scopes?.length && { scope: connector.auth.scopes.join(scopeSep) }),
+  });
+
+  // Most OAuth2 providers expect response_type=code, but Slack v2 doesn't use it
+  if (!isSlackV2) {
+    params.set('response_type', 'code');
+  }
+
+  if (opts.codeChallenge) {
+    params.set('code_challenge', opts.codeChallenge);
+    params.set('code_challenge_method', 'S256');
+  }
+
+  // Provider quirks declared in the registry (e.g. Google's access_type=offline,
+  // without which no refresh_token is issued and the connection dies in ~1h).
+  for (const [key, value] of Object.entries(connector.auth.extraAuthParams ?? {})) {
+    params.set(key, value);
+  }
+
+  return `${authUrl}?${params.toString()}`;
+}
+
+/**
  * Start an OAuth2 authorization flow for a connector.
  * Opens an auth window, waits for the redirect with the auth code,
  * then exchanges the code for tokens server-side.
@@ -82,35 +123,7 @@ export async function startOAuthFlow(
   const callbackPath = connector.auth.redirectPath || DEFAULT_CALLBACK_PATH;
   const redirectUri = `${callbackOrigin}${callbackPath}`;
 
-  // Build authorization URL
-  // Slack v2 OAuth uses comma-separated scopes; all other providers use space-separated.
-  const isSlackV2 = connector.auth.authUrl.includes('slack.com/oauth/v2');
-  const scopeSep = isSlackV2 ? ',' : ' ';
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    state: `${connector.id}:${state}`,
-    ...(connector.auth.scopes?.length && { scope: connector.auth.scopes.join(scopeSep) }),
-  });
-
-  // Most OAuth2 providers expect response_type=code, but Slack v2 doesn't use it
-  if (!isSlackV2) {
-    params.set('response_type', 'code');
-  }
-
-  if (codeChallenge) {
-    params.set('code_challenge', codeChallenge);
-    params.set('code_challenge_method', 'S256');
-  }
-
-  // Atlassian requires audience param
-  if (connector.id === 'jira' || connector.id === 'confluence') {
-    params.set('audience', 'api.atlassian.com');
-    params.set('prompt', 'consent');
-  }
-
-  const authUrl = `${connector.auth.authUrl}?${params.toString()}`;
-  console.log('[OAuth] Auth URL:', authUrl);
+  const authUrl = buildAuthorizeUrl(connector, { clientId, redirectUri, state, codeChallenge });
 
   // Get the auth code — Electron intercepts the redirect, browser uses popup
   const { code, error } = await getAuthCode(authUrl, state, connector.id, callbackPath);

@@ -29,6 +29,13 @@ export interface ConnectorDefinition {
     fallbackClientId?: string;
     /** For oauth2 type: user brings their own clientId + clientSecret via a setup dialog (no env var / pre-registered app). */
     byoCredentials?: boolean;
+    /**
+     * Extra query params for the authorization request, for provider quirks.
+     * Google needs `access_type=offline` to issue a refresh_token at all, and
+     * `prompt=consent` to reissue one on re-auth — without them the connection
+     * dies when the access token expires (~1h) and cannot be refreshed.
+     */
+    extraAuthParams?: Record<string, string>;
   };
 
   // MCP server config

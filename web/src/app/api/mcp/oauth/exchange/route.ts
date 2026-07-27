@@ -1,6 +1,6 @@
 export const runtime = 'nodejs';
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { getMcpConfigPath, getMcpClientsPath } from '@/lib/app-paths';
@@ -22,6 +22,20 @@ export async function POST(request: Request) {
 
     if (!mcpName || !code || !codeVerifier || !redirectUri || !tokenEndpoint || !clientId) {
       return Response.json({ error: 'Missing required fields' }, { status: 400 });
+    }
+
+    // The authorization code and (for confidential clients) our client secret
+    // are POSTed to this URL, so it must at minimum be https — plaintext would
+    // put them on the wire. It cannot be origin-pinned the way registry
+    // connectors are, because a DCR server's token endpoint is discovered per
+    // RFC 8414 and often sits on a different host than the MCP URL. P3.4 should
+    // persist the discovered endpoint at registration time and stop trusting
+    // the client for it at all.
+    if (typeof tokenEndpoint !== 'string' || !URL.canParse(tokenEndpoint)) {
+      return Response.json({ error: 'Invalid tokenEndpoint' }, { status: 400 });
+    }
+    if (new URL(tokenEndpoint).protocol !== 'https:') {
+      return Response.json({ error: 'tokenEndpoint must be https' }, { status: 400 });
     }
 
     // Load client credentials (for client_secret if it's a confidential client)
@@ -111,7 +125,14 @@ export async function POST(request: Request) {
       },
     };
 
-    await writeFile(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2), 'utf-8');
+    // Owner-only: this file now holds a live access token, a refresh token and
+    // possibly a client secret. `mode` only applies on create, so chmod covers
+    // configs written before this was enforced.
+    await writeFile(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+    await chmod(MCP_CONFIG_FILE, 0o600).catch(() => {});
     console.log(`[MCP OAuth Exchange] Provisioned ${mcpName} at ${serverKey}`);
 
     return Response.json({
