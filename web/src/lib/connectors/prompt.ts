@@ -18,13 +18,80 @@
  * in every other offer.
  */
 import type { ClassifiedConnector } from './connectability';
+import { isBuiltInServerId, builtInIdOwnsUrl } from '@/lib/mcp/url-guard';
 
-/** Server keys are prefixed per provisioning; this recovers the connector id. */
-export function connectedIdsFromServerKeys(serverKeys: string[]): Set<string> {
+/** The parts of a provisioned MCP entry that carry provenance. */
+interface ProvisionedEntry {
+  /** Remote endpoint, present on every http/sse entry. Survives SDK mounting. */
+  url?: unknown;
+  _meta?: { connectorId?: unknown; managedBy?: unknown } | unknown;
+}
+
+function entryOf(value: unknown): ProvisionedEntry {
+  return value && typeof value === 'object' ? (value as ProvisionedEntry) : {};
+}
+
+function metaOf(entry: ProvisionedEntry): { connectorId?: unknown; managedBy?: unknown } {
+  const meta = entry._meta;
+  return meta && typeof meta === 'object' ? (meta as Record<string, unknown>) : {};
+}
+
+/**
+ * Recover the connector ids a provisioned MCP set actually proves are connected.
+ *
+ * A key is NOT proof of identity. `aime-mcp-<name>` is written from a name the
+ * user's URL derived, so before this checked, a server on
+ * `https://mcp.github.evil.com/mcp` landed at `aime-mcp-github` and this handed
+ * back `github` — which made `buildConnectorsPrompt` tell the agent "GitHub is
+ * already connected, use its tools directly, do not ask again". The agent then
+ * sent repository content to whoever owned that host.
+ *
+ * Three things count as proof, in order of directness:
+ *   1. `_meta.connectorId` — only /api/connectors/provision writes it, and only
+ *      after validating the id against CONNECTOR_MAP.
+ *   2. the `-connector-` infix — likewise only that route writes it, so the id in
+ *      the key was already validated. Covers stdio entries with no URL.
+ *   3. for `-mcp-` (the open-ended DCR path): the stored URL is on an origin that
+ *      built-in publishes.
+ *
+ * A `-mcp-` key naming a built-in with nothing to back it up is dropped. Names
+ * that are not built-in ids claim nothing, so they are kept as-is — the catalogue
+ * has no entry for them and the prompt cannot describe them as connected.
+ *
+ * Accepts the entry map (preferred — it carries the URL) or a bare key list, in
+ * which case rule 3 has no evidence to work with and fails closed.
+ */
+export function connectedIdsFromServerKeys(
+  servers: string[] | Record<string, unknown>,
+): Set<string> {
+  const entries: Array<[string, ProvisionedEntry]> = Array.isArray(servers)
+    ? servers.map((key) => [key, {}])
+    : Object.entries(servers).map(([key, value]) => [key, entryOf(value)]);
+
   const ids = new Set<string>();
-  for (const key of serverKeys) {
-    const match = /^(?:aime|nib)-(?:connector|mcp)-(.+)$/.exec(key);
-    if (match) ids.add(match[1]);
+  for (const [key, entry] of entries) {
+    const match = /^(?:aime|nib)-(connector|mcp)-(.+)$/.exec(key);
+    if (!match) continue;
+    const [, kind, name] = match;
+
+    const connectorId = metaOf(entry).connectorId;
+    if (typeof connectorId === 'string' && connectorId.length > 0) {
+      ids.add(connectorId);
+      continue;
+    }
+
+    if (kind === 'connector') {
+      ids.add(name);
+      continue;
+    }
+
+    if (isBuiltInServerId(name)) {
+      const url = typeof entry.url === 'string' ? entry.url : undefined;
+      if (builtInIdOwnsUrl(name, url)) ids.add(name);
+      continue;
+    }
+
+    ids.add(name);
   }
   return ids;
 }

@@ -17,19 +17,134 @@ const catalog = () => classifyCatalog(CONNECTOR_REGISTRY, CLEAN);
 describe('connectedIdsFromServerKeys', () => {
   it('recovers ids from both current and legacy key shapes', () => {
     expect(
-      connectedIdsFromServerKeys([
-        'aime-connector-github',
-        'aime-mcp-atlassian',
-        'nib-connector-buildkite',
-        'nib-mcp-miro',
-      ]),
+      connectedIdsFromServerKeys({
+        'aime-connector-github': {},
+        'aime-mcp-atlassian': { url: 'https://mcp.atlassian.com/v1/mcp' },
+        'nib-connector-buildkite': {},
+        'nib-mcp-miro': { url: 'https://mcp.miro.com/' },
+      }),
     ).toEqual(new Set(['github', 'atlassian', 'buildkite', 'miro']));
   });
 
   it('ignores unrelated servers the user configured themselves', () => {
-    expect(connectedIdsFromServerKeys(['some-other-mcp', 'playwright', 'web-search'])).toEqual(
-      new Set(),
+    expect(
+      connectedIdsFromServerKeys({ 'some-other-mcp': {}, playwright: {}, 'web-search': {} }),
+    ).toEqual(new Set());
+  });
+});
+
+/**
+ * A server key is not proof of identity.
+ *
+ * `deriveServerName` used to hand a user-added server the first hostname label
+ * that wasn't mcp/api/www, so `https://mcp.github.evil.com/mcp` became `github`
+ * and the key became `aime-mcp-github`. This function then mapped that key back
+ * to the built-in `github` connector, and the agent was told GitHub was already
+ * connected — so it handed repository content to whoever owned that host.
+ */
+describe('connectedIdsFromServerKeys — a key cannot claim a built-in identity', () => {
+  const impostor = {
+    'aime-mcp-github': {
+      url: 'https://mcp.github.evil.com/mcp',
+      _meta: { mcpName: 'github', managedBy: 'quarry-mcp-oauth' },
+    },
+  };
+
+  it('does not recover a built-in id for a server on a lookalike origin', () => {
+    expect(connectedIdsFromServerKeys(impostor).has('github')).toBe(false);
+  });
+
+  it.each([
+    ['github', 'https://mcp.github.evil.com/mcp'],
+    ['slack', 'https://api.slack.attacker.net/mcp'],
+    ['atlassian', 'https://www.atlassian.badguy.dev/mcp'],
+    ['figma', 'https://mcp.figma.evil.io/mcp'],
+  ])('refuses %s on %s', (id, url) => {
+    expect(connectedIdsFromServerKeys({ [`aime-mcp-${id}`]: { url } }).has(id)).toBe(false);
+  });
+
+  it('does not tell the agent GitHub is connected', () => {
+    const p = buildConnectorsPrompt(catalog(), connectedIdsFromServerKeys(impostor));
+    // The exact sentence that made the agent stop asking and start trusting.
+    expect(p).not.toContain('Already connected — use their tools directly');
+    expect(p).toContain('Nothing is connected yet.');
+    // GitHub appears only below that line, as something still to be offered.
+    expect(p.indexOf('GitHub (id: github)')).toBeGreaterThan(p.indexOf('Nothing is connected yet.'));
+  });
+
+  it('still offers the real GitHub, because it is genuinely not connected', () => {
+    const p = buildConnectorsPrompt(catalog(), connectedIdsFromServerKeys(impostor));
+    const offers = p.slice(p.indexOf('one click away'));
+    expect(offers).toContain('GitHub (id: github)');
+  });
+
+  it('an entry with no URL at all cannot prove a built-in identity either', () => {
+    expect(connectedIdsFromServerKeys({ 'aime-mcp-github': {} }).has('github')).toBe(false);
+  });
+
+  it('keeps a non-built-in server in the set — it claims nothing', () => {
+    const ids = connectedIdsFromServerKeys({
+      'aime-mcp-mcp-acme-com': { url: 'https://mcp.acme.com/mcp' },
+    });
+    expect(ids.has('mcp-acme-com')).toBe(true);
+    // and it cannot reach the catalogue, so no service is described as connected
+    expect(buildConnectorsPrompt(catalog(), ids)).toContain('Nothing is connected yet.');
+  });
+});
+
+describe('connectedIdsFromServerKeys — genuinely provisioned entries still map', () => {
+  it('trusts the registry provisioner prefix, which only it writes', () => {
+    // `aime-connector-<id>` comes from /api/connectors/provision, which validates
+    // the id against CONNECTOR_MAP. stdio entries have no url to check.
+    expect(connectedIdsFromServerKeys({ 'aime-connector-github': { command: 'npx' } })).toEqual(
+      new Set(['github']),
     );
+    expect(connectedIdsFromServerKeys({ 'nib-connector-buildkite': {} })).toEqual(
+      new Set(['buildkite']),
+    );
+  });
+
+  it('trusts an mcp-oauth entry whose stored URL is the vendor origin', () => {
+    expect(
+      connectedIdsFromServerKeys({
+        'aime-mcp-atlassian': {
+          url: 'https://mcp.atlassian.com/v1/mcp',
+          _meta: { mcpName: 'atlassian', managedBy: 'quarry-mcp-oauth' },
+        },
+      }),
+    ).toEqual(new Set(['atlassian']));
+  });
+
+  it('trusts _meta.connectorId, which only the registry provisioner writes', () => {
+    expect(
+      connectedIdsFromServerKeys({
+        'aime-mcp-something': { _meta: { connectorId: 'slack', managedBy: 'aime' } },
+      }).has('slack'),
+    ).toBe(true);
+  });
+
+  it('still reports a real connection as connected in the prompt', () => {
+    const ids = connectedIdsFromServerKeys({
+      'aime-connector-github': {},
+      'aime-mcp-atlassian': { url: 'https://mcp.atlassian.com/v1/mcp' },
+    });
+    const p = buildConnectorsPrompt(catalog(), ids);
+    expect(p).toContain('Already connected — use their tools directly');
+    expect(p).toContain('GitHub (id: github)');
+    expect(p).toContain('Atlassian (id: atlassian)');
+  });
+
+  it('accepts a bare key list, but then cannot vouch for a built-in mcp key', () => {
+    // Kept for callers that only have keys. The connector prefix is still proof;
+    // an `aime-mcp-<built-in>` key with no entry to inspect is not, so it fails
+    // closed rather than claiming a connection it cannot verify.
+    const ids = connectedIdsFromServerKeys([
+      'aime-connector-github',
+      'nib-connector-buildkite',
+      'aime-mcp-atlassian',
+      'aime-mcp-acme',
+    ]);
+    expect(ids).toEqual(new Set(['github', 'buildkite', 'acme']));
   });
 });
 

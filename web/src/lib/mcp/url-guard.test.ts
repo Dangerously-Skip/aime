@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { validateMcpServerUrl, deriveServerName } from './url-guard';
+import {
+  validateMcpServerUrl,
+  deriveServerName,
+  hostSlugName,
+  isBuiltInServerId,
+  builtInIdOwnsUrl,
+} from './url-guard';
 import { sanitizePluginName } from './install-guard';
+import { CONNECTOR_REGISTRY } from '@/lib/connectors/registry';
+import { MCP_CATALOG } from '@/lib/mcp/catalog';
 
 /**
  * This guard stands between a request body and a server-side fetch, so it gets
@@ -121,7 +129,14 @@ describe('validateMcpServerUrl — malformed input', () => {
   });
 });
 
-describe('validateMcpServerUrl — properties', () => {
+/**
+ * `fc.webUrl` generation dominates the runtime here — a thousand samples already
+ * spends most of the 5s default, so a cold or loaded runner turns a passing
+ * property into a red build. The timeout is raised rather than the sample count
+ * lowered: these are the security properties, and a flaky suite is worse than a
+ * slow one.
+ */
+describe('validateMcpServerUrl — properties', { timeout: 30_000 }, () => {
   it('never throws, for any input at all', () => {
     fc.assert(
       fc.property(
@@ -172,7 +187,7 @@ describe('validateMcpServerUrl — properties', () => {
   });
 });
 
-describe('deriveServerName', () => {
+describe('deriveServerName', { timeout: 30_000 }, () => {
   it('names a server after its organisation, not its service label', () => {
     expect(deriveServerName('https://mcp.atlassian.com/v1/mcp')).toBe('atlassian');
     expect(deriveServerName('https://api.githubcopilot.com/mcp/')).toBe('githubcopilot');
@@ -213,5 +228,119 @@ describe('deriveServerName', () => {
       }),
       { numRuns: 500 },
     );
+  });
+});
+
+/**
+ * A derived name is not just a label: it becomes the config key
+ * `aime-mcp-<name>`, and consumers map that key back to a built-in connector id
+ * — the chat route's "already connected" prompt, and the Connectors page's green
+ * toggle. So "first label that isn't mcp/api/www" was an identity claim that any
+ * hostname could forge.
+ */
+describe('deriveServerName — a name is an identity claim, not a label', () => {
+  const lookalikes: Array<[string, string]> = [
+    ['https://mcp.github.evil.com/mcp', 'github'],
+    ['https://api.slack.attacker.net/mcp', 'slack'],
+    ['https://mcp.notion.com.evil.io/mcp', 'notion'],
+    ['https://www.atlassian.badguy.dev/mcp', 'atlassian'],
+  ];
+
+  it.each(lookalikes)('%s must not be able to call itself %s', (url, claimed) => {
+    const name = deriveServerName(url);
+    expect(name, url).toBeTruthy();
+    expect(name, url).not.toBe(claimed);
+    // …and not any OTHER built-in id either
+    const builtIn = new Set([
+      ...CONNECTOR_REGISTRY.map((c) => c.id),
+      ...MCP_CATALOG.map((s) => s.id),
+    ]);
+    expect(builtIn.has(name as string), `${url} → ${name}`).toBe(false);
+    // still has to be usable as a directory and a config key
+    expect(sanitizePluginName(name).ok, `${url} → ${name}`).toBe(true);
+  });
+
+  it('keeps the built-in name when the origin really is the built-in one', () => {
+    // Adding the real vendor endpoint by URL must still land on the canonical id,
+    // otherwise the same service shows up twice.
+    expect(deriveServerName('https://mcp.atlassian.com/v1/mcp')).toBe('atlassian');
+    expect(deriveServerName('https://mcp.figma.com/mcp')).toBe('figma');
+    expect(deriveServerName('https://mcp.miro.com/')).toBe('miro');
+    expect(deriveServerName('https://mcp.slack.com/mcp')).toBe('slack');
+    // catalogue entries are identities too
+    expect(deriveServerName('https://mcp.linear.app/mcp')).toBe('linear');
+    expect(deriveServerName('https://mcp.notion.com/mcp')).toBe('notion');
+    // a different path on the same origin is the same server
+    expect(deriveServerName('https://mcp.atlassian.com/v2/sse')).toBe('atlassian');
+  });
+
+  it('leaves an ordinary third-party name alone', () => {
+    expect(deriveServerName('https://mcp.acme.com/mcp')).toBe('acme');
+    expect(deriveServerName('https://api.githubcopilot.com/mcp/')).toBe('githubcopilot');
+    expect(deriveServerName('https://mcp.acme.co.uk/mcp')).toBe('acme');
+  });
+});
+
+describe('hostSlugName — the disambiguator', { timeout: 30_000 }, () => {
+  it('distinguishes vendors that share a label', () => {
+    // These three all derive `acme`; the whole point is that they stay distinct.
+    const names = ['https://mcp.acme.com/mcp', 'https://acme.io/mcp', 'https://api.acme.co.uk/mcp'].map(
+      (u) => hostSlugName(u),
+    );
+    expect(new Set(names).size).toBe(3);
+    expect(names).toEqual(['mcp-acme-com', 'acme-io', 'api-acme-co-uk']);
+  });
+
+  it('keeps a non-default port, because it is part of the origin', () => {
+    expect(hostSlugName('https://mcp.acme.com:8443/mcp')).toBe('mcp-acme-com-8443');
+    expect(hostSlugName('https://mcp.acme.com/mcp')).toBe('mcp-acme-com');
+  });
+
+  it('is always allowlist-safe or null', () => {
+    fc.assert(
+      fc.property(fc.webUrl(), (u) => {
+        const name = hostSlugName(u);
+        if (name === null) return;
+        expect(sanitizePluginName(name).ok, `${u} → ${name}`).toBe(true);
+      }),
+      { numRuns: 500 },
+    );
+  });
+
+  it('returns null for something unparseable', () => {
+    expect(hostSlugName('not a url')).toBeNull();
+  });
+});
+
+describe('built-in identity lookup', () => {
+  it('knows every shipped connector and catalogue id', () => {
+    for (const c of CONNECTOR_REGISTRY) expect(isBuiltInServerId(c.id), c.id).toBe(true);
+    for (const s of MCP_CATALOG) expect(isBuiltInServerId(s.id), s.id).toBe(true);
+    expect(isBuiltInServerId('acme')).toBe(false);
+    expect(isBuiltInServerId('mcp-github-evil-com')).toBe(false);
+  });
+
+  it('matches only on origin, so a path or a query cannot change identity', () => {
+    expect(builtInIdOwnsUrl('atlassian', 'https://mcp.atlassian.com/v1/mcp')).toBe(true);
+    expect(builtInIdOwnsUrl('atlassian', 'https://mcp.atlassian.com/anything?x=1')).toBe(true);
+    expect(builtInIdOwnsUrl('atlassian', 'https://mcp.atlassian.com.evil.io/v1/mcp')).toBe(false);
+    expect(builtInIdOwnsUrl('github', 'https://api.githubcopilot.com/mcp/')).toBe(true);
+    expect(builtInIdOwnsUrl('github', 'https://mcp.github.evil.com/mcp')).toBe(false);
+    // a connector with no MCP endpoint of its own can never be proven this way
+    expect(builtInIdOwnsUrl('buildkite', 'https://mcp.buildkite.com/mcp')).toBe(false);
+    expect(builtInIdOwnsUrl('atlassian', undefined)).toBe(false);
+  });
+
+  it('tolerates the {placeholder} URLs Microsoft connectors declare', () => {
+    // {tenant_id} sits in the path, so the origin is still literal.
+    expect(
+      builtInIdOwnsUrl(
+        'outlook-mail',
+        'https://agent365.svc.cloud.microsoft/agents/tenants/abc-123/servers/mcp_MailTools',
+      ),
+    ).toBe(true);
+    expect(
+      builtInIdOwnsUrl('outlook-mail', 'https://agent365.svc.cloud.microsoft.evil.io/x'),
+    ).toBe(false);
   });
 });

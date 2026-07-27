@@ -160,11 +160,28 @@ export function injectSecrets(entry: Entry, secrets: EntrySecrets | undefined): 
 }
 
 /**
- * Does this entry still carry a secret inline? Used to decide whether an
- * existing config needs migrating.
+ * Is a credential still MISSING from this entry — i.e. does the sentinel survive
+ * where a secret should be?
+ *
+ * True means `injectSecrets` had nothing to put back: the store is keyless,
+ * unreadable, or simply has no record for this server. Such an entry must not be
+ * handed to the SDK, because the sentinel would be transmitted to the third party
+ * as the bearer token. (The previous predicate here, `hasInlineSecrets`, answered
+ * the opposite question, had no production caller, and its docstring claimed a
+ * role in migration that `extractSecrets` + `isEmptySecrets` actually fill.)
+ *
+ * Only env and headers are checked: those are the values that go over the wire.
+ * `_meta` secrets are dropped rather than placeholdered, and never reach the SDK.
  */
-export function hasInlineSecrets(entry: Entry): boolean {
-  return !isEmptySecrets(extractSecrets(entry).secrets);
+export function hasUnresolvedSecrets(entry: Entry): boolean {
+  const carriesPlaceholder = (bag: unknown): boolean =>
+    !!bag &&
+    typeof bag === 'object' &&
+    !Array.isArray(bag) &&
+    Object.values(bag as Record<string, unknown>).some(
+      (value) => typeof value === 'string' && value.includes(SECRET_PLACEHOLDER),
+    );
+  return carriesPlaceholder(entry.env) || carriesPlaceholder(entry.headers);
 }
 
 /** True when there is nothing to store — avoids writing empty records. */

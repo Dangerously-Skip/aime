@@ -231,17 +231,42 @@ export async function loadProvisionedMcpServers(): Promise<Record<string, unknow
     readMcpConfigFile(appConfigPath),
   ]);
   // Re-unite each entry with its secrets (DR-14). They live in the encrypted
-  // store; the config holds only structure plus a visible placeholder. When there
-  // is no master key the store is inert and the secrets were never lifted out, so
-  // the entries already carry them.
+  // store; the config holds only structure plus a visible placeholder.
+  //
+  // An entry whose placeholder SURVIVES injection is dropped rather than mounted.
+  // The old comment here claimed this could not happen — "with no master key the
+  // store is inert and the secrets were never lifted out, so the entries already
+  // carry them" — which is false for a config that a KEYED run already migrated.
+  // `npm run electron:dev` passes no AIME_CRED_KEY while the packaged app does, and
+  // both read the same ~/.claude/.aime-mcp.json, so running one after the other
+  // left every entry placeholdered with nothing to fill it. Mounting those sent
+  // `Bearer ${AIME_SECRET}` to the service as if it were a token. Dropping the
+  // entry instead means the connector is simply not connected for this run, which
+  // the connectors prompt already surfaces to the agent as reconnectable.
   const { getMcpSecretStore } = await import('./secret-store');
-  const { injectSecrets } = await import('./secrets');
+  const { injectSecrets, hasUnresolvedSecrets } = await import('./secrets');
   const secretStore = getMcpSecretStore();
   const withSecrets: Record<string, unknown> = {};
+  const unresolved: string[] = [];
   for (const [key, entry] of Object.entries(appServers)) {
-    withSecrets[key] = injectSecrets(
-      entry as Record<string, unknown>,
-      await secretStore.get(key),
+    const injected = injectSecrets(entry as Record<string, unknown>, await secretStore.get(key));
+    if (hasUnresolvedSecrets(injected)) {
+      unresolved.push(key);
+      continue;
+    }
+    withSecrets[key] = injected;
+  }
+  if (unresolved.length > 0) {
+    const why =
+      secretStore.mode === 'encrypted'
+        ? 'the encrypted store holds no record for them'
+        : secretStore.mode === 'unreadable'
+          ? 'the encrypted store cannot be decrypted with the current master key'
+          : 'this process has no credential master key, and their secrets were already moved into the encrypted store';
+    console.warn(
+      `[MCP] Not mounting ${unresolved.join(', ')} — ${why}. Reconnect the connector, ` +
+        `or run the packaged app so the OS keychain can supply the key. ` +
+        `(Mounting them would send the placeholder to the service as the credential.)`,
     );
   }
 

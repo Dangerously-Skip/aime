@@ -57,7 +57,14 @@ const READ_VERBS = /^(get|list|read|search|fetch|find|query|describe|view|show|c
  * expensive mistakes — ahead of the obvious create/send/delete family.
  */
 const CONSEQUENTIAL_VERBS =
-  /^(send|post|create|update|delete|remove|publish|deploy|write|edit|upload|merge|submit|pay|purchase|buy|book|order|cancel|approve|reject|archive|move|rename|set|add|invite|schedule|reply|forward|transfer|execute|run|trigger|kill|restart|stop|start|apply|patch|push|revoke|grant|assign|close|reopen|label|comment)([_-]|$)/i;
+  /^(send|post|create|update|delete|remove|publish|deploy|write|edit|replace|upload|merge|submit|pay|purchase|buy|book|order|cancel|approve|reject|archive|move|rename|set|add|invite|schedule|reply|forward|transfer|execute|run|trigger|kill|restart|stop|start|apply|patch|push|revoke|grant|assign|close|reopen|label|comment)([_-]|$)/i;
+
+/**
+ * Segments that join two operations into one tool name: `findAndReplace`,
+ * `getOrCreateChannel`. Their presence means the leading verb describes only
+ * HALF of what the tool does, so the other half has to be judged too.
+ */
+const CONJUNCTIONS = /^(and|or|then)$/i;
 
 /** The tool's own name with any MCP server prefix stripped. */
 export function baseToolName(toolName: string): string {
@@ -104,28 +111,66 @@ const GIT_READ_SUBCOMMANDS = new Set([
 ]);
 
 /**
+ * Where one command ends and the next begins.
+ *
+ * Every control operator a POSIX shell (and bash) honours is built purely from
+ * these characters — `;` `;;` `|` `||` `&` `&&` `|&` — plus the newline, which
+ * separates commands just as surely as `;` does. One character class therefore
+ * covers the lot, and the `+` collapses runs so `&&` is a single separator
+ * rather than two with an empty segment wedged between them. `\r` is included
+ * so a command authored on Windows (`\r\n`) does not arrive as one long line.
+ *
+ * The previous list — `/\|\||&&|;|\|/` — omitted the single `&` and the newline,
+ * so `ls & rm -rf ~` and `ls\nrm -rf ~` were one "command" whose first word was
+ * `ls`: classified 'read', and 'read' is ungated under EVERY policy.
+ */
+const SEGMENT_SEPARATORS = /[;|&\n\r]+/;
+
+/**
+ * Where one word ends and the next begins — the shell's blanks, space and tab,
+ * and deliberately NOT JS `\s`. `\s` matches the newline (so a second command
+ * hid behind words[0] once the segment split missed it) and also `\v`, `\f` and
+ * NBSP, which the shell lexer treats as ordinary word characters. Splitting on
+ * horizontal whitespace only means an unrecognised word stays unrecognised
+ * instead of being read as a known-safe binary.
+ */
+const WORD_SEPARATORS = /[ \t]+/;
+
+/** Leading environment assignment: `FOO=bar cmd …`. */
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/**
  * Classify a shell command. Deliberately conservative: a command is 'read' only
  * when EVERY pipeline segment starts with a known read-only binary and the
  * command contains no redirection or substitution. Everything else —
  * including anything we can't parse — is consequential, because Bash is
  * arbitrary code execution and a misclassified `rm` is unrecoverable while a
  * misclassified `ls` merely asks for an approval it didn't need.
+ *
+ * Constructs we don't parse rather than allow: subshells and groups (`(…)`,
+ * `{…;}`) keep their bracket attached to the first word, so they never match a
+ * read-only binary; a backslash line continuation leaves an argument list as
+ * its own segment, which likewise doesn't. Both land on 'consequential', which
+ * is the direction to be wrong in.
  */
 export function classifyBash(command: unknown): ToolClass {
   if (typeof command !== 'string' || !command.trim()) return 'unknown';
   const text = command.trim();
 
-  // Redirection, substitution or background execution ⇒ side effects (or the
-  // ability to smuggle them). `>` also catches `>>`.
+  // Redirection or substitution ⇒ side effects (or the ability to smuggle them).
+  // `>` also catches `>>`. A TRAILING `&` backgrounds the last command, which
+  // then outlives the turn with nothing watching it — consequential regardless
+  // of what it runs. An `&` anywhere else is a separator (see above), so both
+  // halves get classified on their own merits.
   if (/[><]|\$\(|`|&\s*$/.test(text)) return 'consequential';
 
   // Every segment of a pipeline / command list must independently read.
-  const segments = text.split(/\|\||&&|;|\|/).map((s) => s.trim()).filter(Boolean);
+  const segments = text.split(SEGMENT_SEPARATORS).map((s) => s.trim()).filter(Boolean);
   if (!segments.length) return 'unknown';
 
   for (const segment of segments) {
     // Strip leading env assignments (FOO=bar cmd …).
-    const words = segment.split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+    const words = segment.split(WORD_SEPARATORS).filter((w) => !ENV_ASSIGNMENT.test(w));
     const bin = words[0]?.toLowerCase();
     if (!bin) return 'consequential';
 
@@ -154,10 +199,29 @@ export function classifyToolCall(toolName: string, input?: Record<string, unknow
   if (name.startsWith('browser_')) return 'app';
 
   // Verb matching runs against a camelCase-split form so `getIssue` is read the
-  // same way `get_issue` is — see splitCamelCase.
-  const forVerbs = splitCamelCase(name);
-  if (READ_VERBS.test(forVerbs)) return 'read';
-  if (CONSEQUENTIAL_VERBS.test(forVerbs)) return 'consequential';
+  // same way `get_issue` is — see splitCamelCase. Not filtered for empties: a
+  // leading separator (`_getThing`) must keep failing to match a read verb.
+  const segments = splitCamelCase(name).split(/[_-]+/);
+
+  // A consequential verb in ANY segment outranks a read verb in the first one.
+  // Testing only the leading segment meant `findAndReplace`,
+  // `checkAndSendInvoice` and `getOrCreateChannel` all classified 'read' — and
+  // 'read' is not gated by any policy, while tool-policy.ts turns it into
+  // `always_allow` and pushes it into the SDK, where canUseTool never sees the
+  // call at all. The read verb describes half the tool; the other half acts.
+  if (segments.some((s) => CONSEQUENTIAL_VERBS.test(s))) return 'consequential';
+
+  if (READ_VERBS.test(segments[0])) {
+    // A conjunction promises a second operation. If we can't see that it also
+    // only reads, we don't get to call the whole name a read: `findAndReplace`
+    // is caught above, but `findAndFrobnicate` is an unknown, not a find.
+    const conjunction = segments.findIndex((s, i) => i > 0 && CONJUNCTIONS.test(s));
+    if (conjunction !== -1) {
+      const second = segments[conjunction + 1];
+      if (!second || !READ_VERBS.test(second)) return 'unknown';
+    }
+    return 'read';
+  }
   return 'unknown';
 }
 

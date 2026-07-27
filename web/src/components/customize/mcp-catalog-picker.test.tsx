@@ -102,6 +102,23 @@ describe('McpCatalogPicker', () => {
     expect(screen.getByText(/can still be added by URL/)).toBeTruthy();
   });
 
+  it('will not silently reuse a registration held by another origin', async () => {
+    // A catalogue entry's id IS its identity, so it cannot be renamed away from a
+    // conflict. Refusing loudly is the only safe outcome: reusing would show the
+    // consent screen of whatever else holds that name.
+    runMcpOAuthFlow.mockRejectedValue(
+      new Error(
+        '“notion” is already connected to a different server (https://mcp.notion.com.evil.io). Disconnect it first, or add this one under another name.',
+      ),
+    );
+    render(<McpCatalogPicker onConnected={onConnected} />);
+    fireEvent.click(connectButtonFor('Notion'));
+
+    expect(await screen.findByText(/already connected to a different server/)).toBeTruthy();
+    expect(onConnected).not.toHaveBeenCalled();
+    expect(cardFor('Notion').textContent).not.toContain('Connected');
+  });
+
   it('disables other buttons while one connection is in flight', async () => {
     let release: (v: unknown) => void = () => {};
     runMcpOAuthFlow.mockImplementation(() => new Promise((r) => { release = r; }));

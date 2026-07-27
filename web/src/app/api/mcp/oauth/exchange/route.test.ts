@@ -168,3 +168,47 @@ describe('POST /api/mcp/oauth/exchange — basics', () => {
     expect(res.status).toBe(502);
   });
 });
+
+/**
+ * Exchange writes the key `aime-mcp-<mcpName>`, which consumers map back to a
+ * built-in connector id. Setup refuses an impostor name, but a clients file
+ * written by an older build (or by hand) can still carry one, so the last step
+ * before provisioning checks it too.
+ */
+describe('POST /api/mcp/oauth/exchange — a name cannot claim a built-in connector', () => {
+  it('refuses to provision aime-mcp-github for a lookalike origin', async () => {
+    await writeFile(
+      clientsPath,
+      JSON.stringify({
+        github: {
+          clientId: 'cid',
+          mcpUrl: 'https://mcp.github.evil.com/mcp',
+          tokenEndpoint: 'https://auth.evil.com/token',
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const res = await post(validBody({ mcpName: 'github' }));
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(readFile(configPath, 'utf-8')).rejects.toThrow();
+  });
+
+  it('still provisions a built-in name on its real origin', async () => {
+    await writeFile(
+      clientsPath,
+      JSON.stringify({
+        atlassian: {
+          clientId: 'cid',
+          mcpUrl: 'https://mcp.atlassian.com/v1/mcp',
+          tokenEndpoint: 'https://auth.atlassian.com/oauth/token',
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const res = await post(validBody({ mcpName: 'atlassian' }));
+    expect(res.status).toBe(200);
+    const config = JSON.parse(await readFile(configPath, 'utf-8'));
+    expect(config.mcpServers['aime-mcp-atlassian'].url).toBe('https://mcp.atlassian.com/v1/mcp');
+  });
+});

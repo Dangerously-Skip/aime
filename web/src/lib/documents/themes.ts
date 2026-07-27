@@ -177,8 +177,18 @@ export const DOCUMENT_THEMES: Record<ThemeId, DocumentTheme> = {
 
 export const DEFAULT_THEME: ThemeId = 'report';
 
+/**
+ * Resolve a theme id, falling back to the default for anything unrecognised.
+ *
+ * OWN properties only. The guard was `id in DOCUMENT_THEMES`, and `in` walks the
+ * prototype chain — so 'constructor', '__proto__', 'toString', 'valueOf',
+ * 'hasOwnProperty' and 'isPrototypeOf' all passed it and returned something that
+ * is not a theme, and every caller then read `.page.size` off undefined. The
+ * DocumentCreate tool declares `theme` as a free-form `z.string()`, so the id
+ * really is arbitrary model output and the fallback has to be total.
+ */
 export function getTheme(id: unknown): DocumentTheme {
-  return typeof id === 'string' && id in DOCUMENT_THEMES
+  return typeof id === 'string' && Object.hasOwn(DOCUMENT_THEMES, id)
     ? DOCUMENT_THEMES[id as ThemeId]
     : DOCUMENT_THEMES[DEFAULT_THEME];
 }
