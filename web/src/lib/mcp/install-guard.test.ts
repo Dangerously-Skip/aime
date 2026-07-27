@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { join, normalize } from 'path';
+import path, { join, normalize } from 'path';
 import {
   sanitizePluginName,
   resolveInstallDir,
@@ -67,6 +67,27 @@ describe('resolveInstallDir', () => {
     // second line of defence: if the charset rule were loosened, this still holds
     for (const n of ['../evil', 'a/b', '../../etc']) {
       expect(resolveInstallDir(PLUGINS, n).ok, n).toBe(false);
+    }
+  });
+
+  it('regression: resolves an ordinary name under a WINDOWS plugins dir', () => {
+    // THE BUG THIS FUNCTION EXISTS NOT TO HAVE. The earlier string-prefix version
+    // hardcoded '/', so on Windows the normalised target held backslashes while
+    // the prefix still held a forward slash: every install and uninstall answered
+    // "escapes the plugins directory" on a shipped build. It was never asserted,
+    // because the module read ambient `path` and every string here is posix — so
+    // the containment rule now takes a flavour purely so this test can exist.
+    expect(
+      resolveInstallDir('C:\\Users\\u\\.claude\\plugins', 'github-mcp', { flavour: path.win32 }),
+    ).toEqual({ ok: true, value: 'C:\\Users\\u\\.claude\\plugins\\github-mcp' });
+  });
+
+  it('still refuses a win32 escape when reasoning in win32', () => {
+    for (const n of ['..\\evil', '..\\..\\Windows', 'a\\b', 'C:\\Windows', '..', '../evil']) {
+      expect(
+        resolveInstallDir('C:\\Users\\u\\.claude\\plugins', n, { flavour: path.win32 }).ok,
+        n,
+      ).toBe(false);
     }
   });
 });

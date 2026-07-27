@@ -66,6 +66,7 @@ import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useRunRecorder } from "@/hooks/use-run-recorder";
+import { useCloseRunOnAbort } from "@/hooks/use-close-run-on-abort";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
@@ -638,7 +639,6 @@ export function CodeSurface() {
   const stopStreaming = useCodeStore((s) => s.stopStreaming);
   const setCurrentChat = useCodeStore((s) => s.setCurrentChat);
   const setIsStreaming = useCodeStore((s) => s.setIsStreaming);
-  const setStreamError = useCodeStore((s) => s.setStreamError);
   const setSessionStatus = useCodeStore((s) => s.setSessionStatus);
   const updateConversation = useConversationStore((s) => s.updateConversation);
   const addConversation = useConversationStore((s) => s.addConversation);
@@ -767,11 +767,20 @@ export function CodeSurface() {
   // Records a Run per turn so every execution leaves a durable trace with its
   // cost attached (P6 substrate — see lib/runs).
   const runRecorder = useRunRecorder("code");
+  // An aborted stream reaches neither onDone nor onError, so without this a Stop
+  // or a conversation switch leaves the Run 'running' for ever.
+  const ownsChat = useCallback(
+    (id: string) => !!useCodeStore.getState().messages[id]?.length,
+    [],
+  );
+  useCloseRunOnAbort(runRecorder.finish, ownsChat);
 
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
-    setStreamError,
+    // Required by the hook, read by nothing: stream failures reach the user via
+    // `onError` below. The write-only store field it fed is gone.
+    setStreamError: () => undefined,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
       switch (event.type) {

@@ -436,3 +436,38 @@ describe('writing voice injection (P4)', () => {
     expect(promptText()).not.toContain('put their name to');
   });
 });
+
+/**
+ * DEFECT 2 (regression): the documented "no connected client" fallbacks were
+ * unreachable on the HTTP path. This route defined onInputRequest,
+ * onConnectorRequest and onDocumentPrint for EVERY request, and the provider
+ * decides "can we relay to a human?" by whether those callbacks exist. The webhook
+ * route server-side fetches this endpoint and never acts on the events, so a
+ * DocumentCreate stalled for the full print budget and then reported an invented
+ * failure, and an AskUserQuestion would stall for five minutes.
+ *
+ * Whether anyone is ACTING on the stream is knowable only at the caller, so the
+ * caller now says.
+ */
+describe('client-relay callbacks (regression)', () => {
+  it('withholds all three relay callbacks when the caller says it cannot relay', async () => {
+    await post('cowork', { message: 'hi', chatId: 'nr-1', canRelayToClient: false });
+    const params = providerParams();
+    expect(params.onDocumentPrint).toBeUndefined();
+    expect(params.onConnectorRequest).toBeUndefined();
+    expect(params.onInputRequest).toBeUndefined();
+  });
+
+  it('relays by default, so an ordinary renderer is unaffected', async () => {
+    await post('cowork', { message: 'hi', chatId: 'nr-2' });
+    const params = providerParams();
+    expect(typeof params.onDocumentPrint).toBe('function');
+    expect(typeof params.onConnectorRequest).toBe('function');
+    expect(typeof params.onInputRequest).toBe('function');
+  });
+
+  it('treats an explicit true the same as absence', async () => {
+    await post('cowork', { message: 'hi', chatId: 'nr-3', canRelayToClient: true });
+    expect(typeof providerParams().onDocumentPrint).toBe('function');
+  });
+});

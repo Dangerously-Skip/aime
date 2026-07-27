@@ -49,6 +49,12 @@ interface MessageListProps {
   messages: Message[];
   className?: string;
   onQuestionAnswered?: (toolUseId: string, answers: Record<string, string>) => void;
+  /**
+   * A connect request has been answered for good. The surface records it on the
+   * message (`connectorRequestSettled`), which is what makes the answer survive a
+   * conversation switch or a restart — the card's own phase does not.
+   */
+  onConnectorSettled?: (toolUseId: string) => void;
   onArtifactClick?: (pathOrArtifact: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
   onRetry?: () => void;
@@ -59,7 +65,7 @@ interface MessageListProps {
   surfaceId?: 'chat' | 'cowork';
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onArtifactClick, onPreviewUrl, onRetry, onCancel, conversationId, surfaceId }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onConnectorSettled, onArtifactClick, onPreviewUrl, onRetry, onCancel, conversationId, surfaceId }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -129,6 +135,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
               connectorId={msg.connectorRequest.connectorId}
               reason={msg.connectorRequest.reason}
               settled={msg.connectorRequestSettled}
+              onSettled={onConnectorSettled}
             />
           </div>
         ) : msg.questionData ? (

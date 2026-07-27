@@ -99,3 +99,46 @@ describe('POST /api/webhooks/[token]', () => {
     expect((await res.json()).ok).toBe(true);
   });
 });
+
+/**
+ * DEFECT 2 (regression): this route fetches /api/chat/<surface> and never reads
+ * response.body, so nothing here can act on a relay event (document_print,
+ * input_request, connector_request). The chat route handed the provider those
+ * callbacks anyway, so a webhook-triggered DocumentCreate stalled for the whole
+ * 60s print budget and then told the model "PDF rendering timed out." — an
+ * invented failure — instead of the honest "only the HTML was written".
+ */
+describe('a webhook run has no client to relay to', () => {
+  it('tells the chat route it cannot relay, so the documented fallbacks fire', async () => {
+    const webhook = await create({ name: 'hook' });
+    await fire(webhook.token, { ping: true });
+
+    const sent = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(sent.canRelayToClient).toBe(false);
+  });
+
+  it('drains the agent run stream instead of abandoning the body', async () => {
+    // Abandoning it leaves the server-side writer pushing into a stream nobody is
+    // reading, which is where the "no consumer" bug lived in the first place.
+    let cancelled = false;
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        if (pulled > 2) controller.close();
+        else controller.enqueue(new TextEncoder().encode('data: {"type":"connected"}\n\n'));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    fetchMock.mockResolvedValueOnce(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+
+    const webhook = await create({ name: 'drain' });
+    await fire(webhook.token, {});
+
+    await vi.waitFor(() => expect(pulled).toBeGreaterThan(2));
+    // Read to completion, not cancelled — cancelling would kill the agent run.
+    expect(cancelled).toBe(false);
+  });
+});

@@ -1,6 +1,20 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useMemoryStore } from './memory-store';
+import { graphFor } from '@/lib/memory/graph/graph';
 import type { Memory } from '@/lib/memory/types';
+
+/**
+ * FIXED clock, never `Date.now()` per memory.
+ *
+ * This fixture used to call `Date.now()` three times per memory, so a single
+ * millisecond tick partway through building a fixture changed the retrieval
+ * ranking: identical timestamps produced [sarah, ds, f0] and 1ms apart produced
+ * [sarah, f9, f8]. That made a graph-retrieval test intermittent — it failed once
+ * on a clean tree and then passed 18 runs. Freezing the clock makes the fixture
+ * and the recency scoring inside the retriever agree on one instant.
+ */
+const NOW = 1_750_000_000_000;
+const day = 24 * 60 * 60 * 1000;
 
 let seq = 0;
 const memory = (overrides: Partial<Memory> = {}): Memory => ({
@@ -12,9 +26,9 @@ const memory = (overrides: Partial<Memory> = {}): Memory => ({
   tags: [],
   confidence: 0.8,
   accessCount: 0,
-  lastAccessedAt: Date.now(),
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
+  lastAccessedAt: NOW,
+  createdAt: NOW,
+  updatedAt: NOW,
   supersededBy: null,
   source: 'auto',
   updatedCount: 0,
@@ -22,7 +36,12 @@ const memory = (overrides: Partial<Memory> = {}): Memory => ({
 });
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
   useMemoryStore.setState({ memories: [] });
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 const store = () => useMemoryStore.getState();
@@ -111,9 +130,9 @@ describe('touchMemory', () => {
 
 describe('cleanupMemories', () => {
   it('hard-deletes superseded memories older than 30 days', () => {
-    const staleMs = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    const staleMs = NOW - 31 * day;
     store().addMemory(memory({ supersededBy: 'x', updatedAt: staleMs }));
-    store().addMemory(memory({ supersededBy: 'x', updatedAt: Date.now() }));
+    store().addMemory(memory({ supersededBy: 'x', updatedAt: NOW }));
     store().addMemory(memory());
 
     const removed = store().cleanupMemories();
@@ -132,20 +151,19 @@ describe('cleanupMemories', () => {
   });
 
   it('keeps higher-retention memories when pruning', () => {
-    const now = Date.now();
     const keeper = memory({
       id: 'keeper',
       category: 'preference',
       confidence: 1,
       accessCount: 50,
-      lastAccessedAt: now,
+      lastAccessedAt: NOW,
     });
     const filler = Array.from({ length: 600 }, () =>
       memory({
         category: 'decision',
         confidence: 0.1,
         accessCount: 0,
-        lastAccessedAt: now - 90 * 24 * 60 * 60 * 1000,
+        lastAccessedAt: NOW - 90 * day,
       }),
     );
     useMemoryStore.setState({ memories: [...filler, keeper] });
@@ -161,16 +179,28 @@ describe('getMemoriesForContext — graph boost wired at the choke point (P4.3)'
    * call through this one method. The P3.5 lesson was that per-call-site wiring
    * is where one site silently gets forgotten.
    */
+  const linkedSet = () => [
+    memory({
+      id: 'sarah',
+      content: 'Works with Sarah on the design system',
+      tags: ['design-system'],
+      lastAccessedAt: NOW - 5 * day,
+    }),
+    memory({
+      id: 'ds',
+      content: 'The design system ships every Friday',
+      tags: ['design-system'],
+      lastAccessedAt: NOW - 5 * day,
+    }),
+    // Fresher than the linked pair: recency alone ranks all of them higher, so the
+    // graph boost has to actually win rather than ride on fixture ordering.
+    ...Array.from({ length: 10 }, (_, i) =>
+      memory({ id: `f${i}`, content: `Unrelated filler note ${i}`, lastAccessedAt: NOW }),
+    ),
+  ];
+
   it('surfaces a memory connected only through a shared entity', () => {
-    useMemoryStore.setState({
-      memories: [
-        memory({ id: 'sarah', content: 'Works with Sarah on the design system', tags: ['design-system'] }),
-        memory({ id: 'ds', content: 'The design system ships every Friday', tags: ['design-system'] }),
-        ...Array.from({ length: 10 }, (_, i) =>
-          memory({ id: `f${i}`, content: `Unrelated filler note ${i}` }),
-        ),
-      ],
-    });
+    useMemoryStore.setState({ memories: linkedSet() });
 
     const out = store().getMemoriesForContext({ query: 'what is Sarah working on?', limit: 3 });
     const ids = out.map((m) => m.id);
@@ -178,6 +208,57 @@ describe('getMemoriesForContext — graph boost wired at the choke point (P4.3)'
     // "ds" shares no keyword with the question — only an entity.
     expect(ids).toContain('sarah');
     expect(ids).toContain('ds');
+  });
+
+  it('keeps the graph cached across consecutive messages', () => {
+    // Every send handler calls touchMemory once per retrieved memory, so the old
+    // array-identity cache key was invalidated up to 20 times per message and the
+    // hit rate after the first message was measured at 0 — rebuilding the graph on
+    // every single message.
+    useMemoryStore.setState({
+      memories: Array.from({ length: 120 }, (_, i) =>
+        memory({
+          id: `s${i}`,
+          content: `Works with Sarah on topic ${i % 20} using TypeScript`,
+          tags: [`topic-${i % 20}`],
+        }),
+      ),
+    });
+
+    const seen: ReturnType<typeof graphFor>[] = [];
+    for (let message = 0; message < 5; message++) {
+      const out = store().getMemoriesForContext({ query: 'what is Sarah working on?' });
+      seen.push(graphFor(useMemoryStore.getState().memories));
+      // Exactly what the surfaces do after retrieval.
+      out.forEach((m) => store().touchMemory(m.id));
+    }
+
+    const hits = seen.filter((g, i) => i > 0 && g === seen[i - 1]).length;
+    expect(hits).toBe(4);
+    expect(useMemoryStore.getState().memories.some((m) => m.accessCount > 0)).toBe(true);
+  });
+
+  it('rebuilds the graph when a memory is actually added', () => {
+    useMemoryStore.setState({ memories: linkedSet() });
+    const before = graphFor(useMemoryStore.getState().memories);
+    store().addMemory(memory({ id: 'new', content: 'Reports to Mike Chen' }));
+    const after = graphFor(useMemoryStore.getState().memories);
+    expect(after).not.toBe(before);
+    expect(after.entities.has('person:mike chen')).toBe(true);
+  });
+
+  it('is stable — the same store state gives the same answer every time', () => {
+    useMemoryStore.setState({ memories: linkedSet() });
+    const first = store()
+      .getMemoriesForContext({ query: 'what is Sarah working on?', limit: 3 })
+      .map((m) => m.id);
+    for (let i = 0; i < 25; i++) {
+      expect(
+        store()
+          .getMemoriesForContext({ query: 'what is Sarah working on?', limit: 3 })
+          .map((m) => m.id),
+      ).toEqual(first);
+    }
   });
 
   it('still honours the limit and excludes superseded memories', () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useCallback } from "react";
 import { useProjectStore, type KnowledgeFile } from "@/stores/project-store";
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
 import { useChatStore } from "@/stores/chat-store";
@@ -50,6 +50,7 @@ import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useRunRecorder } from "@/hooks/use-run-recorder";
+import { useCloseRunOnAbort } from "@/hooks/use-close-run-on-abort";
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -148,7 +149,6 @@ export function ProjectDetail({
   const updateToolResult = useChatStore((s) => s.updateToolResult);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
-  const setStreamError = useChatStore((s) => s.setStreamError);
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
@@ -181,11 +181,20 @@ export function ProjectDetail({
   // cost attached (P6 substrate — see lib/runs). Project chats run on the chat
   // surface, so they record against it.
   const runRecorder = useRunRecorder("chat");
+  // An aborted stream reaches neither onDone nor onError below. Scoped to the
+  // conversation this page launched, so it cannot close the Chat surface's Run.
+  const ownsChat = useCallback(
+    (id: string) => !!id && id === launchedConvIdRef.current,
+    [],
+  );
+  useCloseRunOnAbort(runRecorder.finish, ownsChat);
 
   const { sendMessage } = useSSEStream({
     chatId: activeChatId,
     setIsStreaming,
-    setStreamError,
+    // Required by the hook, read by nothing: stream failures reach the user via
+    // `onError` below. The write-only store field it fed is gone.
+    setStreamError: () => undefined,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
       const cid = launchedConvIdRef.current;

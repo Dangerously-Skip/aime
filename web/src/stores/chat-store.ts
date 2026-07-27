@@ -85,14 +85,6 @@ interface ChatState {
    */
   modelRoute: ModelOption | null;
   isStreaming: boolean;
-  /**
-   * Last stream failure — WRITE-ONLY. `useSSEStream` sets it and no component
-   * reads it: stream errors reach the user through the surface's `onError`,
-   * which appends them to the transcript. Kept only because four surface files
-   * still pass `setStreamError` into the hook; it and they should go together.
-   * Do not build on it — render `messages` or add a real banner first.
-   */
-  streamError: string | null;
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
   suggestions: Record<string, string[]>;
@@ -118,7 +110,6 @@ interface ChatActions {
   getSessionControls: (chatId: string) => SessionControls;
   touchActivity: (chatId: string) => void;
   setIsStreaming: (v: boolean) => void;
-  setStreamError: (e: string | null) => void;
   addSuggestion: (chatId: string, suggestion: string) => void;
   clearSuggestions: (chatId: string) => void;
   addCanvasArtifact: (chatId: string, artifact: CanvasArtifact) => void;
@@ -135,7 +126,6 @@ export const useChatStore = create<ChatStore>()(
       model: 'sonnet',
       modelRoute: null,
       isStreaming: false,
-      streamError: null,
       sessionControls: {},
       lastActivityAt: {},
       suggestions: {},
@@ -309,7 +299,6 @@ export const useChatStore = create<ChatStore>()(
         })),
 
       setIsStreaming: (v) => set({ isStreaming: v }),
-      setStreamError: (e) => set({ streamError: e }),
 
       addSuggestion: (chatId, suggestion) =>
         set((state) => ({

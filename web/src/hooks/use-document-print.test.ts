@@ -53,9 +53,10 @@ describe('useDocumentPrint', () => {
       outputPath: '/o/r.pdf',
       printOptions: { pageSize: 'A4' },
     });
-    expect(reports()).toEqual([
-      { toolUseId: 'doc_1', ok: true, path: '/o/r.pdf', bytes: 2048 },
-    ]);
+    // No `path`: the server already knows where it asked for the PDF, and the
+    // route it reports to authenticates nothing — a client-supplied path was only
+    // ever a way to make the model name a file of the caller's choosing.
+    expect(reports()).toEqual([{ toolUseId: 'doc_1', ok: true, bytes: 2048 }]);
   });
 
   it('reports immediately outside the desktop app, rather than letting the tool hang', async () => {

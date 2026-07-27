@@ -150,6 +150,7 @@ export async function POST(
     tier = null,
     providerConfig = null,
     disabledConnectors = null,
+    canRelayToClient = true,
   } = body as {
     message?: string;
     chatId?: string;
@@ -183,6 +184,25 @@ export async function POST(
     providerConfig?: import('@/lib/models/execution').ProviderExecConfig | null;
     /** Connector ids the user has switched off in the Connectors screen (P3.5). */
     disabledConnectors?: string[] | null;
+    /**
+     * Will the caller ACT on the relay events this stream emits — `input_request`,
+     * `connector_request`, `document_print`?
+     *
+     * Every one of those is a request for something only a live client can do, and
+     * the provider decides whether it can ask a human purely by whether the
+     * matching callback exists. Handing over callbacks for a stream nobody is
+     * acting on is how the "no connected client" fallbacks became unreachable: a
+     * webhook-triggered DocumentCreate stalled for the full print budget and then
+     * reported a rendering failure that never happened.
+     *
+     * Only the caller knows, so the caller says. Defaults to TRUE because an
+     * absent value means an ordinary renderer (or an older one) — those do relay,
+     * and silently withholding the callbacks from them would break the connector
+     * card, the approval gate and PDF export at once. The server-side callers that
+     * cannot relay pass false; `/api/subagent` and the standing-order runner never
+     * pass these callbacks at all, which is why the fallbacks already work there.
+     */
+    canRelayToClient?: boolean;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -254,6 +274,46 @@ export async function POST(
       // connector support, and session management. Gateway routing for billing is
       // handled inside ClaudeProvider via ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL env vars.
       const provider = getProvider(providerName as string);
+
+      // ── Every independent read, started at once ────────────────────────
+      // Nine serialized filesystem round-trips used to sit between the request
+      // arriving and the query being assembled: connector health, then SOUL.md,
+      // USER.md, IDENTITY.md, VOICE.md, BOOTSTRAP.md, ~/.claude/MEMORY.md and
+      // today's memory log — each waiting on the one before it for no reason,
+      // since none of them feeds any of the others. Measured at 8 reads with a
+      // maximum concurrency of 1.
+      //
+      // Kicked off here, ahead of the connector load, and awaited at the two
+      // points of use. Awaiting one promise twice is free; what matters is that
+      // the syscalls are already in flight.
+      const { join: pathJoin } = await import('path');
+      const { homedir } = await import('os');
+      const { staleConnectorIds } = await import('@/lib/connectors/health');
+      const home = homedir();
+      const contextFiles = Promise.all([
+        // Expired-with-no-refresh connections are mounted but will 401, so the
+        // agent must be told not to use them (P3.4). Reads the config and the
+        // credential store rather than the mounted server map, because
+        // loadProvisionedMcpServers strips _meta and `expiresAt` never arrived.
+        //
+        // Caught rather than allowed to reject: a health read that fails is a
+        // reason to stop advertising staleness, not to fail the user's message.
+        // It also has to be caught because this promise is created before it is
+        // awaited, and an unhandled rejection would take the process with it.
+        staleConnectorIds().catch((err: unknown) => {
+          console.warn('[CHAT] Connector health unavailable:', err);
+          return new Set<string>();
+        }),
+        readIdentityFile(pathJoin(home, '.claude', 'SOUL.md')),
+        readIdentityFile(pathJoin(home, '.claude', 'USER.md')),
+        cwd ? readIdentityFile(pathJoin(cwd as string, 'IDENTITY.md')) : Promise.resolve(''),
+        readIdentityFile(pathJoin(home, '.claude', 'VOICE.md')),
+        onboardingComplete
+          ? Promise.resolve('')
+          : readIdentityFile(pathJoin(home, '.claude', 'BOOTSTRAP.md')),
+        readGlobalMemoryFile(),
+        readDailyMemoryLog(),
+      ] as const);
 
       // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
       const allProvisionedServers = await loadProvisionedMcpServers();
@@ -354,15 +414,8 @@ export async function POST(
         );
         const canRequest =
           surfaceConfig.allowedTools?.includes('mcp__aime__RequestConnector') ?? false;
-        // Expired-with-no-refresh connections are mounted but will 401, so the
-        // agent must be told not to use them (P3.4).
-        //
-        // Reads the config and store directly rather than the mounted server map:
-        // loadProvisionedMcpServers strips _meta, so expiresAt never reached the
-        // classifier and this was always empty — the EXPIRED prompt block below
-        // could never fire.
-        const { staleConnectorIds } = await import('@/lib/connectors/health');
-        const staleIds = await staleConnectorIds();
+        // Already in flight since before the connectors were loaded.
+        const [staleIds] = await contextFiles;
         const connectorsPrompt = buildConnectorsPrompt(
           classifyCatalog(CONNECTOR_REGISTRY),
           // The ENTRIES, not just the keys: a key like `aime-mcp-github` is a name
@@ -418,20 +471,11 @@ export async function POST(
       if (userContextStr) console.log('[CHAT] User context injected:', userContextStr.substring(0, 80));
       console.log('[CHAT] Surface tools:', surfaceConfig.allowedTools?.join(', '));
 
-      // ── Load identity/persona files ────────────────────────────────────
-      const { join: pathJoin } = await import('path');
-      const { homedir } = await import('os');
-      const soulMd = await readIdentityFile(pathJoin(homedir(), '.claude', 'SOUL.md'));
-      const userMd = await readIdentityFile(pathJoin(homedir(), '.claude', 'USER.md'));
-      const identityMd = cwd ? await readIdentityFile(pathJoin(cwd as string, 'IDENTITY.md')) : '';
-      const voiceMd = await readIdentityFile(pathJoin(homedir(), '.claude', 'VOICE.md'));
-      const bootstrapMd = !onboardingComplete
-        ? await readIdentityFile(pathJoin(homedir(), '.claude', 'BOOTSTRAP.md'))
-        : '';
-
-      // ── Load global memory file ────────────────────────────────────────
-      const globalMemoryMd = await readGlobalMemoryFile();
-      const dailyMemoryLog = await readDailyMemoryLog();
+      // ── Identity/persona and memory files ──────────────────────────────
+      // Read as one concurrent batch at the top of this handler; by here they are
+      // long since resolved.
+      const [, soulMd, userMd, identityMd, voiceMd, bootstrapMd, globalMemoryMd, dailyMemoryLog] =
+        await contextFiles;
 
       // Build system prompt with clear injection order:
       // SOUL > IDENTITY > base prompt > user context > project instructions > project knowledge > memories > cross-surface context > memory files
@@ -509,35 +553,52 @@ export async function POST(
         systemPrompt = appendToSystemPrompt(systemPrompt, compactionNotice);
       }
 
-      // Build onInputRequest callback to forward AskUserQuestion to the client
-      const onInputRequest = async (toolUseId: string, questions: unknown) => {
-        await sse.writeEvent({
-          type: 'input_request',
-          toolUseId,
-          questions,
-        });
-      };
+      // ── Client-relay callbacks ─────────────────────────────────────────
+      // Each of these asks the client to do something the server cannot, and then
+      // BLOCKS the agent's turn waiting for the answer. Withheld entirely when the
+      // caller has told us nothing is acting on this stream: the provider treats a
+      // missing callback as "there is no way to ask", which is the honest answer
+      // and the one every fallback is written for. Handing them over regardless is
+      // what made those fallbacks unreachable on the HTTP path.
+      if (!canRelayToClient) {
+        console.log('[CHAT] Caller cannot relay to a client — question/connector/print fallbacks apply');
+      }
+
+      // Forward AskUserQuestion to the client.
+      const onInputRequest = !canRelayToClient
+        ? undefined
+        : async (toolUseId: string, questions: unknown) => {
+            await sse.writeEvent({
+              type: 'input_request',
+              toolUseId,
+              questions,
+            });
+          };
 
       // Forward a connector request to the client (P3.3). The agent is paused
       // in canUseTool while this card is outstanding; the heartbeat keeps the
       // stream open until the user answers.
-      const onConnectorRequest = async (toolUseId: string, connectorId: string, reason: string) => {
-        await sse.writeEvent({
-          type: 'connector_request',
-          toolUseId,
-          connectorId,
-          reason,
-        });
-      };
+      const onConnectorRequest = !canRelayToClient
+        ? undefined
+        : async (toolUseId: string, connectorId: string, reason: string) => {
+            await sse.writeEvent({
+              type: 'connector_request',
+              toolUseId,
+              connectorId,
+              reason,
+            });
+          };
 
       // Relay a document print to the client, which owns the Electron bridge
       // (P4.2b). The server cannot call ipcMain from its child process.
-      const onDocumentPrint = async (
-        toolUseId: string,
-        payload: { html: string; outputPath: string; printOptions: Record<string, unknown> },
-      ) => {
-        await sse.writeEvent({ type: 'document_print', toolUseId, ...payload });
-      };
+      const onDocumentPrint = !canRelayToClient
+        ? undefined
+        : async (
+            toolUseId: string,
+            payload: { html: string; outputPath: string; printOptions: Record<string, unknown> },
+          ) => {
+            await sse.writeEvent({ type: 'document_print', toolUseId, ...payload });
+          };
 
       // Build onBrowserToolUse callback to forward browser tool calls to the client
       const onBrowserToolUse = async (toolUseId: string, name: string, input: Record<string, unknown>) => {

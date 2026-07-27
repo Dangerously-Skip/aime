@@ -23,7 +23,9 @@ export interface DocumentPrintRequest {
 
 async function report(
   toolUseId: string,
-  result: { ok: boolean; path?: string; bytes?: number; error?: string },
+  // No `path`: the server knows where it asked for the PDF and no longer takes a
+  // path from whoever POSTs the result (see the route for why).
+  result: { ok: boolean; bytes?: number; error?: string },
 ): Promise<void> {
   await fetch("/api/chat/document-result", {
     method: "POST",
@@ -58,7 +60,6 @@ export function useDocumentPrint(): (request: DocumentPrintRequest) => Promise<v
       });
       await report(request.toolUseId, {
         ok: !!result?.ok,
-        ...(result?.path ? { path: result.path } : {}),
         ...(typeof result?.bytes === "number" ? { bytes: result.bytes } : {}),
         ...(result?.error ? { error: result.error } : {}),
       });

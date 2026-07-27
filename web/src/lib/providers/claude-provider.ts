@@ -81,7 +81,11 @@ export class ClaudeProvider extends BaseProvider {
       if (!fs.existsSync(pluginsDir)) return [];
       const entries = fs.readdirSync(pluginsDir, { withFileTypes: true });
       return entries
-        .filter(e => e.isDirectory())
+        // Dot-directories are not plugins. /api/mcp/install stages a clone in
+        // `.tmp-<name>-<unique>/` inside this very directory before promoting it,
+        // so without this an install that is still cloning gets handed to the SDK
+        // as a half-populated plugin.
+        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
         .map(e => path.join(pluginsDir, e.name));
     } catch {
       return [];
@@ -163,6 +167,22 @@ export class ClaudeProvider extends BaseProvider {
     const pluginPaths = await this.scanPlugins();
     console.log('[Claude] Plugin paths found:', pluginPaths);
 
+    /**
+     * Abort plumbing, created up here rather than beside the query call below,
+     * because the in-process tool handlers and `canUseTool` both close over the
+     * SIGNAL: every cross-request wait they open is tied to this query's life.
+     * Without that, pressing Stop with a connector card open left a live
+     * five-minute timer holding a resolve closure nobody would ever call — see
+     * rendezvous.ts.
+     *
+     * Only the CONTROLLER is created here. Registration in `abortControllers`
+     * still happens immediately before the query starts, so a failure during
+     * setup cannot leave a stale entry for a later abort() to find.
+     */
+    const abortController = new AbortController();
+    /** Every rendezvous this query opens dies with it. */
+    const waitOptions = { signal: abortController.signal };
+
     // Per-request array to collect cron jobs created via the CronCreate MCP tool
     const pendingCronJobs: Array<{ expression: string; prompt: string; surfaceId: string }> = [];
 
@@ -189,15 +209,38 @@ export class ClaudeProvider extends BaseProvider {
       allowWeb?: boolean;
     }> = [];
 
-    // Outcomes of RequestConnector calls, keyed by connector id (P3.3).
-    //
-    // NOT passed through `updatedInput`: RequestConnector is an in-process MCP
-    // tool, so the SDK zod-parses its arguments and STRIPS unknown keys before the
-    // handler runs — verified by execution. The `__x` pattern works for
-    // AskUserQuestion, spawn_agent and browser tools precisely because those are
-    // not MCP tools. Both canUseTool and the handler close over this map, which is
-    // the same per-request pattern used for cron jobs and widgets above.
-    const connectorOutcomes = new Map<string, { connected: boolean; reason?: string }>();
+    /**
+     * RequestConnector calls made during this request, keyed by connector id (P3.3).
+     *
+     * Keyed by connector id because that is the only thing the handler can look
+     * itself up by: the outcome is NOT passed through `updatedInput`, since
+     * RequestConnector is an in-process MCP tool and the SDK zod-parses its
+     * arguments and STRIPS unknown keys before the handler runs (verified by
+     * execution). The `__x` pattern works for AskUserQuestion, spawn_agent and
+     * browser tools precisely because those are not MCP tools.
+     *
+     * It used to be `Map<connectorId, outcome>` with no delete — a last-write-wins
+     * slot. The rendezvous one layer down is correctly keyed by tool-use id, but
+     * this was not, so two RequestConnector blocks for the SAME connector in one
+     * turn crossed in both directions against the real canUseTool: a user who
+     * CONNECTED was told "Not connected: user declined", and a user who DECLINED
+     * was told "slack is now connected". Two things stop that now:
+     *
+     *   - `canUseTool` REFUSES a second request for a connector already asked
+     *     about this turn. "At most one per turn" was prose in the tool
+     *     description and enforced nowhere, while CronCreate three hundred lines
+     *     up has had an `alreadyQueued` guard all along.
+     *   - the handler CONSUMES the outcome (`reported`), so it belongs to the one
+     *     tool call that produced it and cannot be replayed.
+     */
+    interface ConnectorRequestRecord {
+      /** The tool call that opened this request — what the outcome belongs to. */
+      toolUseId: string;
+      outcome?: { connected: boolean; reason?: string };
+      /** Set once the handler has told the model about it. */
+      reported?: boolean;
+    }
+    const connectorRequests = new Map<string, ConnectorRequestRecord>();
 
     // In-process MCP server exposing CronCreate so the model can schedule reminders
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -393,14 +436,22 @@ export class ClaudeProvider extends BaseProvider {
               // Chromium is not available to print.
               await fsp.writeFile(resolved.target.htmlPath, html, "utf-8");
 
-              // Printing needs a connected client to relay to Electron main
-              // (see pending-documents). A scheduled run has none, so the HTML
-              // written above is the whole deliverable in that case.
-              if (!onDocumentPrint) {
-                return { content: [{ type: "text" as const, text: describeOutcome({ title, htmlPath: resolved.target.htmlPath }) }] };
-              }
+              // Printing needs a client that will ACT on the relay event (see
+              // pending-documents). A scheduled run has no callback at all, so the
+              // HTML written above is the whole deliverable in that case.
+              const htmlOnly = () => ({
+                content: [{
+                  type: "text" as const,
+                  text: describeOutcome({ title, htmlPath: resolved.target.htmlPath }),
+                }],
+              });
+              if (!onDocumentPrint) return htmlOnly();
 
-              const printId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+              // Random, not `Date.now()`-derived: this id is the only thing tying a
+              // resolution on the unauthenticated /api/chat/document-result route
+              // back to the print that opened it, and a timestamp plus 6 chars of
+              // Math.random is a poor secret for that job.
+              const printId = `doc_${crypto.randomUUID()}`;
               await onDocumentPrint(printId, {
                 html,
                 outputPath: resolved.target.pdfPath,
@@ -409,14 +460,45 @@ export class ClaudeProvider extends BaseProvider {
                   title,
                 ),
               });
-              const result = await waitForDocumentPrint(printId);
+              const result = await waitForDocumentPrint(printId, waitOptions);
+
+              // NOBODY ANSWERED. That is not a rendering failure, and the
+              // difference matters: `onDocumentPrint` exists on every chat request,
+              // so its presence never proved anyone was consuming the stream. The
+              // webhook route fetches /api/chat/<surface> and never reads
+              // response.body, so `document_print` could not possibly be acted on —
+              // and the model was told the invented failure "PDF rendering timed
+              // out." instead of the honest fallback this branch restores.
+              if (result.unclaimed) {
+                console.warn("[Claude] Nothing acted on the document print — reporting HTML only");
+                return htmlOnly();
+              }
+
+              // A reported success is a CLAIM. It arrives on a localhost route that
+              // authenticates nothing, so believing it blindly let the model tell
+              // the user about a PDF that was never written. Cheap to check.
+              const bytesOnDisk = await fsp
+                .stat(resolved.target.pdfPath)
+                .then((s) => s.size)
+                .catch(() => 0);
+              const printed = result.ok && bytesOnDisk > 0;
+              if (result.ok && !printed) {
+                console.warn("[Claude] Print reported success but no PDF is on disk:", resolved.target.pdfPath);
+              }
+
               return {
                 content: [{
                   type: "text" as const,
                   text: describeOutcome({
                     title,
                     htmlPath: resolved.target.htmlPath,
-                    ...(result.ok ? { pdfPath: resolved.target.pdfPath } : { pdfError: result.error }),
+                    ...(printed
+                      ? { pdfPath: resolved.target.pdfPath }
+                      : {
+                          pdfError: result.ok
+                            ? "the print was reported as succeeding but no PDF was written."
+                            : result.error,
+                        }),
                   }),
                 }],
               };
@@ -542,7 +624,11 @@ export class ClaudeProvider extends BaseProvider {
           },
           async (input: Record<string, unknown>) => {
             const connectorId = String(input.connectorId ?? '');
-            const outcome = connectorOutcomes.get(connectorId);
+            const record = connectorRequests.get(connectorId);
+            // Consumed, not read: an outcome belongs to the single tool call that
+            // produced it. A replayed handler invocation is not a second connect.
+            const outcome = record?.reported ? undefined : record?.outcome;
+            if (record) record.reported = true;
 
             if (outcome?.connected) {
               // The mounted MCP set is fixed for the life of this request, so the
@@ -789,7 +875,7 @@ export class ClaudeProvider extends BaseProvider {
         let unanswered = false;
         try {
           await onInputRequest(toolUseID, [question]);
-          decision = readApprovalAnswer(await waitForAnswer(toolUseID), question.question, {
+          decision = readApprovalAnswer(await waitForAnswer(toolUseID, waitOptions), question.question, {
             handlesMoney,
           });
         } catch {
@@ -878,10 +964,19 @@ export class ClaudeProvider extends BaseProvider {
         awaitingHuman.add(toolUseID);
         try {
           await onInputRequest(toolUseID, input.questions);
-          const answers = await waitForAnswer(toolUseID);
+          const answers = await waitForAnswer(toolUseID, waitOptions);
           return {
             behavior: 'allow' as const,
             updatedInput: { ...input, answers },
+          };
+        } catch (err) {
+          // The wait rejects on its own timeout and, now, when the turn is
+          // stopped. Both used to throw out of canUseTool and into the SDK loop;
+          // reporting it is what the agent can actually act on.
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            behavior: 'deny' as const,
+            message: `The question was not answered (${msg}). Do not re-ask it; say what you still need.`,
           };
         } finally {
           awaitingHuman.delete(toolUseID);
@@ -919,7 +1014,15 @@ export class ClaudeProvider extends BaseProvider {
       if (BROWSER_TOOL_NAMES.has(toolName) && onBrowserToolUse) {
         console.log('[Claude] Intercepting browser tool:', toolName, 'id:', toolUseID);
         await onBrowserToolUse(toolUseID, toolName, input);
-        const result = await waitForBrowserToolResult(toolUseID);
+        // Rejects on timeout and on a stopped turn. Turned into an error RESULT
+        // rather than thrown: the agent can react to "that step failed", and
+        // throwing out of canUseTool just kills the loop.
+        const result = await waitForBrowserToolResult(toolUseID, waitOptions).catch(
+          (err: unknown) => ({
+            output: err instanceof Error ? err.message : String(err),
+            isError: true,
+          }),
+        );
         return {
           behavior: 'allow' as const,
           updatedInput: { ...input, __browserToolResult: result.output, __isError: result.isError },
@@ -933,23 +1036,47 @@ export class ClaudeProvider extends BaseProvider {
         const connectorId = typeof input.connectorId === 'string' ? input.connectorId : '';
         const reason = typeof input.reason === 'string' ? input.reason : '';
         if (!connectorId) {
-          connectorOutcomes.set('', { connected: false, reason: 'No connector id was given.' });
+          connectorRequests.set('', {
+            toolUseId: toolUseID,
+            outcome: { connected: false, reason: 'No connector id was given.' },
+          });
           return { behavior: 'allow' as const };
         }
+
+        // The one-per-connector rule the tool description states, now enforced.
+        // The handler can only look an outcome up by connector id, so a second
+        // card for the same service creates two answers competing for one slot —
+        // which is exactly how a successful connect came to be reported as a
+        // decline. A PENDING request counts: the SDK client permits concurrent
+        // can_use_tool dispatch, so both blocks can be in flight at once.
+        const existing = connectorRequests.get(connectorId);
+        if (existing) {
+          console.warn('[Claude] Refusing a repeat connector request for', connectorId);
+          return {
+            behavior: 'deny' as const,
+            message:
+              `${connectorId} has already been requested in this turn, so it was not asked ` +
+              `again. Do not retry it. Its tools would not be usable this turn in any case — ` +
+              `finish what you can without it and tell the user which part you could not do.`,
+          };
+        }
+
         console.log('[Claude] Connector requested:', connectorId, 'id:', toolUseID);
+        const record: ConnectorRequestRecord = { toolUseId: toolUseID };
+        connectorRequests.set(connectorId, record);
         // OAuth + sign-in + possibly 2FA. waitForConnector budgets 300s, so the
         // 90s tool watchdog must not count this as a hang.
         awaitingHuman.add(toolUseID);
         let result;
         try {
           await onConnectorRequest(toolUseID, connectorId, reason);
-          result = await waitForConnector(toolUseID);
+          result = await waitForConnector(toolUseID, waitOptions);
         } finally {
           awaitingHuman.delete(toolUseID);
         }
         // Recorded where the handler can actually read it. Passing it through
         // updatedInput looked correct and was silently discarded by the schema.
-        connectorOutcomes.set(connectorId, result);
+        record.outcome = result;
         return { behavior: 'allow' as const };
       }
 
@@ -1087,10 +1214,9 @@ export class ClaudeProvider extends BaseProvider {
 
     console.log('[Claude] Calling Claude Agent SDK...', surfaceId ? `(surface: ${surfaceId})` : '');
 
-    // Create abort controller for this request
-    // Use composite key (surfaceId:chatId) for concurrent surface support
+    // Register the abort controller created at the top of this method.
+    // Use composite key (surfaceId:chatId) for concurrent surface support.
     const abortKey = this.getAbortKey(chatId, surfaceId);
-    const abortController = new AbortController();
     if (chatId) {
       this.abortControllers.set(abortKey, abortController);
     }

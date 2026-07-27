@@ -19,10 +19,21 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { toolUseId, ok, path, bytes, error } = body as {
+  // `path` is deliberately NOT read off the body, and neither is `unclaimed`.
+  //
+  // This route authenticates nothing and binds nothing to the requester, so
+  // everything it accepts is a claim by whoever POSTed. The rendezvous already
+  // knows where the PDF was asked to go, so a caller-supplied path is not
+  // information — it is only a way to make the model report a file at a path of
+  // the caller's choosing. `unclaimed` is the bridge's own word for "nobody
+  // answered at all", which the tool turns into "PDF rendering needs the desktop
+  // app"; a caller that DID answer must not be able to claim it did not.
+  //
+  // The remaining claim — `ok` — is checked against the filesystem by the
+  // DocumentCreate tool before it tells the model a PDF exists.
+  const { toolUseId, ok, bytes, error } = body as {
     toolUseId?: string;
     ok?: boolean;
-    path?: string;
     bytes?: number;
     error?: string;
   };
@@ -33,7 +44,6 @@ export async function POST(req: NextRequest) {
 
   const resolved = resolveDocumentPrint(toolUseId, {
     ok,
-    ...(typeof path === 'string' ? { path } : {}),
     ...(typeof bytes === 'number' ? { bytes } : {}),
     // Truncated: this string reaches the model's tool result.
     ...(typeof error === 'string' && error ? { error: error.slice(0, 300) } : {}),

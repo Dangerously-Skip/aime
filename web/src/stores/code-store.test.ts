@@ -19,7 +19,7 @@ const streamingTurn = (): Message[] => [
 const store = () => useCodeStore.getState();
 
 beforeEach(() => {
-  useCodeStore.setState({ messages: {}, currentChatId: null, isStreaming: false, streamError: null });
+  useCodeStore.setState({ messages: {}, currentChatId: null, isStreaming: false });
 });
 
 describe('code-store streaming lifecycle', () => {

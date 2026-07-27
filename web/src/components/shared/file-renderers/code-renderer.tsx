@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import hljs from "highlight.js/lib/common";
+// The one tested escaper. This file carried a private copy that differed only in
+// the apostrophe entity (&#039; vs &#39; — both valid references for '), and it
+// was the guard on a `dangerouslySetInnerHTML` sink with no test of its own.
+import { escapeHtml } from "@/lib/documents/render";
 
 interface CodeRendererProps {
   content: string;
@@ -50,7 +54,6 @@ const EXT_TO_LANG: Record<string, string> = {
  */
 export function CodeRenderer({ content, ext }: CodeRendererProps) {
   const lang = EXT_TO_LANG[ext] || "";
-  const codeRef = useRef<HTMLElement | null>(null);
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
@@ -82,6 +85,10 @@ export function CodeRenderer({ content, ext }: CodeRendererProps) {
     }
   }, [isDark]);
 
+  // The fallback is NOT theoretical: EXT_TO_LANG maps .dockerfile to a language
+  // the `highlight.js/lib/common` bundle does not register, so hljs throws
+  // "Unknown language" and escaping is the only thing standing between file
+  // contents and the innerHTML below.
   const highlighted = useMemo(() => {
     try {
       if (lang) {
@@ -96,19 +103,10 @@ export function CodeRenderer({ content, ext }: CodeRendererProps) {
   return (
     <pre className="rounded-lg bg-muted/40 p-4 text-xs leading-relaxed overflow-x-auto font-mono whitespace-pre-wrap break-words">
       <code
-        ref={codeRef}
+        data-testid="code-renderer-output"
         className={`hljs ${lang ? `language-${lang}` : ""}`}
         dangerouslySetInnerHTML={{ __html: highlighted }}
       />
     </pre>
   );
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
+import path from 'path';
 import { slugifySkillName, buildSkillMd, resolveSkillDir } from './create';
 import { parseSkillMd } from '../skill-parser';
 
@@ -122,8 +123,27 @@ describe('resolveSkillDir', () => {
   });
 
   it('refuses a nested or escaping slug even though slugify prevents it', () => {
-    // Second line of defence, in case the charset is ever loosened.
+    // Second line of defence, in case the charset is ever loosened. Until the
+    // shared containment rule landed this could not fail at all — a slug has no
+    // separators, so the guard asserted nothing while reading as the boundary.
     expect(resolveSkillDir('/s', 'a/b').ok).toBe(false);
     expect(resolveSkillDir('/s', '../evil').ok).toBe(false);
+    expect(resolveSkillDir('/s', '..').ok).toBe(false);
+    expect(resolveSkillDir('/s', '').ok).toBe(false);
+    // '..\evil' is one legal filename on Linux and a traversal on Windows; a skill
+    // folder written on one host is read on the other, so both refuse it.
+    expect(resolveSkillDir('/s', '..\\evil').ok).toBe(false);
+  });
+
+  it('regression: resolves a skill under a WINDOWS skills dir', () => {
+    // Same string-prefix form that broke every plugin install on a shipped
+    // Windows build — this copy still had it, and no test could see it while the
+    // module read ambient `path`.
+    expect(
+      resolveSkillDir('C:\\Users\\u\\.claude\\skills', 'weekly-report', { flavour: path.win32 }),
+    ).toEqual({ ok: true, dir: 'C:\\Users\\u\\.claude\\skills\\weekly-report' });
+    expect(
+      resolveSkillDir('C:\\Users\\u\\.claude\\skills', '..\\evil', { flavour: path.win32 }).ok,
+    ).toBe(false);
   });
 });

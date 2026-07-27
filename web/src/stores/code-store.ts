@@ -23,8 +23,6 @@ interface CodeState {
    */
   modelRoute: ModelOption | null;
   isStreaming: boolean;
-  /** Write-only — see the note on `ChatState.streamError`. Nothing renders it. */
-  streamError: string | null;
   folderByChat: Record<string, string | null>;
   permissionMode: PermissionMode;
   sessionStatus: SessionStatus;
@@ -55,7 +53,6 @@ interface CodeActions {
   setPlanOpen: (open: boolean) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   setIsStreaming: (v: boolean) => void;
-  setStreamError: (e: string | null) => void;
 }
 
 export { DEFAULT_SESSION_CONTROLS };
@@ -70,7 +67,6 @@ export const useCodeStore = create<CodeStore>()(
       model: 'sonnet',
       modelRoute: null,
       isStreaming: false,
-      streamError: null,
       folderByChat: {},
       permissionMode: 'default',
       sessionStatus: 'idle',
@@ -215,7 +211,6 @@ export const useCodeStore = create<CodeStore>()(
         })),
 
       setIsStreaming: (v) => set({ isStreaming: v }),
-      setStreamError: (e) => set({ streamError: e }),
     }),
     {
       name: 'aime:code',

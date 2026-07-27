@@ -49,7 +49,15 @@ const TECHNOLOGIES = new Set([
   'cypress', 'webpack', 'vite', 'esbuild', 'rollup', 'eslint', 'prettier',
 ]);
 
-/** Words that look like names but never are. */
+/**
+ * Words that look like names but never are.
+ *
+ * Deliberately short. A stopword list cannot decide whether a capitalised word is
+ * a name — every attempt to make it do so needs six more words the next day. It
+ * exists only to keep obvious noise out of the relationship-phrase matches
+ * ("works with The team"); query-side candidates are judged by position and by
+ * whether the graph actually knows the name (see `extractQueryEntities`).
+ */
 const NAME_STOPWORDS = new Set([
   'I', 'The', 'This', 'That', 'These', 'Those', 'A', 'An', 'And', 'But', 'Or', 'If',
   'When', 'While', 'User', 'They', 'He', 'She', 'It', 'We', 'You', 'His', 'Her',
@@ -185,18 +193,84 @@ export function extractEntities(memory: Pick<Memory, 'content' | 'tags'>): Entit
   return [...byId.values()];
 }
 
-/** Entities named in a free-text query, for graph-boosted retrieval. */
-export function extractQueryEntities(query: string): Entity[] {
+/**
+ * Anything that can answer "does this entity id exist?" — `graph.entities` (a Map)
+ * and a `Set` of ids both satisfy it, so nothing has to be copied to ask.
+ */
+export interface KnownEntities {
+  has(entityId: string): boolean;
+}
+
+/** Checked in this order when a bare capitalised word could be several things. */
+const CANDIDATE_TYPES: EntityType[] = ['person', 'topic', 'organisation', 'technology'];
+
+/**
+ * Whether the capitalised word at `index` opens a sentence.
+ *
+ * A capitalised first word is evidence of nothing: every sentence capitalises its
+ * first word. Skipping openers is what stops "Can you write a summary" from
+ * naming a person called Can.
+ */
+function opensSentence(text: string, index: number): boolean {
+  for (let i = index - 1; i >= 0; i--) {
+    const ch = text[i];
+    // Opening punctuation sits between the boundary and the word: 'Write' in
+    // `"Write the docs"` is still the first word.
+    if (ch === ' ' || ch === '\t' || ch === '"' || ch === "'" || ch === '“' || ch === '‘'
+      || ch === '(' || ch === '[' || ch === '{' || ch === '*' || ch === '`') continue;
+    if (ch === '\n' || ch === '\r') return true;
+    return ch === '.' || ch === '!' || ch === '?' || ch === '…';
+  }
+  return true;
+}
+
+/**
+ * Entities named in a free-text query, for graph-boosted retrieval.
+ *
+ * A query rarely uses the relationship phrasing memory extraction relies on ("who
+ * is Sarah?"), so a bare capitalised word is also considered here. Two rules keep
+ * that from turning every instruction into a person:
+ *
+ *  - `known` — when the caller can say which entities exist, that is the only
+ *    reliable test of "is this a name", and it costs one Map lookup. Retrieval
+ *    passes the graph's entity index.
+ *  - position — without a `known` set, a sentence-opening word is skipped.
+ *
+ * The alternative was a longer stopword list. Before this, `person:can`,
+ * `person:please`, `person:what`, `person:write`, `person:fix` and `person:how`
+ * were all "people", so capitalisation alone decided whether a query looked
+ * entity-free — and the fast path that exists to skip the graph never fired on a
+ * sentence-capitalised message.
+ */
+export function extractQueryEntities(query: string, known?: KnownEntities): Entity[] {
   const text = typeof query === 'string' ? query : '';
   const all = [...extractPeople(text), ...extractTechnologies(text), ...extractOrganisations(text)];
 
-  // A query rarely uses relationship phrasing ("who is Sarah?"), so also accept a
-  // bare capitalised name here — looser than for memories, because a wrong query
-  // entity only widens the candidate set rather than polluting stored knowledge.
-  for (const m of text.matchAll(/\b([A-Z][a-z]{2,})\b/g)) {
-    const name = m[1];
-    if (NAME_STOPWORDS.has(name) || TECHNOLOGIES.has(name.toLowerCase())) continue;
-    all.push(entity('person', name));
+  // Runs of up to two capitalised words, so "Mike Chen" can be recognised as one
+  // name before falling back to its parts.
+  for (const m of text.matchAll(/\b([A-Z][a-z]{2,})(?:\s+([A-Z][a-z]{2,}))?\b/g)) {
+    const words = [m[1], m[2]].filter((w): w is string => !!w);
+    const usable = words.filter(
+      (w) => !NAME_STOPWORDS.has(w) && !TECHNOLOGIES.has(w.toLowerCase()),
+    );
+    if (usable.length === 0) continue;
+
+    if (known) {
+      // Prefer the longest run the graph recognises, then each word on its own.
+      const candidates = usable.length > 1 ? [usable.join(' '), ...usable] : usable;
+      for (const candidate of candidates) {
+        const normalised = normaliseEntityName(candidate);
+        const type = CANDIDATE_TYPES.find((t) => known.has(`${t}:${normalised}`));
+        if (!type) continue;
+        all.push(entity(type, candidate));
+        // A recognised two-word name is the answer; do not also add its halves.
+        if (candidate.includes(' ')) break;
+      }
+      continue;
+    }
+
+    if (opensSentence(text, m.index ?? 0)) continue;
+    for (const word of usable) all.push(entity('person', word));
   }
 
   const byId = new Map<string, Entity>();

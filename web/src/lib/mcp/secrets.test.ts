@@ -167,6 +167,46 @@ describe('injectSecrets — the SDK gets a working entry back', () => {
 });
 
 describe('properties', () => {
+  /**
+   * WHY TWO OF THESE ARE NOT "does the secret string appear anywhere?" SEARCHES.
+   *
+   * They were, and they were flaky — 2 failures in 30 runs of this file. fast-check
+   * draws a fresh seed per run, so the failure is seed-dependent rather than
+   * intermittent, and both counterexamples reproduce with an explicit seed:
+   *
+   *   seed 1  → {transport:'stdio', headers:{Authorization:'Bearer rototype'},
+   *              _meta:{connectorId:'', refreshToken:'rototype'}}
+   *   seed 44 → {transport:'stdio', command:'', headers:{Authorization:'Bearer        _'}}
+   *
+   * Neither is a leak. The code is right in both cases; the SEARCH could not tell
+   * a leak from a coincidence, for two separate reasons:
+   *
+   * 1. COLLISION BETWEEN INDEPENDENT VALUES. fast-check biases `fc.string()`
+   *    toward a 22-entry corpus of prototype-pollution names (see
+   *    `SlicesForStringBuilder`'s `dangerousStrings`: '__proto__', 'prototype',
+   *    'constructor', '__lookupSetter__', …). EVERY string in this arbitrary is
+   *    drawn from that same small pool — env values, header credentials,
+   *    refreshToken, clientSecret, command, connectorId — so two of them share a
+   *    substring regularly. At seed 1 the refresh token and the Authorization
+   *    credential were both 'rototype'; another run produced clientSecret
+   *    'lookupSe' sitting inside the credential 'lookupSe        '.
+   *    `injectSecrets` then correctly restores the header credential — which the
+   *    server MUST present — and the search blamed that header for containing the
+   *    refresh token.
+   *
+   * 2. A SECRET SHORTER THAN THE SENTINEL'S OWN ALPHABET. `${AIME_SECRET}` contains
+   *    '_', 'A', 'I', 'M', 'E', 'S', 'C', 'R', 'T', '$', '{' and '}'. At seed 44
+   *    the extracted credential WAS '_': the header read 'Bearer        _', and
+   *    `extractSecrets`' greedy `(Bearer\s+)` prefix absorbs all that whitespace,
+   *    leaving a one-character credential. Searching the written entry for '_'
+   *    finds it inside the very sentinel that replaced it.
+   *
+   * So the invariant is asserted STRUCTURALLY instead — which slot holds what, and
+   * what else moved — and the substring search is kept only where the haystack
+   * cannot collide by construction. That is strictly STRONGER than the original: it
+   * pins the exact shape of the written entry instead of hoping a random string
+   * does not recur. No seed is pinned, because there is no counterexample to hide.
+   */
   const entryArb = fc.record(
     {
       transport: fc.constantFrom('stdio', 'streamable-http', 'sse'),
@@ -214,33 +254,79 @@ describe('properties', () => {
       fc.property(entryArb, (entry) => {
         const original = entry as Record<string, unknown>;
         const { entry: pub, secrets } = extractSecrets(original);
-        const serialised = JSON.stringify(injectSecrets(pub, secrets));
-        for (const value of [secrets.refreshToken, secrets.clientSecret]) {
-          if (typeof value !== 'string' || value.trim() === '') continue;
-          expect(serialised, `leaked to argv: ${value}`).not.toContain(value);
+        const restored = injectSecrets(pub, secrets);
+
+        // The invariant, exactly and unconditionally: neither field the SDK would
+        // serialise into `--mcp-config` argv still carries a credential. Stated as
+        // "no non-empty string value", not `'x' in meta` — `extractSecrets` only
+        // deletes a key it actually lifted a string out of, so an input carrying
+        // `refreshToken: undefined` legitimately keeps the key. (That distinction
+        // is itself why this is a value check: the first structural draft asserted
+        // key absence and failed on seed 1's `{refreshToken: undefined}`.)
+        const meta = (restored._meta ?? {}) as Record<string, unknown>;
+        for (const field of ['refreshToken', 'clientSecret'] as const) {
+          const survivor = meta[field];
+          expect(typeof survivor === 'string' && survivor !== '', field).toBe(false);
         }
+
+        // And they did not reappear anywhere else, expressed as "nothing else
+        // moved": the restored object is the original minus those two fields. This
+        // catches a leak into ANY slot — args, url, a new field — which the old
+        // substring search only approximated, and it cannot collide with a
+        // coincidental repeat of a generated string.
+        const expectedMeta = original._meta ? { ...(original._meta as Record<string, unknown>) } : undefined;
+        if (expectedMeta) {
+          delete expectedMeta.refreshToken;
+          delete expectedMeta.clientSecret;
+        }
+        expect(restored).toEqual(
+          expectedMeta ? { ...original, _meta: expectedMeta } : original,
+        );
       }),
       { numRuns: 500 },
     );
   });
 
-  it('every extracted secret value is absent from the written entry', () => {
+  it('every extracted secret value is replaced by the sentinel on disk', () => {
     fc.assert(
       fc.property(entryArb, (entry) => {
-        const { entry: pub, secrets } = extractSecrets(entry as Record<string, unknown>);
-        const onDisk = JSON.stringify(pub);
-        // Flatten the env/header maps as well as the scalar fields — checking
-        // only Object.values(secrets) silently skipped both maps.
-        const values = [
-          ...Object.values(secrets.env ?? {}),
-          ...Object.values(secrets.headers ?? {}),
-          secrets.refreshToken,
-          secrets.clientSecret,
-        ];
-        for (const value of values) {
-          if (typeof value !== 'string' || value.trim() === '') continue;
-          expect(onDisk, `leaked: ${JSON.stringify(value)}`).not.toContain(value);
+        const original = entry as Record<string, unknown>;
+        const { entry: pub, secrets } = extractSecrets(original);
+
+        // Slot by slot, rather than searching the serialised entry for the value.
+        // An env slot that yielded a secret holds the sentinel and nothing else.
+        for (const [name, value] of Object.entries(secrets.env ?? {})) {
+          const written = (pub.env as Record<string, string>)[name];
+          expect(written, name).toBe(SECRET_PLACEHOLDER);
+          expect(written, name).not.toContain(value);
         }
+
+        // A header slot holds prefix + sentinel, so strip the sentinel and what is
+        // left — the scheme prefix, which is protocol and not secret — must not
+        // contain the credential.
+        for (const [name, value] of Object.entries(secrets.headers ?? {})) {
+          const written = (pub.headers as Record<string, string>)[name];
+          expect(written, name).toContain(SECRET_PLACEHOLDER);
+          expect(written.split(SECRET_PLACEHOLDER).join(''), name).not.toContain(value);
+        }
+
+        // A _meta secret that was lifted is dropped outright, so its key is gone.
+        const meta = (pub._meta ?? {}) as Record<string, unknown>;
+        if (secrets.refreshToken !== undefined) expect('refreshToken' in meta).toBe(false);
+        if (secrets.clientSecret !== undefined) expect('clientSecret' in meta).toBe(false);
+
+        // Nothing but those slots changed: no secret was copied to a public field
+        // on the way out. Same "nothing else moved" argument as above, and the
+        // reason a substring search is no longer needed to cover unenumerated slots.
+        const expectedPublic = { ...original };
+        delete expectedPublic.env;
+        delete expectedPublic.headers;
+        delete expectedPublic._meta;
+        const actualPublic = { ...pub };
+        delete actualPublic.env;
+        delete actualPublic.headers;
+        delete actualPublic._meta;
+        expect(actualPublic).toEqual(expectedPublic);
       }),
       { numRuns: 500 },
     );

@@ -1,8 +1,8 @@
 /**
  * Writing a rendered document to disk (P4.2).
  *
- * Split from the tool handler so the naming, path confinement and the
- * PDF-availability decision are testable without Electron.
+ * Split from the tool handler so the naming and path confinement are testable
+ * without Electron.
  *
  * The HTML is ALWAYS written; the PDF only when Electron can print. That
  * asymmetry is deliberate: outside the packaged app (`next dev`, or a headless
@@ -10,8 +10,15 @@
  * user with no document at all. A themed HTML file opens in any browser and
  * prints from there, so the degraded path is still useful — and the tool says
  * which one happened rather than implying a PDF exists.
+ *
+ * "Can we print?" is NOT decided here. The DocumentCreate handler answers it by
+ * asking whether it has a connected client to relay through (`onDocumentPrint`,
+ * see pending-documents). A `canPrintBridge`-style duck-type used to live in this
+ * file with no caller at all, so a reader tracing PDF availability found it first
+ * and followed a dead branch; it is gone rather than left as a decoy.
  */
 import { slugifySkillName } from '../skills/create';
+import { resolveContainedChild, type PathFlavour } from '../path-containment';
 
 export interface DocumentTarget {
   /** Directory the document is written into. */
@@ -30,42 +37,35 @@ export type TargetResult = { ok: true; target: DocumentTarget } | { ok: false; e
  * Reuses the skill slugifier: a document title is a human display name with the
  * same problem — "Q3 Board Pack" must become a filename, and `../../etc` must not
  * escape. Sharing it means one tested rule rather than two similar ones.
+ *
+ * Containment is the shared rule too (`@/lib/path-containment`), rather than the
+ * third copy of a string-prefix check that hardcoded '/' and could not fail while
+ * its only input was a slug.
  */
-export function resolveDocumentTarget(baseDir: string, title: unknown): TargetResult {
+export function resolveDocumentTarget(
+  baseDir: string,
+  title: unknown,
+  /** Test seam — see `PathFlavour`. Production always uses the host's. */
+  opts: { flavour?: PathFlavour } = {},
+): TargetResult {
   const slug = slugifySkillName(title);
   if (!slug.ok) return { ok: false, error: slug.error };
 
-  const base = baseDir.endsWith('/') ? baseDir : `${baseDir}/`;
-  const stem = `${base}${slug.slug}`;
-  if (!stem.startsWith(base) || stem.slice(base.length).includes('/')) {
-    return { ok: false, error: 'Resolved document path escapes the output directory.' };
-  }
+  const contained = resolveContainedChild(baseDir, slug.slug, {
+    error: 'Resolved document path escapes the output directory.',
+    flavour: opts.flavour,
+  });
+  if (!contained.ok) return { ok: false, error: contained.error };
 
   return {
     ok: true,
     target: {
-      dir: baseDir,
+      dir: contained.base,
       slug: slug.slug,
-      htmlPath: `${stem}.html`,
-      pdfPath: `${stem}.pdf`,
+      htmlPath: `${contained.path}.html`,
+      pdfPath: `${contained.path}.pdf`,
     },
   };
-}
-
-export interface PrintBridge {
-  printPdf: (args: {
-    html: string;
-    outputPath: string;
-    printOptions: Record<string, unknown>;
-  }) => Promise<{ ok: boolean; path?: string; error?: string; bytes?: number }>;
-}
-
-/**
- * Is a real print pipeline available? False under `next dev` and in any headless
- * run, which is the case the honest fallback exists for.
- */
-export function canPrintPdf(bridge: unknown): bridge is PrintBridge {
-  return !!bridge && typeof (bridge as PrintBridge).printPdf === 'function';
 }
 
 /** What the model is told, so it can describe the outcome accurately. */

@@ -9,6 +9,25 @@ declare global {
 export const runtime = 'nodejs';
 
 /**
+ * Read a response body to completion and discard it.
+ *
+ * Not `body.cancel()`: cancelling propagates back through the chat route's
+ * TransformStream and would abort the agent run we just started. Not "ignore it"
+ * either — that was the previous behaviour, and it leaves the producer pushing
+ * into a stream with no consumer.
+ */
+async function drain(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (!body) return;
+  const reader = body.getReader();
+  try {
+    let done = false;
+    while (!done) ({ done } = await reader.read());
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
  * POST /api/webhooks/:token
  * Validates the token and triggers an agent run with the POST body as context.
  * The response is a JSON object with a chatId that the client can poll.
@@ -51,9 +70,22 @@ export async function POST(
       chatId,
       userId: 'webhook',
       apiKey: process.env.ANTHROPIC_API_KEY || undefined,
+      // There is no window, no renderer and nothing here that reads the SSE
+      // events: a `document_print` or `input_request` from this run can never be
+      // acted on. Saying so is what makes the agent take the documented fallback
+      // (write the HTML, say only the HTML was written) instead of stalling for
+      // the full print budget and then reporting a rendering failure that never
+      // happened. This is the only caller of this endpoint that misses out —
+      // /api/subagent and the standing-order runner pass no relay callbacks at all.
+      canRelayToClient: false,
       ...(config.systemPrompt ? { projectInstructions: config.systemPrompt } : {}),
     }),
-  }).catch((err) => console.error('[Webhook] Agent run failed:', err));
+  })
+    // The stream still has to be DRAINED. Abandoning the body leaves the chat
+    // route writing into a stream nobody reads; cancelling it would abort the
+    // agent run outright. So read to the end and throw the bytes away.
+    .then((res) => drain(res.body))
+    .catch((err) => console.error('[Webhook] Agent run failed:', err));
 
   // Don't await — return immediately with the chatId
   void runPromise;

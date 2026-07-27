@@ -313,7 +313,25 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
       transport: 'stdio',
       command: 'uvx',
       args: ['awslabs.core-mcp-server@latest'],
-      tokenInjection: { method: 'env', envVar: 'AWS_ACCESS_KEY_ID' },
+      // This connector injects NOTHING: `aws_iam` is in the provision route's
+      // CREDENTIAL_FREE_AUTH set, so the token is blanked before the entry is
+      // built and the server inherits the ambient chain (~/.aws, SSO, IRSA).
+      // `tokenInjection` is required by the type, so it has to name something —
+      // and this named AWS_ACCESS_KEY_ID, which is the wrong slot to point a
+      // bypass at. Env static keys sit at the TOP of the AWS credential chain, so
+      // a value landing there is unrecoverable: it either fails as a partial
+      // credential (no AWS_SECRET_ACCESS_KEY) or authenticates as garbage, and
+      // either way it shadows the working profile. AWS_PROFILE is only consulted
+      // by the shared-config provider, so a stray value there is inert whenever
+      // env or container credentials are present, and fails loudly and locally
+      // when they are not.
+      //
+      // AWS_PROFILE is also what the rest of the codebase already believes this
+      // says — provision-guard's buildTrustedMcpEntry comment, and both aws tests
+      // in the provision route ("would set AWS_PROFILE to a profile that does not
+      // exist", "refuses a hostile AWS_PROFILE dressed up as a token"). The
+      // registry was the only place saying otherwise.
+      tokenInjection: { method: 'env', envVar: 'AWS_PROFILE' },
     },
   },
 

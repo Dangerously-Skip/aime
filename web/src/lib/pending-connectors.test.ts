@@ -86,3 +86,37 @@ describe('waitForConnector / resolveConnectorRequest', () => {
     expect(resolveConnectorRequest('t6', { connected: true })).toBe(false);
   });
 });
+
+/**
+ * DEFECT 6 (regression): pressing Stop with a connector card open left a live
+ * five-minute timer and a captured `resolve` closure with nobody left to call it.
+ * The wait now belongs to the query that opened it.
+ */
+describe('abort cancellation', () => {
+  it('resolves as not-connected the moment the query is aborted, and frees the entry', async () => {
+    const controller = new AbortController();
+    const promise = waitForConnector('abort-1', { signal: controller.signal });
+    expect(pendingConnectorCount()).toBe(1);
+
+    controller.abort();
+    await expect(promise).resolves.toMatchObject({ connected: false });
+    expect(pendingConnectorCount()).toBe(0);
+
+    // no live timer is left behind
+    vi.advanceTimersByTime(CONNECTOR_REQUEST_TIMEOUT_MS + 1);
+    expect(resolveConnectorRequest('abort-1', { connected: true })).toBe(false);
+  });
+
+  it('leaves a different query card alone', async () => {
+    const mine = new AbortController();
+    const a = waitForConnector('abort-2', { signal: mine.signal });
+    const b = waitForConnector('abort-3', { signal: new AbortController().signal });
+
+    mine.abort();
+    await expect(a).resolves.toMatchObject({ connected: false });
+    expect(pendingConnectorCount()).toBe(1);
+
+    resolveConnectorRequest('abort-3', { connected: true });
+    await expect(b).resolves.toEqual({ connected: true });
+  });
+});

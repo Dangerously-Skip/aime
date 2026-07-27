@@ -43,3 +43,18 @@ describe('pending questions bridge', () => {
     await expect(b).resolves.toEqual({ pick: 'B' });
   });
 });
+
+/** DEFECT 6 (regression): a cancelled turn must take its rendezvous with it. */
+describe('abort cancellation', () => {
+  it('rejects the moment the query is aborted, and frees the entry', async () => {
+    const controller = new AbortController();
+    const pending = waitForAnswer('abort-q1', { signal: controller.signal });
+    const assertion = expect(pending).rejects.toThrow(/cancel/i);
+    controller.abort();
+    await assertion;
+
+    // no live five-minute timer, no dead resolve closure
+    vi.advanceTimersByTime(300_001);
+    expect(resolveAnswer('abort-q1', {})).toBe(false);
+  });
+});

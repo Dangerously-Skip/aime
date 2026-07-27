@@ -14,6 +14,7 @@
  * Pure: no fs. The caller writes.
  */
 import { serializeSkillMd, type SkillFrontmatter } from '../skill-parser';
+import { resolveContainedChild, type PathFlavour } from '../path-containment';
 
 export type SlugResult = { ok: true; slug: string } | { ok: false; error: string };
 
@@ -87,15 +88,26 @@ export function buildSkillMd(opts: BuildSkillOptions): string {
 /**
  * Resolve the directory a skill will be written to, proving it stays an
  * immediate child of the skills directory.
+ *
+ * The rule is shared with the plugin installer and the document writer (see
+ * `@/lib/path-containment`). This used to be its own `endsWith('/')` + concat +
+ * `startsWith` copy — the form the installer had already had to abandon because
+ * the hardcoded '/' made it reject every legitimate name on Windows. It was also
+ * a tautology: its only argument is a slug that cannot contain a separator, so it
+ * could not fail, while reading here as the boundary that keeps a
+ * model-supplied name inside the skills directory.
  */
 export function resolveSkillDir(
   skillsDir: string,
   slug: string,
+  /** Test seam — see `PathFlavour`. Production always uses the host's. */
+  opts: { flavour?: PathFlavour } = {},
 ): { ok: true; dir: string } | { ok: false; error: string } {
-  const base = skillsDir.endsWith('/') ? skillsDir : `${skillsDir}/`;
-  const dir = `${base}${slug}`;
-  if (!dir.startsWith(base) || dir.slice(base.length).includes('/')) {
-    return { ok: false, error: 'Resolved skill path escapes the skills directory.' };
-  }
-  return { ok: true, dir };
+  const contained = resolveContainedChild(skillsDir, slug, {
+    error: 'Resolved skill path escapes the skills directory.',
+    flavour: opts.flavour,
+  });
+  return contained.ok
+    ? { ok: true, dir: contained.path }
+    : { ok: false, error: contained.error };
 }

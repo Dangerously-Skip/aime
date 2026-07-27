@@ -27,7 +27,6 @@ beforeEach(() => {
     currentChatId: null,
     model: 'opus',
     isStreaming: false,
-    streamError: null,
     folderByChat: {},
     contextFiles: {},
     artifactFiles: {},

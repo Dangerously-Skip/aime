@@ -45,6 +45,7 @@ import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useRunRecorder } from "@/hooks/use-run-recorder";
+import { useCloseRunOnAbort } from "@/hooks/use-close-run-on-abort";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
@@ -142,7 +143,6 @@ export function ChatSurface() {
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const setCurrentChat = useChatStore((s) => s.setCurrentChat);
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
-  const setStreamError = useChatStore((s) => s.setStreamError);
   const clearMessages = useChatStore((s) => s.clearMessages);
   const updateConversation = useConversationStore(
     (s) => s.updateConversation
@@ -217,14 +217,35 @@ export function ChatSurface() {
   // This causes chunks to be written to chatId "" instead of the new ID.
   const getChatId = () => useChatStore.getState().currentChatId ?? "";
 
+  /**
+   * The chat the in-flight stream was started for.
+   *
+   * `getChatId()` answers "which conversation is on screen NOW", which is the
+   * right question while chunks are arriving and the wrong one when a turn ends:
+   * a timeout firing after a cross-surface switch appended its error text to
+   * whatever the user was reading instead of the conversation that failed.
+   */
+  const streamChatIdRef = useRef("");
+
   // Records a Run per turn so every execution leaves a durable trace with its
   // cost attached (P6 substrate — see lib/runs).
   const runRecorder = useRunRecorder("chat");
+  // A Stop, a conversation switch or an inactivity timeout aborts the fetch, so
+  // neither onDone nor onError below runs — without this the Run stays 'running'.
+  const ownsChat = useCallback(
+    (id: string) => !!useChatStore.getState().messages[id]?.length,
+    [],
+  );
+  useCloseRunOnAbort(runRecorder.finish, ownsChat);
 
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
-    setStreamError,
+    // Required by the hook, read by nothing: stream failures reach the user
+    // through `onError` below, which appends them to the transcript. The store
+    // field it used to write was write-only, so it is gone; the hook option
+    // should follow it out.
+    setStreamError: () => undefined,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
       const cid = getChatId();
@@ -397,7 +418,7 @@ export function ChatSurface() {
     },
     onDone() {
       runRecorder.succeed();
-      const doneId = getChatId();
+      const doneId = streamChatIdRef.current || getChatId();
       completeRunningTools(doneId);
       stopStreaming(doneId);
       // Detect binary artifacts from Bash tool calls (e.g. ppt plugin .pptx output)
@@ -425,8 +446,10 @@ export function ChatSurface() {
     },
     onError(error) {
       runRecorder.fail(error.message);
-      stopStreaming(getChatId());
-      appendToLastAssistant(getChatId(), `\n\n**Error:** ${error.message}`);
+      // The conversation that failed, not whichever one is on screen by now.
+      const errorId = streamChatIdRef.current || getChatId();
+      stopStreaming(errorId);
+      appendToLastAssistant(errorId, `\n\n**Error:** ${error.message}`);
     },
   });
 
@@ -549,6 +572,9 @@ export function ChatSurface() {
       // Open the run record before the turn starts so an immediate failure is
       // still attributed rather than lost.
       runRecorder.begin({ trigger: "chat", model: route?.model ?? model });
+      // Pin the target before the stream starts: everything that finalises the
+      // turn must land here even if the user has moved on by then.
+      streamChatIdRef.current = id;
       await sendMessage(trimmed, id, "chat", route?.model ?? model, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
@@ -602,6 +628,16 @@ export function ChatSurface() {
   const handleQuestionAnswered = useCallback(
     (toolUseId: string) => {
       if (chatId) updateMessage(chatId, toolUseId, { questionAnswered: true });
+    },
+    [chatId, updateMessage]
+  );
+
+  // Persist a connect card's answer on the message. Without this the card's
+  // answered state lived only in local component state, so switching conversation
+  // brought its Connect / Not now buttons back for a request already dealt with.
+  const handleConnectorSettled = useCallback(
+    (toolUseId: string) => {
+      if (chatId) updateMessage(chatId, toolUseId, { connectorRequestSettled: true });
     },
     [chatId, updateMessage]
   );
@@ -890,7 +926,7 @@ export function ChatSurface() {
             {/* Messages column */}
             <div className="flex flex-1 flex-col min-w-0">
               {/* Messages */}
-              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
+              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onConnectorSettled={handleConnectorSettled} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
 
               {/* Prompt suggestions */}
               {suggestions.length > 0 && !isStreaming && (
