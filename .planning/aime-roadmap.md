@@ -80,13 +80,18 @@ marketplace routes, widget cards). New: **skill generation** ("make me a
 skill and save it" → prompt + `serializeSkillMd()`, already tested) and
 **widget creation** (generation flow onto `AssistantCard.widget`).
 
-**Composio evaluation (DR-9):** Composio (composio.dev) is a tool-integration
-platform — hundreds of managed OAuth integrations exposed as agent tools,
-similar territory to our Nango option but agent-native. Evaluate as either a
-replacement for, or a third leg beside, the built-in connector registry and
-Nango. Note: the cowork surface config already has a `mcpServers: {}` stub
-commented "Composio added at runtime if configured" — someone had the same
-idea earlier. Evaluate during P3.
+**DR-9 RESOLVED (2026-07-27): MCP-native, not Composio.** Full analysis in
+`dr-9-tool-integrations.md`. Composio holds end-user OAuth tokens server-side
+and meters per tool call — both contradict a local-first app with unattended
+schedulers, and every OSS user would need their own account. Meanwhile the
+Agent SDK already accepts remote MCP (`McpHttpServerConfig` with `headers` and
+per-tool `permission_policy`), and the open ecosystem is ~20k servers with
+vendors shipping their own OAuth 2.1 endpoints. So P3 invests in being an
+excellent MCP client: remote MCP + OAuth, a registry-backed server catalog,
+per-tool policy fed by the C3 classifier, and tool-count discipline.
+Revisit hosted tool platforms at **P5** (hosted edition) where token custody is
+expected — **Nango** over Composio there, since it self-hosts; note its Elastic
+License is source-available, so it can never ship in the OSS desktop build.
 
 ### P4 — Output & intelligence
 
