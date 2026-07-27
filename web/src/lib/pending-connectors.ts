@@ -19,6 +19,12 @@
  *
  * (The previous hand-rolled version also stored a `reject` callback that nothing
  * ever called — copied from pending-questions, where a timeout does reject.)
+ *
+ * The `toolUseId` these functions take is the nonce-bearing handle the provider
+ * issued, not the SDK's tool use id. Nothing else binds an outcome to the card
+ * that asked for it, and — unlike the document bridge, where the tool can stat the
+ * PDF — there is nothing on the server against which `connected: true` could be
+ * checked. See rendezvous.issueHandle.
  */
 import { createRendezvous, type WaitOptions } from './rendezvous';
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, writeFile, rm, readdir, readFile as read } from 'fs/promises';
+import { mkdir, writeFile, rm, readdir, readFile as read, utimes } from 'fs/promises';
 import { join, dirname } from 'path';
 
 /**
@@ -256,5 +256,73 @@ describe('POST /api/mcp/install — overlapping installs of the same name', () =
     }
     expect((await readdir(join(PLUGINS_DIR, 'dup'))).sort()).toEqual(['.claude-plugin', 'sub', 'top.txt']);
     expect((await readdir(PLUGINS_DIR)).filter((e) => e.startsWith('.tmp'))).toEqual([]);
+  });
+});
+
+/**
+ * The `finally` below only runs if the process survives. A SIGKILL, a power loss
+ * or a dev-server restart between mkdtemp and the promoting rename leaves the
+ * scratch tree in ~/.claude/plugins, which is what sweepAbandonedScratch exists
+ * for. It just could not be reached in the case that matters most.
+ */
+describe('POST /api/mcp/install — sweeping scratch a crashed install left behind', () => {
+  const PLUGINS_DIR = '/tmp/aime-install-test-home/.claude/plugins';
+  const OLD = Date.now() - 10 * 60_000;
+
+  const leaveOrphan = async (name: string) => {
+    const dir = join(PLUGINS_DIR, `.tmp-${name}-crashed`, 'repo');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'partial.txt'), 'half a clone', 'utf-8');
+    // Backdated past TEMP_SWEEP_AGE_MS so it is provably not a live clone.
+    await utimes(join(PLUGINS_DIR, `.tmp-${name}-crashed`), OLD / 1000, OLD / 1000);
+  };
+
+  const scratchDirs = async () =>
+    (await readdir(PLUGINS_DIR)).filter((e) => e.startsWith('.tmp-'));
+
+  beforeEach(async () => {
+    await rm('/tmp/aime-install-test-home', { recursive: true, force: true });
+    await mkdir(PLUGINS_DIR, { recursive: true });
+    execFileMock.mockImplementation((_f, args: string[], _o, cb) => {
+      const dest = (args as string[]).at(-1)!;
+      void mkdir(join(dest, '.claude-plugin'), { recursive: true })
+        .then(() => writeFile(join(dest, '.claude-plugin', 'plugin.json'), '{"name":"p"}', 'utf-8'))
+        .then(() => cb(null, { stdout: '', stderr: '' }));
+    });
+  });
+
+  afterEach(async () => {
+    await rm('/tmp/aime-install-test-home', { recursive: true, force: true });
+  });
+
+  it('removes an aged orphan on the next install', async () => {
+    await leaveOrphan('p');
+    expect(await scratchDirs()).toHaveLength(1);
+
+    expect((await post({ name: 'p', source: { source: 'github', repo: 'o/r' } })).status).toBe(200);
+    expect(await scratchDirs()).toEqual([]);
+  });
+
+  it('REGRESSION: sweeps even when the plugin is already installed', async () => {
+    // The retry after a crash is what installs the plugin, and from then on every
+    // Install returns early at dirExists(targetDir). With the sweep behind that
+    // return, the leftover was unreachable and stayed on disk forever.
+    await mkdir(join(PLUGINS_DIR, 'p', '.claude-plugin'), { recursive: true });
+    await writeFile(join(PLUGINS_DIR, 'p', '.claude-plugin', 'plugin.json'), '{"name":"p"}', 'utf-8');
+    await leaveOrphan('p');
+
+    const res = await post({ name: 'p', source: { source: 'github', repo: 'o/r' } });
+    expect((await res.json()).alreadyInstalled).toBe(true);
+    // Nothing was cloned — the sweep is the only thing that ran.
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(await scratchDirs()).toEqual([]);
+  });
+
+  it('never touches a scratch directory young enough to be a live clone', async () => {
+    const dir = join(PLUGINS_DIR, '.tmp-other-inflight');
+    await mkdir(join(dir, 'repo'), { recursive: true });
+
+    await post({ name: 'p', source: { source: 'github', repo: 'o/r' } });
+    expect(await scratchDirs()).toEqual(['.tmp-other-inflight']);
   });
 });

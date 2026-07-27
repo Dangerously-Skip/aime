@@ -44,8 +44,7 @@ import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useRunRecorder } from "@/hooks/use-run-recorder";
-import { useCloseRunOnAbort } from "@/hooks/use-close-run-on-abort";
+import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
@@ -227,25 +226,22 @@ export function ChatSurface() {
    */
   const streamChatIdRef = useRef("");
 
-  // Records a Run per turn so every execution leaves a durable trace with its
-  // cost attached (P6 substrate — see lib/runs).
-  const runRecorder = useRunRecorder("chat");
-  // A Stop, a conversation switch or an inactivity timeout aborts the fetch, so
-  // neither onDone nor onError below runs — without this the Run stays 'running'.
   const ownsChat = useCallback(
     (id: string) => !!useChatStore.getState().messages[id]?.length,
     [],
   );
-  useCloseRunOnAbort(runRecorder.finish, ownsChat);
+  // Run recording + the two card-answer persisters, shared with the other three
+  // surfaces (see use-turn-wiring for why it is not inlined here any more).
+  const { runRecorder, onQuestionAnswered, onConnectorSettled } = useTurnWiring({
+    surfaceId: "chat",
+    chatId,
+    ownsChat,
+    updateMessage,
+  });
 
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
-    // Required by the hook, read by nothing: stream failures reach the user
-    // through `onError` below, which appends them to the transcript. The store
-    // field it used to write was write-only, so it is gone; the hook option
-    // should follow it out.
-    setStreamError: () => undefined,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
       const cid = getChatId();
@@ -326,10 +322,11 @@ export function ChatSurface() {
           }
           break;
         case "document_print":
-          // Relay to Electron main, which owns Chromium (P4.2b).
+          // Relay to Electron main, which owns Chromium (P4.2b). Paths only —
+          // the document itself never enters the renderer.
           void printDocument({
             toolUseId: event.toolUseId as string,
-            html: event.html as string,
+            htmlPath: event.htmlPath as string,
             outputPath: event.outputPath as string,
             printOptions: event.printOptions as Record<string, unknown> | undefined,
           });
@@ -625,23 +622,6 @@ export function ChatSurface() {
     ]
   );
 
-  const handleQuestionAnswered = useCallback(
-    (toolUseId: string) => {
-      if (chatId) updateMessage(chatId, toolUseId, { questionAnswered: true });
-    },
-    [chatId, updateMessage]
-  );
-
-  // Persist a connect card's answer on the message. Without this the card's
-  // answered state lived only in local component state, so switching conversation
-  // brought its Connect / Not now buttons back for a request already dealt with.
-  const handleConnectorSettled = useCallback(
-    (toolUseId: string) => {
-      if (chatId) updateMessage(chatId, toolUseId, { connectorRequestSettled: true });
-    },
-    [chatId, updateMessage]
-  );
-
   const handleRetry = useCallback(() => {
     if (!chatId || isStreaming) return;
     const msgs = useChatStore.getState().messages[chatId];
@@ -926,7 +906,7 @@ export function ChatSurface() {
             {/* Messages column */}
             <div className="flex flex-1 flex-col min-w-0">
               {/* Messages */}
-              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={handleQuestionAnswered} onConnectorSettled={handleConnectorSettled} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
+              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
 
               {/* Prompt suggestions */}
               {suggestions.length > 0 && !isStreaming && (

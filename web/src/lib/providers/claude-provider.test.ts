@@ -54,6 +54,38 @@ async function captureOptions(provider: ClaudeProvider, params: Partial<QueryPar
   return { prompt: call.prompt, options: call.options, canUseTool: call.options.canUseTool as CanUseTool };
 }
 
+/**
+ * Answer an outstanding card the way the real client does: with the handle the
+ * provider issued on the relay callback.
+ *
+ * These tests used to settle the rendezvous by the SDK's `toolUseID`, which they
+ * knew because they passed it in. They cannot any more, and that is the point —
+ * the id a resolution must present is minted per request with a nonce in it (see
+ * lib/rendezvous → issueHandle), so knowing which tool call is pending is not
+ * enough to answer for the user. `issued` is filled by the test's onInputRequest /
+ * onConnectorRequest, exactly as the SSE event fills the card.
+ *
+ * Polls because the provider parks its wait immediately AFTER that callback
+ * returns, so the handle exists a tick before the wait it belongs to does.
+ */
+async function deliver<R>(
+  issued: string[],
+  settle: (handle: string, result: R) => boolean,
+  result: R,
+  /** Which card, when a test has more than one open. Default: the newest. */
+  nth = -1,
+): Promise<void> {
+  await vi.waitFor(() => {
+    const handle = issued.at(nth);
+    expect(handle !== undefined && settle(handle, result)).toBe(true);
+  });
+}
+
+/** Drop-in onInputRequest / onConnectorRequest that records what it was handed. */
+const recordHandle = (issued: string[]) => async (handle: string) => {
+  issued.push(handle);
+};
+
 const controls = (overrides: Partial<SessionControls>): SessionControls => ({
   thinkLevel: 'off',
   effortLevel: null,
@@ -443,15 +475,21 @@ describe('canUseTool interception', () => {
 
     // the card has been pushed to the client...
     await vi.waitFor(() => expect(requested).toHaveLength(1));
-    expect(requested[0]).toEqual({
-      toolUseId: 'rc-1',
+    expect(requested[0]).toMatchObject({
       connectorId: 'atlassian',
       reason: 'to file the ticket',
     });
+    // The relayed id is a nonce derived from the tool call, not the tool call's
+    // own id — see the note on `deliver`.
+    expect(requested[0].toolUseId).toMatch(/^rc-1\.[0-9a-f-]{36}$/);
     // ...and the agent is still waiting
     expect(settled).toBe(false);
 
-    resolveConnectorRequest('rc-1', { connected: true });
+    await deliver(
+      requested.map((r) => r.toolUseId),
+      resolveConnectorRequest,
+      { connected: true },
+    );
     const result = await pending;
     expect(result.behavior).toBe('allow');
     // Deliberately NOT asserting updatedInput: the outcome cannot travel that way
@@ -461,12 +499,13 @@ describe('canUseTool interception', () => {
 
   it('resumes with the decline reason so the agent can adapt', async () => {
     const { resolveConnectorRequest } = await import('../pending-connectors');
+    const issued: string[] = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
-      onConnectorRequest: async () => {},
+      onConnectorRequest: recordHandle(issued),
     });
 
     const pending = canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'rc-2' });
-    await vi.waitFor(() => expect(resolveConnectorRequest('rc-2', { connected: false, reason: 'declined' })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: false, reason: 'declined' });
 
     // The call completes rather than hanging; the reason reaching the model is
     // asserted at the handler.
@@ -503,13 +542,15 @@ describe('canUseTool interception', () => {
   });
 
   it('resolves AskUserQuestion via the pending-questions bridge', async () => {
-    const onInputRequest = vi.fn().mockResolvedValue(undefined);
+    const issued: string[] = [];
+    const onInputRequest = vi.fn(async (handle: string) => { issued.push(handle); });
     const { canUseTool } = await captureOptions(new ClaudeProvider(), { onInputRequest });
 
     const pending = canUseTool('AskUserQuestion', { questions: ['pick one'] }, { toolUseID: 'q1' });
-    // Give canUseTool a tick to register the pending question
-    await vi.waitFor(() => expect(onInputRequest).toHaveBeenCalledWith('q1', ['pick one']));
-    resolveAnswer('q1', { choice: 'A' });
+    await vi.waitFor(() =>
+      expect(onInputRequest).toHaveBeenCalledWith(expect.stringMatching(/^q1\./), ['pick one']),
+    );
+    await deliver(issued, resolveAnswer, { choice: 'A' });
 
     const result = await pending;
     expect(result.behavior).toBe('allow');
@@ -943,8 +984,11 @@ describe('RequestConnector — the OUTCOME reaches the model (regression)', () =
    * drive canUseTool AND then the real handler, which is the only arrangement that
    * can catch it.
    */
+  /** Handles the provider relayed to "the client" — see the note on `deliver`. */
+  let issued: string[] = [];
+
   async function capture() {
-    await run(new ClaudeProvider(), { onConnectorRequest: async () => {} });
+    await run(new ClaudeProvider(), { onConnectorRequest: recordHandle(issued) });
     const call = queryMock.mock.calls.at(-1)![0] as {
       options: {
         canUseTool: CanUseTool;
@@ -955,7 +999,10 @@ describe('RequestConnector — the OUTCOME reaches the model (regression)', () =
     return { canUseTool: call.options.canUseTool, handler: tool.handler };
   }
 
-  beforeEach(() => scriptChunks([]));
+  beforeEach(() => {
+    issued = [];
+    scriptChunks([]);
+  });
 
   it('reports success after the user connects', async () => {
     const { resolveConnectorRequest } = await import('../pending-connectors');
@@ -966,7 +1013,7 @@ describe('RequestConnector — the OUTCOME reaches the model (regression)', () =
       { connectorId: 'atlassian', reason: 'to file the ticket' },
       { toolUseID: 'rc-ok' },
     );
-    await vi.waitFor(() => expect(resolveConnectorRequest('rc-ok', { connected: true })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: true });
     await pending;
 
     // The handler receives only what the schema allows — connectorId and reason.
@@ -981,7 +1028,7 @@ describe('RequestConnector — the OUTCOME reaches the model (regression)', () =
     const { canUseTool, handler } = await capture();
 
     const pending = canUseTool('RequestConnector', { connectorId: 'miro', reason: 'r' }, { toolUseID: 'rc-turn' });
-    await vi.waitFor(() => expect(resolveConnectorRequest('rc-turn', { connected: true })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: true });
     await pending;
 
     const text = (await handler({ connectorId: 'miro', reason: 'r' })).content[0].text;
@@ -995,9 +1042,7 @@ describe('RequestConnector — the OUTCOME reaches the model (regression)', () =
     const { canUseTool, handler } = await capture();
 
     const pending = canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'rc-no' });
-    await vi.waitFor(() =>
-      expect(resolveConnectorRequest('rc-no', { connected: false, reason: 'user declined' })).toBe(true),
-    );
+    await deliver(issued, resolveConnectorRequest, { connected: false, reason: 'user declined' });
     await pending;
 
     const text = (await handler({ connectorId: 'github', reason: 'r' })).content[0].text;
@@ -1016,10 +1061,10 @@ describe('RequestConnector — the OUTCOME reaches the model (regression)', () =
     const { canUseTool, handler } = await capture();
 
     const a = canUseTool('RequestConnector', { connectorId: 'figma', reason: 'r' }, { toolUseID: 'rc-a' });
-    await vi.waitFor(() => expect(resolveConnectorRequest('rc-a', { connected: true })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: true });
     await a;
     const b = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r' }, { toolUseID: 'rc-b' });
-    await vi.waitFor(() => expect(resolveConnectorRequest('rc-b', { connected: false, reason: 'nope' })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: false, reason: 'nope' });
     await b;
 
     expect((await handler({ connectorId: 'figma', reason: 'r' })).content[0].text).toContain('now connected');
@@ -1135,22 +1180,22 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
     expect(settled).toBe(false);
 
     const question = (asked[0].questions as Array<{ question: string }>)[0].question;
-    resolveAnswer('gate-1', { [question]: 'Allow once' });
+    await deliver(asked.map((a) => a.toolUseId), resolveAnswer, { [question]: 'Allow once' });
     expect((await pending).behavior).toBe('allow');
   });
 
   it('denies when the user declines', async () => {
-    const asked: Array<{ questions: unknown }> = [];
+    const asked: Array<{ handle: string; questions: unknown }> = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       chatId: 'regular-chat',
       mcpServers: acme,
-      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+      onInputRequest: async (handle: string, questions: unknown) => { asked.push({ handle, questions }); },
     });
 
     const pending = canUseTool('mcp__aime-mcp-acme__sendEmail', {}, { toolUseID: 'gate-2' });
     await vi.waitFor(() => expect(asked).toHaveLength(1));
     const question = (asked[0].questions as Array<{ question: string }>)[0].question;
-    resolveAnswer('gate-2', { [question]: 'Deny' });
+    await deliver(asked.map((a) => a.handle), resolveAnswer, { [question]: 'Deny' });
 
     const result = await pending;
     expect(result.behavior).toBe('deny');
@@ -1158,12 +1203,12 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
   });
 
   it('a create_refund-shaped money tool does not execute unprompted', async () => {
-    const asked: Array<{ questions: unknown }> = [];
+    const asked: Array<{ handle: string; questions: unknown }> = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       chatId: 'regular-chat',
       surfaceId: 'chat',
       mcpServers: stripe,
-      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+      onInputRequest: async (handle: string, questions: unknown) => { asked.push({ handle, questions }); },
     });
 
     let settled = false;
@@ -1181,24 +1226,25 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
     expect(q.options.map((o) => o.label)).not.toContain('Always allow');
     expect(q.question).toMatch(/create_refund/);
 
-    resolveAnswer('money-1', { [q.question]: 'Deny' });
+    await deliver(asked.map((a) => a.handle), resolveAnswer, { [q.question]: 'Deny' });
     expect((await pending).behavior).toBe('deny');
   });
 
   it('a tool name that impersonates an in-app builtin is still gated', async () => {
     // Any MCP server can name a tool `canvas`, `Task` or `TodoWrite`; the
     // classifier's exact-name table would otherwise hand it always_allow.
+    const issued: string[] = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       chatId: 'regular-chat',
       mcpServers: stripe,
-      onInputRequest: async () => {},
+      onInputRequest: recordHandle(issued),
     });
 
     let settled = false;
     const pending = canUseTool('mcp__aime-mcp-stripe__canvas', {}, { toolUseID: 'imp-1' })
       .then((r) => { settled = true; return r; });
     await vi.waitFor(() => expect(settled).toBe(false));
-    resolveAnswer('imp-1', { x: 'Deny' });
+    await deliver(issued, resolveAnswer, { x: 'Deny' });
     expect((await pending).behavior).toBe('deny');
   });
 
@@ -1331,16 +1377,16 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
   it('does not re-ask after a denial in the same turn', async () => {
     // Loop detection cannot help: a denial returns before the window is touched.
     // Without this an agent could put the same card up until the user gave in.
-    const asked: Array<{ questions: unknown }> = [];
+    const asked: Array<{ handle: string; questions: unknown }> = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       chatId: 'regular-chat',
       mcpServers: acme,
-      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+      onInputRequest: async (handle: string, questions: unknown) => { asked.push({ handle, questions }); },
     });
 
     const first = canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'n-1' });
     await vi.waitFor(() => expect(asked).toHaveLength(1));
-    resolveAnswer('n-1', { x: 'Deny' });
+    await deliver(asked.map((a) => a.handle), resolveAnswer, { x: 'Deny' });
     expect((await first).behavior).toBe('deny');
 
     // Different input, so loop detection would not catch it either.
@@ -1357,6 +1403,7 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
     vi.useFakeTimers();
     try {
       let aborted: boolean | undefined;
+      const issued: string[] = [];
       queryMock.mockImplementation(async function* (args: {
         options: { canUseTool: CanUseTool };
         abortSignal: AbortSignal;
@@ -1376,14 +1423,17 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
         );
         await vi.advanceTimersByTimeAsync(150_000);
         aborted = args.abortSignal.aborted;
-        resolveAnswer('w-1', { x: 'Deny' });
+        // No vi.waitFor here (fake timers, inside the SDK generator): the 150s
+        // advance above has already flushed the relay and parked the wait, and
+        // asserting the answer LANDED proves that rather than assuming it.
+        expect(resolveAnswer(issued[0], { x: 'Deny' })).toBe(true);
         await pending;
       });
 
       await run(new ClaudeProvider(), {
         chatId: 'regular-chat',
         mcpServers: acme,
-        onInputRequest: async () => {},
+        onInputRequest: recordHandle(issued),
       });
       expect(aborted).toBe(false);
     } finally {
@@ -1429,17 +1479,17 @@ describe('MCP approval gate — remembered decisions', () => {
   };
 
   it('persists "Always allow" and stops asking for that tool', async () => {
-    const asked: Array<{ questions: unknown }> = [];
+    const asked: Array<{ handle: string; questions: unknown }> = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       chatId: 'regular-chat',
       mcpServers: acme,
-      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+      onInputRequest: async (handle: string, questions: unknown) => { asked.push({ handle, questions }); },
     });
 
     const pending = canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'aa-1' });
     await vi.waitFor(() => expect(asked).toHaveLength(1));
     const q = (asked[0].questions as Array<{ question: string }>)[0].question;
-    resolveAnswer('aa-1', { [q]: 'Always allow' });
+    await deliver(asked.map((a) => a.handle), resolveAnswer, { [q]: 'Always allow' });
     expect((await pending).behavior).toBe('allow');
 
     await vi.waitFor(async () =>
@@ -1453,17 +1503,17 @@ describe('MCP approval gate — remembered decisions', () => {
   });
 
   it('persists "Always deny" and blocks silently from then on', async () => {
-    const asked: Array<{ questions: unknown }> = [];
+    const asked: Array<{ handle: string; questions: unknown }> = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       chatId: 'regular-chat',
       mcpServers: acme,
-      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+      onInputRequest: async (handle: string, questions: unknown) => { asked.push({ handle, questions }); },
     });
 
     const pending = canUseTool('mcp__aime-mcp-acme__sendEmail', {}, { toolUseID: 'ad-1' });
     await vi.waitFor(() => expect(asked).toHaveLength(1));
     const q = (asked[0].questions as Array<{ question: string }>)[0].question;
-    resolveAnswer('ad-1', { [q]: 'Always deny' });
+    await deliver(asked.map((a) => a.handle), resolveAnswer, { [q]: 'Always deny' });
     expect((await pending).behavior).toBe('deny');
 
     await vi.waitFor(async () =>
@@ -1476,15 +1526,15 @@ describe('MCP approval gate — remembered decisions', () => {
   });
 
   it('writes the decision file 0600 — it decides whether a tool runs unasked', async () => {
-    const asked: Array<{ questions: unknown }> = [];
+    const asked: Array<{ handle: string; questions: unknown }> = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       chatId: 'regular-chat',
       mcpServers: acme,
-      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+      onInputRequest: async (handle: string, questions: unknown) => { asked.push({ handle, questions }); },
     });
     const pending = canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'perm-1' });
     await vi.waitFor(() => expect(asked).toHaveLength(1));
-    resolveAnswer('perm-1', { x: 'Always allow' });
+    await deliver(asked.map((a) => a.handle), resolveAnswer, { x: 'Always allow' });
     await pending;
 
     const fsp = await import('fs/promises');
@@ -1514,18 +1564,18 @@ describe('MCP approval gate — remembered decisions', () => {
   });
 
   it('never remembers a blanket approval for a money-moving tool', async () => {
-    const asked: Array<{ questions: unknown }> = [];
+    const asked: Array<{ handle: string; questions: unknown }> = [];
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       chatId: 'regular-chat',
       mcpServers: { 'aime-mcp-stripe': { type: 'http', url: 'https://mcp.stripe.com' } },
-      onInputRequest: async (_id: string, questions: unknown) => { asked.push({ questions }); },
+      onInputRequest: async (handle: string, questions: unknown) => { asked.push({ handle, questions }); },
     });
 
     const pending = canUseTool('mcp__aime-mcp-stripe__create_refund', {}, { toolUseID: 'm-1' });
     await vi.waitFor(() => expect(asked).toHaveLength(1));
     const q = (asked[0].questions as Array<{ question: string }>)[0].question;
     // Even if the answer claims a blanket approval, it degrades to allow-once.
-    resolveAnswer('m-1', { [q]: 'Always allow' });
+    await deliver(asked.map((a) => a.handle), resolveAnswer, { [q]: 'Always allow' });
     expect((await pending).behavior).toBe('allow');
 
     const fsp = await import('fs/promises');
@@ -1534,7 +1584,7 @@ describe('MCP approval gate — remembered decisions', () => {
     // ...and the next refund asks again.
     const second = canUseTool('mcp__aime-mcp-stripe__create_refund', { n: 2 }, { toolUseID: 'm-2' });
     await vi.waitFor(() => expect(asked).toHaveLength(2));
-    resolveAnswer('m-2', { x: 'Deny' });
+    await deliver(asked.map((a) => a.handle), resolveAnswer, { x: 'Deny' });
     expect((await second).behavior).toBe('deny');
   });
 });
@@ -1553,8 +1603,11 @@ describe('MCP approval gate — remembered decisions', () => {
  * passed against the broken behaviour.
  */
 describe('RequestConnector — outcomes bound to their own call (regression)', () => {
+  /** Handles the provider relayed to "the client" — see the note on `deliver`. */
+  let issued: string[] = [];
+
   async function capture() {
-    await run(new ClaudeProvider(), { onConnectorRequest: async () => {} });
+    await run(new ClaudeProvider(), { onConnectorRequest: recordHandle(issued) });
     const call = queryMock.mock.calls.at(-1)![0] as {
       options: {
         canUseTool: CanUseTool;
@@ -1570,7 +1623,10 @@ describe('RequestConnector — outcomes bound to their own call (regression)', (
     connectorId: string,
   ) => (await handler({ connectorId, reason: 'r' })).content[0].text;
 
-  beforeEach(() => scriptChunks([]));
+  beforeEach(() => {
+    issued = [];
+    scriptChunks([]);
+  });
 
   it('does not tell a user who CONNECTED that they declined', async () => {
     const { resolveConnectorRequest } = await import('../pending-connectors');
@@ -1581,7 +1637,7 @@ describe('RequestConnector — outcomes bound to their own call (regression)', (
     const first = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r1' }, { toolUseID: 'x1-a' });
     const second = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r2' }, { toolUseID: 'x1-b' });
 
-    await vi.waitFor(() => expect(resolveConnectorRequest('x1-a', { connected: true })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: true });
     await first;
     await second;
 
@@ -1597,9 +1653,7 @@ describe('RequestConnector — outcomes bound to their own call (regression)', (
     const first = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r1' }, { toolUseID: 'x2-a' });
     const second = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r2' }, { toolUseID: 'x2-b' });
 
-    await vi.waitFor(() =>
-      expect(resolveConnectorRequest('x2-a', { connected: false, reason: 'user declined' })).toBe(true),
-    );
+    await deliver(issued, resolveConnectorRequest, { connected: false, reason: 'user declined' });
     await first;
     await second;
 
@@ -1614,7 +1668,7 @@ describe('RequestConnector — outcomes bound to their own call (regression)', (
     const { canUseTool } = await capture();
 
     const first = canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'x3-a' });
-    await vi.waitFor(() => expect(resolveConnectorRequest('x3-a', { connected: true })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: true });
     await first;
 
     const second = await canUseTool('RequestConnector', { connectorId: 'github', reason: 'again' }, { toolUseID: 'x3-b' });
@@ -1628,7 +1682,7 @@ describe('RequestConnector — outcomes bound to their own call (regression)', (
     const { canUseTool, handler } = await capture();
 
     const pending = canUseTool('RequestConnector', { connectorId: 'figma', reason: 'r' }, { toolUseID: 'x4-a' });
-    await vi.waitFor(() => expect(resolveConnectorRequest('x4-a', { connected: true })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: true });
     await pending;
 
     expect(await say(handler, 'figma')).toContain('now connected');
@@ -1641,12 +1695,110 @@ describe('RequestConnector — outcomes bound to their own call (regression)', (
     const { canUseTool } = await capture();
 
     const a = canUseTool('RequestConnector', { connectorId: 'figma', reason: 'r' }, { toolUseID: 'x5-a' });
-    await vi.waitFor(() => expect(resolveConnectorRequest('x5-a', { connected: true })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: true });
     await a;
 
     const b = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r' }, { toolUseID: 'x5-b' });
-    await vi.waitFor(() => expect(resolveConnectorRequest('x5-b', { connected: false, reason: 'nope' })).toBe(true));
+    await deliver(issued, resolveConnectorRequest, { connected: false, reason: 'nope' });
     expect((await b).behavior).toBe('allow');
+  });
+});
+
+/**
+ * DEFECT (regression): /api/chat/answer and /api/chat/connector-result accept a
+ * resolution from anyone who can reach localhost, and nothing tied one to the
+ * request that created it. The rendezvous was keyed by the SDK's `toolUseID` —
+ * which is relayed to the client, yes, but also written to stdout, to the audit
+ * log, and out on the `tool_use` stream event. "Knows the tool use id" was
+ * therefore a weak proof of "is the card we sent", and the two things a forged
+ * resolution can do are serious: make the model tell the user a service is
+ * connected when it is not, and answer the MCP approval gate with "Allow".
+ *
+ * The key is now minted per request with a nonce in it and travels only on the SSE
+ * stream (lib/rendezvous → issueHandle). These tests assert the negative — that
+ * the ids an attacker CAN see are refused — which is the whole of the fix.
+ */
+describe('a resolution must come from the card that was sent (regression)', () => {
+  beforeEach(() => scriptChunks([]));
+
+  it('refuses a connector outcome addressed to the SDK tool use id', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const issued: string[] = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      onConnectorRequest: recordHandle(issued),
+    });
+
+    const pending = canUseTool(
+      'RequestConnector',
+      { connectorId: 'slack', reason: 'r' },
+      { toolUseID: 'forge-1' },
+    );
+    await vi.waitFor(() => expect(issued).toHaveLength(1));
+
+    // The tool use id: what a forged POST would carry, and what used to work.
+    expect(resolveConnectorRequest('forge-1', { connected: true })).toBe(false);
+    // The right shape but the wrong nonce is no better than a guess.
+    expect(resolveConnectorRequest(`${issued[0]}0`, { connected: true })).toBe(false);
+    expect(resolveConnectorRequest(`forge-1.${'0'.repeat(36)}`, { connected: true })).toBe(false);
+
+    // ...and the real card still gets through, so the gate is not just shut.
+    await deliver(issued, resolveConnectorRequest, { connected: false, reason: 'declined' });
+    expect((await pending).behavior).toBe('allow');
+  });
+
+  it('refuses an answer addressed to the SDK tool use id', async () => {
+    const issued: string[] = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      onInputRequest: recordHandle(issued),
+    });
+
+    const pending = canUseTool(
+      'AskUserQuestion',
+      { questions: ['ship it?'] },
+      { toolUseID: 'forge-2' },
+    );
+    await vi.waitFor(() => expect(issued).toHaveLength(1));
+
+    expect(resolveAnswer('forge-2', { 'ship it?': 'yes' })).toBe(false);
+    await deliver(issued, resolveAnswer, { 'ship it?': 'no' });
+    expect((await pending).updatedInput?.answers).toEqual({ 'ship it?': 'no' });
+  });
+
+  it('refuses an approval addressed to the SDK tool use id', async () => {
+    const issued: string[] = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: { 'aime-mcp-acme': { type: 'http', url: 'https://mcp.acme.com/mcp' } },
+      onInputRequest: recordHandle(issued),
+    });
+
+    const pending = canUseTool('mcp__aime-mcp-acme__deleteIssue', {}, { toolUseID: 'forge-3' });
+    await vi.waitFor(() => expect(issued).toHaveLength(1));
+
+    // An "Allow once" that cannot be shown to have come from the card the user
+    // was looking at is not an approval, which is what this gate exists to be.
+    expect(resolveAnswer('forge-3', { q: 'Allow once' })).toBe(false);
+    await deliver(issued, resolveAnswer, { q: 'Deny' });
+    expect((await pending).behavior).toBe('deny');
+  });
+
+  it('never issues the same handle twice, even for the same tool use id', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const issued: string[] = [];
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      onConnectorRequest: recordHandle(issued),
+    });
+
+    // Different connectors: the one-per-connector rule refuses a repeat.
+    for (const connectorId of ['slack', 'github', 'figma']) {
+      const pending = canUseTool('RequestConnector', { connectorId, reason: 'r' }, { toolUseID: 'same' });
+      await deliver(issued, resolveConnectorRequest, { connected: false, reason: 'no' });
+      await pending;
+    }
+
+    expect(issued).toHaveLength(3);
+    expect(new Set(issued).size).toBe(3);
+    for (const handle of issued) expect(handle).toMatch(/^same\.[0-9a-f-]{36}$/);
   });
 });
 

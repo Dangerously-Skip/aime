@@ -32,19 +32,39 @@ async function readMcpConfigFile(configPath: string): Promise<Record<string, unk
   }
 }
 
+/** Mirrored by REFRESH_BUFFER_MS in connectors/health.ts, which says so. */
+const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
+/**
+ * Everything `refreshTokenIfNeeded` can rule out from the CONFIG alone, split out
+ * so the caller can ask before paying for a credential-store read.
+ *
+ * That read is a full AES-256-GCM decrypt of the whole blob, and it used to happen
+ * for every entry with a `_meta` — including the overwhelmingly common case of a
+ * token with fifty minutes left, and every long-lived credential with no expiry at
+ * all (a PAT, ambient AWS IAM), where the answer is always "nothing to do".
+ *
+ * `refreshTokenIfNeeded` calls this too rather than repeating the conditions, so
+ * the pre-screen cannot start disagreeing with the real decision. Note the
+ * non-numeric `expiresAt` case is preserved exactly: a corrupt value still attempts
+ * a refresh, as it did before.
+ */
+function refreshCouldBeDue(meta: Record<string, unknown>): boolean {
+  const { expiresAt, connectorId, mcpName } = meta;
+  if (!expiresAt) return false;
+  if (!connectorId && !mcpName) return false;
+  if (typeof expiresAt === 'number' && Date.now() < expiresAt - REFRESH_BUFFER_MS) return false;
+  return true;
+}
+
 async function refreshTokenIfNeeded(
   serverKey: string,
   meta: Record<string, unknown>,
   configPath: string,
 ): Promise<string | null> {
-  const { refreshToken, expiresAt, connectorId, mcpName, tokenEndpoint, clientId, clientSecret } = meta;
-  if (!refreshToken || !expiresAt) return null;
-  if (!connectorId && !mcpName) return null;
-
-  const REFRESH_BUFFER_MS = 5 * 60 * 1000;
-  if (typeof expiresAt === 'number' && Date.now() < expiresAt - REFRESH_BUFFER_MS) {
-    return null;
-  }
+  const { refreshToken, connectorId, mcpName, tokenEndpoint, clientId, clientSecret } = meta;
+  if (!refreshToken) return null;
+  if (!refreshCouldBeDue(meta)) return null;
 
   const label = (connectorId || mcpName) as string;
   console.log(`[Token Refresh] Token for ${label} is expired or near expiry, refreshing...`);
@@ -213,6 +233,11 @@ export async function loadProvisionedMcpServers(): Promise<Record<string, unknow
       for (const [key, entry] of Object.entries(config.mcpServers)) {
         const meta = entry._meta as Record<string, unknown> | undefined;
         if (!meta) continue;
+        // Screened from the config BEFORE the store read, which is a full decrypt of
+        // the entire credential blob. Nothing here needs the token to know that a
+        // credential with no expiry, or one with fifty minutes left, has nothing to
+        // do — and that is nearly every entry on nearly every message.
+        if (!refreshCouldBeDue(meta)) continue;
         // The refresh token now lives in the store, so hand refresh a view of
         // _meta that includes it rather than the bare on-disk metadata.
         const stored = await store.get(key);
@@ -248,14 +273,35 @@ export async function loadProvisionedMcpServers(): Promise<Record<string, unknow
   const secretStore = getMcpSecretStore();
   const withSecrets: Record<string, unknown> = {};
   const unresolved: string[] = [];
-  for (const [key, entry] of Object.entries(appServers)) {
-    const injected = injectSecrets(entry as Record<string, unknown>, await secretStore.get(key));
+
+  // Two measured costs, both removed here (and both already fixed on the health
+  // side of the same data — see `mergedMetadata` in connectors/health.ts):
+  //
+  //  1. One `store.get()` per entry IN THE CONFIG. Each is a full AES-256-GCM
+  //     decrypt of the entire credential blob, and it ran for entries that carry no
+  //     sentinel at all — the user's own `playwright`, a stdio server with an
+  //     ambient credential — where `injectSecrets` then had nothing to put back.
+  //     `hasUnresolvedSecrets` is the exact test for "needs something put back",
+  //     which is why it decides the lookup rather than a managed-key filter:
+  //     `migrateInlineSecrets` lifts secrets out of the user's own entries too, so
+  //     those genuinely DO have records and must still be looked up.
+  //  2. Those reads sequentially, on a path that runs for every message. They are
+  //     independent.
+  const appEntries = Object.entries(appServers) as Array<[string, Record<string, unknown>]>;
+  const storedSecrets = await Promise.all(
+    appEntries.map(([key, entry]) =>
+      hasUnresolvedSecrets(entry) ? secretStore.get(key) : Promise.resolve(undefined),
+    ),
+  );
+
+  appEntries.forEach(([key, entry], i) => {
+    const injected = injectSecrets(entry, storedSecrets[i]);
     if (hasUnresolvedSecrets(injected)) {
       unresolved.push(key);
-      continue;
+      return;
     }
     withSecrets[key] = injected;
-  }
+  });
   if (unresolved.length > 0) {
     const why =
       secretStore.mode === 'encrypted'

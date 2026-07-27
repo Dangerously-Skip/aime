@@ -7,6 +7,7 @@ import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
 import { waitForConnector } from '../pending-connectors';
 import { waitForDocumentPrint } from '../pending-documents';
+import { issueHandle } from '../rendezvous';
 import { expandCanvasTemplate } from '../canvas/templates';
 import { describeThemes as describeThemesForPrompt } from '../documents/themes';
 import {
@@ -234,8 +235,10 @@ export class ClaudeProvider extends BaseProvider {
      *     tool call that produced it and cannot be replayed.
      */
     interface ConnectorRequestRecord {
-      /** The tool call that opened this request — what the outcome belongs to. */
-      toolUseId: string;
+      // No `toolUseId` here: it was written by both call sites and read by
+      // nobody, and now that the rendezvous is keyed by a nonce (issueHandle)
+      // rather than the SDK's id, a field of that name would actively mislead
+      // the next reader into thinking it is what the card echoes back.
       outcome?: { connected: boolean; reason?: string };
       /** Set once the handler has told the model about it. */
       reported?: boolean;
@@ -447,13 +450,17 @@ export class ClaudeProvider extends BaseProvider {
               });
               if (!onDocumentPrint) return htmlOnly();
 
-              // Random, not `Date.now()`-derived: this id is the only thing tying a
-              // resolution on the unauthenticated /api/chat/document-result route
-              // back to the print that opened it, and a timestamp plus 6 chars of
-              // Math.random is a poor secret for that job.
-              const printId = `doc_${crypto.randomUUID()}`;
+              // Unguessable: this id is the only thing tying a resolution on the
+              // unauthenticated /api/chat/document-result route back to the print
+              // that opened it. See issueHandle for the threat that buys.
+              const printId = issueHandle('doc');
               await onDocumentPrint(printId, {
-                html,
+                // The PATH, not the 20KB-and-up string. The `writeFile` above has
+                // already put it on disk, so sending the markup as well copied it
+                // into the SSE frame, out to the renderer, back over IPC and then
+                // into a ~3x-inflated data URL — four copies of a file Chromium
+                // can simply open. Embedded base64 images make that megabytes.
+                htmlPath: resolved.target.htmlPath,
                 outputPath: resolved.target.pdfPath,
                 printOptions: printOptionsForTheme(
                   typeof input.theme === "string" ? input.theme : undefined,
@@ -871,11 +878,16 @@ export class ClaudeProvider extends BaseProvider {
           handlesMoney,
         });
         awaitingHuman.add(toolUseID);
+        // The card echoes this back to /api/chat/answer, which authenticates
+        // nobody — so it is a nonce, not the SDK's toolUseID. An "Allow" that
+        // nothing proves came from the card the user was shown is not an approval
+        // at all, and this gate exists precisely to make the approval real.
+        const approvalHandle = issueHandle(toolUseID);
         let decision: ApprovalDecision;
         let unanswered = false;
         try {
-          await onInputRequest(toolUseID, [question]);
-          decision = readApprovalAnswer(await waitForAnswer(toolUseID, waitOptions), question.question, {
+          await onInputRequest(approvalHandle, [question]);
+          decision = readApprovalAnswer(await waitForAnswer(approvalHandle, waitOptions), question.question, {
             handlesMoney,
           });
         } catch {
@@ -962,9 +974,12 @@ export class ClaudeProvider extends BaseProvider {
       // ── AskUserQuestion ────────────────────────────────────────────────
       if (toolName === 'AskUserQuestion' && onInputRequest) {
         awaitingHuman.add(toolUseID);
+        // Nonce, not the tool use id — see issueHandle. The answers land in
+        // `updatedInput` and become what the model believes the user said.
+        const answerHandle = issueHandle(toolUseID);
         try {
-          await onInputRequest(toolUseID, input.questions);
-          const answers = await waitForAnswer(toolUseID, waitOptions);
+          await onInputRequest(answerHandle, input.questions);
+          const answers = await waitForAnswer(answerHandle, waitOptions);
           return {
             behavior: 'allow' as const,
             updatedInput: { ...input, answers },
@@ -1037,7 +1052,6 @@ export class ClaudeProvider extends BaseProvider {
         const reason = typeof input.reason === 'string' ? input.reason : '';
         if (!connectorId) {
           connectorRequests.set('', {
-            toolUseId: toolUseID,
             outcome: { connected: false, reason: 'No connector id was given.' },
           });
           return { behavior: 'allow' as const };
@@ -1062,15 +1076,19 @@ export class ClaudeProvider extends BaseProvider {
         }
 
         console.log('[Claude] Connector requested:', connectorId, 'id:', toolUseID);
-        const record: ConnectorRequestRecord = { toolUseId: toolUseID };
+        const record: ConnectorRequestRecord = {};
         connectorRequests.set(connectorId, record);
         // OAuth + sign-in + possibly 2FA. waitForConnector budgets 300s, so the
         // 90s tool watchdog must not count this as a hang.
         awaitingHuman.add(toolUseID);
+        // Nonce, not the tool use id — see issueHandle. This is the resolution
+        // that most needs binding: a fabricated `connected: true` reaches the
+        // model as "the service is wired up now", which it then tells the user.
+        const connectHandle = issueHandle(toolUseID);
         let result;
         try {
-          await onConnectorRequest(toolUseID, connectorId, reason);
-          result = await waitForConnector(toolUseID, waitOptions);
+          await onConnectorRequest(connectHandle, connectorId, reason);
+          result = await waitForConnector(connectHandle, waitOptions);
         } finally {
           awaitingHuman.delete(toolUseID);
         }

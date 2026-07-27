@@ -11,6 +11,19 @@ export const runtime = 'nodejs';
  * original SSE stream.
  *
  * Body: { toolUseId, connected, reason? }
+ *
+ * WHAT AUTHORISES THIS. Nothing about the request itself, and unlike
+ * /api/chat/document-result there is nothing server-side to check the claim
+ * against: `connected: true` describes an OAuth flow that happened in the
+ * renderer, so the tool cannot stat a file and see for itself the way the PDF path
+ * can. It reaches the model as "the service is wired up now", which the model then
+ * tells the user.
+ *
+ * So the binding is `toolUseId`, which the provider mints per request with a nonce
+ * in it and sends only on the SSE stream (lib/rendezvous → issueHandle). The card
+ * echoes it back; a caller that cannot read the stream cannot produce it and takes
+ * the 404 below. issueHandle states both the threat that stops and the one it does
+ * not.
  */
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -40,6 +53,8 @@ export async function POST(req: NextRequest) {
   });
 
   if (!resolved) {
+    // "Expired" and "never issued that id" answer identically on purpose:
+    // distinguishing them would let a caller probe for live ids.
     return Response.json(
       { error: 'No pending connector request found for this toolUseId' },
       { status: 404 },

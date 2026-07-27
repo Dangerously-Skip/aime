@@ -26,6 +26,14 @@ import type { ConnectorDefinition } from "@/lib/connectors/types";
  */
 
 interface ConnectorRequestCardProps {
+  /**
+   * The handle the server issued for this request, echoed back when reporting the
+   * outcome. It is a CAPABILITY, not just an identifier: /api/chat/connector-result
+   * authenticates nothing else, and presenting this is the only proof that a
+   * `connected: true` came from the card the user actually clicked (see
+   * lib/rendezvous → issueHandle). So it must not be logged, put in a URL, or sent
+   * anywhere but that route.
+   */
   toolUseId: string;
   connectorId: string;
   reason?: string;

@@ -16,7 +16,16 @@ import { useCallback } from "react";
 
 export interface DocumentPrintRequest {
   toolUseId: string;
-  html: string;
+  /**
+   * Where the tool already wrote the HTML — Chromium opens it from there.
+   *
+   * Deliberately not the markup. This relay used to carry the whole document by
+   * value: measured at ~76KB of copying for a 19.8KB file (SSE frame → renderer →
+   * IPC message → a ~3x-inflated `encodeURIComponent` data URL), scaling linearly,
+   * so a report with embedded base64 images turned a few MB on disk into several
+   * MB crossing three process boundaries. The file was on disk the whole time.
+   */
+  htmlPath: string;
   outputPath: string;
   printOptions?: Record<string, unknown>;
 }
@@ -54,7 +63,7 @@ export function useDocumentPrint(): (request: DocumentPrintRequest) => Promise<v
 
     try {
       const result = await api.printDocumentPdf({
-        html: request.html,
+        htmlPath: request.htmlPath,
         outputPath: request.outputPath,
         printOptions: request.printOptions ?? {},
       });

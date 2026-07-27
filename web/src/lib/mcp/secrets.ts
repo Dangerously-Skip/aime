@@ -18,6 +18,10 @@
  * env var and which header the server uses, and a human reading it can see at a
  * glance that the value is held elsewhere instead of wondering if it is missing.
  *
+ * `args` is the third place a credential could sit, and it is REFUSED rather than
+ * split — see `credentialBearingArgs` at the bottom for why encrypting an argv
+ * secret would be theatre.
+ *
  * Pure: no fs, no crypto. The caller owns storage.
  */
 
@@ -195,4 +199,139 @@ export function isEmptySecrets(secrets: EntrySecrets): boolean {
 /** The credential-store key for a provisioned server. */
 export function secretKeyForServer(serverKey: string): string {
   return `mcp:${serverKey}`;
+}
+
+// ── argv: refused, not encrypted ──────────────────────────────────────────────
+
+/**
+ * Would writing this entry put a credential into a command line?
+ *
+ * `env` and `headers` are SPLIT above. `args` is REFUSED instead, and the
+ * asymmetry is deliberate:
+ *
+ *  1. There is nothing to split by. `env` and `headers` are name→value maps, so a
+ *     secret can be lifted out and a sentinel left in the same slot with the name
+ *     still documenting the structure. `args` is a positional array of flags,
+ *     package specs and paths with no names, and `tokenInjection` has no `argv`
+ *     method to say which element is the credential. Placeholdering elements by
+ *     guess would corrupt argv the SDK then executes.
+ *
+ *  2. Encrypting it at rest would buy nothing anyway. `injectSecrets` would have to
+ *     put the value back before the entry reaches the SDK, and the SDK serialises
+ *     the whole `mcpServers` object into the `claude` CLI argv (`--mcp-config
+ *     <json>`) — so it lands in `ps auxww` and /proc/<pid>/cmdline regardless, and
+ *     again in the argv of the stdio server itself. That is exactly the exposure
+ *     `injectSecrets` refuses to reintroduce for `_meta.refreshToken`. Building the
+ *     machinery would hand the next registry author a credential-in-argv path that
+ *     LOOKS protected.
+ *
+ * So the honest move is to fail closed at the write, at the moment a registry
+ * entry starts carrying a token in argv — when it is still cheap to move it to
+ * `env`, which is split, refreshable and not world-readable.
+ *
+ * Returns the offending positions with a reason, NEVER the value. Empty = safe.
+ */
+export interface ArgvCredentialFinding {
+  index: number;
+  reason: string;
+}
+
+/**
+ * Flag names whose inline value is a credential. Matched on the whole flag name,
+ * so `--client-id` and `--token-file` (a PATH to a credential, not the credential)
+ * are untouched — see EXEMPT_SUFFIXES.
+ */
+const CREDENTIAL_FLAGS =
+  /^--?(?:api[-_]?key|access[-_]?token|auth[-_]?token|refresh[-_]?token|client[-_]?secret|bearer|credential|pass(?:word)?|pat|secret|token)$/i;
+
+/**
+ * A flag ending in one of these names a LOCATION or an IDENTIFIER, not a secret:
+ * `--token-file=/run/secrets/x`, `--api-key-env=GH_TOKEN`, `--client-id=1234`.
+ * Flagging those would push registry authors toward inlining the real value.
+ */
+const EXEMPT_SUFFIXES = /(?:[-_](?:file|path|env|var|name|id))$/i;
+
+/**
+ * Credential formats with a fixed, unmistakable prefix. Narrow on purpose: every
+ * entry here is a shape no npm package spec, flag or path can collide with. This
+ * is a backstop for a token that appears ONLY in argv and so is invisible to the
+ * exact check below, not the primary rule.
+ */
+const KNOWN_TOKEN_PREFIXES = [
+  'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', // GitHub
+  'xoxb-', 'xoxp-', 'xoxa-', 'xoxs-', 'xapp-',            // Slack
+  'sk-', 'sk_live_', 'sk_test_', 'rk_live_',              // OpenAI / Stripe
+  'ya29.', '1//',                                          // Google
+  'eyJ',                                                   // a JWT header
+  'figd_', 'AKIA', 'ASIA',                                 // Figma, AWS
+];
+
+function flagName(arg: string): string | null {
+  if (!arg.startsWith('-')) return null;
+  const eq = arg.indexOf('=');
+  return eq === -1 ? arg : arg.slice(0, eq);
+}
+
+function namesACredential(arg: string): boolean {
+  const name = flagName(arg);
+  if (name === null) return false;
+  if (EXEMPT_SUFFIXES.test(name)) return false;
+  return CREDENTIAL_FLAGS.test(name);
+}
+
+export function credentialBearingArgs(
+  entry: Entry,
+  /**
+   * The secrets this same entry is storing. Compared BY VALUE, which is the
+   * load-bearing rule here: an arg byte-identical to the token going into the
+   * encrypted store is a credential in argv by construction, with no guessing.
+   * The pattern rules below only cover a token that never went through
+   * `env`/`headers` at all.
+   */
+  secrets?: EntrySecrets,
+): ArgvCredentialFinding[] {
+  const args = entry.args;
+  if (!Array.isArray(args)) return [];
+
+  const known = [
+    ...Object.values(secrets?.env ?? {}),
+    ...Object.values(secrets?.headers ?? {}),
+    ...(secrets?.refreshToken ? [secrets.refreshToken] : []),
+    ...(secrets?.clientSecret ? [secrets.clientSecret] : []),
+  ].filter((v) => typeof v === 'string' && v.length >= 8);
+
+  const findings: ArgvCredentialFinding[] = [];
+  args.forEach((raw, index) => {
+    if (typeof raw !== 'string') return;
+
+    if (known.some((secret) => raw.includes(secret))) {
+      findings.push({ index, reason: "carries this entry's own credential" });
+      return;
+    }
+    // `--token=<value>`: the flag names a credential and the value is inline.
+    if (namesACredential(raw) && raw.includes('=') && raw.slice(raw.indexOf('=') + 1) !== '') {
+      findings.push({ index, reason: 'inline value of a credential-named flag' });
+      return;
+    }
+    // `--token <value>`: the credential is the NEXT arg. Reported against that
+    // arg, since that is the one holding the secret.
+    const prev = index > 0 ? args[index - 1] : undefined;
+    if (typeof prev === 'string' && !prev.includes('=') && namesACredential(prev) && !raw.startsWith('-')) {
+      findings.push({ index, reason: `value of the credential-named flag ${prev}` });
+      return;
+    }
+    if (KNOWN_TOKEN_PREFIXES.some((p) => raw.startsWith(p))) {
+      findings.push({ index, reason: 'matches a known credential format' });
+    }
+  });
+
+  return findings;
+}
+
+/**
+ * One line safe to log or return in an error: positions and reasons, no values.
+ * `[1]` style indices so the reader can find the arg in the registry entry.
+ */
+export function describeArgvCredentials(findings: ArgvCredentialFinding[]): string {
+  return findings.map((f) => `args[${f.index}] (${f.reason})`).join(', ');
 }

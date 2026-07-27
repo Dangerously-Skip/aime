@@ -7,7 +7,6 @@ import {
   abortReasonOf,
   notifyStreamAborted,
 } from '@/lib/stream-registry';
-import { useConnectorStore } from '@/stores/connector-store';
 
 /** Abort the stream if no data arrives for this long (the server heartbeats ~30s). */
 const INACTIVITY_TIMEOUT_MS = 120_000;
@@ -71,8 +70,6 @@ interface UseSSEStreamOptions {
   chatId: string;                            // needed for registry key
   /** Store-level flag: gates the composer, NOT the per-message spinner. */
   setIsStreaming: (v: boolean) => void;
-  /** Write-only store field — see the note on `ChatState.streamError`. */
-  setStreamError: (e: string | null) => void;
 }
 
 interface UseSSEStreamReturn {
@@ -106,7 +103,6 @@ interface UseSSEStreamReturn {
         modelOverride?: string | null
       }
       toolProfile?: string;
-      disabledConnectors?: string[]
       contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
       capability?: string
       tier?: string
@@ -207,7 +203,6 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           modelOverride?: string | null
         }
         toolProfile?: string;
-        disabledConnectors?: string[]
         capability?: string
         tier?: string
         providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
@@ -229,10 +224,8 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       const pinnedOnError = optionsRef.current.onError;
       const pinnedOnUsage = optionsRef.current.onUsage;
       const pinnedSetIsStreaming = optionsRef.current.setIsStreaming;
-      const pinnedSetStreamError = optionsRef.current.setStreamError;
 
       pinnedSetIsStreaming(true);
-      pinnedSetStreamError(null);
 
       let firstTokenAt: number | null = null;
       let clarificationCount = 0;
@@ -263,15 +256,11 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.capability ? { capability: extra.capability } : {}),
             ...(extra?.tier ? { tier: extra.tier } : {}),
             ...(extra?.providerConfig ? { providerConfig: extra.providerConfig } : {}),
-            // Connectors the user switched off must not have their MCP servers
-            // mounted (P3.5). Resolved HERE rather than at each call site: there
-            // are five of them across four surfaces, and one forgetting would
-            // silently mount a disabled service.
-            ...(() => {
-              const ids = extra?.disabledConnectors
-                ?? useConnectorStore.getState().getDisabledConnectorIds();
-              return ids.length ? { disabledConnectors: ids } : {};
-            })(),
+            // A switched-off connector is NOT denied from here. The server stashes
+            // it in `disabledMcpServers`, which `loadProvisionedMcpServers` never
+            // reads — so it costs no decrypt, no token refresh and no config
+            // rewrite. A deny list sent per request could only ever discard work
+            // the server had already paid for.
           }),
           signal: controller.signal,
         });
@@ -370,11 +359,11 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
         if (abortReason === 'timeout') {
           // A timeout is a failure the user has to see, so it goes down the
-          // same path as any other stream error. notifyStreamAborted first so
-          // message state is finalised even if a surface's onError resolves a
-          // different chatId than the one this stream was started for.
+          // same path as any other stream error: `onError`, which every surface
+          // appends to the transcript as `**Error:** …`. notifyStreamAborted
+          // first so message state is finalised even if a surface's onError
+          // resolves a different chatId than the one this stream was started for.
           notifyStreamAborted({ chatId, reason: 'timeout' });
-          pinnedSetStreamError(INACTIVITY_TIMEOUT_MESSAGE);
           pinnedOnError(new Error(INACTIVITY_TIMEOUT_MESSAGE));
           return;
         }
@@ -390,7 +379,6 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         }
 
         const err = error instanceof Error ? error : new Error(String(error));
-        pinnedSetStreamError(err.message);
         pinnedOnError(err);
       } finally {
         // Only the stream that still owns the chat may reset shared state: a

@@ -58,7 +58,6 @@ function harness() {
     useSSEStream({
       chatId: 'c1',
       setIsStreaming: () => {},
-      setStreamError: () => {},
       onChunk: () => {},
       onDone: () => {},
       onError: () => {},

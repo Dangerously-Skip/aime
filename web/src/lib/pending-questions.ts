@@ -10,6 +10,10 @@
  * human has to read and click) and that silence REJECTS: an unanswered question
  * is not an answer, and the caller distinguishes "the prompt expired" from "they
  * said no".
+ *
+ * The `toolUseId` these functions take is the nonce-bearing handle the provider
+ * issued, not the SDK's tool use id: knowing it is the whole of what authorises an
+ * answer on an unauthenticated route. See rendezvous.issueHandle.
  */
 import { createRendezvous, type WaitOptions } from './rendezvous';
 
