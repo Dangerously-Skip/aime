@@ -66,12 +66,23 @@ if (fs.existsSync(plist)) {
   console.log('Patched Info.plist');
 }
 
-// 3. Update electron's path export so `require('electron')` still resolves the binary
+// 3. Update electron's path export so `require('electron')` still resolves the binary.
+//
+// Keyed on the BINARY existing, not on path.txt existing. The previous guard was
+// `existsSync(path.txt)`, which made this a no-op in exactly the case it exists
+// for: electron's own install.js writes path.txt when it downloads dist/, so if
+// that download is skipped or the file is lost (a copied node_modules, a pruned
+// or offline install), the guard fell through — leaving the bundle renamed to
+// AIME.app with nothing pointing at it, and `require('electron')` throwing
+// "Electron failed to install correctly, please delete node_modules/electron".
+// The path is known here, so writing it is always correct when the binary is there.
 const electronPathFile = path.join(__dirname, '..', 'node_modules', 'electron', 'path.txt');
 const newBinaryPath = path.join(`${APP_NAME}.app`, 'Contents', 'MacOS', 'Electron');
-if (fs.existsSync(electronPathFile)) {
+if (fs.existsSync(path.join(electronDir, newBinaryPath))) {
   fs.writeFileSync(electronPathFile, newBinaryPath);
   console.log('Updated electron path.txt');
+} else {
+  console.warn(`Electron binary missing at dist/${newBinaryPath} — leaving path.txt alone`);
 }
 
 console.log(`Done — dock will show "${APP_NAME}"`);
