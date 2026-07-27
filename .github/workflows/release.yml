@@ -28,15 +28,6 @@ jobs:
         working-directory: web
         run: npm install --no-save --force @anthropic-ai/claude-agent-sdk-darwin-arm64@0.2.116
 
-      - name: Create teams.json (secret or empty example)
-        working-directory: web
-        run: |
-          if [ -n '${{ secrets.TEAMS_JSON }}' ]; then
-            echo '${{ secrets.TEAMS_JSON }}' > src/config/teams.json
-          else
-            cp src/config/teams.example.json src/config/teams.json
-          fi
-
       - name: Create .env (optional secret)
         working-directory: web
         run: echo '${{ secrets.DOT_ENV }}' > .env
@@ -113,16 +104,6 @@ jobs:
           Get-ChildItem -Path $x64Out -Recurse -Filter bash.exe | Select-Object -First 5 FullName
           if (-not (Test-Path "$x64Out\bin\bash.exe")) { throw "x64 bash.exe missing after extract" }
           if (-not (Test-Path "$armOut\bin\bash.exe")) { throw "arm64 bash.exe missing after extract" }
-
-      - name: Create teams.json (secret or empty example)
-        working-directory: web
-        shell: bash
-        run: |
-          if [ -n '${{ secrets.TEAMS_JSON }}' ]; then
-            echo '${{ secrets.TEAMS_JSON }}' > src/config/teams.json
-          else
-            cp src/config/teams.example.json src/config/teams.json
-          fi
 
       - name: Create .env (optional secret)
         working-directory: web

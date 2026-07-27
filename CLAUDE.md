@@ -16,7 +16,7 @@ cd web && npm run test:watch     # Vitest watch mode
 cd web && npm run dist           # Build macOS app (next build + electron-builder)
 ```
 
-Run `npm run typecheck` and `npm test` before commits and ships — CI (`.github/workflows/ci.yml`) enforces both on every push/PR. `tsc --noEmit` requires `web/src/config/teams.json` locally: `cp src/config/teams.example.json src/config/teams.json` (gitignored).
+Run `npm run typecheck` and `npm test` before commits and ships — CI (`.github/workflows/ci.yml`) enforces both on every push/PR. No extra local config is needed: a fresh clone typechecks after `npm install`.
 
 ### Testing
 
@@ -176,9 +176,8 @@ The pipeline (`.github/workflows/release.yml`):
 
 ### Optional GitHub secrets
 
-`MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` (macOS signing/notarization), `WIN_CERT_PFX_BASE64`, `WIN_CERT_PASSWORD` (Windows signing), `DOT_ENV` (bundled .env), `TEAMS_JSON` (org team config; falls back to the empty example)
+`MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` (macOS signing/notarization), `WIN_CERT_PFX_BASE64`, `WIN_CERT_PASSWORD` (Windows signing), `DOT_ENV` (bundled .env)
 
 ## Config Files
 
-- `web/src/config/teams.json` — Optional org team definitions (id/name/API key). Empty array = BYOK onboarding. Injected from `TEAMS_JSON` secret in CI when set; use `teams.example.json` locally
-- `web/src/config/teams.ts` — TypeScript interface for team config
+- `web/src/config/branding.ts` — Product name and branding constants (`APP_NAME`). Never hardcode the product name; import from here

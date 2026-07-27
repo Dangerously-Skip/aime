@@ -18,10 +18,27 @@ interface DoctorResult {
   checks: HealthCheck[];
 }
 
-function StatusIcon({ status }: { status: HealthCheck['status'] }) {
-  if (status === 'ok') return <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />;
-  if (status === 'warn') return <AlertCircle className="h-4 w-4 text-yellow-500 shrink-0" />;
-  return <XCircle className="h-4 w-4 text-destructive shrink-0" />;
+const STATUS_TEXT: Record<HealthCheck['status'], string> = {
+  ok: 'Passed',
+  warn: 'Warning',
+  error: 'Failed',
+};
+
+/**
+ * On a check row the icon is the *only* thing that says pass/warn/fail — the
+ * label and message don't — so it carries an sr-only name. Pass `decorative`
+ * where an adjacent sentence already states the outcome, to avoid it being
+ * announced twice.
+ */
+function StatusIcon({ status, decorative = false }: { status: HealthCheck['status']; decorative?: boolean }) {
+  const Icon = status === 'ok' ? CheckCircle : status === 'warn' ? AlertCircle : XCircle;
+  const color = status === 'ok' ? 'text-green-500' : status === 'warn' ? 'text-yellow-500' : 'text-destructive';
+  return (
+    <>
+      <Icon className={`h-4 w-4 shrink-0 ${color}`} aria-hidden="true" />
+      {!decorative && <span className="sr-only">{STATUS_TEXT[status]}</span>}
+    </>
+  );
 }
 
 function statusBg(status: HealthCheck['status']) {
@@ -94,8 +111,11 @@ export function DoctorPanel() {
           ))}
 
           <div className="pt-2 border-t border-border">
-            <p className="text-xs text-muted-foreground">
-              {result.summary === 'ok' && '✓ All checks passed'}
+            {/* The summary icon repeats what the sentence already says, so it is
+                decorative — the text is the accessible signal, not the glyph. */}
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <StatusIcon status={result.summary} />
+              {result.summary === 'ok' && 'All checks passed'}
               {result.summary === 'warn' && `${result.checks.filter((c) => c.status === 'warn').length} warning(s) — not critical`}
               {result.summary === 'error' && `${result.checks.filter((c) => c.status === 'error').length} error(s) require attention`}
             </p>

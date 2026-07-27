@@ -29,7 +29,29 @@ import type {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MermaidBlock } from '@/components/shared/mermaid-block';
-import { MessageSquare, ArrowRight, ExternalLink, Circle } from 'lucide-react';
+import {
+  MessageSquare,
+  ArrowRight,
+  ArrowUp,
+  ArrowDown,
+  ExternalLink,
+  Circle,
+  Check,
+  X,
+  AlertTriangle,
+  Plus,
+  User,
+  Save,
+  Pencil,
+  GitMerge,
+  RefreshCw,
+  Clock,
+  Ban,
+  SkipForward,
+  Search,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react';
 import {
   DndContext,
   closestCorners,
@@ -48,6 +70,98 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
+// ── Glyph → outline icon ─────────────────────────────────────────────────────
+
+/**
+ * A2UI payloads conventionally lead an `icon` field or an action `label` with an
+ * emoji ("👤", "✓ Approve"). Those strings arrive from two places — AIME's own
+ * canvas templates and model-authored specs — so the render layer is the only
+ * place that can present all of them consistently. Known glyphs become lucide
+ * outline icons; anything unrecognised falls through as its original text, so a
+ * payload shape we have never seen is displayed, never corrupted.
+ *
+ * Keys are matched after trimming, and the variation-selector-16 suffix (U+FE0F)
+ * is stripped first, so "⚠️" and "⚠" resolve alike.
+ */
+const GLYPH_ICONS: Record<string, { Icon: LucideIcon; name: string }> = {
+  '💬': { Icon: MessageSquare, name: 'Comment' },
+  '→': { Icon: ArrowRight, name: 'Move to' },
+  '✓': { Icon: Check, name: 'Yes' },
+  '✔': { Icon: Check, name: 'Yes' },
+  '☑': { Icon: Check, name: 'Yes' },
+  '✅': { Icon: Check, name: 'Passed' },
+  '✗': { Icon: X, name: 'No' },
+  '✘': { Icon: X, name: 'No' },
+  '❌': { Icon: X, name: 'Failed' },
+  '⚠': { Icon: AlertTriangle, name: 'Warning' },
+  '⛔': { Icon: Ban, name: 'Blocked' },
+  '➕': { Icon: Plus, name: 'Add' },
+  '👤': { Icon: User, name: 'Person' },
+  '💾': { Icon: Save, name: 'Save' },
+  '✎': { Icon: Pencil, name: 'Edit' },
+  '✏': { Icon: Pencil, name: 'Edit' },
+  '🔀': { Icon: GitMerge, name: 'Merge' },
+  '🔄': { Icon: RefreshCw, name: 'Running' },
+  '🕐': { Icon: Clock, name: 'Scheduled' },
+  '⏭': { Icon: SkipForward, name: 'Skipped' },
+  '🔍': { Icon: Search, name: 'Search' },
+  '⚡': { Icon: Zap, name: 'Agent' },
+  '⚪': { Icon: Circle, name: 'Canceled' },
+};
+
+/** Normalise a glyph for lookup: trim, then drop emoji variation selectors. */
+function glyphKey(glyph: string): string {
+  return glyph.trim().replace(/[\uFE0E\uFE0F]/g, '');
+}
+
+/**
+ * Render a spec `icon` field. Falls back to the raw string (as before) when the
+ * glyph is not one we map, which keeps arbitrary model-supplied icons working.
+ * The icon is decorative: every call site sits beside the text it decorates.
+ */
+function GlyphIcon({
+  glyph,
+  className,
+  textClassName,
+}: {
+  glyph: string;
+  className: string;
+  textClassName: string;
+}) {
+  const hit = GLYPH_ICONS[glyphKey(glyph)];
+  if (!hit) return <span className={textClassName}>{glyph}</span>;
+  return <hit.Icon className={className} strokeWidth={1.75} aria-hidden="true" />;
+}
+
+/**
+ * Split a label whose leading token may be a glyph icon: "✓ Approve" becomes a
+ * check icon plus the text "Approve". A label that is *only* a glyph yields no
+ * text, and `GlyphLabel` then supplies the glyph's name to assistive tech —
+ * otherwise replacing the character would strip the control's only name.
+ */
+function splitGlyphLabel(label: string): { hit: { Icon: LucideIcon; name: string } | null; text: string } {
+  const trimmed = label.trim();
+  const whole = GLYPH_ICONS[glyphKey(trimmed)];
+  if (whole) return { hit: whole, text: '' };
+  const match = /^(\S+)\s+(.+)$/.exec(trimmed);
+  if (match) {
+    const hit = GLYPH_ICONS[glyphKey(match[1])];
+    if (hit) return { hit, text: match[2] };
+  }
+  return { hit: null, text: trimmed };
+}
+
+function GlyphLabel({ label, iconClassName }: { label: string; iconClassName: string }) {
+  const { hit, text } = splitGlyphLabel(label);
+  if (!hit) return <>{text}</>;
+  return (
+    <>
+      <hit.Icon className={`${iconClassName} shrink-0`} strokeWidth={1.75} aria-hidden="true" />
+      {text ? <span>{text}</span> : <span className="sr-only">{hit.name}</span>}
+    </>
+  );
+}
+
 // ── Shared primitives ────────────────────────────────────────────────────────
 
 function CardShell({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -58,12 +172,14 @@ function CardShell({ children, className }: { children: React.ReactNode; classNa
   );
 }
 
-function CardHeader({ title, subtitle, icon, trailing }: { title?: string; subtitle?: string; icon?: string; trailing?: React.ReactNode }) {
+function CardHeader({ title, subtitle, icon, trailing }: { title?: string; subtitle?: string; icon?: React.ReactNode; trailing?: React.ReactNode }) {
   if (!title && !subtitle) return null;
   return (
     <div className="flex items-start justify-between px-5 pt-4 pb-2">
       <div className="flex items-start gap-2.5 min-w-0">
-        {icon && <span className="text-lg mt-0.5">{icon}</span>}
+        {typeof icon === 'string'
+          ? icon && <GlyphIcon glyph={icon} className="h-4 w-4 mt-1 shrink-0 text-muted-foreground" textClassName="text-lg mt-0.5" />
+          : icon && <span className="mt-1 shrink-0">{icon}</span>}
         <div className="min-w-0">
           {title && <h3 className="text-[15px] font-semibold leading-tight text-foreground">{title}</h3>}
           {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
@@ -103,9 +219,9 @@ function ActionButton({ label, variant, onClick }: { label: string; variant?: 'p
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-colors ${styles[variant || 'secondary']}`}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${styles[variant || 'secondary']}`}
     >
-      {label}
+      <GlyphLabel label={label} iconClassName="h-4 w-4" />
     </button>
   );
 }
@@ -138,7 +254,11 @@ function TableRenderer({ component }: { component: TableComponent }) {
                     return (
                       <td key={col.key} className="py-2.5 px-4 text-foreground">
                         {col.type === 'badge' ? (
-                          <PillBadge>{String(val ?? '')}</PillBadge>
+                          <PillBadge>
+                            <span className="inline-flex items-center gap-1">
+                              <GlyphLabel label={String(val ?? '')} iconClassName="h-3 w-3" />
+                            </span>
+                          </PillBadge>
                         ) : (
                           <span>{String(val ?? '')}</span>
                         )}
@@ -282,21 +402,17 @@ function KanbanActionButton({
   // unrecognised content.
   const labelEl = (() => {
     const lbl = action.label.trim();
-    // Comment-style action: emoji "💬" → MessageSquare icon (icon-only button)
-    if (lbl === '💬' || lbl.toLowerCase() === 'comment') {
-      return <MessageSquare className="h-3 w-3" strokeWidth={1.75} />;
-    }
-    // Transition: "→ In Progress" → ArrowRight icon + text
-    const transitionMatch = /^→\s*(.+)$/.exec(lbl);
-    if (transitionMatch) {
+    // A label that literally reads "Comment" collapses to the icon-only form the
+    // 💬 glyph gets, so a model that spells the word matches template payloads.
+    if (lbl.toLowerCase() === 'comment') {
       return (
         <>
-          <ArrowRight className="h-3 w-3 shrink-0" strokeWidth={1.75} />
-          <span>{transitionMatch[1]}</span>
+          <MessageSquare className="h-3 w-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+          <span className="sr-only">Comment</span>
         </>
       );
     }
-    return lbl;
+    return <GlyphLabel label={lbl} iconClassName="h-3 w-3" />;
   })();
 
   return (
@@ -441,8 +557,8 @@ function KanbanCardView({ card, componentId, onAction }: { card: KanbanComponent
       {card.labels && card.labels.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {card.labels.map((l) => (
-            <span key={l} className="text-[10px] px-1.5 py-0.5 rounded-md bg-muted/70 text-muted-foreground font-medium">
-              {l}
+            <span key={l} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md bg-muted/70 text-muted-foreground font-medium">
+              <GlyphLabel label={l} iconClassName="h-2.5 w-2.5" />
             </span>
           ))}
         </div>
@@ -662,7 +778,14 @@ function StatRenderer({ component }: { component: StatComponent }) {
                   stat.trend === 'down' ? 'text-red-600 dark:text-red-400' :
                   'text-muted-foreground'
                 }`}>
-                  <span>{stat.trend === 'up' ? '↑' : stat.trend === 'down' ? '↓' : '→'}</span>
+                  {stat.trend === 'up' ? (
+                    <ArrowUp className="h-3 w-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                  ) : stat.trend === 'down' ? (
+                    <ArrowDown className="h-3 w-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                  ) : (
+                    <ArrowRight className="h-3 w-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                  )}
+                  <span className="sr-only">{`Trending ${stat.trend}`}</span>
                   <span>{stat.trendValue}</span>
                 </div>
               )}
@@ -784,7 +907,13 @@ function ListRenderer({ component, onAction }: { component: ListComponent; onAct
                 <span className={`text-sm ${item.checked ? 'line-through text-muted-foreground' : 'text-foreground'}`}>{item.text}</span>
                 {item.subtext && <div className="text-xs text-muted-foreground mt-0.5">{item.subtext}</div>}
               </div>
-              {item.icon && <span className="text-sm shrink-0">{item.icon}</span>}
+              {item.icon && (
+                <GlyphIcon
+                  glyph={item.icon}
+                  className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground"
+                  textClassName="text-sm shrink-0"
+                />
+              )}
             </div>
           ))}
         </div>
@@ -969,7 +1098,19 @@ function ApprovalCardRenderer({ component, onAction }: { component: ApprovalCard
     <div>
       <CardHeader
         title={component.title}
-        icon={decided ? (component.status === 'approved' ? '✓' : '✗') : '⚠️'}
+        /* Decorative: the trailing pill below carries the status as text, so the
+           icon is aria-hidden and only repeats the signal in colour + shape. */
+        icon={
+          decided ? (
+            component.status === 'approved' ? (
+              <Check className="h-4 w-4 text-green-700 dark:text-green-400" strokeWidth={1.75} aria-hidden="true" />
+            ) : (
+              <X className="h-4 w-4 text-red-700 dark:text-red-400" strokeWidth={1.75} aria-hidden="true" />
+            )
+          ) : (
+            <AlertTriangle className="h-4 w-4 text-yellow-700 dark:text-yellow-400" strokeWidth={1.75} aria-hidden="true" />
+          )
+        }
         trailing={
           decided ? (
             <PillBadge variant={component.status === 'approved' ? 'success' : 'error'}>
@@ -1044,7 +1185,13 @@ function TimelineRenderer({ component }: { component: TimelineComponent }) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-[11px] text-muted-foreground tabular-nums">{entry.timestamp}</span>
-                    {entry.icon && <span className="text-xs">{entry.icon}</span>}
+                    {entry.icon && (
+                      <GlyphIcon
+                        glyph={entry.icon}
+                        className="h-3 w-3 shrink-0 text-muted-foreground"
+                        textClassName="text-xs"
+                      />
+                    )}
                   </div>
                   <div className="text-sm text-foreground font-medium">{entry.label}</div>
                   {entry.detail && <div className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{entry.detail}</div>}

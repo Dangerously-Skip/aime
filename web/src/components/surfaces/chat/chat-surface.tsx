@@ -11,7 +11,7 @@ import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, X, ImageIcon, FileText, File, FilePen, PanelRight, PanelRightClose, LayoutDashboard } from "lucide-react";
+import { ArrowUp, Square, X, ImageIcon, FileText, File, FilePen, PanelRight, PanelRightClose, LayoutDashboard, Pencil, Sparkles, Code2, Lightbulb } from "lucide-react";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import type { Message } from "@/stores/chat-store";
@@ -860,17 +860,17 @@ export function ChatSurface() {
             {/* Quick-start suggestion pills */}
             <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
               {[
-                { label: "Write", icon: "✏️", prompt: "Help me write " },
-                { label: "Learn", icon: "✨", prompt: "Explain to me " },
-                { label: "Code", icon: "</>", prompt: "Write code that " },
-                { label: "Brainstorm", icon: "💡", prompt: "Brainstorm ideas for " },
+                { label: "Write", icon: Pencil, prompt: "Help me write " },
+                { label: "Learn", icon: Sparkles, prompt: "Explain to me " },
+                { label: "Code", icon: Code2, prompt: "Write code that " },
+                { label: "Brainstorm", icon: Lightbulb, prompt: "Brainstorm ideas for " },
               ].map((pill) => (
                 <button
                   key={pill.label}
                   onClick={() => { setInputValue(pill.prompt); setTimeout(() => document.querySelector<HTMLTextAreaElement>('[placeholder="How can I help you today?"]')?.focus(), 50); }}
                   className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-card hover:border-border transition-colors"
                 >
-                  <span>{pill.icon}</span>
+                  <pill.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                   <span>{pill.label}</span>
                 </button>
               ))}

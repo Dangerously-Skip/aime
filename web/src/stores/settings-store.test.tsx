@@ -106,12 +106,78 @@ describe('settings migrations', () => {
   });
 
   it('current version passes through untouched', async () => {
-    await rehydrateWith(9, { fullName: 'Zoe', devHourlyRate: 200, onboardingComplete: true });
+    await rehydrateWith(11, { fullName: 'Zoe', devHourlyRate: 200, onboardingComplete: true });
 
     const s = useSettingsStore.getState();
     expect(s.fullName).toBe('Zoe');
     expect(s.devHourlyRate).toBe(200);
     expect(s.onboardingComplete).toBe(true);
+  });
+});
+
+/**
+ * v11: the org "select your team" concept moved to a separate product. The key
+ * has to be DROPPED, not just removed from the type: zustand's default merge
+ * splices every persisted field into live state, so an orphan `teamId` would sit
+ * in the store — invisible to `partialize`, absent from the type, and still
+ * there — until some later write happened to overwrite the payload.
+ */
+describe('v11 — the teamId key is dropped', () => {
+  const teamIdOf = (s: unknown) => (s as Record<string, unknown>).teamId;
+
+  it('drops a persisted teamId without disturbing the other keys', async () => {
+    await rehydrateWith(10, {
+      teamId: 'nib-digital',
+      fullName: 'Rory',
+      displayName: 'Ro',
+      anthropicApiKey: 'sk-ant-keepme',
+      onboardingComplete: true,
+      devHourlyRate: 220,
+      surfaceTiers: { cowork: 'smort' },
+      tierModels: { smort: 'or-1:kimi-k2' },
+      pushToTalkEnabled: true,
+    });
+
+    const s = useSettingsStore.getState();
+    expect(teamIdOf(s)).toBeUndefined();
+    // everything else survives the drop
+    expect(s.fullName).toBe('Rory');
+    expect(s.displayName).toBe('Ro');
+    expect(s.anthropicApiKey).toBe('sk-ant-keepme');
+    expect(s.onboardingComplete).toBe(true);
+    expect(s.devHourlyRate).toBe(220);
+    expect(s.surfaceTiers).toEqual({ cowork: 'smort' });
+    expect(s.tierModels).toEqual({ smort: 'or-1:kimi-k2' });
+    expect(s.pushToTalkEnabled).toBe(true);
+  });
+
+  it('drops it from the oldest payloads too, not just v10', async () => {
+    // The v2/v3 branches return early, so a per-version branch would have
+    // missed these — the delete has to happen up front.
+    for (const version of [1, 2, 3, 6, 9]) {
+      localStorage.clear();
+      useSettingsStore.getState().resetAll();
+      await rehydrateWith(version, { teamId: 'nib-digital', fullName: `v${version}` });
+
+      const s = useSettingsStore.getState();
+      expect(teamIdOf(s)).toBeUndefined();
+      expect(s.fullName).toBe(`v${version}`);
+    }
+  });
+
+  it('the dropped key never gets written back to storage', async () => {
+    openStorageGate();
+    await rehydrateWith(10, { teamId: 'nib-digital', fullName: 'Rory' });
+    useSettingsStore.getState().setFullName('Rory Two');
+
+    const persisted = (JSON.parse(localStorage.getItem(KEY)!) as { state: Record<string, unknown> }).state;
+    expect(persisted).not.toHaveProperty('teamId');
+    expect(persisted.fullName).toBe('Rory Two');
+  });
+
+  it('has no setTeamId action left to call', () => {
+    expect(teamIdOf(useSettingsStore.getState())).toBeUndefined();
+    expect((useSettingsStore.getState() as unknown as Record<string, unknown>).setTeamId).toBeUndefined();
   });
 });
 

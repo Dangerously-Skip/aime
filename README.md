@@ -30,7 +30,6 @@ git clone https://github.com/Dangerously-Skip/aime.git
 cd aime/web
 npm install
 cp .env.example .env          # add your model credentials (see below)
-cp src/config/teams.example.json src/config/teams.json
 npm run electron:dev          # Next.js dev server + Electron
 ```
 

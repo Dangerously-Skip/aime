@@ -11,9 +11,10 @@ import { ArrowLeft, Check, KeyRound, Globe, HardDrive, Loader2 } from "lucide-re
 /**
  * Onboarding — choose how AIME reaches a model (the P2 provider-path rework).
  *
- * Replaces the nib-era "pick your team" step for open-source installs (the
- * team step still renders when a teams.json is configured). Three first-class
- * paths, each wired to the real machinery rather than a fake form:
+ * The only inference-setup step in onboarding — it replaced the nib-era "pick
+ * your team" step outright (org/team selection lives in a separate product now).
+ * Three first-class paths, each wired to the real machinery rather than a fake
+ * form:
  *
  *  - Anthropic BYOK  → settings key + keychain mirror (so unattended runs work)
  *  - OpenRouter      → provider added + models scanned + key in the keychain;

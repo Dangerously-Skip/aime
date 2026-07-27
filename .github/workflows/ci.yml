@@ -21,10 +21,6 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Provide local teams config
-        working-directory: web
-        run: cp src/config/teams.example.json src/config/teams.json
-
       - name: Typecheck
         working-directory: web
         run: npm run typecheck
@@ -55,10 +51,6 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: npm ci
-
-      - name: Provide local teams config
-        working-directory: web
-        run: cp src/config/teams.example.json src/config/teams.json
 
       - name: Install Playwright browsers
         working-directory: web

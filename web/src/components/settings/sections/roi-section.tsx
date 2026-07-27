@@ -1,6 +1,7 @@
 "use client";
 
 import { useConversationStore } from "@/stores/conversation-store";
+import { ThumbsUp } from 'lucide-react'
 import { useSettingsStore } from "@/stores/settings-store";
 import { Input } from "@/components/ui/input";
 
@@ -72,7 +73,17 @@ export function RoiSection() {
         <StatCard label="Abort rate" value={`${abortRate}%`} sub={`${abortedCount} / ${conversations.length}`} />
         <StatCard
           label="Satisfaction"
-          value={thumbsUpPct !== null ? `${thumbsUpPct}% 👍` : "—"}
+          value={
+            thumbsUpPct !== null ? (
+              <span className="inline-flex items-center gap-1.5">
+                {thumbsUpPct}%
+                <ThumbsUp className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="sr-only">thumbs up</span>
+              </span>
+            ) : (
+              "—"
+            )
+          }
           sub={ratedConvs.length > 0 ? `${ratedConvs.length} rated` : "No ratings yet"}
         />
       </div>
@@ -105,7 +116,7 @@ export function RoiSection() {
   );
 }
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function StatCard({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
     <div className="rounded-lg border border-border/50 bg-card/50 px-3 py-2.5">
       <p className="text-xs text-muted-foreground mb-1">{label}</p>
