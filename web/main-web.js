@@ -52,26 +52,13 @@ let cachedCredentialKeyHex = null;
 function getCredentialKeyHex() {
   if (cachedCredentialKeyHex) return cachedCredentialKeyHex;
   try {
-    const crypto = require("crypto");
     const { safeStorage } = require("electron");
-    const keyPath = path.join(app.getPath("userData"), "credential-master.key");
-    const encryptionOk = safeStorage.isEncryptionAvailable();
-
-    if (fs.existsSync(keyPath)) {
-      const stored = fs.readFileSync(keyPath);
-      cachedCredentialKeyHex = encryptionOk
-        ? safeStorage.decryptString(stored)
-        : stored.toString("utf-8");
-    } else {
-      cachedCredentialKeyHex = crypto.randomBytes(32).toString("hex");
-      const toStore = encryptionOk
-        ? safeStorage.encryptString(cachedCredentialKeyHex)
-        : Buffer.from(cachedCredentialKeyHex, "utf-8");
-      if (!encryptionOk) {
-        console.warn("[AIME] OS keyring unavailable — credential master key stored unencrypted (0600).");
-      }
-      fs.writeFileSync(keyPath, toStore, { mode: 0o600 });
-    }
+    const { readOrCreateKey } = require("./credential-key");
+    cachedCredentialKeyHex = readOrCreateKey({
+      keyPath: path.join(app.getPath("userData"), "credential-master.key"),
+      safeStorage,
+      warn: (msg) => console.warn(`[AIME] ${msg}`),
+    });
   } catch (err) {
     console.error("[AIME] Could not provision credential master key:", err.message);
     cachedCredentialKeyHex = null;

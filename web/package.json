@@ -30,6 +30,7 @@
     ],
     "files": [
       "main-web.js",
+      "credential-key.js",
       "preload-web.js",
       "setup-window.html",
       "setup-handler.js",
