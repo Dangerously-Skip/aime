@@ -179,6 +179,16 @@ export class ClaudeProvider extends BaseProvider {
       allowWeb?: boolean;
     }> = [];
 
+    // Outcomes of RequestConnector calls, keyed by connector id (P3.3).
+    //
+    // NOT passed through `updatedInput`: RequestConnector is an in-process MCP
+    // tool, so the SDK zod-parses its arguments and STRIPS unknown keys before the
+    // handler runs — verified by execution. The `__x` pattern works for
+    // AskUserQuestion, spawn_agent and browser tools precisely because those are
+    // not MCP tools. Both canUseTool and the handler close over this map, which is
+    // the same per-request pattern used for cron jobs and widgets above.
+    const connectorOutcomes = new Map<string, { connected: boolean; reason?: string }>();
+
     // In-process MCP server exposing CronCreate so the model can schedule reminders
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const z = (await import('zod/v3') as any).z ?? (await import('zod/v3') as any).default ?? await import('zod/v3');
@@ -500,11 +510,32 @@ export class ClaudeProvider extends BaseProvider {
             reason: z.string().describe('One short sentence, shown to the user, saying what you need it for. E.g. "to send the summary to Bob".'),
           },
           async (input: Record<string, unknown>) => {
-            const outcome = input.__connectorResult as { connected?: boolean; reason?: string } | undefined;
+            const connectorId = String(input.connectorId ?? '');
+            const outcome = connectorOutcomes.get(connectorId);
+
             if (outcome?.connected) {
-              return { content: [{ type: 'text' as const, text: `Connected. The tools for ${String(input.connectorId)} are available from your next tool call — retry the step that needed it.` }] };
+              // The mounted MCP set is fixed for the life of this request, so the
+              // newly connected server's tools do NOT exist in this session. Saying
+              // "retry the step" would send the agent at a tool that isn't there.
+              return {
+                content: [{
+                  type: 'text' as const,
+                  text:
+                    `${connectorId} is now connected. Its tools are NOT available in this ` +
+                    `turn — the tool set was fixed when this message started. Tell the user ` +
+                    `it is connected and ask them to send another message so you can use it.`,
+                }],
+              };
             }
-            return { content: [{ type: 'text' as const, text: `Not connected${outcome?.reason ? `: ${outcome.reason}` : ''}. Do not ask again this turn. Finish what you can without it and tell the user which part you could not do.` }] };
+            return {
+              content: [{
+                type: 'text' as const,
+                text:
+                  `Not connected${outcome?.reason ? `: ${outcome.reason}` : ''}. Do not ask ` +
+                  `again this turn. Finish what you can without it and tell the user which ` +
+                  `part you could not do.`,
+              }],
+            };
           }
         ),
       ],
@@ -725,15 +756,16 @@ export class ClaudeProvider extends BaseProvider {
         const connectorId = typeof input.connectorId === 'string' ? input.connectorId : '';
         const reason = typeof input.reason === 'string' ? input.reason : '';
         if (!connectorId) {
-          return {
-            behavior: 'allow' as const,
-            updatedInput: { ...input, __connectorResult: { connected: false, reason: 'No connector id was given.' } },
-          };
+          connectorOutcomes.set('', { connected: false, reason: 'No connector id was given.' });
+          return { behavior: 'allow' as const };
         }
         console.log('[Claude] Connector requested:', connectorId, 'id:', toolUseID);
         await onConnectorRequest(toolUseID, connectorId, reason);
         const result = await waitForConnector(toolUseID);
-        return { behavior: 'allow' as const, updatedInput: { ...input, __connectorResult: result } };
+        // Recorded where the handler can actually read it. Passing it through
+        // updatedInput looked correct and was silently discarded by the schema.
+        connectorOutcomes.set(connectorId, result);
+        return { behavior: 'allow' as const };
       }
 
       return { behavior: 'allow' as const };

@@ -144,13 +144,17 @@ export function injectSecrets(entry: Entry, secrets: EntrySecrets | undefined): 
     out.headers = headers;
   }
 
-  // Refresh metadata is restored so refreshTokenIfNeeded sees what it expects.
-  if (secrets.refreshToken !== undefined || secrets.clientSecret !== undefined) {
-    const meta = { ...((out._meta as Record<string, unknown>) ?? {}) };
-    if (secrets.refreshToken !== undefined) meta.refreshToken = secrets.refreshToken;
-    if (secrets.clientSecret !== undefined) meta.clientSecret = secrets.clientSecret;
-    out._meta = meta;
-  }
+  // DELIBERATELY NOT restoring _meta.refreshToken / _meta.clientSecret.
+  //
+  // The SDK serialises the whole mcpServers object into the `claude` CLI argv
+  // (`--mcp-config <json>`), so anything left here is visible in `ps auxww` and
+  // /proc/<pid>/cmdline. readMcpConfigFile strips _meta for exactly that reason,
+  // and an earlier version of this function put the LONG-LIVED refresh token and
+  // client secret straight back — making process-listing exposure worse than
+  // before the commit whose purpose was removing plaintext secrets.
+  //
+  // Nothing needs them here: refreshTokenIfNeeded reads the store directly. Only
+  // the credential the server must actually present (env / header) is restored.
 
   return out;
 }

@@ -1,8 +1,6 @@
 export const runtime = 'nodejs';
 
-import { readFile } from 'fs/promises';
-import { getMcpConfigPath } from '@/lib/app-paths';
-import { classifyProvisioned, diffConnections, type ConnectionMeta } from '@/lib/connectors/health';
+import { readConnectionHealth, diffConnections } from '@/lib/connectors/health';
 
 /**
  * GET /api/connectors/health[?clientConnected=a,b,c]
@@ -17,15 +15,10 @@ import { classifyProvisioned, diffConnections, type ConnectionMeta } from '@/lib
  * Returns no secrets — only statuses, ids and expiry timestamps.
  */
 export async function GET(request: Request) {
-  let mcpServers: Record<string, { _meta?: ConnectionMeta }> = {};
-  try {
-    const raw = await readFile(getMcpConfigPath(), 'utf-8');
-    mcpServers = (JSON.parse(raw) as { mcpServers?: typeof mcpServers }).mcpServers ?? {};
-  } catch {
-    // No config yet — nothing is provisioned, which is a valid answer.
-  }
-
-  const connectors = classifyProvisioned(mcpServers);
+  // Reads the config AND the encrypted store: after DR-14 the refresh token is
+  // only in the store, and judging health without it reported every healthy
+  // mcp-oauth connector as expired once its access token aged out.
+  const connectors = await readConnectionHealth();
 
   const claimed = new URL(request.url).searchParams.get('clientConnected');
   const drift = claimed

@@ -7,16 +7,25 @@
  * and page-break avoidance that a hand-rolled fpdf2 script never gets right.
  *
  * SECURITY: the output is loaded into a real browser context to be printed, so
- * raw HTML in the source would execute. Rather than take on a sanitiser
- * dependency, inline HTML is DISABLED — the document language is markdown, and
- * markdown alone. Anything that looks like a tag is escaped and shown literally.
- * That closes the injection vector by construction instead of by filtering,
- * which is the difference between "we blocked the payloads we thought of" and
- * "there is no execution path".
+ * raw HTML in the source would execute. Inline HTML is therefore DISABLED — the
+ * document language is markdown alone, and anything tag-shaped is shown as
+ * literal text. That closes the vector by construction rather than by filtering.
+ *
+ * HOW matters, though. The first version escaped the whole markdown SOURCE before
+ * parsing, which double-escaped everything marked escapes itself: a code block
+ * containing `a < b && c > d` printed as `a &lt; b &amp;&amp; c &gt; d`, making
+ * every technical document unreadable, and `>` being pre-escaped meant blockquote
+ * syntax could never be recognised at all — leaving the blockquote rule in all
+ * four themes as dead CSS. Neither was visible to a unit test that only used
+ * code without special characters.
+ *
+ * So the escaping is applied to raw-HTML TOKENS only, via a renderer override.
+ * marked's own (correct, single) escaping then handles code, and normal markdown
+ * constructs work.
  *
  * Pure: no fs, no Electron.
  */
-import { marked } from 'marked';
+import { Marked } from 'marked';
 import { getTheme, type ThemeId } from './themes';
 
 export interface RenderOptions {
@@ -40,20 +49,29 @@ export function escapeHtml(value: string): string {
 }
 
 /**
- * Convert the document body. `async: false` keeps this synchronous and therefore
- * easy to test; marked only needs async for custom extensions we do not use.
+ * A marked instance whose only deviation from stock is that raw HTML is rendered
+ * as visible text instead of markup.
+ *
+ * Built once at module scope: `marked.use` mutates the instance it is called on,
+ * so calling it per render would stack the extension repeatedly.
+ */
+const documentMarked = new Marked({ async: false, gfm: true, breaks: false });
+documentMarked.use({
+  renderer: {
+    // Covers both block-level and inline raw HTML — marked routes both here.
+    html({ raw }: { raw: string }) {
+      return escapeHtml(raw);
+    },
+  },
+});
+
+/**
+ * Convert the document body. Synchronous, so it stays easy to test; marked only
+ * needs async for extensions we do not use.
  */
 export function markdownToHtml(markdown: string): string {
   if (typeof markdown !== 'string' || markdown.trim() === '') return '';
-  return marked.parse(markdown, {
-    async: false,
-    gfm: true,
-    breaks: false,
-    // The whole injection story: markdown's HTML passthrough is off, so a `<script>`
-    // in the source is rendered as visible text rather than executed.
-    // marked has no `sanitize` any more; escaping the source first is the
-    // supported way to get the same guarantee.
-  }) as string;
+  return documentMarked.parse(markdown) as string;
 }
 
 /**
@@ -93,9 +111,9 @@ export function constrainGeneratedHtml(html: string): string {
 export function renderDocument(opts: RenderOptions): string {
   const theme = getTheme(opts.theme);
   const title = escapeHtml(opts.title || 'Untitled');
-  // Escape the markdown source BEFORE parsing, so any tag in it becomes literal
-  // text. Markdown syntax itself is unaffected — it uses no angle brackets.
-  const body = constrainGeneratedHtml(markdownToHtml(escapeHtml(opts.markdown ?? '')));
+  // Raw HTML is neutralised by the renderer (see markdownToHtml), not by escaping
+  // the source — pre-escaping broke code blocks and blockquotes.
+  const body = constrainGeneratedHtml(markdownToHtml(opts.markdown ?? ''));
 
   const subtitle = opts.subtitle
     ? `<p class="doc-meta">${escapeHtml(opts.subtitle)}</p>`

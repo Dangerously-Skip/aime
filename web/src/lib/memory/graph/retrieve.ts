@@ -70,10 +70,17 @@ export function getMemoriesForContextWithGraph(
 ): Memory[] {
   const { query = '', limit = 20, useGraph = true, now = Date.now() } = ctx;
 
-  // Keyword retrieval first, over a generous window: the boost can only reorder
-  // what the base retriever surfaced plus what the graph adds, so the candidate
-  // pool has to be wider than the final limit for reordering to mean anything.
-  const baseline = getMemoriesForContext(memories, { ...ctx, limit: Math.max(limit * 3, limit) });
+  // Rank EVERYTHING the base retriever would consider, not a truncated window.
+  //
+  // With a window, a memory the graph reached but keywords missed scored 0 for
+  // relevance, so a 0.12 two-hop boost could not beat a mid-ranked keyword result
+  // — and whether it won depended on millisecond-level recency differences. That
+  // made the headline behaviour ("surfaces a memory sharing no keyword")
+  // intermittent, which a flaky test of mine exposed.
+  //
+  // Ranking the full set gives every candidate a meaningful base score, so the
+  // boost adds signal instead of fighting an artefact of where the window fell.
+  const baseline = getMemoriesForContext(memories, { ...ctx, limit: memories.length });
 
   if (!useGraph || !query.trim()) return baseline.slice(0, limit);
 
@@ -84,21 +91,11 @@ export function getMemoriesForContextWithGraph(
   const reached = traverse(graph, queryEntities.map((e) => e.id), HOP_BOOST.length - 1);
   if (reached.size === 0) return baseline.slice(0, limit);
 
-  // Anything the graph reached but keyword search missed is a candidate too —
-  // that is the entire point, so it must survive the same filters the baseline
-  // applied rather than bypassing scope and supersede rules.
-  const byId = new Map(memories.map((m) => [m.id, m]));
-  const allowed = new Set(
-    getMemoriesForContext(memories, { ...ctx, query: '', limit: memories.length }).map((m) => m.id),
-  );
-
+  // The baseline now spans everything the scope and supersede filters permit, so
+  // it doubles as the allow-list: a graph-reached memory that is not in it was
+  // filtered out for a reason and must stay out.
   const candidates = new Map<string, Memory>();
   baseline.forEach((m) => candidates.set(m.id, m));
-  for (const id of reached.keys()) {
-    if (candidates.has(id) || !allowed.has(id)) continue;
-    const m = byId.get(id);
-    if (m) candidates.set(id, m);
-  }
 
   // Baseline position stands in for the keyword score: the retriever returns a
   // ranked list, and re-deriving its internal score here would duplicate — and
