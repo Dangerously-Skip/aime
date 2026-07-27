@@ -63,6 +63,7 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
       // Slack's hosted MCP. DCR isn't supported, so we use the public client_id
       // that slackapi publishes in their marketplace plugin's .mcp.json.
       mcpUrl: 'https://mcp.slack.com/mcp',
+      dcr: 'unsupported',
       fallbackClientId: '1601185624273.8899143856786',
     },
     mcp: {
@@ -228,7 +229,9 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
       // email domain at connect time. DCR isn't supported, so we fall back to a
       // pre-registered Azure AD app via MS365_CLIENT_ID.
       mcpUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_MailTools',
-      fallbackClientIdEnv: 'MS365_CLIENT_ID',
+      // Microsoft Graph MCP endpoints do not implement RFC 7591, so a client_id
+      // must come from an app registration — this is why they need env config.
+      dcr: 'unsupported',      fallbackClientIdEnv: 'MS365_CLIENT_ID',
     },
     mcp: {
       transport: 'http',
@@ -245,7 +248,9 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     auth: {
       type: 'mcp-oauth',
       mcpUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_CalendarTools',
-      fallbackClientIdEnv: 'MS365_CLIENT_ID',
+      // Microsoft Graph MCP endpoints do not implement RFC 7591, so a client_id
+      // must come from an app registration — this is why they need env config.
+      dcr: 'unsupported',      fallbackClientIdEnv: 'MS365_CLIENT_ID',
     },
     mcp: {
       transport: 'http',
@@ -262,7 +267,9 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     auth: {
       type: 'mcp-oauth',
       mcpUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_M365Copilot',
-      fallbackClientIdEnv: 'MS365_CLIENT_ID',
+      // Microsoft Graph MCP endpoints do not implement RFC 7591, so a client_id
+      // must come from an app registration — this is why they need env config.
+      dcr: 'unsupported',      fallbackClientIdEnv: 'MS365_CLIENT_ID',
     },
     mcp: {
       transport: 'http',
@@ -279,7 +286,9 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
     auth: {
       type: 'mcp-oauth',
       mcpUrl: 'https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_ODSPRemoteServer',
-      fallbackClientIdEnv: 'MS365_CLIENT_ID',
+      // Microsoft Graph MCP endpoints do not implement RFC 7591, so a client_id
+      // must come from an app registration — this is why they need env config.
+      dcr: 'unsupported',      fallbackClientIdEnv: 'MS365_CLIENT_ID',
     },
     mcp: {
       transport: 'http',
