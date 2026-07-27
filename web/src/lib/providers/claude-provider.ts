@@ -769,6 +769,15 @@ export class ClaudeProvider extends BaseProvider {
             const budget = summarizeToolBudget(toolNames);
             initData.toolBudget = budget;
             if (budget.overBudget) console.warn('[Claude] Tool budget:', budget.advice);
+            // Remember what each server exposes so the NEXT session can carry a
+            // per-tool permission policy (P3.6b) — names are only knowable once
+            // a session has connected.
+            try {
+              const { groupToolsByServer } = await import('../mcp/tool-policy');
+              const { recordObservedTools } = await import('../mcp/observed-tools');
+              const { getMcpConfigPath } = await import('../app-paths');
+              await recordObservedTools(getMcpConfigPath(), groupToolsByServer(toolNames));
+            } catch { /* advisory only */ }
           }
           this.lastInitData = initData;
           console.log('[Claude] system:init data cached:', Object.keys(initData).join(', '));
