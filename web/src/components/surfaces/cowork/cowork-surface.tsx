@@ -80,6 +80,7 @@ import { useRunRecorder } from "@/hooks/use-run-recorder";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { usePushToTalk } from "@/hooks/use-push-to-talk";
+import { useDocumentPrint } from "@/hooks/use-document-print";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("cowork").capability;
@@ -715,6 +716,7 @@ export function CoworkSurface() {
   const conversations = useConversationStore((s) => s.conversations);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
+  const printDocument = useDocumentPrint();
   const displayName = useSettingsStore((s) => s.displayName);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
@@ -1107,6 +1109,15 @@ export function CoworkSurface() {
           if (event.toolBudget) {
             useToolBudgetStore.getState().setReport(event.toolBudget as ToolBudgetReport);
           }
+          break;
+        case "document_print":
+          // Relay to Electron main, which owns Chromium (P4.2b).
+          void printDocument({
+            toolUseId: event.toolUseId as string,
+            html: event.html as string,
+            outputPath: event.outputPath as string,
+            printOptions: event.printOptions as Record<string, unknown> | undefined,
+          });
           break;
         case "connector_request":
           addMessage(chatId, {

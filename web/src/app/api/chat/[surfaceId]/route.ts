@@ -525,6 +525,15 @@ export async function POST(
         });
       };
 
+      // Relay a document print to the client, which owns the Electron bridge
+      // (P4.2b). The server cannot call ipcMain from its child process.
+      const onDocumentPrint = async (
+        toolUseId: string,
+        payload: { html: string; outputPath: string; printOptions: Record<string, unknown> },
+      ) => {
+        await sse.writeEvent({ type: 'document_print', toolUseId, ...payload });
+      };
+
       // Build onBrowserToolUse callback to forward browser tool calls to the client
       const onBrowserToolUse = async (toolUseId: string, name: string, input: Record<string, unknown>) => {
         await sse.writeEvent({
@@ -773,6 +782,7 @@ export async function POST(
           onInputRequest,
           onBrowserToolUse,
           onConnectorRequest,
+          onDocumentPrint,
         })) {
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);

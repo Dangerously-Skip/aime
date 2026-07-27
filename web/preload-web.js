@@ -57,6 +57,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setPushToTalkEnabled: (enabled, accelerator) =>
     ipcRenderer.invoke("voice:set-push-to-talk", { enabled, accelerator }),
 
+  // ── Document printing (P4.2b) ────────────────────────────────────────
+  // Main owns Chromium; the server relays through the renderer because it runs
+  // in a child process and cannot reach ipcMain.
+  printDocumentPdf: (args) => ipcRenderer.invoke("documents:print-pdf", args),
+
   // ── IDE workspace IPC ────────────────────────────────────────────────
   // Wave 1 declares; Wave 2 agents fill the main-side implementations.
   // Stubs in main-web.js return safe defaults so the renderer doesn't

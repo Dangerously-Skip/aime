@@ -24,7 +24,8 @@ export type ChunkType =
   | 'cron_create'
   | 'standing_order_create'
   | 'widget_create'
-  | 'connector_request';
+  | 'connector_request'
+  | 'document_print';
 
 /**
  * A single streaming chunk yielded by a provider's query() method.
@@ -80,6 +81,14 @@ export interface QueryParams {
    * Lets the agent pause mid-task and ask for a service it needs (P3.3).
    */
   onConnectorRequest?: (toolUseId: string, connectorId: string, reason: string) => Promise<void>;
+  /**
+   * Ask the client to print a rendered document to PDF (P4.2b). Needed because
+   * the server is a child process of Electron and cannot call ipcMain itself.
+   */
+  onDocumentPrint?: (
+    toolUseId: string,
+    payload: { html: string; outputPath: string; printOptions: Record<string, unknown> },
+  ) => Promise<void>;
   /** Callback to send a browser_tool_use event to the client during streaming. */
   onBrowserToolUse?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => Promise<void>;
   /**

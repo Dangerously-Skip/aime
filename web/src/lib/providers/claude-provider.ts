@@ -6,6 +6,7 @@ import { waitForAnswer } from '../pending-questions';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
 import { waitForConnector } from '../pending-connectors';
+import { waitForDocumentPrint } from '../pending-documents';
 import { expandCanvasTemplate } from '../canvas/templates';
 import { describeThemes as describeThemesForPrompt } from '../documents/themes';
 
@@ -115,6 +116,7 @@ export class ClaudeProvider extends BaseProvider {
       onInputRequest,
       onBrowserToolUse,
       onConnectorRequest,
+      onDocumentPrint,
     } = params;
 
     // Load surface config if surfaceId is provided, otherwise use defaults
@@ -326,7 +328,7 @@ export class ClaudeProvider extends BaseProvider {
           async (input: Record<string, unknown>) => {
             try {
               const { renderDocument, printOptionsForTheme } = await import("../documents/render");
-              const { resolveDocumentTarget, canPrintPdf, describeOutcome } = await import("../documents/write");
+              const { resolveDocumentTarget, describeOutcome } = await import("../documents/write");
               const os = await import("os");
               const path = await import("path");
               const fsp = await import("fs/promises");
@@ -350,16 +352,23 @@ export class ClaudeProvider extends BaseProvider {
               // Chromium is not available to print.
               await fsp.writeFile(resolved.target.htmlPath, html, "utf-8");
 
-              const bridge = (globalThis as unknown as { aimeDocumentBridge?: unknown }).aimeDocumentBridge;
-              if (!canPrintPdf(bridge)) {
+              // Printing needs a connected client to relay to Electron main
+              // (see pending-documents). A scheduled run has none, so the HTML
+              // written above is the whole deliverable in that case.
+              if (!onDocumentPrint) {
                 return { content: [{ type: "text" as const, text: describeOutcome({ title, htmlPath: resolved.target.htmlPath }) }] };
               }
 
-              const result = await bridge.printPdf({
+              const printId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+              await onDocumentPrint(printId, {
                 html,
                 outputPath: resolved.target.pdfPath,
-                printOptions: printOptionsForTheme(typeof input.theme === "string" ? input.theme : undefined),
+                printOptions: printOptionsForTheme(
+                  typeof input.theme === "string" ? input.theme : undefined,
+                  title,
+                ),
               });
+              const result = await waitForDocumentPrint(printId);
               return {
                 content: [{
                   type: "text" as const,
