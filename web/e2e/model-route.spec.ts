@@ -18,6 +18,15 @@ test.setTimeout(120_000);
  *     the local Playwright/`next dev` harness is non-deterministic under
  *     repeated invocation.
  *
+ * RE-TESTED 2026-07-27: still fails identically (3/3 at the boot assertion) across
+ * three consecutive runs, while e2e/document-print.spec.ts — which drives Chromium
+ * directly without the app shell — passes 6/6. The dropdown-click leg was also
+ * attempted as a jsdom component test and abandoned: Radix Select needs a
+ * browser-grade pointer/ARIA environment that jsdom does not provide.
+ *
+ * So this leg is GENUINELY uncovered, and saying so is better than a green test
+ * that proves nothing.
+ *
  * Left as `fixme` rather than deleted because the assertions encode the real
  * contract (a tier must send its RESOLVED model, not the built-in), and rather
  * than left failing because a red test for environmental reasons trains people

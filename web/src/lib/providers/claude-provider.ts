@@ -421,7 +421,7 @@ export class ClaudeProvider extends BaseProvider {
               await fsp.writeFile(path.join(dir, 'VOICE.md'), serializeVoiceProfile(profile), 'utf-8');
 
               const saved = Object.entries(profile).filter(([, v]) => v).map(([k]) => k);
-              return { content: [{ type: 'text' as const, text: `Saved the writing voice (${saved.join(', ')}). Drafts you write for the user from the next message on will match it; they can edit it in Settings.` }] };
+              return { content: [{ type: 'text' as const, text: `Saved the writing voice (${saved.join(', ')}). Drafts you write for the user from the next message on will match it. It is stored at ~/.claude/VOICE.md and can be edited there.` }] };
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               return { content: [{ type: 'text' as const, text: `Could not save the writing voice: ${msg}` }] };
