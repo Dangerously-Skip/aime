@@ -310,6 +310,49 @@ export class ClaudeProvider extends BaseProvider {
             return { content: [{ type: 'text' as const, text: `Canvas rendered (${label}). The user sees it now in the canvas panel.` }] };
           }
         ),
+        // Save the user's writing voice, usually after analysing samples they
+        // pasted (P4). Writes VOICE.md directly — same reasoning as SkillCreate.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'VoiceProfileSave',
+          "Save a description of the USER's writing voice, so future drafts you write for them sound like them. Use after they share samples of their own writing and ask you to learn or match their style. Describe what you actually observed in the samples — be specific and testable (\"sentences average 12 words\", \"never uses semicolons\"), never vague (\"professional yet friendly\"). This governs prose you draft FOR them, not your own replies.",
+          {
+            tone: z.string().optional().describe('How it should feel to read — e.g. "dry and direct, never chummy".'),
+            sentenceRhythm: z.string().optional().describe('Typical sentence and paragraph length, and how much they vary.'),
+            vocabulary: z.string().optional().describe('Characteristic words and phrases; register and jargon level.'),
+            structure: z.string().optional().describe('How a piece opens, orders its points, and closes.'),
+            avoid: z.string().optional().describe('Constructions, clichés and habits to stay away from.'),
+          },
+          async (input: Record<string, unknown>) => {
+            try {
+              const { serializeVoiceProfile, hasVoice } = await import('../identity/voice');
+              const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+              const profile = {
+                tone: str(input.tone),
+                'sentence-rhythm': str(input.sentenceRhythm),
+                vocabulary: str(input.vocabulary),
+                structure: str(input.structure),
+                avoid: str(input.avoid),
+              };
+              if (!hasVoice(profile)) {
+                return { content: [{ type: 'text' as const, text: 'Nothing was saved — describe at least one aspect of the voice.' }] };
+              }
+
+              const os = await import('os');
+              const path = await import('path');
+              const fsp = await import('fs/promises');
+              const dir = path.join(os.homedir(), '.claude');
+              await fsp.mkdir(dir, { recursive: true });
+              await fsp.writeFile(path.join(dir, 'VOICE.md'), serializeVoiceProfile(profile), 'utf-8');
+
+              const saved = Object.entries(profile).filter(([, v]) => v).map(([k]) => k);
+              return { content: [{ type: 'text' as const, text: `Saved the writing voice (${saved.join(', ')}). Drafts you write for the user from the next message on will match it; they can edit it in Settings.` }] };
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { content: [{ type: 'text' as const, text: `Could not save the writing voice: ${msg}` }] };
+            }
+          }
+        ),
         // Author a reusable skill from the conversation and save it (P3.7).
         // Unlike CronCreate/WidgetCreate this needs no client round-trip: skills
         // are files on disk and this server runs server-side, so it writes

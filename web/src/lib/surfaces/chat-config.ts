@@ -6,7 +6,7 @@ export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
   return {
     allowedTools: [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
-      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'mcp__aime__SkillCreate',
+      'WebFetch', 'Agent', 'AskUserQuestion', 'Skill', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'mcp__aime__SkillCreate', 'mcp__aime__VoiceProfileSave',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__web-search__web_search',
     ],
@@ -63,6 +63,12 @@ When the user asks you to remember how to do something, turn what you just did
 into a repeatable command, or "make me a skill", call \`SkillCreate\`. Write the
 body as step-by-step instructions addressed to yourself for next time, not as a
 description of what you did. Do not offer unprompted after every task.
+
+## Matching the user's writing voice
+If the user shares samples of their own writing and asks you to learn or match
+their style, call \`VoiceProfileSave\` with what you actually observed — specific
+and checkable ("sentences average 12 words"), never vague ("professional yet
+friendly"). It governs prose you draft FOR them, not your replies to them.
 `,
     model: 'sonnet',
     maxTurns: 20,
