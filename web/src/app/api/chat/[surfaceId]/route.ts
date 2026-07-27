@@ -339,10 +339,18 @@ export async function POST(
         );
         const canRequest =
           surfaceConfig.allowedTools?.includes('mcp__aime__RequestConnector') ?? false;
+        // Expired-with-no-refresh connections are mounted but will 401, so the
+        // agent must be told not to use them (P3.4).
+        const { classifyProvisioned } = await import('@/lib/connectors/health');
+        const staleIds = new Set(
+          classifyProvisioned(mcpServers as Record<string, { _meta?: Record<string, unknown> }>)
+            .filter((r) => r.health.needsReconnect)
+            .map((r) => r.id),
+        );
         const connectorsPrompt = buildConnectorsPrompt(
           classifyCatalog(CONNECTOR_REGISTRY),
           connectedIdsFromServerKeys(Object.keys(mcpServers)),
-          { canRequest },
+          { canRequest, staleIds },
         );
         if (connectorsPrompt) {
           surfaceConfig.systemPrompt = `${
