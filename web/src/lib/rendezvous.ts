@@ -22,6 +22,48 @@
  * cancelled turn takes its rendezvous entries with it.
  */
 
+/**
+ * Mint the id a resolution has to present — a label plus a nonce.
+ *
+ * WHY. Every one of these bridges is settled by an unauthenticated localhost
+ * route (/api/chat/answer, /api/chat/connector-result, /api/chat/document-result,
+ * /api/chat/browser-tool-result). Knowing the id IS the authorisation, so the id
+ * has to be something only the client we sent the card to could know.
+ *
+ * Used by the question, connector and document bridges. NOT yet by the
+ * browser-tool one, which is still keyed by the raw `toolUseID` — and should not be
+ * read as safe for that reason. The obstacle is only incidental: the Code surface
+ * uses that same id as the tool-call id in its transcript, so giving the relay a
+ * different one risks the same call appearing twice. Worth doing separately, since a
+ * forged browser-tool result puts attacker text in front of the model as fact.
+ *
+ * THE THREAT, honestly. The attacker this actually stops is a BLIND one. Any web
+ * page the user has open can POST JSON at 127.0.0.1 — a cross-origin request is
+ * sent, only the response is withheld — and so can any other program on the
+ * machine. Such a caller could fabricate `connected: true` and make the model tell
+ * the user a service is wired up when it is not, or answer a permission prompt
+ * with "Allow". What it cannot do is READ the SSE stream, so it cannot learn a
+ * value that only ever travelled on that stream.
+ *
+ * WHY NOT JUST THE `toolUseID`, which these waits used to be keyed by. It is
+ * random too, so this is not a guessing argument — it is an exposure one. That id
+ * is written to the server's stdout and carried on every `tool_use` chunk, and it
+ * is an IDENTIFIER: its job is to be quotable, so the next thing to log or expose
+ * it is a reasonable change that would silently be a security regression. The
+ * handle exists only to be presented back, which is a property a reader can check.
+ *
+ * WHAT THIS DOES NOT DO. A local process that can read this machine's memory, the
+ * persisted conversation store, or the renderer's devtools can recover a handle.
+ * It can also read ~/.claude credentials outright, so it is already past anything
+ * this file could do about it. This is not an auth scheme and is not pretending to
+ * be one — it is proof that a resolution came from the card we sent.
+ *
+ * @param label anything that helps a human reading a log: a tool use id, "doc".
+ */
+export function issueHandle(label: string): string {
+  return `${label}.${globalThis.crypto.randomUUID()}`;
+}
+
 /** How a wait ends when nobody answers: with a value, or with an error. */
 export type Settlement<T> = { resolve: T } | { reject: string };
 

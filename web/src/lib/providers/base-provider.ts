@@ -84,10 +84,15 @@ export interface QueryParams {
   /**
    * Ask the client to print a rendered document to PDF (P4.2b). Needed because
    * the server is a child process of Electron and cannot call ipcMain itself.
+   *
+   * A PATH, not the markup. The tool has already written the HTML to disk by the
+   * time it asks, so shipping the string as well copied it through the SSE frame,
+   * the renderer, the IPC message and a data URL — four copies of a document that
+   * was sitting on the filesystem the whole time.
    */
   onDocumentPrint?: (
     toolUseId: string,
-    payload: { html: string; outputPath: string; printOptions: Record<string, unknown> },
+    payload: { htmlPath: string; outputPath: string; printOptions: Record<string, unknown> },
   ) => Promise<void>;
   /** Callback to send a browser_tool_use event to the client during streaming. */
   onBrowserToolUse?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => Promise<void>;

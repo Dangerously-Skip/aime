@@ -34,7 +34,7 @@ afterEach(() => {
 
 const request = {
   toolUseId: 'doc_1',
-  html: '<!DOCTYPE html><html><body>x</body></html>',
+  htmlPath: '/o/r.html',
   outputPath: '/o/r.pdf',
   printOptions: { pageSize: 'A4' },
 };
@@ -48,8 +48,11 @@ describe('useDocumentPrint', () => {
   it('prints through Electron and reports success', async () => {
     await run();
 
+    // Paths only. The rendered document never crosses this boundary: it was
+    // already on disk, and shipping it by value copied it through the SSE frame,
+    // the renderer and the IPC message before a data URL inflated it again.
     expect(printDocumentPdf).toHaveBeenCalledWith({
-      html: request.html,
+      htmlPath: '/o/r.html',
       outputPath: '/o/r.pdf',
       printOptions: { pageSize: 'A4' },
     });

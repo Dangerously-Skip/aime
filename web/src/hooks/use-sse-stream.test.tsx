@@ -25,7 +25,6 @@ function setup(chatId = 'chat1') {
     onDone: vi.fn<() => void>(),
     onUsage: vi.fn<(usage: StreamUsage) => void>(),
     setIsStreaming: vi.fn<(v: boolean) => void>(),
-    setStreamError: vi.fn<(e: string | null) => void>(),
   };
   const { result } = renderHook(() => useSSEStream({ ...handlers, chatId }));
   return { handlers, stream: result.current };
@@ -164,7 +163,7 @@ describe('useSSEStream.sendMessage', () => {
     expect(body.memories).toBeUndefined(); // empty string omitted
   });
 
-  it('reports HTTP errors via onError and setStreamError', async () => {
+  it('reports HTTP errors via onError', async () => {
     fetchMock.mockResolvedValue({
       ok: false,
       status: 500,
@@ -176,7 +175,6 @@ describe('useSSEStream.sendMessage', () => {
 
     expect(handlers.onError).toHaveBeenCalledTimes(1);
     expect((handlers.onError.mock.calls[0][0] as Error).message).toContain('HTTP 500');
-    expect(handlers.setStreamError).toHaveBeenLastCalledWith(expect.stringContaining('HTTP 500'));
     expect(handlers.onDone).not.toHaveBeenCalled();
     expect(handlers.setIsStreaming).toHaveBeenLastCalledWith(false);
   });
@@ -313,7 +311,6 @@ function setupWithStore(chatId: string) {
   const spies = {
     onDone: vi.fn(),
     onError: vi.fn<(e: Error) => void>(),
-    setStreamError: vi.fn<(e: string | null) => void>(),
   };
   const { result } = renderHook(() =>
     useSSEStream({
@@ -324,7 +321,6 @@ function setupWithStore(chatId: string) {
         }
       },
       setIsStreaming: (v) => useChatStore.getState().setIsStreaming(v),
-      setStreamError: (e) => spies.setStreamError(e),
       onDone: () => {
         spies.onDone();
         useChatStore.getState().completeRunningTools(chatId);
@@ -367,10 +363,10 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     // cowork's onDone can auto-continue the turn — a deliberate Stop must not
     // take that path, or Stop would resurrect the stream it just killed.
     expect(spies.onDone).not.toHaveBeenCalled();
-    // A user-initiated stop is not a timeout — not in the final state, and not
-    // transiently either.
-    const reported = spies.setStreamError.mock.calls.map(([e]) => e ?? '');
-    expect(reported.filter((e) => /timed out/i.test(e))).toEqual([]);
+    // A user-initiated stop is not a timeout. Asserted on what the user can
+    // actually see — the transcript — now that the write-only store field the
+    // hook used to mirror errors into is gone.
+    expect(last.content).not.toMatch(/timed out/i);
     expect(useChatStore.getState().isStreaming).toBe(false);
   });
 
@@ -394,7 +390,7 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     const last = lastMessage('stop-chat');
     expect(last.isStreaming).toBe(false);
     expect(last.isLoading).toBe(false);
-    expect(spies.setStreamError).not.toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
+    expect(last.content).not.toMatch(/timed out/i);
     expect(spies.onError).not.toHaveBeenCalled();
   });
 
@@ -412,8 +408,8 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     expect(last.isStreaming).toBe(false);
     expect(last.isLoading).toBe(false);
     expect(last.content).not.toContain('**Error:**');
+    expect(last.content).not.toMatch(/timed out/i);
     expect(spies.onError).not.toHaveBeenCalled();
-    expect(spies.setStreamError).not.toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
   });
 
   it('a 120s inactivity timeout surfaces as an error and clears the message spinner', async () => {
@@ -428,12 +424,14 @@ describe('useSSEStream — aborted streams finalise message state', () => {
 
     expect(spies.onError).toHaveBeenCalledTimes(1);
     expect(spies.onError.mock.calls[0][0].message).toMatch(/timed out/i);
-    expect(spies.setStreamError).toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
     expect(spies.onDone).not.toHaveBeenCalled();
 
     const last = lastMessage('timeout-chat');
     expect(last.isStreaming).toBe(false);
     expect(last.isLoading).toBe(false);
+    // `onError` is the ONLY route a timeout now takes to the user, so assert it
+    // arrives in the transcript rather than only that the callback fired.
+    expect(last.content).toMatch(/\*\*Error:\*\*[\s\S]*timed out/i);
     expect(useChatStore.getState().isStreaming).toBe(false);
   });
 

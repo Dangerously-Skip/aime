@@ -65,8 +65,7 @@ import { WorkspaceLayout } from "./workspace/workspace-layout";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useRunRecorder } from "@/hooks/use-run-recorder";
-import { useCloseRunOnAbort } from "@/hooks/use-close-run-on-abort";
+import { useTurnWiring } from "@/hooks/use-turn-wiring";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
@@ -707,13 +706,6 @@ export function CodeSurface() {
     [setFolder, chatId]
   );
 
-  const handleQuestionAnswered = useCallback(
-    (toolUseId: string) => {
-      if (chatId) updateMessage(chatId, toolUseId, { questionAnswered: true });
-    },
-    [chatId, updateMessage]
-  );
-
   // Auto-scroll
   const endRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -764,23 +756,24 @@ export function CodeSurface() {
     if (conv?.surface === "code") setCurrentChat(activeConvId);
   }, [activeConvId, allConversations, setCurrentChat]);
 
-  // Records a Run per turn so every execution leaves a durable trace with its
-  // cost attached (P6 substrate — see lib/runs).
-  const runRecorder = useRunRecorder("code");
-  // An aborted stream reaches neither onDone nor onError, so without this a Stop
-  // or a conversation switch leaves the Run 'running' for ever.
   const ownsChat = useCallback(
     (id: string) => !!useCodeStore.getState().messages[id]?.length,
     [],
   );
-  useCloseRunOnAbort(runRecorder.finish, ownsChat);
+  // Run recording + the card-answer persisters, shared with the other three
+  // surfaces (see use-turn-wiring). This surface renders no connect card, so
+  // `onConnectorSettled` goes unused rather than being a fourth copy waiting to
+  // be needed.
+  const { runRecorder, onQuestionAnswered } = useTurnWiring({
+    surfaceId: "code",
+    chatId,
+    ownsChat,
+    updateMessage,
+  });
 
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
-    // Required by the hook, read by nothing: stream failures reach the user via
-    // `onError` below. The write-only store field it fed is gone.
-    setStreamError: () => undefined,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
       switch (event.type) {
@@ -1290,7 +1283,7 @@ export function CodeSurface() {
                       <div ref={contentRef} className="max-w-3xl mx-auto relative">
                         <TerminalOutput
                           messages={messages as TerminalMessage[]}
-                          onQuestionAnswered={handleQuestionAnswered}
+                          onQuestionAnswered={onQuestionAnswered}
                           onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }}
                           endRef={endRef}
                         />

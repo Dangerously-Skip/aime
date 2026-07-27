@@ -147,6 +147,17 @@ export async function POST(request: Request) {
 
     await mkdir(PLUGINS_DIR, { recursive: true });
 
+    // Swept BEFORE the already-installed early return, not after it.
+    //
+    // A crash between mkdtemp and the promoting rename (SIGKILL, a dev-server
+    // restart, power loss) skips the `finally` below, so the scratch tree survives.
+    // The natural next user action is to press Install again — and once the retry
+    // succeeds, every subsequent Install on that plugin short-circuits at
+    // `dirExists(targetDir)`. With the sweep behind that return the leftover was
+    // then unreachable, so it sat in ~/.claude/plugins forever. Age-gated either
+    // way, so it still cannot touch a clone that is running.
+    await sweepAbandonedScratch(Date.now());
+
     const target = resolveInstallDir(PLUGINS_DIR, safeName.value);
     if (!target.ok) {
       return Response.json({ error: target.error }, { status: 400 });
@@ -161,8 +172,6 @@ export async function POST(request: Request) {
         manifest: await readManifest(targetDir),
       });
     }
-
-    await sweepAbandonedScratch(Date.now());
 
     // EVERY install stages into its own scratch directory and is then promoted by
     // a single rename. Two reasons, both of which used to bite:

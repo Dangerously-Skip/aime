@@ -231,11 +231,45 @@ export async function POST(request: Request) {
 
     const fullEntry: Entry = { ...decision.entry, _meta: meta };
 
+    // ── argv is refused, never written ───────────────────────────────────────
+    //
+    // `env` and `headers` get split into the encrypted store. `args` cannot be:
+    // it is positional, unnamed, and executed — and the SDK serialises mcpServers
+    // into the `claude` CLI argv anyway, so an "encrypted" argv secret would still
+    // be in `ps auxww`. Refusing is the only answer that is not theatre; see
+    // credentialBearingArgs. Checked BEFORE any write, so a bad entry reaches
+    // neither the config nor the store.
+    //
+    // Unreachable today — `tokenInjection` supports only `env` and `header`, and
+    // args come from the static registry — which is exactly why it is a guard and
+    // not a migration. It fires the moment a registry entry starts carrying a token
+    // in argv, when moving it to `env` is still a one-line change.
+    const { credentialBearingArgs, describeArgvCredentials } = await import('@/lib/mcp/secrets');
+    // Split once and reuse. extractSecrets is pure and idempotent, but running it
+    // twice on an entry carrying a real token is a needless second copy.
+    const { entry: publicEntry, secrets } = extractSecrets(fullEntry);
+    const argvLeaks = credentialBearingArgs(fullEntry, secrets);
+    if (argvLeaks.length > 0) {
+      // The connector id, the positions and the reasons — never the value.
+      console.error(
+        `[Provisioner] Refusing to provision ${body.connectorId}: ` +
+          `command-line arguments would carry a credential — ${describeArgvCredentials(argvLeaks)}. ` +
+          `Move it to the entry's env (tokenInjection.method 'env'), which is encrypted at rest.`,
+      );
+      return Response.json(
+        {
+          error:
+            'This connector would pass a credential on the command line, where it is visible ' +
+            'to any process listing. Refusing to provision it.',
+        },
+        { status: 500 },
+      );
+    }
+
     // Secrets go to the encrypted store; the config keeps structure and a visible
     // placeholder (DR-14). With no master key the store is inert and the entry is
     // written as-is, which is the documented fallback rather than a silent one.
     if (store.mode === 'encrypted') {
-      const { entry: publicEntry, secrets } = extractSecrets(fullEntry);
       if (!isEmptySecrets(secrets)) {
         // MERGED, not replaced: a record is one blob, so setting it from a request
         // that carries no refresh token (an api_key reconnect, a re-enable) used to

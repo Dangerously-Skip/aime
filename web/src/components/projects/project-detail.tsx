@@ -49,8 +49,7 @@ import { ProjectCanvases } from "./project-canvases";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useRunRecorder } from "@/hooks/use-run-recorder";
-import { useCloseRunOnAbort } from "@/hooks/use-close-run-on-abort";
+import { useTurnWiring } from "@/hooks/use-turn-wiring";
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -177,24 +176,24 @@ export function ProjectDetail({
   const launchedConvIdRef = useRef<string>("");
   const [activeChatId, setActiveChatId] = useState("");
 
-  // Records a Run per turn so every execution leaves a durable trace with its
-  // cost attached (P6 substrate — see lib/runs). Project chats run on the chat
-  // surface, so they record against it.
-  const runRecorder = useRunRecorder("chat");
-  // An aborted stream reaches neither onDone nor onError below. Scoped to the
-  // conversation this page launched, so it cannot close the Chat surface's Run.
+  // Scoped to the conversation this page launched, so an abort here cannot close
+  // the Chat surface's Run — both record against the 'chat' surface.
   const ownsChat = useCallback(
     (id: string) => !!id && id === launchedConvIdRef.current,
     [],
   );
-  useCloseRunOnAbort(runRecorder.finish, ownsChat);
+  // Shared with the three surfaces (see use-turn-wiring). No `updateMessage`: this
+  // page renders no question or connect cards, so the answer persisters are
+  // deliberately inert rather than wired to a list that would never show one.
+  const { runRecorder } = useTurnWiring({
+    surfaceId: "chat",
+    chatId: activeChatId,
+    ownsChat,
+  });
 
   const { sendMessage } = useSSEStream({
     chatId: activeChatId,
     setIsStreaming,
-    // Required by the hook, read by nothing: stream failures reach the user via
-    // `onError` below. The write-only store field it fed is gone.
-    setStreamError: () => undefined,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
       const cid = launchedConvIdRef.current;

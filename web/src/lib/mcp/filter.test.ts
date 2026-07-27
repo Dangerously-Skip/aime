@@ -1,98 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import {
-  filterMcpServers,
-  connectorIdForServerKey,
-  summarizeToolBudget,
-  TOOL_BUDGET,
-} from './filter';
+import { summarizeToolBudget, TOOL_BUDGET } from './filter';
 
-describe('connectorIdForServerKey', () => {
-  it('recovers ids from current and legacy key shapes', () => {
-    expect(connectorIdForServerKey('aime-connector-github')).toBe('github');
-    expect(connectorIdForServerKey('aime-mcp-atlassian')).toBe('atlassian');
-    expect(connectorIdForServerKey('nib-connector-miro')).toBe('miro');
-    expect(connectorIdForServerKey('nib-mcp-figma')).toBe('figma');
-  });
-
-  it('returns null for servers we do not manage', () => {
-    for (const key of ['playwright', 'web-search', 'my-own-server', '']) {
-      expect(connectorIdForServerKey(key), key).toBeNull();
-    }
-  });
-});
-
-describe('filterMcpServers', () => {
-  const servers = {
-    'aime-connector-github': { type: 'http' },
-    'aime-mcp-atlassian': { type: 'http' },
-    'web-search': { command: 'npx' },
-    playwright: { command: 'npx' },
-  };
-
-  it('drops only the disabled connector', () => {
-    const { servers: kept, removed } = filterMcpServers(servers, ['github']);
-    expect(Object.keys(kept).sort()).toEqual(['aime-mcp-atlassian', 'playwright', 'web-search']);
-    expect(removed).toEqual(['aime-connector-github']);
-  });
-
-  it('never filters servers the app does not manage', () => {
-    // The toggle governs connectors, not a hand-written .mcp.json entry.
-    const { servers: kept } = filterMcpServers(servers, ['web-search', 'playwright']);
-    expect(kept['web-search']).toBeDefined();
-    expect(kept.playwright).toBeDefined();
-  });
-
-  it('mounts everything when nothing is disabled', () => {
-    expect(filterMcpServers(servers, []).servers).toBe(servers);
-    expect(filterMcpServers(servers, undefined).servers).toBe(servers);
-  });
-
-  it('mounts everything when the caller sends no list at all', () => {
-    // An older renderer, or a scheduled server-side run with no UI state.
-    // Unmounting by default would silently strip an unattended run of its tools.
-    const { servers: kept, removed } = filterMcpServers(servers, undefined);
-    expect(Object.keys(kept)).toHaveLength(4);
-    expect(removed).toEqual([]);
-  });
-
-  it('handles an absent server map', () => {
-    expect(filterMcpServers(undefined, ['github'])).toEqual({ servers: {}, removed: [] });
-  });
-
-  it('can disable every managed connector without touching the rest', () => {
-    const { servers: kept } = filterMcpServers(servers, ['github', 'atlassian']);
-    expect(Object.keys(kept).sort()).toEqual(['playwright', 'web-search']);
-  });
-
-  it('property: filtering never adds a server and never keeps a disabled one', () => {
-    fc.assert(
-      fc.property(
-        fc.dictionary(
-          fc.constantFrom(
-            'aime-connector-github',
-            'aime-mcp-atlassian',
-            'nib-connector-miro',
-            'playwright',
-            'web-search',
-          ),
-          fc.constant({ type: 'http' }),
-        ),
-        fc.array(fc.constantFrom('github', 'atlassian', 'miro', 'playwright')),
-        (servers, disabled) => {
-          const { servers: kept } = filterMcpServers(servers, disabled);
-          const disabledSet = new Set<string>(disabled);
-          for (const key of Object.keys(kept)) {
-            expect(key in servers).toBe(true);
-            const id = connectorIdForServerKey(key);
-            if (id) expect(disabledSet.has(id)).toBe(false);
-          }
-        },
-      ),
-      { numRuns: 300 },
-    );
-  });
-});
+/**
+ * `filterMcpServers` and `connectorIdForServerKey` were tested here and are gone.
+ * The per-request deny list they implemented duplicated the server-side stash
+ * (`/api/connectors/provision?intent=disable` → `config.disabledMcpServers`) at
+ * strictly worse cost, because it ran after the load. The behaviour those tests
+ * pinned — a switched-off connector is not mounted — now lives where the mechanism
+ * does: mcp/disabled-connector-cost.test.ts, which also measures what the
+ * duplicate cost per message.
+ */
 
 describe('summarizeToolBudget', () => {
   const mcpTools = (server: string, n: number) =>

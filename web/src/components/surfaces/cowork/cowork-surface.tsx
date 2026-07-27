@@ -76,8 +76,7 @@ import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import type { Capability } from "@/lib/models/types";
-import { useRunRecorder } from "@/hooks/use-run-recorder";
-import { useCloseRunOnAbort } from "@/hooks/use-close-run-on-abort";
+import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { watchStuckTool } from "@/lib/stuck-tool-watchdog";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
@@ -781,23 +780,24 @@ export function CoworkSurface() {
     }
   }, [chatId]);
 
-  // Records a Run per turn so every execution leaves a durable trace with its
-  // cost attached (P6 substrate — see lib/runs).
-  const runRecorder = useRunRecorder("cowork");
-  // A Stop, a conversation switch or a stuck-tool abort never reaches onDone or
-  // onError below, so without this the Run would stay 'running' for ever.
   const ownsChat = useCallback(
     (id: string) => !!useCoworkStore.getState().messages[id]?.length,
     [],
   );
-  useCloseRunOnAbort(runRecorder.finish, ownsChat);
+  // Run recording + the two card-answer persisters, shared with the other three
+  // surfaces (see use-turn-wiring). This wiring was hand-copied between surfaces,
+  // which is how the connect-card defect came to be dealt with in some of them and
+  // not others; there is one copy now, and one test.
+  const { runRecorder, onQuestionAnswered, onConnectorSettled } = useTurnWiring({
+    surfaceId: "cowork",
+    chatId,
+    ownsChat,
+    updateMessage,
+  });
 
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
-    // Required by the hook, read by nothing: stream failures reach the user via
-    // `onError` below. The write-only store field it fed is gone.
-    setStreamError: () => undefined,
     onUsage(usage) {
       // Composed: the run recorder captures cost first (it must not be skipped
       // by the no-active-conversation early return below), then the existing
@@ -1112,10 +1112,11 @@ export function CoworkSurface() {
           }
           break;
         case "document_print":
-          // Relay to Electron main, which owns Chromium (P4.2b).
+          // Relay to Electron main, which owns Chromium (P4.2b). Paths only —
+          // the document itself never enters the renderer.
           void printDocument({
             toolUseId: event.toolUseId as string,
-            html: event.html as string,
+            htmlPath: event.htmlPath as string,
             outputPath: event.outputPath as string,
             printOptions: event.printOptions as Record<string, unknown> | undefined,
           });
@@ -1295,24 +1296,6 @@ export function CoworkSurface() {
       appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
     },
   });
-
-  const handleQuestionAnswered = useCallback(
-    (toolUseId: string) => {
-      if (chatId) {
-        updateMessage(chatId, toolUseId, { questionAnswered: true });
-      }
-    },
-    [chatId, updateMessage]
-  );
-
-  // Persist a connect card's answer on the message, so switching conversation
-  // does not bring its Connect / Not now buttons back for a settled request.
-  const handleConnectorSettled = useCallback(
-    (toolUseId: string) => {
-      if (chatId) updateMessage(chatId, toolUseId, { connectorRequestSettled: true });
-    },
-    [chatId, updateMessage]
-  );
 
   // Retry: ref holds handleSubmit so the retry callback can call it without circular deps
   const handleSubmitRef = useRef<((text: string) => void) | null>(null);
@@ -1822,7 +1805,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={handleQuestionAnswered} onConnectorSettled={handleConnectorSettled} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
+            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">

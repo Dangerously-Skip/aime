@@ -7,6 +7,7 @@ const os = require("os");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
+const { pathToFileURL } = require("url");
 const setupHandler = require("./setup-handler");
 const ptyManager = require("./src/lib/code-workspace/pty-manager");
 
@@ -1021,13 +1022,24 @@ app.on("activate", async () => {
 // Python, no pip install, no extra binary — and real typography, including the
 // page-break control a hand-rolled generator never gets right.
 //
-// Rendered in an offscreen window with node integration OFF and no preload, so
-// the document has no bridge to the app even though its content is escaped
-// upstream. Defence in depth: the renderer guarantees no executable markup, and
-// this guarantees there would be nothing to reach if that ever failed.
-ipcMain.handle("documents:print-pdf", async (_event, { html, outputPath, printOptions } = {}) => {
-  if (typeof html !== "string" || typeof outputPath !== "string") {
-    return { ok: false, error: "html and outputPath are required" };
+// Rendered in an offscreen window with node integration OFF, sandboxed, script
+// disabled and no preload, so the document has no bridge to the app even though
+// its content is escaped upstream. Defence in depth: the renderer guarantees no
+// executable markup, and this guarantees there would be nothing to reach if that
+// ever failed.
+//
+// Takes the PATH the document was written to, not the markup — see the note on
+// loadURL below for why that is both cheaper and no less safe.
+ipcMain.handle("documents:print-pdf", async (_event, { htmlPath, outputPath, printOptions } = {}) => {
+  if (typeof htmlPath !== "string" || typeof outputPath !== "string") {
+    return { ok: false, error: "htmlPath and outputPath are required" };
+  }
+  // The window this opens can only fetch what it is pointed at, so what it is
+  // pointed at is worth constraining: an absolute path to a document THIS app
+  // wrote, not an arbitrary file promoted into a PDF the user then shares.
+  const source = expandHome(htmlPath);
+  if (!path.isAbsolute(source) || !/\.html?$/i.test(source)) {
+    return { ok: false, error: "htmlPath must be an absolute path to an .html file" };
   }
 
   let win = null;
@@ -1037,9 +1049,28 @@ ipcMain.handle("documents:print-pdf", async (_event, { html, outputPath, printOp
       webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, javascript: false },
     });
 
-    // A data URL keeps the document off disk entirely; nothing to clean up and
-    // nothing for another process to read mid-render.
-    await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+    // Opened from disk, where the DocumentCreate tool already wrote it.
+    //
+    // This used to be a data URL, justified as keeping "the document off disk
+    // entirely" — which was never true: the tool writes the HTML two statements
+    // before it asks for the print, and leaves it there as the fallback
+    // deliverable. All the data URL actually bought was four copies of the
+    // document (SSE frame, renderer, IPC message, then ~3x inflation through
+    // encodeURIComponent), measured at ~76KB for a 19.8KB file and linear in
+    // document size.
+    //
+    // ORIGIN. file:// gives the page a file origin where the data URL gave it an
+    // opaque one. That matters only to something that can act, and nothing here
+    // can: `javascript: false` means no script runs at all, and the generator
+    // (lib/documents/render) escapes raw HTML to text, allows only `data:image/`
+    // in `<img src>`, and inlines every style — so there is no element in the
+    // document that could reference a local file in the first place. A file
+    // origin with no script and no external references has no capability an
+    // opaque one withheld.
+    //
+    // pathToFileURL, not string concatenation: it escapes spaces and `#`, and
+    // gets `C:\…` right on Windows.
+    await win.loadURL(pathToFileURL(source).toString());
 
     const pdf = await win.webContents.printToPDF({
       printBackground: true,

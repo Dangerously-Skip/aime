@@ -48,9 +48,12 @@ interface ElectronAPI {
     | string
     | null
   >;
-  /** Print a rendered document to PDF via Electron main (P4.2b). */
+  /**
+   * Print a rendered document to PDF via Electron main (P4.2b). Takes the path the
+   * tool already wrote the HTML to, not the markup — see DocumentPrintRequest.
+   */
   printDocumentPdf?: (args: {
-    html: string;
+    htmlPath: string;
     outputPath: string;
     printOptions?: Record<string, unknown>;
   }) => Promise<{ ok: boolean; path?: string; bytes?: number; error?: string }>;

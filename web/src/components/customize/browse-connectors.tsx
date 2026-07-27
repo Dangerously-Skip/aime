@@ -138,14 +138,38 @@ export function BrowseConnectors() {
     let cancelled = false;
     fetch("/api/connectors/hydrate")
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
+      .then(async (data) => {
         if (cancelled || !data?.connectedIds) return;
         for (const id of data.connectedIds as string[]) {
           // Only registry connectors get a row here, so only they can be reflected
           // in the store. The one-click catalogue's ids live in a separate space on
           // purpose and are handled by `provisionedIds` below, which reads the
           // health report instead of this map.
-          if (CONNECTOR_MAP[id]) markProvisioned(id);
+          const connector = CONNECTOR_MAP[id];
+          if (!connector) continue;
+
+          // hydrate reads `config.mcpServers` only, so an id arriving here is
+          // MOUNTED. If the persisted client store nonetheless has it switched off,
+          // this is a build that predates the server-side stash: back then "off"
+          // was a deny list sent with each chat request, and the entry stayed
+          // mounted. Push the disable through now, so the two representations agree
+          // and the user's choice survives — `markProvisioned` would set
+          // `enabled: true` and silently switch the service back on.
+          const prior = useConnectorStore.getState().connectorStates[id];
+          const wasSwitchedOff = !!prior?.authenticated && !prior.enabled;
+          // Except for mcp-oauth, whose toggle is a one-way uninstall (see
+          // handleToggle): stashing one leaves a row that cannot be switched back
+          // on without reconnecting, so those keep the old behaviour.
+          if (wasSwitchedOff && connector.auth.type !== "mcp-oauth") {
+            try {
+              await deprovisionConnector(id, "disable");
+            } catch (err) {
+              console.error(`Failed to converge disabled ${id} to the server stash:`, err);
+              markProvisioned(id); // the entry IS mounted; don't claim otherwise
+            }
+            continue;
+          }
+          markProvisioned(id);
         }
       })
       .catch(() => {});

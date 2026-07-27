@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createRendezvous } from './rendezvous';
+import { createRendezvous, issueHandle } from './rendezvous';
 
 /**
  * The generalised bridge behind pending-questions / -browser-tools / -connectors
@@ -172,5 +172,32 @@ describe('createRendezvous — a re-used id', () => {
     r.settle('dup', { ok: true });
     await expect(second).resolves.toEqual({ ok: true });
     expect(r.size()).toBe(0);
+  });
+});
+
+/**
+ * The id is the authorisation. Every route that settles one of these bridges is
+ * unauthenticated localhost, so "knows the id" is all that separates the card we
+ * sent from a forged POST — see the threat note on issueHandle.
+ */
+describe('issueHandle', () => {
+  it('appends a fresh uuid to the label, so the label alone is not the id', () => {
+    const handle = issueHandle('toolu_01ABC');
+    expect(handle).toMatch(/^toolu_01ABC\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(handle).not.toBe('toolu_01ABC');
+  });
+
+  it('never repeats, so one leaked handle cannot answer the next card', () => {
+    const handles = new Set(Array.from({ length: 500 }, () => issueHandle('same')));
+    expect(handles.size).toBe(500);
+  });
+
+  it('is what the rendezvous is keyed by — the label on its own does not settle', () => {
+    const r = resolving();
+    const handle = issueHandle('toolu_1');
+    const waiting = r.wait(handle);
+    expect(r.settle('toolu_1', { ok: true })).toBe(false);
+    expect(r.settle(handle, { ok: true })).toBe(true);
+    return expect(waiting).resolves.toEqual({ ok: true });
   });
 });

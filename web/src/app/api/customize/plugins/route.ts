@@ -47,6 +47,13 @@ export async function GET() {
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    // Dot-directories are never plugins, and one of them is reachable: every
+    // install stages into `.tmp-<name>-<random>` and promotes it with a rename, so
+    // a crash between those two steps leaves that scratch tree here. It has no
+    // manifest, so it used to surface as a plugin at version 0.0.0 by "Unknown".
+    // `/api/mcp/installed` has always skipped these; the two scanners now agree.
+    // (The install route sweeps aged leftovers — this only stops them being SEEN.)
+    if (entry.name.startsWith('.')) continue;
 
     const pluginDir = path.join(PLUGINS_DIR, entry.name);
     const metaDir = path.join(pluginDir, '.claude-plugin');

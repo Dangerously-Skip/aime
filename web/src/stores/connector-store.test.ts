@@ -5,9 +5,9 @@ import { useConnectorStore } from './connector-store';
  * The regression (DEFECT 6): the store held the same fact twice and the two
  * copies disagreed.
  *
- * `connectorStates[id].authenticated` is what every badge, every derived set
- * (`getEnabledConnectorIds`, `getDisabledConnectorIds`) and every row in the
- * Connectors screen reads. `isAuthenticated(id)` additionally required a truthy
+ * `connectorStates[id].authenticated` is what every badge, `getEnabledConnectorIds`
+ * and every row in the Connectors screen reads. `isAuthenticated(id)`
+ * additionally required a truthy
  * `tokens[id]` — so any connector whose credential does not live in the browser
  * (ambient AWS IAM, an MCP that signs itself in, anything reconciled from the
  * provisioned config where the token never leaves the server) read as connected

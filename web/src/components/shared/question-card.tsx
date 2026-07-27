@@ -18,6 +18,13 @@ interface Question {
 }
 
 interface QuestionCardProps {
+  /**
+   * The handle the server issued for this question, echoed back with the answers.
+   * It is a CAPABILITY, not just an identifier: /api/chat/answer authenticates
+   * nothing else, so presenting this is the only proof that the answers — which at
+   * the MCP approval gate include "Allow" — came from the card the user was shown
+   * (see lib/rendezvous → issueHandle). Not to be logged or put in a URL.
+   */
   toolUseId: string;
   questions: Question[];
   answered?: boolean;

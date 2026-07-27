@@ -62,6 +62,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // ── Document printing (P4.2b) ────────────────────────────────────────
   // Main owns Chromium; the server relays through the renderer because it runs
   // in a child process and cannot reach ipcMain.
+  //
+  // `args` is { htmlPath, outputPath, printOptions } — two paths and a small
+  // options object. It used to carry the whole rendered document as a string,
+  // which made this IPC message as large as the PDF being produced; main opens
+  // the file the tool already wrote instead.
   printDocumentPdf: (args) => ipcRenderer.invoke("documents:print-pdf", args),
 
   // ── IDE workspace IPC ────────────────────────────────────────────────

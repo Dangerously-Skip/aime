@@ -149,7 +149,6 @@ export async function POST(
     capability = null,
     tier = null,
     providerConfig = null,
-    disabledConnectors = null,
     canRelayToClient = true,
   } = body as {
     message?: string;
@@ -182,8 +181,6 @@ export async function POST(
     capability?: import('@/lib/models/types').Capability | null;
     tier?: import('@/lib/models/types').Tier | null;
     providerConfig?: import('@/lib/models/execution').ProviderExecConfig | null;
-    /** Connector ids the user has switched off in the Connectors screen (P3.5). */
-    disabledConnectors?: string[] | null;
     /**
      * Will the caller ACT on the relay events this stream emits — `input_request`,
      * `connector_request`, `document_print`?
@@ -316,21 +313,22 @@ export async function POST(
       ] as const);
 
       // Build MCP servers config from provisioned OAuth connectors in ~/.claude/.mcp.json
-      const allProvisionedServers = await loadProvisionedMcpServers();
-      // Honour the Connectors screen's enable/disable toggle (P3.5). Until now
-      // nothing read it, so every provisioned connector was mounted regardless and
-      // the switch did nothing. A deny list means an absent value mounts
-      // everything, so a scheduled run with no UI state keeps its tools.
-      const { filterMcpServers } = await import('@/lib/mcp/filter');
-      const { servers: mcpServers, removed: unmountedServers } = filterMcpServers(
-        allProvisionedServers,
-        Array.isArray(disabledConnectors) ? (disabledConnectors as string[]) : undefined,
-      );
+      //
+      // The Connectors screen's toggle is honoured UPSTREAM of here (P3.5): switching
+      // a connector off calls `/api/connectors/provision?intent=disable`, which moves
+      // the entry into `config.disabledMcpServers`, and this loader reads only
+      // `config.mcpServers`. So a disabled connector is already absent.
+      //
+      // There used to be a second mechanism as well — a `disabledConnectors` deny
+      // list on the request body, applied by `filterMcpServers` right here. It gave
+      // the same answer at strictly worse cost, because it ran AFTER the load:
+      // measured at 3 extra AES-256-GCM credential decrypts, one outbound OAuth
+      // token-refresh POST and one config rewrite per message, all for a server
+      // whose next act was to be discarded. Two representations of one fact is also
+      // how they come to disagree. Removed; the stash is the mechanism.
+      const mcpServers = await loadProvisionedMcpServers();
       if (Object.keys(mcpServers).length > 0) {
         console.log('[CHAT] Loaded provisioned connector servers:', Object.keys(mcpServers).join(', '));
-      }
-      if (unmountedServers.length > 0) {
-        console.log('[CHAT] Skipped disabled connectors:', unmountedServers.join(', '));
       }
 
       // Get surface-specific config
@@ -590,12 +588,13 @@ export async function POST(
           };
 
       // Relay a document print to the client, which owns the Electron bridge
-      // (P4.2b). The server cannot call ipcMain from its child process.
+      // (P4.2b). The server cannot call ipcMain from its child process. Carries
+      // the path the tool already wrote, not the markup — see onDocumentPrint.
       const onDocumentPrint = !canRelayToClient
         ? undefined
         : async (
             toolUseId: string,
-            payload: { html: string; outputPath: string; printOptions: Record<string, unknown> },
+            payload: { htmlPath: string; outputPath: string; printOptions: Record<string, unknown> },
           ) => {
             await sse.writeEvent({ type: 'document_print', toolUseId, ...payload });
           };

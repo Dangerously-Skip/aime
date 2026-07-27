@@ -7,6 +7,8 @@ import {
   isEmptySecrets,
   secretKeyForServer,
   SECRET_PLACEHOLDER,
+  credentialBearingArgs,
+  describeArgvCredentials,
 } from './secrets';
 
 /**
@@ -421,5 +423,188 @@ describe('regression: dollar signs in credentials', () => {
     const { entry, secrets } = extractSecrets(original);
     // env values are assigned directly, not via replace, but pin it anyway
     expect(injectSecrets(entry, secrets)).toEqual(original);
+  });
+});
+
+describe('credentialBearingArgs — argv is refused, not encrypted', () => {
+  const argsOf = (args: unknown[], rest: Record<string, unknown> = {}) => ({
+    transport: 'stdio',
+    command: 'npx',
+    args,
+    ...rest,
+  });
+
+  /**
+   * The load-bearing rule: an arg byte-identical to a credential this same entry is
+   * storing. No heuristic, no guessing — it IS the token, in argv.
+   */
+  it('catches an arg holding the same token the entry stores in env', () => {
+    const entry = argsOf(['-y', 'some-mcp@latest', 'ghp_realtokenvalue1234'], {
+      env: { GITHUB_TOKEN: 'ghp_realtokenvalue1234' },
+    });
+    const { secrets } = extractSecrets(entry);
+    const findings = credentialBearingArgs(entry, secrets);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].index).toBe(2);
+    expect(findings[0].reason).toMatch(/own credential/);
+  });
+
+  it('catches it even when the arg only embeds the credential', () => {
+    const entry = argsOf(['--url=https://x/?key=ghp_realtokenvalue1234'], {
+      env: { GITHUB_TOKEN: 'ghp_realtokenvalue1234' },
+    });
+    const { secrets } = extractSecrets(entry);
+    expect(credentialBearingArgs(entry, secrets)).toHaveLength(1);
+  });
+
+  it('catches a header credential reused in argv', () => {
+    const entry = {
+      transport: 'streamable-http',
+      url: 'https://x/mcp',
+      headers: { Authorization: 'Bearer tok-abcdefghij' },
+      args: ['--auth', 'Bearer tok-abcdefghij'],
+    };
+    const { secrets } = extractSecrets(entry);
+    expect(credentialBearingArgs(entry, secrets)).not.toEqual([]);
+  });
+
+  it('catches a stored refresh token or client secret in argv', () => {
+    const entry = argsOf(['--x', SECRETS_REFRESH]);
+    expect(credentialBearingArgs(entry, { refreshToken: SECRETS_REFRESH })).not.toEqual([]);
+    expect(credentialBearingArgs(argsOf([SECRETS_CLIENT]), { clientSecret: SECRETS_CLIENT }))
+      .not.toEqual([]);
+  });
+
+  // Pattern rules — the backstop for a token that never went through env/headers,
+  // and therefore has no stored value to compare against.
+  it.each([
+    ['--token=abc123xyz', 'inline value of a credential-named flag'],
+    ['--api-key=abc123xyz', 'inline value of a credential-named flag'],
+    ['--client-secret=GOCSPX-x', 'inline value of a credential-named flag'],
+    ['--password=hunter2', 'inline value of a credential-named flag'],
+    ['--access_token=abc', 'inline value of a credential-named flag'],
+    ['-token=abc', 'inline value of a credential-named flag'],
+  ])('flags %j', (arg, reason) => {
+    const findings = credentialBearingArgs(argsOf(['-y', 'pkg', arg]));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toEqual({ index: 2, reason });
+  });
+
+  it('flags the value that FOLLOWS a credential-named flag, against that value', () => {
+    const findings = credentialBearingArgs(argsOf(['--token', 'abc123xyz']));
+    expect(findings).toEqual([
+      { index: 1, reason: 'value of the credential-named flag --token' },
+    ]);
+  });
+
+  it.each([
+    'ghp_16C7e42F292c6912E7710c838347Ae178B4a',
+    'github_pat_11ABC',
+    'xoxb-123-456-abc',
+    'sk-proj-abcdef',
+    'ya29.a0AfB_x',
+    '1//0gAbCdEf',
+    'eyJhbGciOiJIUzI1NiJ9.e30.x',
+    'AKIAIOSFODNN7EXAMPLE',
+    'figd_abcdef',
+  ])('flags the known credential format %j even with no stored secret to compare', (token) => {
+    expect(credentialBearingArgs(argsOf(['-y', 'pkg', token]))).toEqual([
+      { index: 2, reason: 'matches a known credential format' },
+    ]);
+  });
+
+  // The false positives that would matter. Every real registry entry today, plus
+  // the patterns a registry author reaches for when doing it RIGHT.
+  it.each([
+    [['-y', '@buildkite/mcp-server@latest'], 'buildkite'],
+    [['-y', 'zoom-mcp-server@latest'], 'zoom'],
+    [['/opt/aime/mcp-servers/google-workspace/index.mjs'], 'google workspace'],
+    [['awslabs.core-mcp-server@latest'], 'aws'],
+    [['-y', 'sumologic-mcp-server@latest'], 'sumologic'],
+    [['--token-file=/run/secrets/token'], 'a PATH to a credential'],
+    [['--api-key-file', '/run/secrets/k'], 'a path as a separate arg'],
+    [['--api-key-env=GITHUB_TOKEN'], 'the NAME of an env var'],
+    [['--client-id=1234.apps.googleusercontent.com'], 'a client id is public'],
+    [['--token-name', 'aime_mcp'], 'a token NAME'],
+    [['--secret-name', 'prod/github'], 'a secret manager key'],
+    [['--token='], 'an empty inline value'],
+    [['--token', '--verbose'], 'the next arg is another flag'],
+    [['--stdio', '--port', '3000'], 'ordinary flags'],
+    // Deliberate gap, pinned so it is a decision and not a surprise: a
+    // single-letter flag is unclassifiable (-p is port, path, project, package),
+    // so the name rules stay out of it. The exact-value rule still catches the
+    // real case, where the same credential is also in env/headers.
+    [['-p=hunter2'], 'a single-letter flag names nothing'],
+  ])('does not flag %j (%s)', (args) => {
+    expect(credentialBearingArgs(argsOf(args))).toEqual([]);
+  });
+
+  it('ignores entries with no args at all, or non-array args', () => {
+    expect(credentialBearingArgs({ transport: 'streamable-http', url: 'https://x/' })).toEqual([]);
+    expect(credentialBearingArgs({ args: 'not-an-array' })).toEqual([]);
+    expect(credentialBearingArgs({ args: [] })).toEqual([]);
+  });
+
+  it('ignores short stored values, which cannot be told apart from flags', () => {
+    // A one- or two-character "credential" would match half of every argv.
+    expect(credentialBearingArgs(argsOf(['-y', 'pkg']), { env: { T: '-y' } })).toEqual([]);
+  });
+
+  it('never puts the credential in the description', () => {
+    const entry = argsOf(['--token=ghp_SUPERSECRETVALUE'], {
+      env: { GITHUB_TOKEN: 'ghp_SUPERSECRETVALUE' },
+    });
+    const { secrets } = extractSecrets(entry);
+    const described = describeArgvCredentials(credentialBearingArgs(entry, secrets));
+    expect(described).not.toContain('SUPERSECRET');
+    expect(described).toMatch(/^args\[0\] \(/);
+  });
+
+  it('describes several findings on one line', () => {
+    expect(
+      describeArgvCredentials([
+        { index: 1, reason: 'a' },
+        { index: 4, reason: 'b' },
+      ]),
+    ).toBe('args[1] (a), args[4] (b)');
+  });
+});
+
+describe('credentialBearingArgs — extraction still leaves args alone', () => {
+  it('does not placeholder or rewrite args, so the guard is the only defence', () => {
+    // Stated as a test because the two mechanisms have to stay consistent: if
+    // extraction ever starts splitting args, the refusal above becomes wrong.
+    const entry = { transport: 'stdio', command: 'node', args: ['--token=abc123xyz'] };
+    const { entry: out, secrets } = extractSecrets(entry);
+    expect(out.args).toEqual(['--token=abc123xyz']);
+    expect(isEmptySecrets(secrets)).toBe(true);
+  });
+});
+
+describe('credentialBearingArgs — against the REAL registry', () => {
+  /**
+   * The guard refuses to provision, so a false positive is an outage for a working
+   * connector. Asserted against every entry the registry actually ships rather than
+   * a hand-picked sample, so adding a connector with awkward args fails HERE — at
+   * `npm test` — instead of at a user's first click.
+   */
+  it('flags none of the connectors that ship today', async () => {
+    const { CONNECTOR_REGISTRY } = await import('@/lib/connectors/registry');
+    const { substituteAppDir } = await import('@/lib/connectors/provision-guard');
+
+    const offenders = CONNECTOR_REGISTRY.filter((c) => {
+      // Substituted exactly as the provision route does, since {appDir} expands to
+      // a real path and that path is what would be inspected.
+      const args = substituteAppDir(c.mcp.args, '/Applications/AIME.app/Contents/Resources');
+      return credentialBearingArgs({ args }).length > 0;
+    }).map((c) => c.id);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('covers the stdio connectors, so the assertion above is not vacuous', async () => {
+    const { CONNECTOR_REGISTRY } = await import('@/lib/connectors/registry');
+    const withArgs = CONNECTOR_REGISTRY.filter((c) => (c.mcp.args?.length ?? 0) > 0);
+    expect(withArgs.length).toBeGreaterThan(3);
   });
 });

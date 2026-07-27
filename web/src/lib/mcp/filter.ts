@@ -1,63 +1,24 @@
 /**
- * Which MCP servers actually get mounted (P3.5).
+ * How many tools are mounted, and which service is responsible (P3.5).
  *
- * The Connectors screen has had an enable/disable toggle all along and
- * `getEnabledConnectors()` was never called by anything: every provisioned
- * connector was mounted on every request regardless. So the switch did nothing,
- * and a user who noticed the agent was drowning in tools had no way to trim it.
+ * Why anyone cares: each connected service contributes tens of tool definitions —
+ * the GitHub MCP alone is around a hundred — and model quality degrades from
+ * tool-choice pressure well before the context window is the binding constraint.
+ * Connecting more must never silently make AIME worse, so the user needs to be
+ * told which service to switch off.
  *
- * That matters beyond the dead switch. Each connected service contributes tens of
- * tool definitions — the GitHub MCP alone is around a hundred — and model
- * quality degrades from tool-choice pressure well before the context window is
- * the binding constraint. Connecting more must never silently make AIME worse.
- *
- * A DENY list, not an allow list, is deliberate: if the client sends nothing (an
- * older renderer, a scheduled server-side run with no UI state), every server
- * stays mounted. Defaulting to "mount nothing" would silently strip an
- * unattended run of its tools, which is a far worse failure than mounting one
- * server too many.
+ * This module used to ALSO hold `filterMcpServers`, a per-request deny list of
+ * connector ids that the chat route applied to the loaded server map. It is gone:
+ * switching a connector off calls `/api/connectors/provision?intent=disable`, which
+ * moves the entry into `config.disabledMcpServers`, and `loadProvisionedMcpServers`
+ * reads only `config.mcpServers`. Both mechanisms gave the same answer, but the
+ * deny list ran AFTER the load, so a switched-off connector still cost three
+ * AES-256-GCM credential decrypts, an outbound OAuth token-refresh POST and a
+ * config rewrite on every message — measured in disabled-connector-cost.test.ts.
+ * Keeping two representations of one fact is also how they come to disagree.
  *
  * Pure: no fs, no network.
  */
-
-/** Recover the connector id a provisioned server key belongs to. */
-export function connectorIdForServerKey(serverKey: string): string | null {
-  const match = /^(?:aime|nib)-(?:connector|mcp)-(.+)$/.exec(serverKey);
-  return match ? match[1] : null;
-}
-
-export interface FilterResult<T> {
-  servers: Record<string, T>;
-  /** Server keys that were left out, for logging and for telling the user. */
-  removed: string[];
-}
-
-/**
- * Drop the servers whose connector the user has switched off.
- *
- * Servers that aren't ours (a hand-written entry in `.mcp.json`, the web-search
- * MCP) are never filtered — the toggle only governs connectors the app manages.
- */
-export function filterMcpServers<T>(
-  servers: Record<string, T> | undefined,
-  disabledConnectorIds: Iterable<string> | undefined,
-): FilterResult<T> {
-  const all = servers ?? {};
-  const disabled = new Set(disabledConnectorIds ?? []);
-  if (disabled.size === 0) return { servers: all, removed: [] };
-
-  const kept: Record<string, T> = {};
-  const removed: string[] = [];
-  for (const [key, value] of Object.entries(all)) {
-    const id = connectorIdForServerKey(key);
-    if (id && disabled.has(id)) {
-      removed.push(key);
-      continue;
-    }
-    kept[key] = value;
-  }
-  return { servers: kept, removed: removed.sort() };
-}
 
 // ── Tool budget ───────────────────────────────────────────────────────────
 
