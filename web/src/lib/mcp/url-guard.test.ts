@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { validateMcpServerUrl } from './url-guard';
+import { validateMcpServerUrl, deriveServerName } from './url-guard';
+import { sanitizePluginName } from './install-guard';
 
 /**
  * This guard stands between a request body and a server-side fetch, so it gets
@@ -167,6 +168,50 @@ describe('validateMcpServerUrl — properties', () => {
         },
       ),
       { numRuns: 1000 },
+    );
+  });
+});
+
+describe('deriveServerName', () => {
+  it('names a server after its organisation, not its service label', () => {
+    expect(deriveServerName('https://mcp.atlassian.com/v1/mcp')).toBe('atlassian');
+    expect(deriveServerName('https://api.githubcopilot.com/mcp/')).toBe('githubcopilot');
+    expect(deriveServerName('https://mcp.acme.co.uk/mcp')).toBe('acme');
+    expect(deriveServerName('https://www.example.com/mcp')).toBe('example');
+  });
+
+  it('handles a bare host and localhost', () => {
+    expect(deriveServerName('https://acme.com/mcp')).toBe('acme');
+    expect(deriveServerName('http://localhost:3000/mcp')).toBe('localhost');
+  });
+
+  it('always produces something the install allowlist accepts', () => {
+    // The name becomes a directory, a clients-file key and an MCP entry key.
+    for (const u of [
+      'https://mcp.atlassian.com/v1/mcp',
+      'https://api.githubcopilot.com/mcp/',
+      'http://127.0.0.1:8080/mcp',
+      'https://xn--80ak6aa92e.com/mcp',
+    ]) {
+      const name = deriveServerName(u);
+      expect(name, u).toBeTruthy();
+      expect(sanitizePluginName(name).ok, `${u} → ${name}`).toBe(true);
+    }
+  });
+
+  it('returns null for something unparseable', () => {
+    expect(deriveServerName('not a url')).toBeNull();
+    expect(deriveServerName('')).toBeNull();
+  });
+
+  it('property: a derived name is always allowlist-safe or null', () => {
+    fc.assert(
+      fc.property(fc.webUrl(), (u) => {
+        const name = deriveServerName(u);
+        if (name === null) return;
+        expect(sanitizePluginName(name).ok, `${u} → ${name}`).toBe(true);
+      }),
+      { numRuns: 500 },
     );
   });
 });
