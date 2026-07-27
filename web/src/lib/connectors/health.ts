@@ -157,6 +157,59 @@ export function classifyProvisioned(
   return reports.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * Health for everything provisioned, reading the config AND the encrypted store.
+ *
+ * DR-14 moved refresh tokens out of the config, which silently broke both callers
+ * of `classifyProvisioned`:
+ *
+ *  - `/api/connectors/health` read the file alone, so once an access token passed
+ *    its hour EVERY healthy mcp-oauth connector reported "expired, reconnect".
+ *  - The chat route was handed `loadProvisionedMcpServers()` output, which strips
+ *    `_meta` entirely — so `expiresAt` never arrived, nothing was ever stale, and
+ *    the "Connected but EXPIRED" prompt block was unreachable.
+ *
+ * Both now go through here, so the two cannot disagree again.
+ */
+export async function readConnectionHealth(
+  now: number = Date.now(),
+): Promise<ConnectorHealthReport[]> {
+  const { getMcpConfigPath } = await import('../app-paths');
+  const { getMcpSecretStore } = await import('../mcp/secret-store');
+
+  let mcpServers: Record<string, { _meta?: ConnectionMeta }> = {};
+  try {
+    const { readFile } = await import('fs/promises');
+    const raw = await readFile(getMcpConfigPath(), 'utf-8');
+    mcpServers = (JSON.parse(raw) as { mcpServers?: typeof mcpServers }).mcpServers ?? {};
+  } catch {
+    return [];
+  }
+
+  const store = getMcpSecretStore();
+  const merged: Record<string, { _meta?: ConnectionMeta }> = {};
+  for (const [serverKey, entry] of Object.entries(mcpServers)) {
+    const stored = await store.get(serverKey);
+    merged[serverKey] = {
+      ...entry,
+      _meta: {
+        ...(entry._meta ?? {}),
+        // The refresh token is the difference between "will renew itself" and
+        // "dead"; after DR-14 it lives only in the store.
+        ...(stored?.refreshToken ? { refreshToken: stored.refreshToken } : {}),
+      },
+    };
+  }
+
+  return classifyProvisioned(merged, now);
+}
+
+/** Connector ids that are provisioned but unusable without reconnecting. */
+export async function staleConnectorIds(now: number = Date.now()): Promise<Set<string>> {
+  const reports = await readConnectionHealth(now);
+  return new Set(reports.filter((r) => r.health.needsReconnect).map((r) => r.id));
+}
+
 export interface DriftReport {
   /** Provisioned on disk but the UI thinks they're disconnected. */
   missingInClient: string[];

@@ -16,6 +16,9 @@ import {
  * hand-write.
  */
 
+const SECRETS_REFRESH = '1//real-refresh';
+const SECRETS_CLIENT = 'GOCSPX-real-secret';
+
 const stdio = () => ({
   transport: 'stdio',
   command: 'node',
@@ -26,8 +29,8 @@ const stdio = () => ({
     clientId: 'public-client-id',
     tokenEndpoint: 'https://oauth2.googleapis.com/token',
     expiresAt: 1700000000000,
-    refreshToken: '1//real-refresh',
-    clientSecret: 'GOCSPX-real-secret',
+    refreshToken: SECRETS_REFRESH,
+    clientSecret: SECRETS_CLIENT,
   },
 });
 
@@ -106,10 +109,12 @@ describe('extractSecrets — nothing secret survives on disk', () => {
 });
 
 describe('injectSecrets — the SDK gets a working entry back', () => {
-  it('round-trips a stdio entry exactly', () => {
+  it('round-trips the credential the server must present', () => {
     const original = stdio();
     const { entry, secrets } = extractSecrets(original);
-    expect(injectSecrets(entry, secrets)).toEqual(original);
+    const restored = injectSecrets(entry, secrets);
+    // env is what a stdio server actually needs back
+    expect(restored.env).toEqual(original.env);
   });
 
   it('round-trips an http entry exactly', () => {
@@ -138,10 +143,26 @@ describe('injectSecrets — the SDK gets a working entry back', () => {
     expect(original).toEqual(snapshot);
   });
 
-  it('restores refresh metadata so the refresh path still works', () => {
+  it('does NOT restore _meta secrets — they would reach the CLI argv', () => {
+    // The SDK serialises mcpServers into `--mcp-config <json>`, so anything left
+    // in the returned object is visible in `ps auxww`. An earlier version put the
+    // long-lived refresh token and client secret straight back, which made
+    // exposure worse than before the commit that removed plaintext secrets.
     const { entry, secrets } = extractSecrets(stdio());
     const restored = injectSecrets(entry, secrets);
-    expect((restored._meta as Record<string, unknown>).refreshToken).toBe('1//real-refresh');
+    const serialised = JSON.stringify(restored);
+
+    expect(serialised).not.toContain(SECRETS_REFRESH);
+    expect(serialised).not.toContain(SECRETS_CLIENT);
+    // …while the access token the server must present is still there
+    expect(serialised).toContain('ya29.real-token');
+  });
+
+  it('refresh still works, because it reads the store rather than this object', () => {
+    // Pinning the contract that made dropping _meta safe.
+    const { secrets } = extractSecrets(stdio());
+    expect(secrets.refreshToken).toBe(SECRETS_REFRESH);
+    expect(secrets.clientSecret).toBe(SECRETS_CLIENT);
   });
 });
 
@@ -174,11 +195,30 @@ describe('properties', () => {
     { requiredKeys: ['transport'] },
   );
 
-  it('extract → inject always reproduces the original', () => {
+  it('extract → inject always reproduces env and headers exactly', () => {
     fc.assert(
       fc.property(entryArb, (entry) => {
-        const { entry: pub, secrets } = extractSecrets(entry as Record<string, unknown>);
-        expect(injectSecrets(pub, secrets)).toEqual(entry);
+        const original = entry as Record<string, unknown>;
+        const { entry: pub, secrets } = extractSecrets(original);
+        const restored = injectSecrets(pub, secrets);
+        // The credential the server presents must survive byte-for-byte.
+        if (original.env) expect(restored.env).toEqual(original.env);
+        if (original.headers) expect(restored.headers).toEqual(original.headers);
+      }),
+      { numRuns: 500 },
+    );
+  });
+
+  it('property: no _meta secret ever survives into the SDK-facing object', () => {
+    fc.assert(
+      fc.property(entryArb, (entry) => {
+        const original = entry as Record<string, unknown>;
+        const { entry: pub, secrets } = extractSecrets(original);
+        const serialised = JSON.stringify(injectSecrets(pub, secrets));
+        for (const value of [secrets.refreshToken, secrets.clientSecret]) {
+          if (typeof value !== 'string' || value.trim() === '') continue;
+          expect(serialised, `leaked to argv: ${value}`).not.toContain(value);
+        }
       }),
       { numRuns: 500 },
     );

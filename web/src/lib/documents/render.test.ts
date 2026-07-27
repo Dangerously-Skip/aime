@@ -261,3 +261,79 @@ describe('constrainGeneratedHtml — markdown\'s own network-reaching output', (
     );
   });
 });
+
+describe('regression: code blocks and blockquotes (the double-escaping bug)', () => {
+  /**
+   * The first implementation escaped the whole markdown SOURCE before parsing, so
+   * marked escaped it again. `a < b && c > d` in a code block printed as
+   * `a &lt; b &amp;&amp; c &gt; d` — every technical document unreadable — and
+   * because `>` was pre-escaped, blockquote syntax could never be recognised,
+   * making the blockquote rule in all four themes dead CSS.
+   *
+   * The original test only used `<code>code</code>` with no special characters,
+   * which is why it passed. These assert the actual characters.
+   */
+  const codeIn = (html: string) => /<code[^>]*>([\s\S]*?)<\/code>/.exec(html.slice(html.indexOf('<body>')))?.[1] ?? '';
+
+  it('escapes code exactly once', () => {
+    const html = renderDocument({ title: 'T', markdown: '```ts\nif (a < b && c > d) { f("x"); }\n```' });
+    const code = codeIn(html);
+    // Single escaping: what a browser renders back as the original source.
+    expect(code).toBe('if (a &lt; b &amp;&amp; c &gt; d) { f(&quot;x&quot;); }\n');
+    // The double-escaped form is what the bug produced.
+    expect(code).not.toContain('&amp;lt;');
+    expect(code).not.toContain('&amp;amp;');
+  });
+
+  it('escapes inline code exactly once', () => {
+    const html = renderDocument({ title: 'T', markdown: 'Compare `a < b` please.' });
+    expect(codeIn(html)).toBe('a &lt; b');
+  });
+
+  it('renders blockquotes, which were previously impossible', () => {
+    const html = renderDocument({ title: 'T', markdown: '> Note: revenue grew 12%.' });
+    const body = html.slice(html.indexOf('<body>'));
+    expect(body).toContain('<blockquote>');
+    expect(body).toContain('Note: revenue grew 12%.');
+  });
+
+  it('renders every theme\'s blockquote CSS against real blockquote markup', () => {
+    // The rule existed in all four themes and could never match anything.
+    for (const theme of themeIds()) {
+      const html = renderDocument({ title: 'T', markdown: '> quoted', theme });
+      expect(html.slice(html.indexOf('<body>')), theme).toContain('<blockquote>');
+      expect(html, theme).toContain('blockquote {');
+    }
+  });
+
+  it('still renders ordinary markdown structures', () => {
+    const html = renderDocument({
+      title: 'T',
+      markdown: '## Section\n\n### Subsection\n\n- item\n\n1. first\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n**bold** _em_\n',
+    });
+    const body = html.slice(html.indexOf('<body>'));
+    // ## → h2, ### → h3; the document title is the only h1.
+    for (const tag of ['<h2', '<h3', '<ul>', '<ol>', '<table>', '<strong>', '<em>']) {
+      expect(body, tag).toContain(tag);
+    }
+  });
+
+  it('keeps raw HTML inert now that pre-escaping is gone', () => {
+    // The security property must survive the fix — this is the whole reason the
+    // escaping moved to the renderer rather than being dropped.
+    for (const payload of [
+      '<script>alert(1)</script>',
+      '<img src=x onerror=alert(1)>',
+      '<iframe src="https://evil.example"></iframe>',
+      'text <b>with</b> inline tags',
+    ]) {
+      const body = renderDocument({ title: 'T', markdown: payload }).slice(
+        renderDocument({ title: 'T', markdown: payload }).indexOf('<body>'),
+      );
+      for (const tag of ['<script', '<iframe', '<img', '<b>']) {
+        expect(body.toLowerCase(), `${payload} → raw ${tag}`).not.toContain(tag);
+      }
+      expect(body).toContain('&lt;');
+    }
+  });
+});

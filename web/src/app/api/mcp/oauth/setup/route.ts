@@ -1,6 +1,6 @@
 export const runtime = 'nodejs';
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { discoverMcpOAuth, registerOAuthClient } from '@/lib/mcp/oauth-discovery';
@@ -10,7 +10,6 @@ import { getMcpClientsPath } from '@/lib/app-paths';
 import { APP_NAME } from '@/config/branding';
 
 const QUARRY_DIR = join(homedir(), '.claude');
-const MCP_CLIENTS_FILE = getMcpClientsPath();
 
 interface StoredClient {
   clientId: string;
@@ -26,7 +25,7 @@ interface StoredClient {
 
 async function readClients(): Promise<Record<string, StoredClient>> {
   try {
-    const content = await readFile(MCP_CLIENTS_FILE, 'utf-8');
+    const content = await readFile(getMcpClientsPath(), 'utf-8');
     return JSON.parse(content);
   } catch {
     return {};
@@ -35,7 +34,12 @@ async function readClients(): Promise<Record<string, StoredClient>> {
 
 async function writeClients(clients: Record<string, StoredClient>) {
   await mkdir(QUARRY_DIR, { recursive: true });
-  await writeFile(MCP_CLIENTS_FILE, JSON.stringify(clients, null, 2), 'utf-8');
+  // Owner-only: this file holds OAuth client secrets. It was writing 0644 while
+  // every sibling path (provision, exchange, uninstall) used 0600 — so the same
+  // secret was AES-encrypted in one place and world-readable here.
+  const clientsPath = getMcpClientsPath();
+  await writeFile(clientsPath, JSON.stringify(clients, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  await chmod(clientsPath, 0o600).catch(() => {});
 }
 
 interface PluginMcpHint {

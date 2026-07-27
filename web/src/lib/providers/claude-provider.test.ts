@@ -454,10 +454,9 @@ describe('canUseTool interception', () => {
     resolveConnectorRequest('rc-1', { connected: true });
     const result = await pending;
     expect(result.behavior).toBe('allow');
-    expect(result.updatedInput).toMatchObject({
-      connectorId: 'atlassian',
-      __connectorResult: { connected: true },
-    });
+    // Deliberately NOT asserting updatedInput: the outcome cannot travel that way
+    // through an MCP tool's schema. Delivery is asserted against the real handler
+    // in "RequestConnector — the OUTCOME reaches the model".
   });
 
   it('resumes with the decline reason so the agent can adapt', async () => {
@@ -469,18 +468,19 @@ describe('canUseTool interception', () => {
     const pending = canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'rc-2' });
     await vi.waitFor(() => expect(resolveConnectorRequest('rc-2', { connected: false, reason: 'declined' })).toBe(true));
 
-    const result = await pending;
-    expect(result.updatedInput?.__connectorResult).toEqual({ connected: false, reason: 'declined' });
+    // The call completes rather than hanging; the reason reaching the model is
+    // asserted at the handler.
+    expect((await pending).behavior).toBe('allow');
   });
 
   it('does not pause on a request with no connector id', async () => {
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       onConnectorRequest: async () => {},
     });
-    // Nothing will ever resolve this, so failing closed is the only safe answer.
+    // Nothing would ever resolve this, so it must return immediately rather than
+    // blocking for the five-minute timeout.
     const result = await canUseTool('RequestConnector', { reason: 'r' }, { toolUseID: 'rc-3' });
     expect(result.behavior).toBe('allow');
-    expect(result.updatedInput?.__connectorResult).toMatchObject({ connected: false });
   });
 
   it('passes RequestConnector straight through when the surface cannot show a card', async () => {
@@ -488,7 +488,6 @@ describe('canUseTool interception', () => {
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {});
     const result = await canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'rc-4' });
     expect(result.behavior).toBe('allow');
-    expect(result.updatedInput).toBeUndefined();
   });
 
   it('queues CronCreate calls and emits deduplicated cron_create events after the stream', async () => {
@@ -924,5 +923,102 @@ describe('DocumentCreate — the print hop (P4.2b)', () => {
       setTimeout(() => resolveDocumentPrint(toolUseId, { ok: false }), 0);
     });
     await handler({ title: 'R', markdown: 'x' });
+  });
+});
+
+describe('RequestConnector — the OUTCOME reaches the model (regression)', () => {
+  /**
+   * The bug this exists for: the outcome was passed via `updatedInput`, but
+   * RequestConnector is an in-process MCP tool, so the SDK zod-parses its args and
+   * strips unknown keys before the handler runs. Every connect — including a
+   * successful one — reported "Not connected", and the success branch was
+   * unreachable.
+   *
+   * The old tests asserted `canUseTool`'s returned `updatedInput` and never
+   * invoked the handler, so they passed against completely broken behaviour. These
+   * drive canUseTool AND then the real handler, which is the only arrangement that
+   * can catch it.
+   */
+  async function capture() {
+    await run(new ClaudeProvider(), { onConnectorRequest: async () => {} });
+    const call = queryMock.mock.calls.at(-1)![0] as {
+      options: {
+        canUseTool: CanUseTool;
+        mcpServers: Record<string, { tools?: Array<{ name: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }>;
+      };
+    };
+    const tool = call.options.mcpServers.aime.tools!.find((t) => t.name === 'RequestConnector')!;
+    return { canUseTool: call.options.canUseTool, handler: tool.handler };
+  }
+
+  beforeEach(() => scriptChunks([]));
+
+  it('reports success after the user connects', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool, handler } = await capture();
+
+    const pending = canUseTool(
+      'mcp__aime__RequestConnector',
+      { connectorId: 'atlassian', reason: 'to file the ticket' },
+      { toolUseID: 'rc-ok' },
+    );
+    await vi.waitFor(() => expect(resolveConnectorRequest('rc-ok', { connected: true })).toBe(true));
+    await pending;
+
+    // The handler receives only what the schema allows — connectorId and reason.
+    const result = await handler({ connectorId: 'atlassian', reason: 'to file the ticket' });
+    expect(result.content[0].text).toContain('now connected');
+  });
+
+  it('tells the agent the tools are NOT usable this turn', async () => {
+    // mcpServers is fixed when the request starts, so the newly connected server
+    // does not exist in this session. "Retry the step" would aim at a missing tool.
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool, handler } = await capture();
+
+    const pending = canUseTool('RequestConnector', { connectorId: 'miro', reason: 'r' }, { toolUseID: 'rc-turn' });
+    await vi.waitFor(() => expect(resolveConnectorRequest('rc-turn', { connected: true })).toBe(true));
+    await pending;
+
+    const text = (await handler({ connectorId: 'miro', reason: 'r' })).content[0].text;
+    expect(text).toMatch(/NOT available in this/i);
+    expect(text).toMatch(/send another message/i);
+    expect(text).not.toMatch(/retry the step/i);
+  });
+
+  it('reports the decline reason', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool, handler } = await capture();
+
+    const pending = canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'rc-no' });
+    await vi.waitFor(() =>
+      expect(resolveConnectorRequest('rc-no', { connected: false, reason: 'user declined' })).toBe(true),
+    );
+    await pending;
+
+    const text = (await handler({ connectorId: 'github', reason: 'r' })).content[0].text;
+    expect(text).toContain('Not connected');
+    expect(text).toContain('user declined');
+  });
+
+  it('reports not-connected when no request was ever made for that id', async () => {
+    const { handler } = await capture();
+    const text = (await handler({ connectorId: 'never-asked', reason: 'r' })).content[0].text;
+    expect(text).toContain('Not connected');
+  });
+
+  it('keeps outcomes per connector, so two requests do not cross', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool, handler } = await capture();
+
+    const a = canUseTool('RequestConnector', { connectorId: 'figma', reason: 'r' }, { toolUseID: 'rc-a' });
+    await vi.waitFor(() => expect(resolveConnectorRequest('rc-a', { connected: true })).toBe(true));
+    await a;
+    const b = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r' }, { toolUseID: 'rc-b' });
+    await vi.waitFor(() => expect(resolveConnectorRequest('rc-b', { connected: false, reason: 'nope' })).toBe(true));
+    await b;
+
+    expect((await handler({ connectorId: 'figma', reason: 'r' })).content[0].text).toContain('now connected');
+    expect((await handler({ connectorId: 'slack', reason: 'r' })).content[0].text).toContain('nope');
   });
 });
