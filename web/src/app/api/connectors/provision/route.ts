@@ -80,7 +80,7 @@ export async function POST(request: Request) {
       config.mcpServers = {};
     }
 
-    config.mcpServers[decision.serverKey] = {
+    const fullEntry: Record<string, unknown> = {
       ...decision.entry,
       _meta: {
         connectorId: body.connectorId,
@@ -92,6 +92,20 @@ export async function POST(request: Request) {
         ...decision.meta,
       },
     };
+
+    // Secrets go to the encrypted store; the config keeps structure and a visible
+    // placeholder (DR-14). With no master key the store is inert and the entry is
+    // written as-is, which is the documented fallback rather than a silent one.
+    const { extractSecrets, isEmptySecrets } = await import('@/lib/mcp/secrets');
+    const { getMcpSecretStore } = await import('@/lib/mcp/secret-store');
+    const store = getMcpSecretStore();
+    if (store.mode === 'encrypted') {
+      const { entry: publicEntry, secrets } = extractSecrets(fullEntry);
+      if (!isEmptySecrets(secrets)) await store.set(decision.serverKey, secrets);
+      config.mcpServers[decision.serverKey] = publicEntry;
+    } else {
+      config.mcpServers[decision.serverKey] = fullEntry;
+    }
 
     await writeMcpConfig(config);
 
@@ -125,6 +139,14 @@ export async function DELETE(request: Request) {
     // Legacy pre-rename prefixes
     delete config.mcpServers[`nib-connector-${connectorId}`];
     delete config.mcpServers[`nib-mcp-${connectorId}`];
+
+    // Remove the stored secrets as well, or disconnecting would leave live
+    // credentials behind in the encrypted store.
+    const { getMcpSecretStore } = await import('@/lib/mcp/secret-store');
+    const store = getMcpSecretStore();
+    for (const prefix of ['aime-connector-', 'aime-mcp-', 'nib-connector-', 'nib-mcp-']) {
+      await store.delete(`${prefix}${connectorId}`).catch(() => {});
+    }
 
     await writeMcpConfig(config);
 

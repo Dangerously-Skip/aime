@@ -130,13 +130,65 @@ async function refreshTokenIfNeeded(
         metaObj.expiresAt = data.expires_in ? Date.now() + data.expires_in * 1000 : undefined;
         if (data.refresh_token) metaObj.refreshToken = data.refresh_token;
       }
-      await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
-      console.log(`[Token Refresh] Updated ${label} token in MCP config`);
+
+      // Lift the freshly written credentials back out before the file is saved
+      // (DR-14). Without this, refresh would quietly re-introduce plaintext
+      // tokens into a config that had already been migrated.
+      const { extractSecrets, isEmptySecrets } = await import('./secrets');
+      const { getMcpSecretStore } = await import('./secret-store');
+      const store = getMcpSecretStore();
+      if (store.mode === 'encrypted') {
+        const existing = (await store.get(serverKey)) ?? {};
+        const { entry: publicEntry, secrets } = extractSecrets(entry);
+        if (!isEmptySecrets(secrets)) {
+          // Merge so a rotation that omits a new refresh_token keeps the old one.
+          await store.set(serverKey, { ...existing, ...secrets });
+        }
+        config.mcpServers![serverKey] = publicEntry as Record<string, unknown>;
+      }
+
+      await writeFile(configPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      console.log(`[Token Refresh] Updated ${label} token`);
     }
     return newAccessToken;
   } catch (err) {
     console.error(`[Token Refresh] Error refreshing ${label}:`, err);
     return null;
+  }
+}
+
+/**
+ * Move secrets out of an existing config into the encrypted store (DR-14).
+ *
+ * Runs on every load but writes only when something was actually inline, so it is
+ * a no-op after the first pass. A no-key process leaves the file untouched —
+ * lifting secrets out with nowhere to put them would destroy them.
+ */
+async function migrateInlineSecrets(
+  config: { mcpServers?: Record<string, Record<string, unknown>> },
+  configPath: string,
+): Promise<void> {
+  if (!config.mcpServers) return;
+  const { getMcpSecretStore } = await import('./secret-store');
+  const store = getMcpSecretStore();
+  if (store.mode !== 'encrypted') return;
+
+  const { extractSecrets, isEmptySecrets } = await import('./secrets');
+  let changed = false;
+  for (const [key, entry] of Object.entries(config.mcpServers)) {
+    const { entry: publicEntry, secrets } = extractSecrets(entry);
+    if (isEmptySecrets(secrets)) continue;
+    const existing = (await store.get(key)) ?? {};
+    await store.set(key, { ...existing, ...secrets });
+    config.mcpServers[key] = publicEntry as Record<string, unknown>;
+    changed = true;
+  }
+
+  if (changed) {
+    const { writeFile, chmod } = await import('fs/promises');
+    await writeFile(configPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    await chmod(configPath, 0o600).catch(() => {});
+    console.log('[MCP] Migrated connector secrets into the encrypted store');
   }
 }
 
@@ -152,9 +204,22 @@ export async function loadProvisionedMcpServers(): Promise<Record<string, unknow
     const raw = await readFile(appConfigPath, 'utf-8');
     const config = JSON.parse(raw) as { mcpServers?: Record<string, Record<string, unknown>> };
     if (config.mcpServers) {
+      // Migrate any entry still holding secrets inline, then refresh (DR-14).
+      // Migration runs first so refresh works from the store on the same pass.
+      await migrateInlineSecrets(config, appConfigPath);
+
+      const { getMcpSecretStore } = await import('./secret-store');
+      const store = getMcpSecretStore();
       for (const [key, entry] of Object.entries(config.mcpServers)) {
         const meta = entry._meta as Record<string, unknown> | undefined;
-        if (meta) await refreshTokenIfNeeded(key, meta, appConfigPath);
+        if (!meta) continue;
+        // The refresh token now lives in the store, so hand refresh a view of
+        // _meta that includes it rather than the bare on-disk metadata.
+        const stored = await store.get(key);
+        const effectiveMeta = stored
+          ? { ...meta, ...(stored.refreshToken ? { refreshToken: stored.refreshToken } : {}), ...(stored.clientSecret ? { clientSecret: stored.clientSecret } : {}) }
+          : meta;
+        await refreshTokenIfNeeded(key, effectiveMeta, appConfigPath);
       }
     }
   } catch {
@@ -165,7 +230,22 @@ export async function loadProvisionedMcpServers(): Promise<Record<string, unknow
     readMcpConfigFile(join(claudeDir, '.mcp.json')),
     readMcpConfigFile(appConfigPath),
   ]);
-  const merged = { ...claudeCodeServers, ...appServers };
+  // Re-unite each entry with its secrets (DR-14). They live in the encrypted
+  // store; the config holds only structure plus a visible placeholder. When there
+  // is no master key the store is inert and the secrets were never lifted out, so
+  // the entries already carry them.
+  const { getMcpSecretStore } = await import('./secret-store');
+  const { injectSecrets } = await import('./secrets');
+  const secretStore = getMcpSecretStore();
+  const withSecrets: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(appServers)) {
+    withSecrets[key] = injectSecrets(
+      entry as Record<string, unknown>,
+      await secretStore.get(key),
+    );
+  }
+
+  const merged = { ...claudeCodeServers, ...withSecrets };
 
   // Push the C3 classifier down to the SDK as a per-tool permission policy
   // (P3.6b), so a newly added remote server's destructive tools are always_ask

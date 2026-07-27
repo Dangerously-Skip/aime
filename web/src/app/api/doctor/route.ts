@@ -119,6 +119,25 @@ async function checkProvisionedMcpServers(): Promise<HealthCheck> {
   }
 }
 
+/**
+ * Whether connector tokens are encrypted at rest (DR-14). Reported so the
+ * plaintext fallback is never silent — pretending to encrypt would be worse than
+ * not encrypting.
+ */
+async function checkSecretStorage(): Promise<HealthCheck> {
+  const { describeSecretStorage } = await import('@/lib/mcp/secret-store');
+  const { mode, detail } = describeSecretStorage();
+  return {
+    id: 'secret_storage',
+    label: 'Connector token storage',
+    status: mode === 'encrypted' ? 'ok' : 'warn',
+    message: detail,
+    ...(mode === 'encrypted'
+      ? {}
+      : { fix: 'Run the packaged app so the OS keychain can supply a master key.' }),
+  };
+}
+
 async function checkSkillFiles(): Promise<HealthCheck> {
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
   if (!fs.existsSync(skillsDir)) {
@@ -150,15 +169,24 @@ async function checkSkillFiles(): Promise<HealthCheck> {
 export async function GET(_req: NextRequest) {
   const checks: HealthCheck[] = [];
 
-  const [modelAccessCheck, claudeDirCheck, mcpCheck, skillsCheck] = await Promise.all([
-    checkModelAccess(),
-    checkClaudeDir(),
-    checkProvisionedMcpServers(),
-    checkSkillFiles(),
-  ]);
+  const [modelAccessCheck, claudeDirCheck, mcpCheck, secretStorageCheck, skillsCheck] =
+    await Promise.all([
+      checkModelAccess(),
+      checkClaudeDir(),
+      checkProvisionedMcpServers(),
+      checkSecretStorage(),
+      checkSkillFiles(),
+    ]);
   const identityChecks = await checkIdentityFiles();
 
-  checks.push(modelAccessCheck, claudeDirCheck, ...identityChecks, mcpCheck, skillsCheck);
+  checks.push(
+    modelAccessCheck,
+    claudeDirCheck,
+    ...identityChecks,
+    mcpCheck,
+    secretStorageCheck,
+    skillsCheck,
+  );
 
   const hasError = checks.some((c) => c.status === 'error');
   const hasWarn = checks.some((c) => c.status === 'warn');
