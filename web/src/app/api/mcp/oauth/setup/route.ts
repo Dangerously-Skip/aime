@@ -4,6 +4,8 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { discoverMcpOAuth, registerOAuthClient } from '@/lib/mcp/oauth-discovery';
+import { sanitizePluginName } from '@/lib/mcp/install-guard';
+import { validateMcpServerUrl } from '@/lib/mcp/url-guard';
 import { getMcpClientsPath } from '@/lib/app-paths';
 import { APP_NAME } from '@/config/branding';
 
@@ -97,9 +99,25 @@ function getMcpHintFromPlugin(pluginDir: string): Promise<PluginMcpHint | null> 
  */
 export async function POST(request: Request) {
   try {
-    const { mcpName, mcpUrl: directUrl, fallbackClientId: directClientId, fallbackClientIdEnv } = await request.json();
-    if (!mcpName) {
-      return Response.json({ error: 'Missing mcpName' }, { status: 400 });
+    const { mcpName: rawName, mcpUrl: directUrl, fallbackClientId: directClientId, fallbackClientIdEnv } = await request.json();
+
+    // mcpName becomes a directory lookup under ~/.claude/plugins and the key for
+    // both the clients file and the provisioned MCP entry, so it gets the same
+    // single-safe-segment allowlist the install route uses (P3.6).
+    const safeName = sanitizePluginName(rawName);
+    if (!safeName.ok) {
+      return Response.json({ error: safeName.error }, { status: 400 });
+    }
+    const mcpName = safeName.value;
+
+    // A caller-supplied URL is fetched server-side during discovery and then
+    // persisted for the agent to connect to — unvalidated, that is an SSRF
+    // primitive (see url-guard).
+    if (directUrl !== undefined && directUrl !== null && directUrl !== '') {
+      const verdict = validateMcpServerUrl(directUrl);
+      if (!verdict.ok) {
+        return Response.json({ error: verdict.message }, { status: 400 });
+      }
     }
 
     // Resolve fallback client ID: direct param > env var > plugin manifest hint.

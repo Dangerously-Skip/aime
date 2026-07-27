@@ -6,8 +6,8 @@ import { homedir } from 'os';
 import { getMcpConfigPath, getMcpClientsPath } from '@/lib/app-paths';
 
 const QUARRY_DIR = join(homedir(), '.claude');
-const MCP_CONFIG_FILE = getMcpConfigPath();
-const MCP_CLIENTS_FILE = getMcpClientsPath();
+// Resolved per request, not at module load: Electron sets its paths after the
+// server module is imported, so a captured constant can point at the wrong file.
 
 /**
  * POST /api/mcp/oauth/exchange
@@ -16,6 +16,7 @@ const MCP_CLIENTS_FILE = getMcpClientsPath();
  * into the MCP config file with auto-refresh metadata.
  */
 export async function POST(request: Request) {
+  const mcpConfigFile = getMcpConfigPath();
   try {
     const { mcpName, code, codeVerifier, redirectUri, tokenEndpoint, clientId } =
       await request.json();
@@ -24,31 +25,38 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // The authorization code and (for confidential clients) our client secret
-    // are POSTed to this URL, so it must at minimum be https — plaintext would
-    // put them on the wire. It cannot be origin-pinned the way registry
-    // connectors are, because a DCR server's token endpoint is discovered per
-    // RFC 8414 and often sits on a different host than the MCP URL. P3.4 should
-    // persist the discovered endpoint at registration time and stop trusting
-    // the client for it at all.
-    if (typeof tokenEndpoint !== 'string' || !URL.canParse(tokenEndpoint)) {
-      return Response.json({ error: 'Invalid tokenEndpoint' }, { status: 400 });
-    }
-    if (new URL(tokenEndpoint).protocol !== 'https:') {
-      return Response.json({ error: 'tokenEndpoint must be https' }, { status: 400 });
-    }
-
-    // Load client credentials (for client_secret if it's a confidential client)
+    // Load what we recorded at registration time.
     let clientSecret: string | undefined;
     let mcpUrl: string | undefined;
+    let storedTokenEndpoint: string | undefined;
     try {
-      const clients = JSON.parse(await readFile(MCP_CLIENTS_FILE, 'utf-8'));
+      const clients = JSON.parse(await readFile(getMcpClientsPath(), 'utf-8'));
       clientSecret = clients[mcpName]?.clientSecret;
       mcpUrl = clients[mcpName]?.mcpUrl;
+      storedTokenEndpoint = clients[mcpName]?.tokenEndpoint;
     } catch {}
 
     if (!mcpUrl) {
       return Response.json({ error: 'No MCP URL registered for this plugin' }, { status: 400 });
+    }
+
+    // The authorization code and (for confidential clients) our client secret are
+    // POSTed to this endpoint, so a caller-controlled value would be an
+    // exfiltration channel. Prefer the endpoint we DISCOVERED and stored at
+    // registration (RFC 8414) over anything the client sends — that closes the
+    // gap P3.1 could only narrow to "must be https", because the stored value
+    // came from the server's own metadata document rather than the request.
+    const effectiveTokenEndpoint: string = storedTokenEndpoint ?? tokenEndpoint;
+    if (typeof effectiveTokenEndpoint !== 'string' || !URL.canParse(effectiveTokenEndpoint)) {
+      return Response.json({ error: 'Invalid tokenEndpoint' }, { status: 400 });
+    }
+    if (new URL(effectiveTokenEndpoint).protocol !== 'https:') {
+      return Response.json({ error: 'tokenEndpoint must be https' }, { status: 400 });
+    }
+    if (storedTokenEndpoint && tokenEndpoint !== storedTokenEndpoint) {
+      console.warn(
+        `[MCP OAuth Exchange] Ignoring client tokenEndpoint for ${mcpName}; using the discovered one`,
+      );
     }
 
     // Exchange the code for tokens
@@ -63,7 +71,7 @@ export async function POST(request: Request) {
       tokenParams.set('client_secret', clientSecret);
     }
 
-    const tokenRes = await fetch(tokenEndpoint, {
+    const tokenRes = await fetch(effectiveTokenEndpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -92,7 +100,7 @@ export async function POST(request: Request) {
 
     let mcpConfig: { mcpServers?: Record<string, Record<string, unknown>> } = {};
     try {
-      mcpConfig = JSON.parse(await readFile(MCP_CONFIG_FILE, 'utf-8'));
+      mcpConfig = JSON.parse(await readFile(mcpConfigFile, 'utf-8'));
     } catch {}
 
     if (!mcpConfig.mcpServers) mcpConfig.mcpServers = {};
@@ -118,8 +126,9 @@ export async function POST(request: Request) {
         // Used by loadProvisionedMcpServers() for auto-refresh
         ...(tokenData.refresh_token && { refreshToken: tokenData.refresh_token }),
         ...(expiresAt && { expiresAt }),
-        // Needed for refresh: tokenEndpoint + clientId
-        tokenEndpoint,
+        // Needed for refresh: tokenEndpoint + clientId. The discovered value, so a
+        // later refresh does not inherit a caller-supplied endpoint.
+        tokenEndpoint: effectiveTokenEndpoint,
         clientId,
         ...(clientSecret && { clientSecret }),
       },
@@ -128,11 +137,11 @@ export async function POST(request: Request) {
     // Owner-only: this file now holds a live access token, a refresh token and
     // possibly a client secret. `mode` only applies on create, so chmod covers
     // configs written before this was enforced.
-    await writeFile(MCP_CONFIG_FILE, JSON.stringify(mcpConfig, null, 2), {
+    await writeFile(mcpConfigFile, JSON.stringify(mcpConfig, null, 2), {
       encoding: 'utf-8',
       mode: 0o600,
     });
-    await chmod(MCP_CONFIG_FILE, 0o600).catch(() => {});
+    await chmod(mcpConfigFile, 0o600).catch(() => {});
     console.log(`[MCP OAuth Exchange] Provisioned ${mcpName} at ${serverKey}`);
 
     return Response.json({
