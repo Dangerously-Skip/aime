@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useCoworkStore } from './cowork-store';
+import { notifyStreamAborted } from '@/lib/stream-registry';
 import { cleanStaleStreamingFlags, type Message, type ToolCall } from './chat-store';
 
 let seq = 0;
@@ -122,6 +123,33 @@ describe('streaming lifecycle', () => {
     const [msg] = store().messages['c'];
     expect(msg.isStreaming).toBe(false);
     expect(msg.isLoading).toBe(false);
+  });
+
+  // Stop, conversation switch and the 120s stuck-tool cancel all abort the
+  // fetch, so cowork's onDone/onError never run — and onDone is the wrong hook
+  // for a Stop anyway (it can auto-continue the turn).
+  it('an aborted stream finalises the turn', () => {
+    store().addMessage('c', message({ isStreaming: true, isLoading: true }));
+    store().addToolCall('c', toolCall({ status: 'running' }));
+    store().startStreaming('c');
+
+    notifyStreamAborted({ chatId: 'c', reason: 'user' });
+
+    const [msg] = store().messages['c'];
+    expect(msg.isStreaming).toBe(false);
+    expect(msg.isLoading).toBe(false);
+    expect(msg.toolCalls![0].status).toBe('complete');
+    expect(store().isStreaming).toBe(false);
+  });
+
+  it('an aborted stream in another surface leaves cowork alone', () => {
+    store().addMessage('c', message({ isStreaming: true, isLoading: true }));
+    store().startStreaming('c');
+
+    notifyStreamAborted({ chatId: 'a-chat-conversation', reason: 'timeout' });
+
+    expect(store().messages['c'][0].isStreaming).toBe(true);
+    expect(store().isStreaming).toBe(true);
   });
 });
 

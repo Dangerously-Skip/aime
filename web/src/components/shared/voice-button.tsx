@@ -8,6 +8,18 @@ interface VoiceButtonProps {
   onTranscript: (text: string) => void;
 }
 
+/**
+ * The mic in a composer.
+ *
+ * It reads the app's single recording session rather than owning one, so it
+ * shows "Stop recording" for a take the global hotkey started and can stop it —
+ * previously the two were separate recorders and this button sat there saying
+ * "Voice input" while the mic was live.
+ *
+ * `onTranscript` is registered as this surface's destination for finished text;
+ * whether a given transcript arrives here depends on which surface is on screen
+ * (see lib/voice/voice-scope), not on which control started the recording.
+ */
 export function VoiceButton({ onTranscript }: VoiceButtonProps) {
   const { isListening, isTranscribing, isSupported, startListening, stopListening } =
     useVoiceInput({ onTranscript });

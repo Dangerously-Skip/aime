@@ -82,7 +82,10 @@ describe('classifyProvisioned', () => {
     const reports = classifyProvisioned(
       {
         'aime-connector-github': { _meta: { connectorId: 'github' } },
-        'aime-mcp-atlassian': { _meta: { mcpName: 'atlassian', expiresAt: at(-1), refreshToken: 'rt' } },
+        'aime-mcp-atlassian': {
+          url: 'https://mcp.atlassian.com/v1/mcp',
+          _meta: { mcpName: 'atlassian', expiresAt: at(-1), refreshToken: 'rt' },
+        },
         'aime-connector-google-personal': { _meta: { connectorId: 'google-personal', expiresAt: at(-1) } },
         // user's own server — not ours to judge
         'playwright': { _meta: {} },
@@ -109,6 +112,58 @@ describe('classifyProvisioned', () => {
   it('handles an empty or absent config', () => {
     expect(classifyProvisioned({}, NOW)).toEqual([]);
     expect(classifyProvisioned(undefined, NOW)).toEqual([]);
+  });
+});
+
+describe('classifyProvisioned — a name is not proof of identity', () => {
+  it('REGRESSION: an impostor aime-mcp-github does not surface as the id `github`', () => {
+    // Same origin check `connectedIdsFromServerKeys` applies: a server the user
+    // added from https://mcp.github.evil.com/mcp lands at `aime-mcp-github`, and
+    // reporting it under `github` puts an attacker's host into the id space that
+    // staleConnectorIds() feeds to the chat prompt.
+    const reports = classifyProvisioned(
+      {
+        'aime-mcp-github': {
+          url: 'https://mcp.github.evil.com/mcp',
+          _meta: { mcpName: 'github', expiresAt: at(-1) },
+        },
+      },
+      NOW,
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0].id).not.toBe('github');
+    // still visible, so the user's own server keeps its health verdict
+    expect(reports[0].serverKey).toBe('aime-mcp-github');
+    expect(reports[0].health.needsReconnect).toBe(true);
+  });
+
+  it('accepts a built-in name backed by that service own origin', () => {
+    const reports = classifyProvisioned(
+      { 'aime-mcp-miro': { url: 'https://mcp.miro.com/', _meta: { mcpName: 'miro' } } },
+      NOW,
+    );
+    expect(reports[0].id).toBe('miro');
+  });
+
+  it('fails closed when a -mcp- entry claiming a built-in has no url to prove it', () => {
+    const reports = classifyProvisioned({ 'aime-mcp-figma': { _meta: { mcpName: 'figma' } } }, NOW);
+    expect(reports[0].id).not.toBe('figma');
+  });
+
+  it('keeps a name that claims nothing exactly as it is', () => {
+    const reports = classifyProvisioned(
+      { 'aime-mcp-acmecorp': { url: 'https://mcp.acmecorp.io/mcp' } },
+      NOW,
+    );
+    expect(reports[0].id).toBe('acmecorp');
+  });
+
+  it('still trusts _meta.connectorId, which only the provision route writes', () => {
+    const reports = classifyProvisioned(
+      { 'aime-mcp-github': { url: 'https://evil.example/mcp', _meta: { connectorId: 'github' } } },
+      NOW,
+    );
+    expect(reports[0].id).toBe('github');
   });
 });
 

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { readObservedTools, recordObservedTools } from './observed-tools';
+import { readObservedTools, recordObservedTools, forgetObservedTools } from './observed-tools';
 
 /** Real files: the point of this module is persistence across sessions. */
 let dir: string;
@@ -79,5 +79,60 @@ describe('recordObservedTools / readObservedTools', () => {
   it('ignores a JSON array at the top level', async () => {
     await writeFile(toolsPath(), JSON.stringify(['a', 'b']));
     expect(await readObservedTools(configPath)).toEqual({});
+  });
+});
+
+describe('forgetObservedTools', () => {
+  it('removes what a disconnected server taught us and leaves the rest', async () => {
+    // Uninstall used to delete the plugin, the config entry and the OAuth client
+    // record and leave this file alone, so the next server to derive the same name
+    // (deriveServerName keys off the host, so two hosts can) inherited a policy
+    // built from a different server's tools.
+    await recordObservedTools(configPath, {
+      'aime-mcp-acme': ['delete_everything'],
+      'aime-mcp-other': ['read'],
+    });
+
+    expect(await forgetObservedTools(configPath, ['aime-mcp-acme'])).toBe(true);
+    expect(await readObservedTools(configPath)).toEqual({ 'aime-mcp-other': ['read'] });
+  });
+
+  it('removes several keys at once, for every prefix a connector can hold', async () => {
+    await recordObservedTools(configPath, {
+      'aime-mcp-acme': ['a'],
+      'aime-connector-acme': ['b'],
+      'nib-mcp-acme': ['c'],
+      keep: ['d'],
+    });
+    await forgetObservedTools(configPath, [
+      'aime-mcp-acme',
+      'aime-connector-acme',
+      'nib-mcp-acme',
+      'nib-connector-acme',
+    ]);
+    expect(await readObservedTools(configPath)).toEqual({ keep: ['d'] });
+  });
+
+  it('reports that nothing changed rather than rewriting the file', async () => {
+    await recordObservedTools(configPath, { s: ['a'] });
+    const before = await stat(toolsPath());
+    expect(await forgetObservedTools(configPath, ['not-there'])).toBe(false);
+    expect((await stat(toolsPath())).mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it('is a no-op when nothing was ever recorded', async () => {
+    expect(await forgetObservedTools(configPath, ['anything'])).toBe(false);
+    await expect(readFile(toolsPath(), 'utf-8')).rejects.toThrow();
+  });
+
+  it('ignores an empty server list', async () => {
+    await recordObservedTools(configPath, { s: ['a'] });
+    expect(await forgetObservedTools(configPath, [])).toBe(false);
+    expect(await readObservedTools(configPath)).toEqual({ s: ['a'] });
+  });
+
+  it('never throws on a corrupt file — disconnecting must still succeed', async () => {
+    await writeFile(toolsPath(), 'not json');
+    await expect(forgetObservedTools(configPath, ['s'])).resolves.toBe(false);
   });
 });

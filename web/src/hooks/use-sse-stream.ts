@@ -1,8 +1,33 @@
 'use client';
 
 import { useCallback, useRef } from 'react';
-import { streamRegistry } from '@/lib/stream-registry';
+import {
+  streamRegistry,
+  StreamAbortCause,
+  abortReasonOf,
+  notifyStreamAborted,
+} from '@/lib/stream-registry';
 import { useConnectorStore } from '@/stores/connector-store';
+
+/** Abort the stream if no data arrives for this long (the server heartbeats ~30s). */
+const INACTIVITY_TIMEOUT_MS = 120_000;
+
+/** What the user is told when a stream dies of inactivity. */
+const INACTIVITY_TIMEOUT_MESSAGE =
+  'Request timed out — the agent may be stuck. Try again.';
+
+/**
+ * Cross-realm-safe AbortError check. `error instanceof DOMException` is false
+ * whenever the error crosses a realm boundary (jsdom vs node in tests, and any
+ * cross-context fetch at runtime), so match on the name instead.
+ */
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { name?: unknown }).name === 'AbortError'
+  );
+}
 
 /**
  * Strip store messages to a lightweight {role, content} array suitable for the history param.
@@ -16,7 +41,6 @@ export function stripMessagesForHistory(
     .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface SSEEvent {
   type: string;
   [key: string]: unknown;
@@ -35,12 +59,20 @@ export interface StreamUsage {
 
 interface UseSSEStreamOptions {
   onChunk: (event: SSEEvent) => void;
+  /**
+   * A stream failed, including an inactivity timeout. NOT called for a
+   * deliberate stop — the surfaces append this to the transcript as
+   * `**Error:** …`, and a user who pressed Stop must not be shown an error.
+   */
   onError: (error: Error) => void;
+  /** The stream finished on its own. Aborted streams never reach this. */
   onDone: () => void;
   onUsage?: (usage: StreamUsage) => void;
   chatId: string;                            // needed for registry key
-  setIsStreaming: (v: boolean) => void;      // from store
-  setStreamError: (e: string | null) => void; // from store
+  /** Store-level flag: gates the composer, NOT the per-message spinner. */
+  setIsStreaming: (v: boolean) => void;
+  /** Write-only store field — see the note on `ChatState.streamError`. */
+  setStreamError: (e: string | null) => void;
 }
 
 interface UseSSEStreamReturn {
@@ -136,7 +168,9 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
   const abort = useCallback(() => {
     const id = activeChatIdRef.current ?? optionsRef.current.chatId;
-    streamRegistry.abort(id);
+    // Deliberate: the user asked for this. The running stream reads the cause
+    // off its signal and finalises the turn without reporting an error.
+    streamRegistry.abort(id, 'user');
     activeChatIdRef.current = null;
     optionsRef.current.setIsStreaming(false);
   }, []);
@@ -179,10 +213,10 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
       }
     ): Promise<void> => {
-      // Abort any existing stream for this chatId
-      if (streamRegistry.has(chatId)) {
-        streamRegistry.abort(chatId);
-      }
+      // A new turn replaces any stream still running for this chat. Tagged
+      // 'superseded' so the outgoing stream knows the chat's UI state now
+      // belongs to this one and leaves it alone.
+      streamRegistry.abort(chatId, 'superseded');
 
       const controller = new AbortController();
       streamRegistry.set(chatId, controller);
@@ -261,11 +295,13 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         // silence means the connection or agent is truly stuck.
         // Timer ref is hoisted to hook-level useRef to avoid Turbopack TDZ
         // issues where the bundler breaks closure scoping of block-scoped vars.
-        const INACTIVITY_TIMEOUT_MS = 120_000;
         const startInactivityTimer = () => {
           inactivityTimerRef.current = setTimeout(() => {
-            console.warn('[SSE] Inactivity timeout — no data for 120s, aborting');
-            controller.abort();
+            console.warn(
+              `[SSE] Inactivity timeout — no data for ${INACTIVITY_TIMEOUT_MS / 1000}s, aborting`
+            );
+            // Tag the cause: this is a failure to report, not a user cancel.
+            controller.abort(new StreamAbortCause('timeout'));
           }, INACTIVITY_TIMEOUT_MS);
         };
         const resetInactivityTimer = () => {
@@ -320,21 +356,52 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
         pinnedOnDone();
       } catch (error: unknown) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          // If this was an inactivity timeout (not user-initiated), show an error
-          if (!streamRegistry.has(chatId)) {
-            pinnedSetStreamError('Request timed out — the agent may be stuck. Try again.');
-          }
+        // WHY the stream ended comes from the explicit cause on our own signal.
+        // An AbortError with no cause (an abort raised outside this hook) is
+        // treated as deliberate — the safe reading, since it invents no error.
+        const abortReason =
+          abortReasonOf(controller.signal) ?? (isAbortError(error) ? 'user' : null);
+
+        if (abortReason === 'superseded') {
+          // The replacement stream owns this chat's messages now. Finalising
+          // here would clear the spinner off a turn that is still running.
           return;
         }
+
+        if (abortReason === 'timeout') {
+          // A timeout is a failure the user has to see, so it goes down the
+          // same path as any other stream error. notifyStreamAborted first so
+          // message state is finalised even if a surface's onError resolves a
+          // different chatId than the one this stream was started for.
+          notifyStreamAborted({ chatId, reason: 'timeout' });
+          pinnedSetStreamError(INACTIVITY_TIMEOUT_MESSAGE);
+          pinnedOnError(new Error(INACTIVITY_TIMEOUT_MESSAGE));
+          return;
+        }
+
+        if (abortReason === 'user') {
+          // Deliberate stop: Stop button, conversation switch, stuck-tool
+          // cancel. Finalise the turn silently — no error text for something
+          // the user asked for, and NOT via onDone, whose surface handlers
+          // treat the turn as successfully completed (cowork's even
+          // auto-continues, which would resurrect the stream just killed).
+          notifyStreamAborted({ chatId, reason: 'user' });
+          return;
+        }
+
         const err = error instanceof Error ? error : new Error(String(error));
         pinnedSetStreamError(err.message);
         pinnedOnError(err);
       } finally {
-        if (inactivityTimerRef.current !== undefined) clearTimeout(inactivityTimerRef.current);
-        streamRegistry.clear(chatId);
-        activeChatIdRef.current = null;
-        pinnedSetIsStreaming(false);
+        // Only the stream that still owns the chat may reset shared state: a
+        // superseded stream settling late must not delete the live stream's
+        // registry entry, drop its inactivity timer, or flip its flag off.
+        if (streamRegistry.release(chatId, controller)) {
+          if (inactivityTimerRef.current !== undefined) clearTimeout(inactivityTimerRef.current);
+          // Only surrender the abort target if it is still pointing at us.
+          if (activeChatIdRef.current === chatId) activeChatIdRef.current = null;
+          pinnedSetIsStreaming(false);
+        }
       }
     },
     []

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { connectConnector, type ConnectDeps } from './connect';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { connectConnector, verifyAwsCredentials, type ConnectDeps } from './connect';
 import { CONNECTOR_MAP } from './registry';
 
 /**
@@ -189,11 +189,14 @@ describe('connectConnector — oauth2', () => {
 });
 
 describe('connectConnector — ambient and deferred auth', () => {
-  it('authenticates aws via the ambient credential flow and injects no token', async () => {
+  it('authenticates aws via the ambient credential flow and injects no real token', async () => {
     const runAwsAuth = vi.fn(async () => {});
     const r = await connectConnector(CONNECTOR_MAP.aws, deps({ runAwsAuth }));
     expect(runAwsAuth).toHaveBeenCalled();
-    expect(r).toEqual({ status: 'connected', token: '' });
+    // A non-secret sentinel, not ''. The client store's isAuthenticated() requires
+    // a truthy token, so '' left `authenticated: true` disagreeing with the very
+    // accessor every badge reads. The provision route refuses to inject it.
+    expect(r).toEqual({ status: 'connected', token: 'aws-iam' });
   });
 
   it('surfaces an aws auth failure rather than reporting success', async () => {
@@ -206,6 +209,77 @@ describe('connectConnector — ambient and deferred auth', () => {
       }),
     );
     expect(r).toMatchObject({ status: 'error', message: 'SSO session expired' });
+  });
+
+  it('REGRESSION: refuses to claim connected when no credential check was supplied', async () => {
+    // aws_iam was the ONLY optional dep whose absence was silently ignored: every
+    // sibling returns 'unsupported'. Neither ConnectorRequestCard nor onboarding
+    // passes runAwsAuth, so clicking Connect opened no window, checked nothing,
+    // and told the paused agent turn `connected: true`.
+    const r = await connectConnector(CONNECTOR_MAP.aws, deps());
+    expect(r.status).toBe('unsupported');
+    expect(r.message).toMatch(/AWS credentials/i);
+  });
+
+  it('never reports connected without the check actually having run', async () => {
+    const runAwsAuth = vi.fn(async () => {});
+    await connectConnector(CONNECTOR_MAP.aws, deps());
+    expect(runAwsAuth).not.toHaveBeenCalled();
+  });
+
+  it('reports a deferred-auth connector with a sentinel too, not an empty token', async () => {
+    const selfAuth = {
+      ...CONNECTOR_MAP.aws,
+      auth: { type: 'mcp-self-auth' as const, hint: 'sign in later' },
+    };
+    const r = await connectConnector(selfAuth, deps());
+    expect(r).toMatchObject({
+      status: 'connected',
+      token: 'mcp-self-auth',
+      deferredAuthHint: 'sign in later',
+    });
+  });
+});
+
+describe('verifyAwsCredentials — the real check the orchestrator depends on', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('resolves when the credential probe succeeds', async () => {
+    globalThis.fetch = vi.fn(async () => Response.json({ ok: true })) as typeof fetch;
+    await expect(verifyAwsCredentials()).resolves.toBeUndefined();
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/connectors/aws/auth', { method: 'POST' });
+  });
+
+  it('THROWS the actionable message when there are no usable credentials', async () => {
+    // `aws sts get-caller-identity` failing is the whole point: without this the
+    // orchestrator would report "connected" for a machine with no AWS access.
+    globalThis.fetch = vi.fn(async () =>
+      Response.json({ error: 'No valid AWS credentials found. Run `aws sso login`.' }, { status: 500 }),
+    ) as typeof fetch;
+    await expect(verifyAwsCredentials()).rejects.toThrow(/aws sso login/);
+  });
+
+  it('still throws when the error body is unreadable', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('boom', { status: 502 })) as typeof fetch;
+    await expect(verifyAwsCredentials()).rejects.toThrow(/AWS credentials/i);
+  });
+
+  it('makes the aws path connect end-to-end when wired in', async () => {
+    globalThis.fetch = vi.fn(async () => Response.json({ ok: true })) as typeof fetch;
+    const r = await connectConnector(CONNECTOR_MAP.aws, deps({ runAwsAuth: verifyAwsCredentials }));
+    expect(r).toEqual({ status: 'connected', token: 'aws-iam' });
+  });
+
+  it('turns a failed check into an error outcome, not a connection', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      Response.json({ error: 'No valid AWS credentials found.' }, { status: 500 }),
+    ) as typeof fetch;
+    const r = await connectConnector(CONNECTOR_MAP.aws, deps({ runAwsAuth: verifyAwsCredentials }));
+    expect(r.status).toBe('error');
+    expect(r.message).toMatch(/No valid AWS credentials/);
   });
 });
 

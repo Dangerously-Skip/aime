@@ -48,7 +48,6 @@ import { useRunRecorder } from "@/hooks/use-run-recorder";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
-import { usePushToTalk } from "@/hooks/use-push-to-talk";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 
 /** This surface's routing capability — a fixed property of the surface. */
@@ -161,8 +160,6 @@ export function ChatSurface() {
     (s) => s.setActiveConversation
   );
   const displayName = useSettingsStore((s) => s.displayName);
-  const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
-  const activeSurface = useAppStore((s) => s.activeSurface);
   const printDocument = useDocumentPrint();
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
@@ -619,24 +616,14 @@ export function ChatSurface() {
     handleSubmit(lastUserMsg.content);
   }, [chatId, isStreaming, handleSubmit]);
 
+  // Both the mic button and the global dictation hotkey land here. The hotkey is
+  // owned once by the app shell (see app-shell / use-push-to-talk) and delivers
+  // to whichever surface is on screen, so this surface does not gate on being
+  // active — the comparison that used to live here is the router's job now.
   const handleVoiceTranscript = useCallback(
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
     []
   );
-
-
-  // Push-to-talk: the global hotkey routes to the same handler as the mic button,
-  // so dictation works without focusing the window (P4.1).
-  //
-  // Gated on the ACTIVE surface. Every surface stays mounted (see surface-router),
-  // so without this both chat and cowork held the shortcut: one press started two
-  // MediaRecorders, transcribed twice against the shared Whisper pipeline, and
-  // appended the text to both composers — and either one's cleanup released the OS
-  // shortcut for the other.
-  usePushToTalk({
-    onTranscript: handleVoiceTranscript,
-    enabled: pushToTalkEnabled && activeSurface === 'chat',
-  });
 
   // Merged suggestions: slash takes priority
   const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0

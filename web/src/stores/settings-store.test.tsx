@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
-import { useSettingsStore, DEFAULT_HEARTBEAT_MODES } from './settings-store';
+import {
+  useSettingsStore,
+  DEFAULT_HEARTBEAT_MODES,
+  INITIAL_SETTINGS,
+  PERSISTED_SETTINGS_KEYS,
+  EPHEMERAL_SETTINGS_KEYS,
+} from './settings-store';
+import { openStorageGate } from '@/lib/gated-storage';
 
 const KEY = 'aime:settings';
 const LEGACY_KEY = 'nibcowork:settings';
@@ -181,5 +188,67 @@ describe('v10 — push-to-talk settings', () => {
     const result = useSettingsStore.getState().setPushToTalkAccelerator('V');
     expect(result.ok).toBe(false);
     expect(useSettingsStore.getState().pushToTalkAccelerator).toBe('Control+Shift+J');
+  });
+});
+
+/**
+ * DEFECT 3 regression: the v10 version bump existed for two fields that could
+ * not survive a reload, because `partialize` never listed them. A migration for
+ * a field that is never written is a no-op dressed as a feature.
+ *
+ * These tests run the REAL gated storage and the REAL rehydrate pipeline; a
+ * mocked storage would have agreed with the broken code.
+ */
+describe('persistence — what actually survives a reload', () => {
+  // Writes are gated until StoreHydration opens them in the app; open the gate
+  // so this block exercises the write half too, not only reads.
+  beforeAll(() => openStorageGate());
+
+  /** What the current session has committed to storage. */
+  function persistedState(): Record<string, unknown> {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) throw new Error('nothing was persisted');
+    return (JSON.parse(raw) as { state: Record<string, unknown> }).state;
+  }
+
+  it('persists push-to-talk enablement and the chosen accelerator', () => {
+    const s = () => useSettingsStore.getState();
+    s().setPushToTalkEnabled(true);
+    expect(s().setPushToTalkAccelerator('Ctrl+Alt+K').ok).toBe(true);
+
+    expect(persistedState()).toMatchObject({
+      pushToTalkEnabled: true,
+      pushToTalkAccelerator: 'Control+Alt+K',
+    });
+  });
+
+  it('round-trips them through a fresh session', async () => {
+    const s = () => useSettingsStore.getState();
+    s().setPushToTalkEnabled(true);
+    s().setPushToTalkAccelerator('Ctrl+Alt+K');
+    const fromSessionOne = localStorage.getItem(KEY)!;
+
+    // Session 2: a fresh store, reading what session 1 wrote.
+    s().resetAll();
+    expect(s().pushToTalkEnabled).toBe(false);
+    localStorage.setItem(KEY, fromSessionOne);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(s().pushToTalkEnabled).toBe(true);
+    expect(s().pushToTalkAccelerator).toBe('Control+Alt+K');
+  });
+
+  it('every settings field is either persisted or explicitly declared ephemeral', () => {
+    // The guard against this class of bug recurring: adding a field to state
+    // (and a migration for it) without deciding whether it persists now fails
+    // here, instead of silently resetting on every reload.
+    const declared = new Set<string>([...PERSISTED_SETTINGS_KEYS, ...EPHEMERAL_SETTINGS_KEYS]);
+    const undeclared = Object.keys(INITIAL_SETTINGS).filter((key) => !declared.has(key));
+    expect(undeclared).toEqual([]);
+  });
+
+  it('writes exactly the declared persisted keys — no more, no less', () => {
+    useSettingsStore.getState().setFullName('Persisted Person');
+    expect(Object.keys(persistedState()).sort()).toEqual([...PERSISTED_SETTINGS_KEYS].sort());
   });
 });

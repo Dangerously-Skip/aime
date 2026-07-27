@@ -9,6 +9,16 @@ import { waitForConnector } from '../pending-connectors';
 import { waitForDocumentPrint } from '../pending-documents';
 import { expandCanvasTemplate } from '../canvas/templates';
 import { describeThemes as describeThemesForPrompt } from '../documents/themes';
+import {
+  buildToolGate,
+  buildApprovalQuestion,
+  readApprovalAnswer,
+  readToolDecisions,
+  recordToolDecision,
+  type ApprovalDecision,
+  type ToolDecisions,
+  type ToolGate,
+} from '../mcp/tool-policy';
 
 /** Canvas tool name — intercepted to push A2UI documents to client. */
 const CANVAS_TOOL_NAME = 'canvas';
@@ -644,6 +654,48 @@ export class ClaudeProvider extends BaseProvider {
     const LOOP_WARN_THRESHOLD = 3;
     const LOOP_DENY_THRESHOLD = 5;
 
+    /**
+     * Tool-use ids currently blocked on a human answer.
+     *
+     * The per-tool watchdog below measures wall-clock time since a tool_use block
+     * arrived, and while the SDK loop is paused inside canUseTool waiting for a
+     * person, that measurement means nothing — no tool can finish. Without this,
+     * an approval prompt (or an AskUserQuestion, or an OAuth round trip via
+     * RequestConnector, which budgets 300s) was aborted after 90s: a gate nobody
+     * who steps away from their desk could answer.
+     */
+    const awaitingHuman = new Set<string>();
+
+    /** Tools the user declined during this request — see the gate below. */
+    const deniedThisTurn = new Set<string>();
+
+    /**
+     * Per-tool MCP approval gate (P3.6b, made enforceable).
+     *
+     * Scoped to exactly the remote servers this request mounted — the in-process
+     * `aime` server and `web-search` are added to queryOptions further down and
+     * are deliberately NOT in here, so the app's own tools keep working without
+     * prompts. Built-ins (Write/Edit/Bash) are unchanged too: on an interactive
+     * surface the human is watching the stream and holds abort.
+     *
+     * Reads the user's standing decisions once per request. Skipped entirely when
+     * no remote server is mounted, which is the common case and costs no I/O.
+     */
+    const remoteMcpServers = mcpServers as Record<string, unknown>;
+    let toolGate: ToolGate | null = null;
+    let mcpConfigPath: string | null = null;
+    if (Object.keys(remoteMcpServers).length > 0) {
+      let decisions: ToolDecisions = {};
+      try {
+        const { getMcpConfigPath } = await import('../app-paths');
+        mcpConfigPath = getMcpConfigPath();
+        decisions = await readToolDecisions(mcpConfigPath);
+      } catch {
+        // No readable decision store ⇒ nothing is pre-approved, so the gate asks.
+      }
+      toolGate = buildToolGate(remoteMcpServers, decisions);
+    }
+
     // Detect if this is a background/scheduled execution (not interactive)
     const isBackgroundRun = chatId.startsWith('standing-order-') || chatId.startsWith('subagent_') || chatId.startsWith('hb-') || chatId.startsWith('widget-');
 
@@ -669,6 +721,22 @@ export class ClaudeProvider extends BaseProvider {
       input: Record<string, unknown>,
       { toolUseID }: { toolUseID: string },
     ) => {
+      // ── Per-tool MCP policy: the user's standing denial ─────────────────
+      // First, and in every mode. A tool the user blocked must not run because
+      // the run happens to be unattended, or because a later branch allows it.
+      const mcpTool = toolGate?.resolve(toolName) ?? null;
+      const mcpPolicy = mcpTool?.policy ?? null;
+      if (mcpPolicy === 'always_deny' && mcpTool) {
+        console.warn('[Governance] Blocked a tool the user denied:', toolName);
+        return {
+          behavior: 'deny' as const,
+          message:
+            `${mcpTool.tool} was not run: it is blocked for ${mcpTool.server}. Do not try ` +
+            `it again. Tell the user it is blocked, and that they can change that in ` +
+            `Customize → Connectors. Continue with whatever else you can do.`,
+        };
+      }
+
       // ── Governance: approval policy for unattended runs ─────────────────
       if (approvalPolicy !== 'never') {
         const { evaluateApproval } = await import('../runs/approval');
@@ -677,6 +745,89 @@ export class ClaudeProvider extends BaseProvider {
           console.warn('[Governance] Paused', outcome.class, 'tool in unattended run:', toolName, 'chatId:', chatId);
           return { behavior: 'deny' as const, message: outcome.reason! };
         }
+      } else if (mcpPolicy === 'always_ask' && mcpTool) {
+        // ── The interactive gate ─────────────────────────────────────────
+        // approvalPolicy 'never' means "the human is watching", which is only an
+        // approval mechanism if they are actually asked. bypassPermissions turns
+        // off the SDK's own prompt, so this is where the ask has to happen.
+
+        // A "no" holds for the rest of the turn. Loop detection can't help here
+        // (a denial returns before the window is touched), so without this an
+        // agent — or a prompt injection steering one — could re-call the tool and
+        // put the same card in front of the user until they clicked Allow.
+        if (deniedThisTurn.has(toolName)) {
+          return {
+            behavior: 'deny' as const,
+            message:
+              `${mcpTool.tool} was already declined in this turn and will not be asked ` +
+              `again. Stop trying it and finish what you can without it.`,
+          };
+        }
+
+        const handlesMoney = toolGate!.handlesMoney(mcpTool.server);
+        if (!onInputRequest) {
+          // Nothing can render a prompt on this surface, so there is no way to
+          // ask — which under always_ask means the tool does not run. Allowing
+          // it is what shipped before, and is what this exists to stop.
+          console.warn('[Governance] Cannot ask for approval on this surface; denying', toolName);
+          return {
+            behavior: 'deny' as const,
+            message:
+              `${mcpTool.tool} needs the user's approval and this session cannot ask them ` +
+              `(no interactive client attached). It was not run. Say what you would have ` +
+              `done and let them run it from a chat window.`,
+          };
+        }
+
+        const question = buildApprovalQuestion({
+          server: mcpTool.server,
+          tool: mcpTool.tool,
+          handlesMoney,
+        });
+        awaitingHuman.add(toolUseID);
+        let decision: ApprovalDecision;
+        let unanswered = false;
+        try {
+          await onInputRequest(toolUseID, [question]);
+          decision = readApprovalAnswer(await waitForAnswer(toolUseID), question.question, {
+            handlesMoney,
+          });
+        } catch {
+          // waitForAnswer rejects on its own timeout. No answer is not an answer,
+          // but it is worth telling apart from a decline: the user was away, not
+          // opposed, so the agent should say the prompt expired.
+          decision = 'deny';
+          unanswered = true;
+        } finally {
+          awaitingHuman.delete(toolUseID);
+        }
+        console.log('[Governance] Approval for', toolName, '→', decision);
+
+        if (decision === 'always-allow' || decision === 'always-deny') {
+          const remembered = decision === 'always-allow' ? 'always_allow' : 'always_deny';
+          toolGate!.remember(mcpTool.server, mcpTool.tool, remembered);
+          if (mcpConfigPath) {
+            // Fire-and-forget: a decision that fails to persist still governed
+            // this call, and the user is simply asked again next time.
+            void recordToolDecision(mcpConfigPath, mcpTool.server, mcpTool.tool, remembered);
+          }
+        }
+
+        if (decision === 'deny' || decision === 'always-deny') {
+          deniedThisTurn.add(toolName);
+          return {
+            behavior: 'deny' as const,
+            message: unanswered
+              ? `${mcpTool.tool} was not run: the approval prompt timed out because the user ` +
+                `did not respond. Do not retry it. Tell them it is still waiting on them and ` +
+                `carry on with the rest.`
+              : `${mcpTool.tool} was not run — the user did not approve it` +
+                `${decision === 'always-deny' ? ' and has blocked it from now on' : ''}. ` +
+                `Do not retry it. Tell them which part of the task you could not do, and ` +
+                `carry on with the rest.`,
+          };
+        }
+        // allow-once / always-allow fall through, so loop detection still applies.
       }
       // ── Loop detection ─────────────────────────────────────────────────
       const inputHash = JSON.stringify(input);
@@ -724,12 +875,17 @@ export class ClaudeProvider extends BaseProvider {
 
       // ── AskUserQuestion ────────────────────────────────────────────────
       if (toolName === 'AskUserQuestion' && onInputRequest) {
-        await onInputRequest(toolUseID, input.questions);
-        const answers = await waitForAnswer(toolUseID);
-        return {
-          behavior: 'allow' as const,
-          updatedInput: { ...input, answers },
-        };
+        awaitingHuman.add(toolUseID);
+        try {
+          await onInputRequest(toolUseID, input.questions);
+          const answers = await waitForAnswer(toolUseID);
+          return {
+            behavior: 'allow' as const,
+            updatedInput: { ...input, answers },
+          };
+        } finally {
+          awaitingHuman.delete(toolUseID);
+        }
       }
 
       // ── Spawn agent ────────────────────────────────────────────────────
@@ -781,8 +937,16 @@ export class ClaudeProvider extends BaseProvider {
           return { behavior: 'allow' as const };
         }
         console.log('[Claude] Connector requested:', connectorId, 'id:', toolUseID);
-        await onConnectorRequest(toolUseID, connectorId, reason);
-        const result = await waitForConnector(toolUseID);
+        // OAuth + sign-in + possibly 2FA. waitForConnector budgets 300s, so the
+        // 90s tool watchdog must not count this as a hang.
+        awaitingHuman.add(toolUseID);
+        let result;
+        try {
+          await onConnectorRequest(toolUseID, connectorId, reason);
+          result = await waitForConnector(toolUseID);
+        } finally {
+          awaitingHuman.delete(toolUseID);
+        }
         // Recorded where the handler can actually read it. Passing it through
         // updatedInput looked correct and was silently discarded by the schema.
         connectorOutcomes.set(connectorId, result);
@@ -945,6 +1109,15 @@ export class ClaudeProvider extends BaseProvider {
     const watchdogTrip: Array<{ name: string; elapsedMs: number }> = [];
     const watchdog = setInterval(() => {
       const now = Date.now();
+      // While the turn is blocked on a human decision the SDK loop is paused, so
+      // NO active tool can finish and elapsed wall-clock time stops being
+      // evidence of a hang. Roll their clocks forward rather than accusing them:
+      // this is what stops the 90s deadline from aborting an approval prompt, an
+      // AskUserQuestion or an OAuth round trip that a user takes a minute over.
+      if (awaitingHuman.size > 0) {
+        for (const info of activeTools.values()) info.startedAt = now;
+        return;
+      }
       for (const [id, info] of activeTools) {
         const elapsed = now - info.startedAt;
         if (elapsed > TOOL_DEADLINE_MS) {

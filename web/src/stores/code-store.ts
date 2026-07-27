@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { onStreamAborted } from '@/lib/stream-registry';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import type { ModelOption } from '@/lib/models/client-options';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
@@ -22,6 +23,7 @@ interface CodeState {
    */
   modelRoute: ModelOption | null;
   isStreaming: boolean;
+  /** Write-only — see the note on `ChatState.streamError`. Nothing renders it. */
   streamError: string | null;
   folderByChat: Record<string, string | null>;
   permissionMode: PermissionMode;
@@ -234,3 +236,14 @@ export const useCodeStore = create<CodeStore>()(
     }
   )
 );
+
+/**
+ * Finalise a turn whose stream was aborted — see the matching subscription in
+ * chat-store.
+ */
+onStreamAborted(({ chatId }) => {
+  const state = useCodeStore.getState();
+  if (!state.messages[chatId]?.length) return;
+  state.completeRunningTools(chatId);
+  state.stopStreaming(chatId);
+});

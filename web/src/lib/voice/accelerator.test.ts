@@ -1,8 +1,10 @@
-import { describe, it, expect } from 'vitest';
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach } from 'vitest';
 import fc from 'fast-check';
 import {
   validateAccelerator,
   formatAcceleratorForDisplay,
+  detectPlatform,
   DEFAULT_PUSH_TO_TALK,
 } from './accelerator';
 
@@ -150,5 +152,80 @@ describe('formatAcceleratorForDisplay', () => {
         'CommandOrControl',
       );
     }
+  });
+});
+
+/**
+ * DEFECT 5 regression: the default platform argument was `process.platform`,
+ * which does not exist in Next's client bundle — it substitutes
+ * `process/browser.js`, an object with no `platform` key at all. So `platform`
+ * was `undefined`, `isMac` was always false, and macOS Settings advertised
+ * `Ctrl+Shift+Space` for a binding that is really ⌘⇧Space.
+ *
+ * NOT covered here: the webpack substitution itself. Note also that vitest runs
+ * in node, where `process.platform` DOES exist — so a "no explicit argument on
+ * darwin" assertion cannot fail on a darwin host under vitest even with the old
+ * code. The test that pins the actual fix is "never reads the ambient
+ * process.platform", which makes the bridge disagree with the host and checks
+ * that the bridge wins. `e2e/push-to-talk.spec.ts` then confirms the label in a
+ * real browser bundle.
+ */
+describe('detectPlatform — resolving the platform in the renderer', () => {
+  function setBridge(getPlatform: (() => string) | undefined) {
+    (window as unknown as { electronAPI?: { getPlatform?: () => string } }).electronAPI =
+      getPlatform ? { getPlatform } : undefined;
+  }
+  function setNavigator(values: { platform?: string; userAgent?: string }) {
+    for (const [key, value] of Object.entries(values)) {
+      Object.defineProperty(navigator, key, { configurable: true, value });
+    }
+  }
+
+  afterEach(() => {
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    setNavigator({ platform: '', userAgent: 'test-agent' });
+  });
+
+  it('prefers the Electron bridge, which reports the real process platform', () => {
+    setBridge(() => 'darwin');
+    expect(detectPlatform()).toBe('darwin');
+  });
+
+  it('formats mac glyphs with NO explicit argument on darwin', () => {
+    // The whole defect in one assertion: the default has to work on its own,
+    // because that is how every call site uses it.
+    setBridge(() => 'darwin');
+    expect(formatAcceleratorForDisplay(DEFAULT_PUSH_TO_TALK)).toBe('⌘⇧Space');
+    expect(formatAcceleratorForDisplay('Control+Alt+K')).toBe('⌃⌥K');
+  });
+
+  it('falls back to the user agent in a plain browser', () => {
+    setBridge(undefined);
+    setNavigator({ platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh)' });
+    expect(detectPlatform()).toBe('darwin');
+    expect(formatAcceleratorForDisplay(DEFAULT_PUSH_TO_TALK)).toBe('⌘⇧Space');
+
+    setNavigator({ platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0)' });
+    expect(detectPlatform()).toBe('win32');
+    expect(formatAcceleratorForDisplay(DEFAULT_PUSH_TO_TALK)).toBe('Ctrl+Shift+Space');
+  });
+
+  it('never reads the ambient process.platform', () => {
+    // Proof the source is the renderer: the bridge disagrees with the host and
+    // the bridge wins — both for detection and for the label the user reads.
+    const notTheHostPlatform = process.platform === 'darwin' ? 'win32' : 'darwin';
+    setBridge(() => notTheHostPlatform);
+    expect(detectPlatform()).toBe(notTheHostPlatform);
+    expect(formatAcceleratorForDisplay(DEFAULT_PUSH_TO_TALK)).toBe(
+      notTheHostPlatform === 'darwin' ? '⌘⇧Space' : 'Ctrl+Shift+Space',
+    );
+  });
+
+  it('degrades to non-mac labels when the platform is unknowable', () => {
+    setBridge(undefined);
+    setNavigator({ platform: '', userAgent: '' });
+    expect(detectPlatform()).toBe('');
+    // Words, not glyphs — wrong-but-legible beats a ⌘ shown to a Windows user.
+    expect(formatAcceleratorForDisplay(DEFAULT_PUSH_TO_TALK)).toBe('Ctrl+Shift+Space');
   });
 });

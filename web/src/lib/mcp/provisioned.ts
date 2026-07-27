@@ -272,20 +272,42 @@ export async function loadProvisionedMcpServers(): Promise<Record<string, unknow
 
   const merged = { ...claudeCodeServers, ...withSecrets };
 
-  // Push the C3 classifier down to the SDK as a per-tool permission policy
-  // (P3.6b), so a newly added remote server's destructive tools are always_ask
-  // instead of running unprompted in an interactive session. Only http/sse
-  // configs accept this — stdio cannot, an SDK constraint.
+  // Declare the C3 classifier to the SDK as a per-tool permission policy
+  // (P3.6b), together with any standing decisions the user has made. Only
+  // http/sse configs accept this — stdio cannot, an SDK constraint.
+  //
+  // This is ADVISORY: on chat and cowork the SDK runs with bypassPermissions, so
+  // `permission_policy` gates nothing. The enforceable gate is buildToolGate +
+  // canUseTool in claude-provider.ts, which covers stdio and unobserved servers
+  // as well. The log below therefore says where the gate is, and no longer
+  // claims that N tools "require approval" — under bypassPermissions, none of
+  // them required anything, so that line certified protection that was absent.
   const { readObservedTools } = await import('./observed-tools');
-  const { applyToolPolicies } = await import('./tool-policy');
+  const { applyToolPolicies, readToolDecisions, decisionOptions } = await import('./tool-policy');
   const observed = await readObservedTools(appConfigPath);
-  const { servers, applied, unsupported } = applyToolPolicies(merged, observed);
+  // The production source for BuildPolicyOptions.approved/denied. Without it
+  // `optsFor` defaulted to `() => ({})` and always_deny was unreachable.
+  const decisions = await readToolDecisions(appConfigPath);
+  const { servers, applied, unsupported } = applyToolPolicies(
+    merged,
+    observed,
+    decisionOptions(decisions),
+  );
   if (applied.length > 0) {
-    const gated = applied.reduce((n, a) => n + a.asked, 0);
-    console.log(`[MCP] Tool policy: ${gated} tool(s) require approval across ${applied.length} server(s)`);
+    const sum = (pick: (a: ApplyRow) => number) => applied.reduce((n, a) => n + pick(a), 0);
+    console.log(
+      `[MCP] Tool policy declared for ${applied.length} server(s): ` +
+        `${sum((a) => a.asked)} ask, ${sum((a) => a.allowed)} allow, ${sum((a) => a.denied)} block. ` +
+        `Enforced in canUseTool (the SDK's own permission_policy is inert under bypassPermissions).`,
+    );
   }
   if (unsupported.length > 0) {
-    console.log(`[MCP] No SDK tool policy possible for stdio server(s): ${unsupported.join(', ')}`);
+    console.log(
+      `[MCP] stdio server(s) take no SDK tool policy: ${unsupported.join(', ')} — ` +
+        `governed by canUseTool only.`,
+    );
   }
   return servers;
 }
+
+type ApplyRow = import('./tool-policy').ApplyResult['applied'][number];

@@ -10,6 +10,11 @@ export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): Surface
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__web-search__web_search',
     ],
+    // Turns the SDK's OWN permission machinery off, which includes the per-server
+    // `tools: [{permission_policy}]` list that tool-policy.ts declares. So an
+    // `always_ask` connector tool is gated here by canUseTool in
+    // claude-provider.ts, not by the SDK. Do not add a permission feature that
+    // relies on permissionMode while this says bypassPermissions.
     permissionMode: 'bypassPermissions',
     systemPrompt: `You are ${APP_NAME}, an AI assistant.
 

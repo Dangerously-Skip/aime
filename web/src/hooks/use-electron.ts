@@ -28,8 +28,26 @@ interface ElectronAPI {
   onMinuteTick?: (callback: (ts: number) => void) => (() => void) | void;
   /** Push-to-talk (P4.1): main owns the global shortcut and emits on press. */
   onVoiceToggle?: (callback: () => void) => (() => void) | void;
-  /** Ask main to hold or release the shortcut. Resolves to the accelerator held, or null. */
-  setPushToTalkEnabled?: (enabled: boolean, accelerator?: string) => Promise<string | null>;
+  /**
+   * Ask main to hold or release a global shortcut.
+   *
+   * `ownerId` identifies the caller so main can refuse a release from anyone who
+   * is not the current owner — the guard against a component that registered
+   * nothing unregistering the shortcut someone else is holding.
+   *
+   * The union tolerates the pre-1.7.2 reply shape (the accelerator string, or
+   * null for "failed, reason unknown"), because main-web.js is plain JS and is
+   * not covered by the type checker.
+   */
+  setPushToTalkEnabled?: (
+    enabled: boolean,
+    accelerator?: string,
+    ownerId?: string,
+  ) => Promise<
+    | { ok: boolean; accelerator: string | null; reason?: string; message?: string }
+    | string
+    | null
+  >;
   /** Print a rendered document to PDF via Electron main (P4.2b). */
   printDocumentPdf?: (args: {
     html: string;

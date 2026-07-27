@@ -40,8 +40,55 @@ describe('classifyConnectability — the one-click paths', () => {
     expect(c.detail).toMatch(/published app registration/);
   });
 
-  it('rates ambient AWS credentials instant', () => {
-    expect(effortOf('aws')).toBe('instant');
+  it('rates ambient AWS credentials instant WHEN the environment actually has some', () => {
+    expect(effortOf('aws', { AWS_PROFILE: 'default' })).toBe('instant');
+    expect(effortOf('aws', { AWS_ACCESS_KEY_ID: 'AKIA…', AWS_SECRET_ACCESS_KEY: 's' })).toBe(
+      'instant',
+    );
+  });
+});
+
+describe('classifyConnectability — aws_iam depends on credentials that may not exist', () => {
+  it('REGRESSION: does not advertise AWS as one click on a machine with no credentials', () => {
+    // The old verdict was an unconditional instant/available, so the chat prompt
+    // listed AWS under "one click away" on a laptop that had never run
+    // `aws configure`. Clicking then produced a credential error the prompt had
+    // just promised would not happen.
+    const c = classifyConnectability(CONNECTOR_MAP.aws, CLEAN);
+    expect(c.effort).not.toBe('instant');
+    expect(c.available).toBe(false);
+    // and it says what to actually do about it
+    expect(c.detail).toMatch(/aws sso login|aws configure/);
+  });
+
+  it('accepts every standard way ambient credentials arrive', () => {
+    for (const env of [
+      { AWS_PROFILE: 'dev' },
+      { AWS_ACCESS_KEY_ID: 'AKIA', AWS_SECRET_ACCESS_KEY: 'x' },
+      { AWS_SESSION_TOKEN: 'tok', AWS_ACCESS_KEY_ID: 'AKIA', AWS_SECRET_ACCESS_KEY: 'x' },
+      { AWS_ROLE_ARN: 'arn:…', AWS_WEB_IDENTITY_TOKEN_FILE: '/var/run/tok' },
+      { AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/creds' },
+      { AWS_SHARED_CREDENTIALS_FILE: '/home/u/.aws/credentials' },
+      { AWS_CONFIG_FILE: '/home/u/.aws/config' },
+    ]) {
+      const c = classifyConnectability(CONNECTOR_MAP.aws, env);
+      expect(c, JSON.stringify(env)).toMatchObject({ effort: 'instant', available: true });
+    }
+  });
+
+  it('ignores an empty AWS variable — set-but-blank is not a credential', () => {
+    expect(classifyConnectability(CONNECTOR_MAP.aws, { AWS_PROFILE: '' }).available).toBe(false);
+  });
+
+  it('leaks no credential values into the verdict', () => {
+    const json = JSON.stringify(
+      classifyConnectability(CONNECTOR_MAP.aws, {
+        AWS_ACCESS_KEY_ID: 'AKIASECRET',
+        AWS_SECRET_ACCESS_KEY: 'SECRETVALUE',
+      }),
+    );
+    expect(json).not.toContain('AKIASECRET');
+    expect(json).not.toContain('SECRETVALUE');
   });
 });
 

@@ -152,7 +152,7 @@ interface SettingsActions {
 
 export type SettingsStore = SettingsState & SettingsActions;
 
-const initialState: SettingsState = {
+export const INITIAL_SETTINGS: SettingsState = {
   fullName: '',
   displayName: '',
   workFunction: '',
@@ -190,10 +190,77 @@ const initialState: SettingsState = {
   tierModels: {},
 };
 
+/**
+ * Exactly which fields reach storage.
+ *
+ * This is a list rather than an inline object literal because `partialize` was
+ * where push-to-talk quietly died: the fields existed in state, had a version
+ * bump and a migration written for them, and were never written to disk — so
+ * every reload silently reset them. A migration for a field that is never
+ * persisted is a no-op dressed as a feature.
+ *
+ * With the list exported, `settings-store.test.tsx` can assert that every field
+ * in `INITIAL_SETTINGS` appears either here or in `EPHEMERAL_SETTINGS_KEYS`, so
+ * adding a field without deciding whether it persists fails a test instead of
+ * shipping.
+ */
+export const PERSISTED_SETTINGS_KEYS = [
+  'fullName',
+  'displayName',
+  'workFunction',
+  'personalPreferences',
+  'chatFont',
+  'toolAccessMode',
+  'toolProfile',
+  'pushToTalkEnabled',
+  'pushToTalkAccelerator',
+  'heartbeatEnabled',
+  'heartbeatIntervalMinutes',
+  'heartbeatModes',
+  'loopDetectionThreshold',
+  'sessionResetMode',
+  'sessionResetTime',
+  'sessionIdleMinutes',
+  'coworkInstructions',
+  'codeWorktreeLocation',
+  'codeBranchPrefix',
+  'recentFolders',
+  'trustedFolders',
+  'githubToken',
+  'githubUser',
+  'anthropicApiKey',
+  'autoExtractMemories',
+  'blockDangerousCommands',
+  'blockNetworkCommands',
+  'restrictToProjectFolder',
+  'disableBashTool',
+  'onboardingComplete',
+  'onboardingSkippedAt',
+  'teamId',
+  'devHourlyRate',
+  'surfaceTiers',
+  'tierModels',
+] as const satisfies readonly (keyof SettingsState)[];
+
+/**
+ * Fields that are deliberately NOT persisted. Empty today; anything added here
+ * needs a reason in a comment, because "resets on every reload" has to be a
+ * decision rather than an omission.
+ */
+export const EPHEMERAL_SETTINGS_KEYS = [] as const satisfies readonly (keyof SettingsState)[];
+
+type PersistedSettingsKey = (typeof PERSISTED_SETTINGS_KEYS)[number];
+
+function pickPersisted(state: SettingsStore): Pick<SettingsState, PersistedSettingsKey> {
+  const out: Record<string, unknown> = {};
+  for (const key of PERSISTED_SETTINGS_KEYS) out[key] = state[key];
+  return out as Pick<SettingsState, PersistedSettingsKey>;
+}
+
 export const useSettingsStore = create<SettingsStore>()(
   persist(
     (set) => ({
-      ...initialState,
+      ...INITIAL_SETTINGS,
 
       setFullName: (fullName) => set({ fullName }),
       setDisplayName: (displayName) => set({ displayName }),
@@ -274,7 +341,7 @@ export const useSettingsStore = create<SettingsStore>()(
           return { tierModels: next };
         }),
 
-      resetAll: () => set(initialState),
+      resetAll: () => set(INITIAL_SETTINGS),
     }),
     {
       name: 'aime:settings',
@@ -301,7 +368,7 @@ export const useSettingsStore = create<SettingsStore>()(
           state.tierModels = {};
         }
         if (version === 0) {
-          return { ...initialState, ...state } as unknown as SettingsState & SettingsActions;
+          return { ...INITIAL_SETTINGS, ...state } as unknown as SettingsState & SettingsActions;
         }
         if (version === 1) {
           return {
@@ -349,41 +416,7 @@ export const useSettingsStore = create<SettingsStore>()(
         }
         return state as unknown as SettingsState & SettingsActions;
       },
-      partialize: (state) => ({
-        fullName: state.fullName,
-        displayName: state.displayName,
-        workFunction: state.workFunction,
-        personalPreferences: state.personalPreferences,
-        chatFont: state.chatFont,
-        toolAccessMode: state.toolAccessMode,
-        toolProfile: state.toolProfile,
-        heartbeatEnabled: state.heartbeatEnabled,
-        heartbeatIntervalMinutes: state.heartbeatIntervalMinutes,
-        heartbeatModes: state.heartbeatModes,
-        loopDetectionThreshold: state.loopDetectionThreshold,
-        sessionResetMode: state.sessionResetMode,
-        sessionResetTime: state.sessionResetTime,
-        sessionIdleMinutes: state.sessionIdleMinutes,
-        coworkInstructions: state.coworkInstructions,
-        codeWorktreeLocation: state.codeWorktreeLocation,
-        codeBranchPrefix: state.codeBranchPrefix,
-        recentFolders: state.recentFolders,
-        trustedFolders: state.trustedFolders,
-        githubToken: state.githubToken,
-        githubUser: state.githubUser,
-        anthropicApiKey: state.anthropicApiKey,
-        autoExtractMemories: state.autoExtractMemories,
-        blockDangerousCommands: state.blockDangerousCommands,
-        blockNetworkCommands: state.blockNetworkCommands,
-        restrictToProjectFolder: state.restrictToProjectFolder,
-        disableBashTool: state.disableBashTool,
-        onboardingComplete: state.onboardingComplete,
-        onboardingSkippedAt: state.onboardingSkippedAt,
-        teamId: state.teamId,
-        devHourlyRate: state.devHourlyRate,
-        surfaceTiers: state.surfaceTiers,
-        tierModels: state.tierModels,
-      }),
+      partialize: pickPersisted,
     }
   )
 );

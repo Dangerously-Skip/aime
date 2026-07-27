@@ -8,6 +8,8 @@ import { useAppStore, type Surface } from "@/stores/app-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useProjectStore } from "@/stores/project-store";
 import { useElectron } from "@/hooks/use-electron";
+import { usePushToTalk } from "@/hooks/use-push-to-talk";
+import { useSettingsStore } from "@/stores/settings-store";
 import { ProjectGrid } from "@/components/projects/project-grid";
 import { ProjectDetail } from "@/components/projects/project-detail";
 import { ProjectSettings } from "@/components/projects/project-settings";
@@ -33,8 +35,22 @@ export function AppShell() {
   const addProject = useProjectStore((s) => s.addProject);
   const { isElectron } = useElectron();
 
+  const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
+  const pushToTalkAccelerator = useSettingsStore((s) => s.pushToTalkAccelerator);
+
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [creatingProject, setCreatingProject] = useState(false);
+
+  // The global dictation hotkey (P4.1), mounted ONCE for the whole app.
+  //
+  // Deliberately here and not in a surface. An OS-wide shortcut is a single
+  // exclusive registration, so the component that claims it has to be one that
+  // exists once — and this is it. Every surface is mounted at the same time
+  // (see surface-router), so when chat and cowork each held this hook, both
+  // effects ran and the inactive one released the active one's shortcut.
+  // The transcript is routed to the on-screen surface's composer by
+  // lib/voice/voice-session, via the VoiceScope the router provides.
+  usePushToTalk({ enabled: pushToTalkEnabled, accelerator: pushToTalkAccelerator });
 
   // Global keyboard shortcuts: Cmd+, (settings), Cmd+N (new chat), Cmd+K (search)
   useEffect(() => {

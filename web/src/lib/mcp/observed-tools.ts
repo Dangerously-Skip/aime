@@ -40,6 +40,56 @@ export async function readObservedTools(mcpConfigPath: string): Promise<Observed
 }
 
 /**
+ * Write the map back, owner-independent of who mutated it.
+ *
+ * Shared by record and forget so the two cannot disagree about where the file
+ * lives or how it is created.
+ */
+async function writeObservedTools(mcpConfigPath: string, tools: ObservedTools): Promise<void> {
+  const { writeFile, mkdir } = await import('fs/promises');
+  const path = observedToolsPath(mcpConfigPath);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(tools, null, 2), 'utf-8');
+}
+
+/**
+ * Forget what we learned about servers that are no longer connected.
+ *
+ * The counterpart to `recordObservedTools`, and the reason uninstall could not
+ * clean up after itself: this module only ever grew. The stale window is narrow —
+ * `recordObservedTools` replaces a server's list wholesale on the next session
+ * that mounts it — but it is not empty, because `deriveServerName` keys off the
+ * HOST, so a different server can arrive under a name a previous one used. Its
+ * first session, the one session with no SDK-level policy of its own, would then
+ * be governed by another server's tool names.
+ *
+ * Returns whether anything was actually removed, so a caller can skip a write.
+ * Never throws: this is advisory data and disconnecting must not fail over it.
+ */
+export async function forgetObservedTools(
+  mcpConfigPath: string,
+  servers: Iterable<string>,
+): Promise<boolean> {
+  const drop = [...servers];
+  if (drop.length === 0) return false;
+
+  try {
+    const existing = await readObservedTools(mcpConfigPath);
+    const removed = drop.filter((server) => server in existing);
+    if (removed.length === 0) return false;
+    for (const server of removed) delete existing[server];
+    await writeObservedTools(mcpConfigPath, existing);
+    return true;
+  } catch (err) {
+    console.warn(
+      '[MCP] Could not prune observed tools:',
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
+/**
  * Merge freshly observed names in. Servers absent from `observed` keep their
  * previous entry: a session that mounted only some servers (because the user
  * disabled the rest) must not erase what we know about the others.
@@ -64,10 +114,7 @@ export async function recordObservedTools(
     }
     if (!changed) return; // avoid a write on every single request
 
-    const { writeFile, mkdir } = await import('fs/promises');
-    const path = observedToolsPath(mcpConfigPath);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, JSON.stringify(existing, null, 2), 'utf-8');
+    await writeObservedTools(mcpConfigPath, existing);
   } catch (err) {
     // Advisory data — never fail a request over it.
     console.warn('[MCP] Could not record observed tools:', err instanceof Error ? err.message : err);
