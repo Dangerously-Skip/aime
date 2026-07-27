@@ -5,6 +5,7 @@ import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { waitForAnswer } from '../pending-questions';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
+import { waitForConnector } from '../pending-connectors';
 import { expandCanvasTemplate } from '../canvas/templates';
 
 /** Canvas tool name — intercepted to push A2UI documents to client. */
@@ -108,6 +109,7 @@ export class ClaudeProvider extends BaseProvider {
       sessionControls,
       onInputRequest,
       onBrowserToolUse,
+      onConnectorRequest,
     } = params;
 
     // Load surface config if surfaceId is provided, otherwise use defaults
@@ -302,6 +304,26 @@ export class ClaudeProvider extends BaseProvider {
               ? `template "${input.templateId}"`
               : 'raw A2UI document';
             return { content: [{ type: 'text' as const, text: `Canvas rendered (${label}). The user sees it now in the canvas panel.` }] };
+          }
+        ),
+        // Ask the user to connect a service the current task needs. Intercepted
+        // in canUseTool, which pauses the turn until they answer — see
+        // pending-connectors.ts. The handler only reports the outcome that the
+        // interception already injected.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'RequestConnector',
+          'Ask the user to connect a service you need for the current task but which is not connected yet (e.g. you were asked to send an email and no mail tool is available). Shows them a one-click Connect button and pauses until they answer; if they accept, the service becomes usable and you continue. Only request a service listed as connectable in your system prompt, only when the task needs it, and at most one per turn.',
+          {
+            connectorId: z.string().describe('The connector id exactly as listed in the system prompt, e.g. "github", "atlassian".'),
+            reason: z.string().describe('One short sentence, shown to the user, saying what you need it for. E.g. "to send the summary to Bob".'),
+          },
+          async (input: Record<string, unknown>) => {
+            const outcome = input.__connectorResult as { connected?: boolean; reason?: string } | undefined;
+            if (outcome?.connected) {
+              return { content: [{ type: 'text' as const, text: `Connected. The tools for ${String(input.connectorId)} are available from your next tool call — retry the step that needed it.` }] };
+            }
+            return { content: [{ type: 'text' as const, text: `Not connected${outcome?.reason ? `: ${outcome.reason}` : ''}. Do not ask again this turn. Finish what you can without it and tell the user which part you could not do.` }] };
           }
         ),
       ],
@@ -513,6 +535,24 @@ export class ClaudeProvider extends BaseProvider {
           behavior: 'allow' as const,
           updatedInput: { ...input, __browserToolResult: result.output, __isError: result.isError },
         };
+      }
+
+      // ── Connector request (P3.3) ───────────────────────────────────────
+      // Pause the turn while the user connects, then resume with the outcome so
+      // the agent can retry the step instead of abandoning the task.
+      if ((toolName === 'RequestConnector' || toolName.endsWith('__RequestConnector')) && onConnectorRequest) {
+        const connectorId = typeof input.connectorId === 'string' ? input.connectorId : '';
+        const reason = typeof input.reason === 'string' ? input.reason : '';
+        if (!connectorId) {
+          return {
+            behavior: 'allow' as const,
+            updatedInput: { ...input, __connectorResult: { connected: false, reason: 'No connector id was given.' } },
+          };
+        }
+        console.log('[Claude] Connector requested:', connectorId, 'id:', toolUseID);
+        await onConnectorRequest(toolUseID, connectorId, reason);
+        const result = await waitForConnector(toolUseID);
+        return { behavior: 'allow' as const, updatedInput: { ...input, __connectorResult: result } };
       }
 
       return { behavior: 'allow' as const };

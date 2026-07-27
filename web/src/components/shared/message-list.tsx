@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { UserMessage } from "./user-message";
 import { AssistantMessage } from "./assistant-message";
 import { QuestionCard } from "./question-card";
+import { ConnectorRequestCard } from "./connector-request-card";
 import { ArrowDown } from "lucide-react";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 
@@ -35,6 +36,8 @@ interface Message {
   isStreaming?: boolean;
   isLoading?: boolean;
   questionData?: unknown;
+  connectorRequest?: { connectorId: string; reason?: string; toolUseId: string };
+  connectorRequestSettled?: boolean;
   questionToolUseId?: string;
   questionAnswered?: boolean;
   isAutoContinue?: boolean;
@@ -119,7 +122,16 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onAr
       {messages.map((msg, idx) => {
         const isLastAssistant = msg.role === "assistant" && !msg.isStreaming && !msg.isLoading &&
           messages.slice(idx + 1).every((m) => m.role !== "assistant" || !!m.questionData);
-        return msg.questionData ? (
+        return msg.connectorRequest ? (
+          <div key={msg.id} className="mb-4 max-w-2xl">
+            <ConnectorRequestCard
+              toolUseId={msg.connectorRequest.toolUseId}
+              connectorId={msg.connectorRequest.connectorId}
+              reason={msg.connectorRequest.reason}
+              settled={msg.connectorRequestSettled}
+            />
+          </div>
+        ) : msg.questionData ? (
           <QuestionCard
             key={msg.id}
             toolUseId={msg.questionToolUseId || msg.id}
