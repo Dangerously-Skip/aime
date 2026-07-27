@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { useSettingsStore } from "@/stores/settings-store";
+import { APP_NAME } from "@/config/branding";
 import { StepWelcome } from "./step-welcome";
 import { StepProviders } from "./step-providers";
 import { StepConnectors } from "./step-connectors";
@@ -20,10 +21,17 @@ type StepId = (typeof STEPS)[number];
 const TOTAL_STEPS = STEPS.length;
 
 /**
- * "Skip for now" only makes sense while there is setup left to skip. The summary
- * and feedback steps are the tail of the flow, so they show no skip link.
+ * Steps where the escape hatch DEFERS setup ("Skip for now" — come back in a day).
+ *
+ * Every other step gets an escape that COMPLETES instead, because by the tail of
+ * the flow there is nothing left to defer. The point is that no step is ever
+ * without a way out: onboarding sits in front of the whole app, so a step whose
+ * primary button fails for any reason would otherwise lock the user out entirely
+ * with only a Back button for company. That happened — a "couldn't get past the
+ * summary screen" report which reproduced on neither Chromium nor Electron, so
+ * the cause is still unknown and the trap is the part worth removing.
  */
-const SKIPPABLE_STEPS: readonly StepId[] = ["welcome", "providers", "connectors"];
+const DEFERRABLE_STEPS: readonly StepId[] = ["welcome", "providers", "connectors"];
 
 export function OnboardingWizard() {
   const [step, setStep] = useState(0);
@@ -68,8 +76,8 @@ export function OnboardingWizard() {
   const current: StepId = STEPS[step];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-      <div className="w-full max-w-[480px] mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-background/80 backdrop-blur-sm py-8">
+      <div className="w-full max-w-[480px] mx-4 my-auto">
         {/* Step indicator dots */}
         <div
           className="flex items-center justify-center gap-2 mb-6"
@@ -125,17 +133,24 @@ export function OnboardingWizard() {
             )}
           </div>
 
-          {/* Skip link */}
-          {SKIPPABLE_STEPS.includes(current) && (
-            <div className="px-8 pb-6 pt-0 text-center">
+          {/* Escape hatch — present on EVERY step, so onboarding can never trap. */}
+          <div className="px-8 pb-6 pt-0 text-center">
+            {DEFERRABLE_STEPS.includes(current) ? (
               <button
                 onClick={handleSkip}
                 className="text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
                 Skip for now
               </button>
-            </div>
-          )}
+            ) : (
+              <button
+                onClick={handleComplete}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Go to {APP_NAME}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
