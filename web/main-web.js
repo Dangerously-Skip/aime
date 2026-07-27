@@ -1016,6 +1016,46 @@ app.on("activate", async () => {
 });
 
 // IPC handlers
+// ── Document rendering (P4.2) ──────────────────────────────────────────
+// Print themed HTML to PDF with Chromium, which Electron already ships. No
+// Python, no pip install, no extra binary — and real typography, including the
+// page-break control a hand-rolled generator never gets right.
+//
+// Rendered in an offscreen window with node integration OFF and no preload, so
+// the document has no bridge to the app even though its content is escaped
+// upstream. Defence in depth: the renderer guarantees no executable markup, and
+// this guarantees there would be nothing to reach if that ever failed.
+ipcMain.handle("documents:print-pdf", async (_event, { html, outputPath, printOptions } = {}) => {
+  if (typeof html !== "string" || typeof outputPath !== "string") {
+    return { ok: false, error: "html and outputPath are required" };
+  }
+
+  let win = null;
+  try {
+    win = new BrowserWindow({
+      show: false,
+      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, javascript: false },
+    });
+
+    // A data URL keeps the document off disk entirely; nothing to clean up and
+    // nothing for another process to read mid-render.
+    await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+
+    const pdf = await win.webContents.printToPDF({
+      printBackground: true,
+      pageSize: "A4",
+      ...(printOptions || {}),
+    });
+    fs.writeFileSync(outputPath, pdf, { mode: 0o600 });
+    return { ok: true, path: outputPath, bytes: pdf.length };
+  } catch (err) {
+    console.error("[AIME] PDF render failed:", err.message);
+    return { ok: false, error: "Could not render the PDF" };
+  } finally {
+    if (win && !win.isDestroyed()) win.destroy();
+  }
+});
+
 // ── Push-to-talk global shortcut (P4.1) ────────────────────────────────
 // The renderer asks main to hold or release the combination. Registering here
 // rather than in the renderer is not a preference: a global shortcut has to be
