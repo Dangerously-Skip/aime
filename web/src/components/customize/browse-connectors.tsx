@@ -13,6 +13,7 @@ import { provisionConnector, deprovisionConnector } from "@/lib/connectors/provi
 import { useConnectorHealth } from "@/hooks/use-connector-health";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import { AddMcpServer } from "./add-mcp-server";
+import { McpCatalogPicker } from "./mcp-catalog-picker";
 import type { ConnectionHealth } from "@/lib/connectors/health";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useMarketplace } from "@/lib/use-marketplace";
@@ -151,6 +152,12 @@ export function BrowseConnectors() {
   });
 
   const marketplacePreview = marketplacePlugins.slice(0, 6);
+
+  // Ids already provisioned, so the catalogue can show connected services as such.
+  const provisionedCatalogIds = useMemo(
+    () => new Set(Object.keys(connectorStates).filter((id) => connectorStates[id]?.authenticated)),
+    [connectorStates],
+  );
 
   const handleConnect = useCallback(
     async (connector: ConnectorDefinition) => {
@@ -803,6 +810,15 @@ export function BrowseConnectors() {
               ))}
             </div>
           )}
+
+          {/* One-click DCR servers (P3.6d) — nothing to register first. */}
+          <div className="mb-5">
+            <h3 className="mb-2 text-sm font-semibold">Connect in one click</h3>
+            <McpCatalogPicker
+              connectedIds={provisionedCatalogIds}
+              onConnected={() => void refreshHealth()}
+            />
+          </div>
 
           {/* Official Plugins section */}
           {marketplacePreview.length > 0 && (
