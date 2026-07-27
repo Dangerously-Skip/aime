@@ -18,7 +18,8 @@
  *
  * Pure: no fs, no exec. Returns errors rather than throwing.
  */
-import { join, normalize, isAbsolute, resolve, relative, sep } from 'path';
+import { normalize, isAbsolute, sep } from 'path';
+import { resolveContainedChild, type PathFlavour } from '@/lib/path-containment';
 
 export interface ResolvedSource {
   cloneUrl: string;
@@ -59,22 +60,27 @@ export function sanitizePluginName(name: unknown): Resolution<string> {
  * plugins dir. Belt-and-braces alongside sanitizePluginName: if the charset rule
  * is ever loosened, this still refuses to write outside.
  *
- * Uses `path.relative` rather than string-prefix matching. The prefix version
- * hardcoded '/', so on Windows `normalize` produced a backslash target while the
- * prefix still held a forward slash — every install and uninstall returned
- * "escapes the plugins directory" on a shipped build target, and CI could not see
- * it because the tests use posix strings.
+ * The containment rule itself lives in `@/lib/path-containment`, shared with the
+ * skill and document writers, which each carried their own copy of the string-
+ * prefix version this one had to abandon: it hardcoded '/', so on Windows the
+ * normalised target held a backslash while the prefix still held a forward slash
+ * and every install and uninstall returned "escapes the plugins directory" on a
+ * shipped build target — invisible to CI, whose strings are all posix. The shared
+ * helper takes a path flavour so that verdict is now asserted on a posix runner.
  */
-export function resolveInstallDir(pluginsDir: string, safeName: string): Resolution<string> {
-  const base = resolve(pluginsDir);
-  const target = resolve(base, safeName);
-  const rel = relative(base, target);
-
-  // A single segment, inside the base: not empty, not an escape, no nesting.
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel) || rel.includes(sep) || rel.includes('/')) {
-    return { ok: false, error: 'Resolved install path escapes the plugins directory' };
-  }
-  return { ok: true, value: target };
+export function resolveInstallDir(
+  pluginsDir: string,
+  safeName: string,
+  /** Test seam — see `PathFlavour`. Production always uses the host's. */
+  opts: { flavour?: PathFlavour } = {},
+): Resolution<string> {
+  const contained = resolveContainedChild(pluginsDir, safeName, {
+    error: 'Resolved install path escapes the plugins directory',
+    flavour: opts.flavour,
+  });
+  return contained.ok
+    ? { ok: true, value: contained.path }
+    : { ok: false, error: contained.error };
 }
 
 /**

@@ -10,6 +10,7 @@ import type { ConnectorDefinition } from "@/lib/connectors/types";
 import { startOAuthFlow } from "@/lib/connectors/oauth";
 import { runMcpOAuthFlow } from "@/lib/mcp/oauth-flow";
 import { provisionConnector, deprovisionConnector } from "@/lib/connectors/provisioner";
+import { AMBIENT_CREDENTIAL_SENTINEL, DEFERRED_AUTH_SENTINEL } from "@/lib/connectors/connect";
 import { useConnectorHealth } from "@/hooks/use-connector-health";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import { AddMcpServer } from "./add-mcp-server";
@@ -40,6 +41,22 @@ import {
 
 type CategoryFilter = "all" | ConnectorDefinition["category"];
 
+/**
+ * Values in `tokens[id]` that are markers, not credentials.
+ *
+ * `aws-iam` and `mcp-self-auth` are written for flows that produce no credential
+ * at all (see connect.ts); they exist so the store's `authenticated` flag has
+ * something to sit beside. POSTing one back as the token would overwrite a live
+ * secret with a string no service accepts, so the re-enable path sends nothing
+ * instead and lets the server keep what it already has.
+ */
+const NON_CREDENTIAL_MARKERS = new Set<string>([
+  AMBIENT_CREDENTIAL_SENTINEL,
+  DEFERRED_AUTH_SENTINEL,
+  // Written by older builds' hydration, so a persisted store still carries it.
+  "provisioned",
+]);
+
 export function BrowseConnectors() {
   const setCustomizeSection = useAppStore((s) => s.setCustomizeSection);
   const connectorStates = useConnectorStore((s) => s.connectorStates);
@@ -48,6 +65,7 @@ export function BrowseConnectors() {
   const setToken = useConnectorStore((s) => s.setToken);
   const setTokenMeta = useConnectorStore((s) => s.setTokenMeta);
   const clearToken = useConnectorStore((s) => s.clearToken);
+  const markProvisioned = useConnectorStore((s) => s.markProvisioned);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
@@ -100,7 +118,7 @@ export function BrowseConnectors() {
     () => Object.entries(connectorStates).filter(([, st]) => st?.authenticated).map(([id]) => id),
     [connectorStates],
   );
-  const { healthOf, refresh: refreshHealth } = useConnectorHealth(claimedConnectedIds);
+  const { healthOf, reports, drift, refresh: refreshHealth } = useConnectorHealth(claimedConnectedIds);
   // How many tools the last session actually mounted (P3.5). Only knowable from a
   // live session, but this is the screen where the user can do something about it.
   const toolBudget = useToolBudgetStore((s2) => s2.report);
@@ -123,19 +141,18 @@ export function BrowseConnectors() {
       .then((data) => {
         if (cancelled || !data?.connectedIds) return;
         for (const id of data.connectedIds as string[]) {
-          // Only mark as connected if we have a corresponding connector registry entry
-          if (CONNECTOR_MAP[id]) {
-            // Use a sentinel token so UI shows it as authenticated without leaking real tokens
-            setToken(id, "provisioned");
-            setEnabled(id, true);
-          }
+          // Only registry connectors get a row here, so only they can be reflected
+          // in the store. The one-click catalogue's ids live in a separate space on
+          // purpose and are handled by `provisionedIds` below, which reads the
+          // health report instead of this map.
+          if (CONNECTOR_MAP[id]) markProvisioned(id);
         }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [setToken, setEnabled]);
+  }, [markProvisioned]);
 
   const categories = Array.from(
     new Set(CONNECTOR_REGISTRY.map((c) => c.category))
@@ -153,10 +170,38 @@ export function BrowseConnectors() {
 
   const marketplacePreview = marketplacePlugins.slice(0, 6);
 
-  // Ids already provisioned, so the catalogue can show connected services as such.
-  const provisionedCatalogIds = useMemo(
-    () => new Set(Object.keys(connectorStates).filter((id) => connectorStates[id]?.authenticated)),
-    [connectorStates],
+  /**
+   * Everything actually provisioned for the agent, in whichever id space it lives.
+   *
+   * The registry ids (`github`, `slack`, …) and the one-click catalogue ids
+   * (`linear`, `notion`, `stripe`, …) are deliberately disjoint, so neither the
+   * client store nor CONNECTOR_MAP can answer "is this connected?" for the
+   * catalogue. The health report can: it is built from the provisioned config
+   * itself and covers every managed entry regardless of which space it came from.
+   *
+   * `drift.missingInClient` is the same set narrowed to the entries the client
+   * store never learned about — precisely the signal that a catalogue server is
+   * connected and the UI has not noticed — so it is read here rather than merely
+   * computed and thrown away.
+   */
+  const provisionedIds = useMemo(() => {
+    const ids = new Set(claimedConnectedIds);
+    for (const r of reports) ids.add(r.id);
+    for (const id of drift?.missingInClient ?? []) ids.add(id);
+    return ids;
+  }, [claimedConnectedIds, reports, drift]);
+
+  /**
+   * Shown as connected AND switched on, yet nothing is provisioned: the agent
+   * cannot see a service the UI says it has. The other direction of the same
+   * drift report, and the only one the user has to act on.
+   *
+   * Switched-off connectors are excluded because a disable stashes the entry out
+   * of `mcpServers` on purpose — that is the toggle working, not a dead entry.
+   */
+  const unprovisionedIds = useMemo(
+    () => (drift?.missingOnDisk ?? []).filter((id) => connectorStates[id]?.enabled),
+    [drift, connectorStates],
   );
 
   const handleConnect = useCallback(
@@ -528,18 +573,21 @@ export function BrowseConnectors() {
       }
 
       if (currentlyEnabled) {
-        // Disable — remove from MCP
+        // Switch OFF — unmount it, but keep the credential so switching back on
+        // is not a reconnect. This is the whole difference from Disconnect below.
         setEnabled(connector.id, false);
         try {
-          await deprovisionConnector(connector.id);
+          await deprovisionConnector(connector.id, 'disable');
         } catch (err) {
-          console.error(`Failed to deprovision ${connector.id}:`, err);
+          console.error(`Failed to disable ${connector.id}:`, err);
           setEnabled(connector.id, true); // rollback
         }
       } else {
-        // Re-enable — add back to MCP (token still stored)
-        const token = tokens[connector.id];
-        if (!token) return; // shouldn't happen
+        // Switch ON. The disable preserved the stored secret and its refresh
+        // metadata, so the server needs no token from us — and the only value we
+        // might have is a marker, which must never be written as a credential.
+        const stored = tokens[connector.id];
+        const token = stored && !NON_CREDENTIAL_MARKERS.has(stored) ? stored : undefined;
         setEnabled(connector.id, true);
         try {
           await provisionConnector(connector, token);
@@ -575,10 +623,14 @@ export function BrowseConnectors() {
         return;
       }
 
+      // DESTRUCTIVE, and asked for: the user pressed Disconnect, not the toggle.
+      // Without the explicit intent the route defaults to `disable`, which leaves
+      // the credential encrypted at rest and the grant live upstream — the app
+      // says "disconnected" while the secret is still on disk.
       try {
-        await deprovisionConnector(connectorId);
+        await deprovisionConnector(connectorId, 'disconnect');
       } catch (err) {
-        console.error(`Failed to deprovision ${connectorId}:`, err);
+        console.error(`Failed to disconnect ${connectorId}:`, err);
       }
       // Revoke the OAuth token with the provider so reconnecting triggers
       // a fresh authorization flow (with updated scopes if changed)
@@ -742,6 +794,13 @@ export function BrowseConnectors() {
                   }.`}
             </p>
           )}
+          {unprovisionedIds.length > 0 && (
+            <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-500">
+              {`Connected here but not provisioned for the agent: ${unprovisionedIds
+                .map((id) => CONNECTOR_MAP[id]?.name ?? id)
+                .join(", ")}. Reconnect to restore access.`}
+            </p>
+          )}
         </div>
         <div className="mr-2 shrink-0">
           <AddMcpServer onAdded={() => void refreshHealth()} />
@@ -815,7 +874,7 @@ export function BrowseConnectors() {
           <div className="mb-5">
             <h3 className="mb-2 text-sm font-semibold">Connect in one click</h3>
             <McpCatalogPicker
-              connectedIds={provisionedCatalogIds}
+              connectedIds={provisionedIds}
               onConnected={() => void refreshHealth()}
             />
           </div>

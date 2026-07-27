@@ -150,11 +150,136 @@ describe('ConnectorRequestCard — every exit path reports back', () => {
 
 describe('ConnectorRequestCard — already-answered replay', () => {
   it('renders settled without offering buttons or reporting again', () => {
+    useConnectorStore.setState({
+      connectorStates: { atlassian: { id: 'atlassian', enabled: true, authenticated: true } },
+    } as never);
     render(
       <ConnectorRequestCard toolUseId="tu-1" connectorId="atlassian" reason="r" settled />,
     );
-    expect(screen.getByText(/Connected — continuing/)).toBeTruthy();
+    expect(screen.getByText('Connected')).toBeTruthy();
     expect(screen.queryByText('Connect')).toBeNull();
+    expect(screen.queryByText('Not now')).toBeNull();
     expect(reports()).toHaveLength(0);
+  });
+
+  it('does not claim a connection the user declined', () => {
+    // A replayed card knows only that it was answered. Claiming "Connected" for
+    // a card the user skipped is the same class of lie the settled flag exists to
+    // stop: the store says whether the service is actually connected.
+    render(
+      <ConnectorRequestCard toolUseId="tu-1" connectorId="atlassian" reason="r" settled />,
+    );
+    expect(screen.queryByText(/Connected/)).toBeNull();
+    expect(screen.getByText('Skipped')).toBeTruthy();
+    expect(screen.queryByText('Connect')).toBeNull();
+  });
+});
+
+describe('ConnectorRequestCard — settling is reported to the surface (DEFECT 2)', () => {
+  it('tells the surface to mark the message settled after a successful connect', async () => {
+    const onSettled = vi.fn();
+    render(
+      <ConnectorRequestCard toolUseId="tu-1" connectorId="atlassian" onSettled={onSettled} />,
+    );
+    fireEvent.click(screen.getByText('Connect'));
+
+    await waitFor(() => expect(onSettled).toHaveBeenCalledWith('tu-1'));
+  });
+
+  it('tells the surface to mark the message settled after a decline', async () => {
+    const onSettled = vi.fn();
+    render(
+      <ConnectorRequestCard toolUseId="tu-1" connectorId="atlassian" onSettled={onSettled} />,
+    );
+    fireEvent.click(screen.getByText('Not now'));
+
+    await waitFor(() => expect(onSettled).toHaveBeenCalledWith('tu-1'));
+  });
+
+  it('marks an unknown connector settled so it is not re-reported on every remount', async () => {
+    const onSettled = vi.fn();
+    render(
+      <ConnectorRequestCard toolUseId="tu-1" connectorId="not-a-service" onSettled={onSettled} />,
+    );
+    await waitFor(() => expect(onSettled).toHaveBeenCalledWith('tu-1'));
+  });
+
+  it('leaves a retryable failure unsettled — the buttons must stay live', async () => {
+    const onSettled = vi.fn();
+    runMcpOAuthFlow.mockRejectedValue(new Error('Server rejected the client'));
+    render(
+      <ConnectorRequestCard toolUseId="tu-1" connectorId="atlassian" onSettled={onSettled} />,
+    );
+    fireEvent.click(screen.getByText('Connect'));
+
+    expect(await screen.findByText('Try again')).toBeTruthy();
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  it('reports nothing at all when replaying an already-settled unknown connector', async () => {
+    render(<ConnectorRequestCard toolUseId="tu-1" connectorId="not-a-service" settled />);
+    await waitFor(() => expect(screen.getByText(/unknown service/)).toBeTruthy());
+    expect(reports()).toHaveLength(0);
+  });
+});
+
+describe('ConnectorRequestCard — an undelivered outcome is not reported as success', () => {
+  it('does not claim it is continuing when the paused turn no longer exists', async () => {
+    // The waiter is gone (the turn timed out, or the app restarted), so the POST
+    // 404s. The connection itself succeeded, but nothing is going to continue —
+    // and the swallowed `.catch(() => {})` used to leave the card saying it would.
+    fetchMock.mockImplementation(async (url: RequestInfo | URL) => {
+      if (String(url).includes('/api/chat/connector-result')) {
+        return new Response('{"error":"unknown toolUseId"}', { status: 404 });
+      }
+      return new Response('{}', { status: 200 });
+    });
+    render(<ConnectorRequestCard toolUseId="tu-gone" connectorId="atlassian" />);
+    fireEvent.click(screen.getByText('Connect'));
+
+    await waitFor(() =>
+      expect(useConnectorStore.getState().connectorStates['atlassian']?.authenticated).toBe(true),
+    );
+    expect(screen.queryByText(/Connected — continuing/)).toBeNull();
+    expect(await screen.findByText(/no longer waiting|ask again/i)).toBeTruthy();
+  });
+
+  it('still settles the card, because re-running the whole OAuth flow would fix nothing', async () => {
+    const onSettled = vi.fn();
+    fetchMock.mockImplementation(async (url: RequestInfo | URL) => {
+      if (String(url).includes('/api/chat/connector-result')) {
+        return new Response('{}', { status: 404 });
+      }
+      return new Response('{}', { status: 200 });
+    });
+    render(
+      <ConnectorRequestCard toolUseId="tu-gone" connectorId="atlassian" onSettled={onSettled} />,
+    );
+    fireEvent.click(screen.getByText('Connect'));
+
+    await waitFor(() => expect(onSettled).toHaveBeenCalledWith('tu-gone'));
+  });
+});
+
+describe('ConnectorRequestCard — rendering has no side effects (DEFECT 4)', () => {
+  it('does not report an unknown connector from the render pass', async () => {
+    // It used to call setState and fire the POST from the render body. It
+    // happened to produce one request under StrictMode only because React landed
+    // the render-phase update before the duplicate invocation — an accident, not
+    // a design. Rendering must decide what to show and nothing else.
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    renderToStaticMarkup(<ConnectorRequestCard toolUseId="tu-1" connectorId="not-a-service" />);
+    expect(reports()).toHaveLength(0);
+  });
+
+  it('still reports exactly once when actually mounted, StrictMode included', async () => {
+    const { StrictMode } = await import('react');
+    render(
+      <StrictMode>
+        <ConnectorRequestCard toolUseId="tu-1" connectorId="not-a-service" />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(reports()).toHaveLength(1));
+    expect(reports()[0].reason).toMatch(/no connector with id/i);
   });
 });

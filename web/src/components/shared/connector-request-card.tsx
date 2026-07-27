@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Check, Plug, X, Loader2 } from "lucide-react";
@@ -31,19 +31,48 @@ interface ConnectorRequestCardProps {
   reason?: string;
   /** Set when this card was already answered (replayed from history). */
   settled?: boolean;
+  /**
+   * The card has reached a terminal answer and must never offer its buttons
+   * again. The surface persists this on the message; without it the answered
+   * state lived in local `useState` while the message itself is persisted, so
+   * switching conversation brought the buttons back for a request that was
+   * already dealt with — and clicking one re-ran the whole OAuth flow to POST a
+   * `toolUseId` that no longer has a waiter.
+   *
+   * Not called for a retryable failure: those buttons SHOULD stay live.
+   */
+  onSettled?: (toolUseId: string) => void;
 }
 
-type Phase = "idle" | "connecting" | "connected" | "declined" | "failed";
+type Phase =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "declined"
+  | "failed"
+  /** Connected, but the paused turn was gone by the time we said so. */
+  | "orphaned"
+  /** Replayed from history: answered in some earlier session. */
+  | "answered";
 
-async function report(toolUseId: string, connected: boolean, reason?: string): Promise<void> {
-  await fetch("/api/chat/connector-result", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ toolUseId, connected, reason }),
-  }).catch(() => {
-    // The turn will time out on its own if this never lands; nothing useful to
-    // show the user here beyond the card's own state.
-  });
+/**
+ * Tell the paused turn what happened.
+ *
+ * @returns whether the outcome was actually DELIVERED. A 404 means the waiter is
+ * gone — the turn timed out, or the app restarted — and the caller must not then
+ * claim the conversation is about to continue.
+ */
+async function report(toolUseId: string, connected: boolean, reason?: string): Promise<boolean> {
+  try {
+    const res = await fetch("/api/chat/connector-result", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toolUseId, connected, reason }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export function ConnectorRequestCard({
@@ -51,9 +80,10 @@ export function ConnectorRequestCard({
   connectorId,
   reason,
   settled = false,
+  onSettled,
 }: ConnectorRequestCardProps) {
   const connector: ConnectorDefinition | undefined = CONNECTOR_MAP[connectorId];
-  const [phase, setPhase] = useState<Phase>(settled ? "connected" : "idle");
+  const [phase, setPhase] = useState<Phase>(settled ? "answered" : "idle");
   const [error, setError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<{
     label: string;
@@ -66,6 +96,10 @@ export function ConnectorRequestCard({
   const setToken = useConnectorStore((s) => s.setToken);
   const setEnabled = useConnectorStore((s) => s.setEnabled);
   const clearToken = useConnectorStore((s) => s.clearToken);
+  // A replayed card knows only that it was answered, not how. The store knows
+  // whether the service actually ended up connected, so ask it rather than
+  // assuming success — a skipped request must not read as a connection.
+  const isConnected = useConnectorStore((s) => !!s.connectorStates[connectorId]?.authenticated);
 
   const ask = useCallback(
     (secret: boolean) => (_c: ConnectorDefinition, field: { label: string; hint?: string }) =>
@@ -102,6 +136,8 @@ export function ConnectorRequestCard({
         setPhase(outcome.status === "cancelled" ? "declined" : "failed");
         if (outcome.status !== "cancelled") setError(message);
         await report(toolUseId, false, message);
+        // A cancel is an answer; a failure is not — leave the retry available.
+        if (outcome.status === "cancelled") onSettled?.(toolUseId);
         return;
       }
 
@@ -117,8 +153,15 @@ export function ConnectorRequestCard({
           oauthTokenEndpoint: outcome.oauthTokenEndpoint,
         });
       }
-      setPhase("connected");
-      await report(toolUseId, true);
+      const delivered = await report(toolUseId, true);
+      // The connection is real either way; whether anything is about to continue
+      // is not. Saying "continuing" when the waiter is gone is the lie the
+      // swallowed `.catch(() => {})` used to allow.
+      setPhase(delivered ? "connected" : "orphaned");
+      // Settled regardless: the service IS connected, so re-running the entire
+      // sign-in flow from this card could only take the user through consent
+      // screens again for nothing.
+      onSettled?.(toolUseId);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Connection failed";
       clearToken(connectorId);
@@ -128,21 +171,37 @@ export function ConnectorRequestCard({
     } finally {
       setPrompt(null);
     }
-  }, [connector, connectorId, ask, setToken, setEnabled, clearToken, toolUseId]);
+  }, [connector, connectorId, ask, setToken, setEnabled, clearToken, toolUseId, onSettled]);
 
   const handleDecline = useCallback(async () => {
     setPhase("declined");
     setPrompt(null);
     await report(toolUseId, false, "The user declined to connect it.");
-  }, [toolUseId]);
+    onSettled?.(toolUseId);
+  }, [toolUseId, onSettled]);
 
-  // An unknown id means the agent invented one. Tell the paused turn so it
-  // doesn't sit there for five minutes.
+  /**
+   * An unknown id means the agent invented one — the tool schema accepts any
+   * string. Tell the paused turn so it doesn't sit there for five minutes.
+   *
+   * From an effect, not the render body. It used to call `setPhase` and fire the
+   * POST while rendering, which produced one request only because React happened
+   * to land the render-phase update before StrictMode's duplicate invocation.
+   * That is an accident of scheduling, not a design, and rendering must decide
+   * what to show and nothing else. The ref (not state) is what makes it exactly
+   * once: it survives StrictMode's mount/unmount/mount without a re-render.
+   */
+  const reportedUnknown = useRef(false);
+  useEffect(() => {
+    if (connector || settled || reportedUnknown.current) return;
+    reportedUnknown.current = true;
+    void (async () => {
+      await report(toolUseId, false, `There is no connector with id "${connectorId}".`);
+      onSettled?.(toolUseId);
+    })();
+  }, [connector, settled, toolUseId, connectorId, onSettled]);
+
   if (!connector) {
-    if (phase === "idle") {
-      setPhase("failed");
-      void report(toolUseId, false, `There is no connector with id "${connectorId}".`);
-    }
     return (
       <div className="rounded-xl border border-border bg-card p-3.5 text-xs text-muted-foreground">
         Requested an unknown service (<code>{connectorId}</code>).
@@ -202,7 +261,7 @@ export function ConnectorRequestCard({
 
           {error && <p className="mt-1.5 text-xs text-destructive">{error}</p>}
 
-          {!prompt && phase !== "connected" && phase !== "declined" && (
+          {!prompt && (phase === "idle" || phase === "connecting" || phase === "failed") && (
             <div className="mt-2.5 flex gap-1.5">
               <Button
                 size="sm"
@@ -231,12 +290,32 @@ export function ConnectorRequestCard({
               Connected — continuing
             </p>
           )}
+          {phase === "orphaned" && (
+            <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+              <Check className="h-3 w-3" />
+              Connected, but this request is no longer waiting — ask again to continue.
+            </p>
+          )}
           {phase === "declined" && (
             <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <X className="h-3 w-3" />
               Skipped
             </p>
           )}
+          {/* Replayed from history: the turn that asked is long over, so this
+              reports the outcome rather than promising to continue. */}
+          {phase === "answered" &&
+            (isConnected ? (
+              <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                <Check className="h-3 w-3" />
+                Connected
+              </p>
+            ) : (
+              <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <X className="h-3 w-3" />
+                Skipped
+              </p>
+            ))}
         </div>
       </div>
     </div>

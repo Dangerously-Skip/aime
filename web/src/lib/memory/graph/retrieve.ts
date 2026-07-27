@@ -9,21 +9,32 @@
  *
  * What it buys: a query naming an entity now reaches memories that never contain
  * the query's words. "What do I know about Sarah?" finds "Sarah prefers Figma"
- * (one hop, she is named) and can reach "the design system is owned by payments"
- * (two hops, via a shared entity) — neither of which shares a keyword with the
- * question.
+ * (hop 0 — she is named in it) and reaches "the design system ships weekly"
+ * (one hop onward, through the entity they share) — the second of which has no
+ * keyword in common with the question.
  *
  * Pure: no I/O.
  */
 import type { Memory } from '../types';
-import { getMemoriesForContext, type RetrievalContext } from '../retriever';
-import { graphFor, traverse, type MemoryGraph } from './graph';
+import { rankMemories, type RetrievalContext } from '../retriever';
+import { graphFor, traverse } from './graph';
 import { extractQueryEntities } from './entities';
 
 /**
- * Boost per hop. A direct mention is worth much more than a shared neighbour,
- * and the values are small relative to the base score's 0..1 range so the graph
- * reorders near-ties rather than overturning a strong keyword match.
+ * Boost per hop, on the same scale as the keyword score it is added to.
+ *
+ * That score is `relevance * 0.4 + confidence * 0.3 + recency * 0.3`, so a perfect
+ * keyword match is worth 0.4. Read against that: a direct entity mention (0.35) is
+ * worth about as much as a strong keyword match — it IS a match, just not a
+ * lexical one — a one-hop neighbour about a third of one (0.12), and two hops an
+ * eighth (0.05). A graph connection can therefore lift a memory the keywords
+ * missed above unrelated ones, and cannot displace a memory that answers the
+ * question outright.
+ *
+ * These numbers previously sat against a score derived from BASELINE POSITION,
+ * where one rank was worth 1/n — so the same 0.12 meant "1.5 ranks" in a
+ * 12-memory set and "70 ranks" in a 600-memory one. Whether the graph won depended
+ * on how many memories the user happened to have.
  */
 const HOP_BOOST = [0.35, 0.12, 0.05];
 
@@ -31,19 +42,10 @@ const HOP_BOOST = [0.35, 0.12, 0.05];
 const EDGE_HALF_LIFE_MS = 90 * 24 * 60 * 60 * 1000;
 
 export interface GraphRetrievalContext extends RetrievalContext {
-  /** Prebuilt graph, to avoid rebuilding per request. */
-  graph?: MemoryGraph;
   /** Set false to fall back to keyword-only behaviour exactly. */
   useGraph?: boolean;
   /** Injected for deterministic tests. */
   now?: number;
-}
-
-export interface ScoredMemory {
-  memory: Memory;
-  /** Hops from a query entity, or null when only keywords matched. */
-  hops: number | null;
-  boost: number;
 }
 
 /**
@@ -51,6 +53,9 @@ export interface ScoredMemory {
  * than one asserted last week. This is the "temporal" in temporal edges — the
  * existing model could only mark a memory wholly superseded, with nothing in
  * between.
+ *
+ * The instant used is the memory's own last assertion (`updatedAt`, falling back
+ * to `createdAt`), which is what dates the connection it contributes.
  */
 function temporalFactor(lastAssertedAt: number, now: number): number {
   if (!lastAssertedAt) return 0.5;
@@ -62,7 +67,11 @@ function temporalFactor(lastAssertedAt: number, now: number): number {
  * Retrieve with the graph boost applied.
  *
  * Returns the same shape and honours the same limit as the keyword retriever, so
- * it is a drop-in replacement at the call site.
+ * it is a drop-in replacement at the call site. `result.length <= limit` holds for
+ * every input: the merged list is sliced once, at the end. (It used to prepend an
+ * unlimited episodic block and clamp only the tail, so four episodic memories made
+ * a limit of 1, 2 or 3 all return three — and threw away every non-episodic
+ * candidate, including the direct keyword match.)
  */
 export function getMemoriesForContextWithGraph(
   memories: Memory[],
@@ -70,91 +79,45 @@ export function getMemoriesForContextWithGraph(
 ): Memory[] {
   const { query = '', limit = 20, useGraph = true, now = Date.now() } = ctx;
 
-  // Rank EVERYTHING the base retriever would consider, not a truncated window.
-  //
-  // With a window, a memory the graph reached but keywords missed scored 0 for
-  // relevance, so a 0.12 two-hop boost could not beat a mid-ranked keyword result
-  // — and whether it won depended on millisecond-level recency differences. That
-  // made the headline behaviour ("surfaces a memory sharing no keyword")
-  // intermittent, which a flaky test of mine exposed.
-  //
-  // Ranking the full set gives every candidate a meaningful base score, so the
-  // boost adds signal instead of fighting an artefact of where the window fell.
-  const baseline = getMemoriesForContext(memories, { ...ctx, limit: memories.length });
+  // The full ranking, with the retriever's real scores — not a truncated window,
+  // and not scores re-derived here. `ranked` has already had the scope, category
+  // and supersede filters applied, so it is also the allow-list: a memory the
+  // graph reaches that is not in it was filtered out for a reason.
+  const { episodic, ranked } = rankMemories(memories, ctx);
 
-  if (!useGraph || !query.trim()) return baseline.slice(0, limit);
+  // Episodic memories are pinned to the front as recent session context; the boost
+  // must not shuffle them out of that role.
+  const merge = (rest: Memory[]) => [...episodic, ...rest].slice(0, Math.max(0, limit));
+  const keywordOnly = () => merge(ranked.map((r) => r.memory));
 
-  const queryEntities = extractQueryEntities(query);
-  if (queryEntities.length === 0) return baseline.slice(0, limit);
+  if (!useGraph || !query.trim()) return keywordOnly();
 
-  const graph = ctx.graph ?? graphFor(memories);
+  // Cached per distinct memory content, so this is a comparison rather than a
+  // build on all but the first message.
+  const graph = graphFor(memories);
+
+  // The graph's entity index is what decides whether a capitalised word in the
+  // query is a name. Cheaper and far more accurate than any stopword list, and it
+  // means an entity-free query costs one cached graph lookup.
+  const queryEntities = extractQueryEntities(query, graph.entities);
+  if (queryEntities.length === 0) return keywordOnly();
+
   const reached = traverse(graph, queryEntities.map((e) => e.id), HOP_BOOST.length - 1);
-  if (reached.size === 0) return baseline.slice(0, limit);
+  if (reached.size === 0) return keywordOnly();
 
-  // The baseline now spans everything the scope and supersede filters permit, so
-  // it doubles as the allow-list: a graph-reached memory that is not in it was
-  // filtered out for a reason and must stay out.
-  const candidates = new Map<string, Memory>();
-  baseline.forEach((m) => candidates.set(m.id, m));
-
-  // Baseline position stands in for the keyword score: the retriever returns a
-  // ranked list, and re-deriving its internal score here would duplicate — and
-  // then drift from — its weighting.
-  const basePosition = new Map(baseline.map((m, i) => [m.id, i]));
-  const scored: ScoredMemory[] = [...candidates.values()].map((memory) => {
-    const position = basePosition.get(memory.id);
-    const baseScore = position === undefined ? 0 : 1 - position / Math.max(baseline.length, 1);
-
-    const hops = reached.get(memory.id) ?? null;
+  const boosted = ranked.map(({ memory, score }, index) => {
+    const hops = reached.get(memory.id);
     let boost = 0;
-    if (hops !== null && hops < HOP_BOOST.length) {
+    if (hops !== undefined && hops < HOP_BOOST.length) {
       const asserted = memory.updatedAt || memory.createdAt || 0;
       boost = HOP_BOOST[hops] * temporalFactor(asserted, now) * (memory.confidence ?? 1);
     }
-    return { memory, hops, boost, score: baseScore + boost } as ScoredMemory & { score: number };
-  }) as Array<ScoredMemory & { score: number }>;
-
-  // Episodic memories are pinned to the front by the base retriever as recent
-  // session context; the boost must not shuffle them out of that role.
-  const episodic = baseline.filter((m) => m.category === 'episodic');
-  const episodicIds = new Set(episodic.map((m) => m.id));
-
-  const rest = (scored as Array<ScoredMemory & { score: number }>)
-    .filter((s) => !episodicIds.has(s.memory.id))
-    .sort((x, y) => y.score - x.score || (x.memory.id < y.memory.id ? -1 : 1))
-    .slice(0, Math.max(0, limit - episodic.length))
-    .map((s) => s.memory);
-
-  return [...episodic, ...rest];
-}
-
-/**
- * Retrieval with the reasoning attached, for the memory UI and for explaining why
- * something was recalled. Same ranking as above.
- */
-export function explainRetrieval(
-  memories: Memory[],
-  ctx: GraphRetrievalContext = {},
-): ScoredMemory[] {
-  const { query = '', now = Date.now() } = ctx;
-  const selected = getMemoriesForContextWithGraph(memories, ctx);
-  const graph = ctx.graph ?? graphFor(memories);
-  const reached = traverse(
-    graph,
-    extractQueryEntities(query).map((e) => e.id),
-    HOP_BOOST.length - 1,
-  );
-
-  return selected.map((memory) => {
-    const hops = reached.get(memory.id) ?? null;
-    const asserted = memory.updatedAt || memory.createdAt || 0;
-    return {
-      memory,
-      hops,
-      boost:
-        hops !== null && hops < HOP_BOOST.length
-          ? HOP_BOOST[hops] * temporalFactor(asserted, now) * (memory.confidence ?? 1)
-          : 0,
-    };
+    return { memory, index, score: score + boost };
   });
+
+  // Ties break on the keyword ranking's own order, so with no boosts in play the
+  // result is exactly the keyword retriever's — the graph can only add.
+  boosted.sort((x, y) => y.score - x.score || x.index - y.index);
+
+  return merge(boosted.map((b) => b.memory));
 }

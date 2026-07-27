@@ -31,8 +31,6 @@ interface CoworkState {
    */
   modelRoute: ModelOption | null;
   isStreaming: boolean;
-  /** Write-only — see the note on `ChatState.streamError`. Nothing renders it. */
-  streamError: string | null;
   folderByChat: Record<string, string | null>;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
@@ -71,7 +69,6 @@ interface CoworkActions {
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   touchActivity: (chatId: string) => void;
   setIsStreaming: (v: boolean) => void;
-  setStreamError: (e: string | null) => void;
   addSearchGroup: (chatId: string, group: { query: string; results: { title: string; url: string; snippet: string }[] }) => void;
   clearSearchGroups: (chatId: string) => void;
 }
@@ -86,7 +83,6 @@ export const useCoworkStore = create<CoworkStore>()(
       model: 'opus',
       modelRoute: null,
       isStreaming: false,
-      streamError: null,
       folderByChat: {},
       contextFiles: {},
       artifactFiles: {},
@@ -306,7 +302,6 @@ export const useCoworkStore = create<CoworkStore>()(
         })),
 
       setIsStreaming: (v) => set({ isStreaming: v }),
-      setStreamError: (e) => set({ streamError: e }),
       addSearchGroup: (chatId, group) =>
         set((state) => ({
           searchGroups: {

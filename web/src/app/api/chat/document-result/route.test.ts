@@ -16,9 +16,9 @@ const post = (body: unknown, raw?: string) =>
 describe('POST /api/chat/document-result', () => {
   it('unblocks a waiting print with success', async () => {
     const waiting = waitForDocumentPrint('t1');
-    const res = await post({ toolUseId: 't1', ok: true, path: '/o/r.pdf', bytes: 99 });
+    const res = await post({ toolUseId: 't1', ok: true, bytes: 99 });
     expect(res.status).toBe(200);
-    await expect(waiting).resolves.toEqual({ ok: true, path: '/o/r.pdf', bytes: 99 });
+    await expect(waiting).resolves.toEqual({ ok: true, bytes: 99 });
   });
 
   it('unblocks with a failure and its reason', async () => {
@@ -53,5 +53,34 @@ describe('POST /api/chat/document-result', () => {
     await post({ toolUseId: 't4', ok: true });
     await waiting;
     expect(pendingDocumentCount()).toBe(before);
+  });
+});
+
+/**
+ * DEFECT 3 (regression): this route is unauthenticated and bound nothing to the
+ * requester, so any local process could resolve a pending print with `ok: true`
+ * and a fabricated `path` — and the model would then tell the user about a PDF at
+ * a path of the caller's choosing. The rendezvous already knows where the PDF was
+ * asked to go, so a caller-supplied path is not information, only an attack
+ * surface. It is now ignored outright.
+ */
+describe('the reported path is not taken from the caller', () => {
+  it('ignores a path in the body rather than passing it to the tool', async () => {
+    const waiting = waitForDocumentPrint('p1');
+    const res = await post({ toolUseId: 'p1', ok: true, path: '/Users/victim/.ssh/id_rsa', bytes: 42 });
+    expect(res.status).toBe(200);
+
+    const result = await waiting;
+    expect(result).toEqual({ ok: true, bytes: 42 });
+    expect(JSON.stringify(result)).not.toContain('id_rsa');
+  });
+
+  it('does not let a caller invent the unclaimed marker', async () => {
+    // `unclaimed` is how the bridge says "nobody answered at all", which the tool
+    // reports as "PDF rendering needs the desktop app". A caller that DID answer
+    // must not be able to claim it did not.
+    const waiting = waitForDocumentPrint('p2');
+    await post({ toolUseId: 'p2', ok: false, unclaimed: true, error: 'nope' });
+    expect((await waiting).unclaimed).toBeUndefined();
   });
 });

@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdir, writeFile, rm, readdir, readFile as read } from 'fs/promises';
+import { join, dirname } from 'path';
 
 /**
  * The property that matters: hostile input must never reach a process. So this
@@ -94,7 +96,7 @@ describe('POST /api/mcp/install — how git is invoked', () => {
     const [file, args] = execFileMock.mock.calls[0];
     expect(file).toBe('git');
     expect(Array.isArray(args)).toBe(true);
-    expect(args).toEqual([
+    expect(args.slice(0, -1)).toEqual([
       'clone',
       '--depth',
       '1',
@@ -103,8 +105,14 @@ describe('POST /api/mcp/install — how git is invoked', () => {
       'main',
       '--',
       'https://github.com/anthropics/x.git',
-      '/tmp/aime-install-test-home/.claude/plugins/my-plugin',
     ]);
+    // The destination is a per-request scratch dir, never the plugin's final home:
+    // an interrupted clone there would leave a half plugin that dirExists() then
+    // treats as installed forever.
+    const dest = args.at(-1)!;
+    expect(dest).toMatch(
+      /^\/tmp\/aime-install-test-home\/\.claude\/plugins\/\.tmp-my-plugin-[^/]+\/repo$/,
+    );
   });
 
   it('disables git credential prompting so a bad URL cannot hang the request', async () => {
@@ -138,5 +146,115 @@ describe('POST /api/mcp/install — how git is invoked', () => {
     );
     expect(res.status).toBe(400);
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * DEFECT 4 (regression): the temp dir lost its uniquifier — `.tmp-${name}-${Date.now()}`
+ * became `.tmp-${safeName.value}` — leaving the comment claiming only that it
+ * "keeps concurrent installs of DIFFERENT plugins apart". The same-name case the
+ * timestamp had covered was unprotected: there is no lock, and `dirExists(targetDir)`
+ * only catches installs that already FINISHED.
+ *
+ * The reachable trigger needs no devtools. browse-connectors.tsx mounts a PluginRow
+ * with no `installedState`/`onStateChange`, so its "Working" guard is lost on
+ * unmount: click Install, click "Browse all", click Install again.
+ *
+ * The worst outcome was silent. Both requests shared one scratch dir, so the
+ * loser's `rm -rf` in `finally` deleted files out from under `srcDir` before the
+ * winner's `rename` — promoting a PARTIALLY POPULATED plugin tree with
+ * `success: true`, after which `dirExists` short-circuits forever and Install can
+ * never repair it.
+ */
+describe('POST /api/mcp/install — overlapping installs of the same name', () => {
+  const PLUGINS_DIR = '/tmp/aime-install-test-home/.claude/plugins';
+  /** Enough files, written slowly enough, that two clones genuinely interleave. */
+  const CLONE_TREE = [
+    '.claude-plugin/plugin.json',
+    'top.txt',
+    'sub/.claude-plugin/plugin.json',
+    'sub/one.txt',
+    'sub/two.txt',
+    'sub/three.txt',
+    'sub/nested/four.txt',
+  ];
+
+  /** A git clone that actually populates the destination, file by file. */
+  const slowClone = () =>
+    execFileMock.mockImplementation(
+      (
+        _file: string,
+        args: string[],
+        _opts: unknown,
+        cb: (e: Error | null, r: { stdout: string; stderr: string }) => void,
+      ) => {
+        const dest = args[args.length - 1];
+        void (async () => {
+          for (const rel of CLONE_TREE) {
+            const abs = join(dest, rel);
+            await mkdir(dirname(abs), { recursive: true });
+            await writeFile(abs, rel.endsWith('.json') ? '{"name":"dup"}' : rel, 'utf-8');
+            await new Promise((r) => setTimeout(r, 4));
+          }
+          cb(null, { stdout: '', stderr: '' });
+        })();
+      },
+    );
+
+  beforeEach(async () => {
+    await rm('/tmp/aime-install-test-home', { recursive: true, force: true });
+    slowClone();
+  });
+
+  afterEach(async () => {
+    await rm('/tmp/aime-install-test-home', { recursive: true, force: true });
+  });
+
+  const subdirBody = { name: 'dup', source: { source: 'git-subdir', url: 'https://h/r.git', path: 'sub' } };
+
+  it('never promotes a partial tree when two same-name subpath installs overlap', async () => {
+    const [a, b] = await Promise.all([post(subdirBody), post(subdirBody)]);
+
+    // Neither may claim success over an incomplete plugin.
+    for (const res of [a, b]) {
+      const body = (await res.json()) as { success?: boolean; error?: string };
+      expect(res.status, body.error).toBe(200);
+      expect(body.success).toBe(true);
+      // The misleading 404 the shared scratch dir used to produce.
+      expect(body.error).toBeUndefined();
+    }
+
+    // The promoted plugin is COMPLETE — every file the subpath contains.
+    const promoted = join(PLUGINS_DIR, 'dup');
+    expect((await readdir(promoted)).sort()).toEqual(['.claude-plugin', 'nested', 'one.txt', 'three.txt', 'two.txt']);
+    expect(await read(join(promoted, 'nested', 'four.txt'), 'utf-8')).toBe('sub/nested/four.txt');
+    expect(await read(join(promoted, '.claude-plugin', 'plugin.json'), 'utf-8')).toContain('dup');
+  });
+
+  it('leaves no orphaned .tmp-* directory behind — the plugin list cannot see them', async () => {
+    await Promise.all([post(subdirBody), post(subdirBody)]);
+    const entries = await readdir(PLUGINS_DIR);
+    expect(entries.filter((e) => e.startsWith('.tmp'))).toEqual([]);
+  });
+
+  it('gives the two overlapping installs different scratch directories', async () => {
+    await Promise.all([post(subdirBody), post(subdirBody)]);
+    const destinations = execFileMock.mock.calls.map((c) => (c[1] as string[]).at(-1));
+    expect(destinations).toHaveLength(2);
+    expect(new Set(destinations).size).toBe(2);
+  });
+
+  it('stages a whole-repo install too, so a half-cloned tree is never the target', async () => {
+    const body = { name: 'dup', source: { source: 'github', repo: 'o/r' } };
+    const [a, b] = await Promise.all([post(body), post(body)]);
+    for (const res of [a, b]) expect(res.status).toBe(200);
+
+    // git was never pointed at the final directory, so an interrupted clone
+    // cannot leave a partial plugin that dirExists() then treats as installed.
+    for (const call of execFileMock.mock.calls) {
+      expect((call[1] as string[]).at(-1)).not.toBe(join(PLUGINS_DIR, 'dup'));
+    }
+    expect((await readdir(join(PLUGINS_DIR, 'dup'))).sort()).toEqual(['.claude-plugin', 'sub', 'top.txt']);
+    expect((await readdir(PLUGINS_DIR)).filter((e) => e.startsWith('.tmp'))).toEqual([]);
   });
 });

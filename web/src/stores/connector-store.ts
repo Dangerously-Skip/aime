@@ -33,6 +33,14 @@ interface ConnectorStoreActions {
   setEnabled: (id: string, enabled: boolean) => void;
   setToken: (id: string, token: string) => void;
   setTokenMeta: (id: string, meta: TokenInfo) => void;
+  /**
+   * Reconciled from the provisioned MCP config: the server holds the credential
+   * and the client never sees it. Marks the connector connected and switched on
+   * WITHOUT inventing a token — the Connectors screen used to do this with
+   * `setToken(id, 'provisioned')`, and re-enabling then POSTed that word back to
+   * the server as the credential.
+   */
+  markProvisioned: (id: string) => void;
   clearToken: (id: string) => void;
   isAuthenticated: (id: string) => boolean;
   getConnectorState: (id: string) => ConnectorState;
@@ -104,6 +112,18 @@ export const useConnectorStore = create<ConnectorStore>()(
           },
         })),
 
+      markProvisioned: (id) =>
+        set((state) => ({
+          connectorStates: {
+            ...state.connectorStates,
+            [id]: {
+              ...(state.connectorStates[id] || defaultConnectorState(id)),
+              authenticated: true,
+              enabled: true,
+            },
+          },
+        })),
+
       clearToken: (id) =>
         set((state) => {
           const { [id]: _, ...remainingTokens } = state.tokens;
@@ -122,10 +142,21 @@ export const useConnectorStore = create<ConnectorStore>()(
           };
         }),
 
-      isAuthenticated: (id) => {
-        const state = get();
-        return !!state.tokens[id] && !!state.connectorStates[id]?.authenticated;
-      },
+      /**
+       * `connectorStates[id].authenticated` is the single answer.
+       *
+       * This used to also require a truthy `tokens[id]`, which left the store
+       * disagreeing with itself: every badge, every row in the Connectors screen
+       * and both derived id sets read the flag, while this accessor added a
+       * condition they do not. Plenty of legitimately-connected services leave no
+       * token in the browser — ambient AWS IAM credentials, an MCP that signs
+       * itself in on first use, anything reconciled from the provisioned config
+       * where the credential never leaves the server — so requiring one reported
+       * them disconnected here and connected everywhere else. Whether we happen to
+       * hold a copy of the credential is a different question from whether the
+       * service is connected.
+       */
+      isAuthenticated: (id) => !!get().connectorStates[id]?.authenticated,
 
       getConnectorState: (id) => {
         return get().connectorStates[id] || defaultConnectorState(id);

@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   getMemoriesForContext,
+  rankMemories,
   searchMemories,
   tagSimilarity,
   contentSimilarity,
@@ -9,6 +10,24 @@ import {
   formatMemoriesForPrompt,
 } from './retriever';
 import type { Memory } from './types';
+
+/**
+ * Fixed clock. Recency scoring reads `Date.now()`, so a fixture that calls it
+ * once per memory makes the ranking depend on whether the millisecond ticked
+ * mid-fixture — which is exactly how a sibling test became intermittent. The
+ * fixture uses this constant and the system clock is frozen to it, so fixture
+ * time and scoring time are the same instant.
+ */
+const NOW = 1_750_000_000_000;
+const day = 24 * 60 * 60 * 1000;
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 let seq = 0;
 const memory = (overrides: Partial<Memory> = {}): Memory => ({
@@ -20,9 +39,9 @@ const memory = (overrides: Partial<Memory> = {}): Memory => ({
   tags: [],
   confidence: 0.8,
   accessCount: 0,
-  lastAccessedAt: Date.now(),
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
+  lastAccessedAt: NOW,
+  createdAt: NOW,
+  updatedAt: NOW,
   supersededBy: null,
   source: 'auto',
   ...overrides,
@@ -149,13 +168,76 @@ describe('getMemoriesForContext', () => {
     expect(getMemoriesForContext(memories, { limit: 5 })).toHaveLength(5);
   });
 
+  it('never returns more than the limit, even when episodic memories alone fill it', () => {
+    // Regression: the merge sliced only the non-episodic tail, by
+    // `limit - episodic.length`. That goes NEGATIVE once episodic fills the limit,
+    // and Array#slice reads a negative end as "all but the last n" — so a limit of
+    // 1 against 15 memories returned 12 of them.
+    const episodic = [1, 2, 3, 4].map((i) =>
+      memory({ category: 'episodic', content: `session ${i}`, createdAt: NOW - i }),
+    );
+    const facts = Array.from({ length: 11 }, (_, i) => memory({ content: `fact ${i}` }));
+    const all = [...facts, ...episodic];
+
+    for (const limit of [1, 2, 3, 4, 10, 15, 20]) {
+      expect(getMemoriesForContext(all, { limit }).length, `limit ${limit}`).toBeLessThanOrEqual(
+        limit,
+      );
+    }
+    expect(getMemoriesForContext(all, { limit: 1 })).toHaveLength(1);
+  });
+});
+
+describe('rankMemories', () => {
+  /**
+   * Exposed so a re-ranker adds to the REAL keyword score instead of guessing one
+   * from list position. Position-derived scores are length-dependent: the same
+   * additive boost moved a memory ~1.5 ranks in a 12-memory set and ~70 ranks in a
+   * 600-memory one, which made graph-boosted ordering depend on set size.
+   */
+  it('returns every candidate with its score, unsliced', () => {
+    const memories = Array.from({ length: 8 }, (_, i) => memory({ content: `fact ${i}` }));
+    const { episodic, ranked } = rankMemories(memories, { query: 'fact 3' });
+    expect(episodic).toEqual([]);
+    expect(ranked).toHaveLength(8);
+    expect(ranked.every((r) => r.score >= 0 && r.score <= 1)).toBe(true);
+  });
+
+  it('scores are independent of how many memories are in the set', () => {
+    const target = memory({ id: 'target', content: 'deployment pipeline uses buildkite agents' });
+    const scoreWith = (fillerCount: number) => {
+      const fillers = Array.from({ length: fillerCount }, (_, i) =>
+        memory({ content: `unrelated note ${i}` }),
+      );
+      const { ranked } = rankMemories([target, ...fillers], { query: 'buildkite deployment' });
+      return ranked.find((r) => r.memory.id === 'target')!.score;
+    };
+    // Same memory, same query, sets of wildly different size.
+    expect(scoreWith(200)).toBeCloseTo(scoreWith(5), 5);
+  });
+
+  it('separates episodic memories and caps them at 3 most recent', () => {
+    const { episodic, ranked } = rankMemories(
+      [
+        memory({ content: 'a fact' }),
+        ...[1, 2, 3, 4].map((i) =>
+          memory({ category: 'episodic', content: `session ${i}`, createdAt: NOW - i * day }),
+        ),
+      ],
+      {},
+    );
+    expect(episodic.map((m) => m.content)).toEqual(['session 1', 'session 2', 'session 3']);
+    expect(ranked.map((r) => r.memory.content)).toEqual(['a fact']);
+  });
+});
+
+describe('getMemoriesForContext — ranking', () => {
   it('ranks query-relevant memories above unrelated ones', () => {
-    const now = Date.now();
     const relevant = memory({
       content: 'deployment pipeline uses buildkite agents',
-      lastAccessedAt: now,
+      lastAccessedAt: NOW,
     });
-    const unrelated = memory({ content: 'favourite colour is teal', lastAccessedAt: now });
+    const unrelated = memory({ content: 'favourite colour is teal', lastAccessedAt: NOW });
 
     const result = getMemoriesForContext([unrelated, relevant], {
       query: 'how does the buildkite deployment work',

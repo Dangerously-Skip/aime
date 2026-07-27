@@ -18,12 +18,16 @@
  * in storage while the value sits in retrieval. Deriving instead buys the
  * retrieval win with none of the migration risk.
  *
- * MEASURED cost of building, rather than assumed: 2.3ms at 100 memories, 6.8ms at
- * 1000, 31ms at 5000. That is too much to pay on every message, so
- * `graphFor()` caches per memories-array identity — zustand replaces the array on
- * any mutation, which makes reference equality an exact invalidation key. An
- * earlier version of this comment claimed sub-millisecond; it was wrong, and
- * benchmarking is why the cache exists.
+ * MEASURED cost of building, rather than assumed: 0.8ms at 100 memories, 3.0ms at
+ * 600 (the store's prune trigger), 5.0ms at 1000 and 23ms at 5000 — Node 26 on an
+ * M1 Pro; a slower machine measured roughly double. Absolute numbers are
+ * machine-dependent, the shape is not: it is milliseconds, per message, growing
+ * with memory count. Two earlier versions of this comment were wrong in both
+ * directions (one claimed sub-millisecond, one claimed 6.8ms at 1000 where the same
+ * machine measured 10ms), which is why the numbers now come with the method.
+ *
+ * That is too much to pay on every message, so `graphFor()` caches — see the note
+ * there for why array identity alone turned out not to be a usable key.
  *
  * If memory volume ever makes even the cached build untenable, the interface here
  * is what an embedded store would implement.
@@ -179,55 +183,79 @@ export function traverse(
 }
 
 /**
- * Cache keyed on array identity. A WeakMap so a replaced memories array is
- * collected with its graph rather than leaking one per mutation.
+ * Cache keyed on array identity — exact, and a WeakMap so a replaced memories
+ * array is collected with its graph rather than leaking one per mutation.
  */
 const graphCache = new WeakMap<object, MemoryGraph>();
 
 /**
- * The graph for these memories, built once per distinct array.
- *
- * Correct because the store updates immutably: any change produces a new array,
- * and an unchanged reference cannot represent changed data.
+ * The most recent build, so a NEW array whose graph-relevant content is unchanged
+ * reuses it instead of rebuilding. Only one array is pinned at a time.
  */
-export function graphFor(memories: Memory[]): MemoryGraph {
-  if (!Array.isArray(memories)) return emptyGraph();
-  const cached = graphCache.get(memories);
-  if (cached) return cached;
-  const graph = buildMemoryGraph(memories);
-  graphCache.set(memories, graph);
-  return graph;
-}
+let lastBuild: { memories: Memory[]; graph: MemoryGraph } | null = null;
 
-/** Entities a memory mentions, for display and debugging. */
-export function entitiesOf(graph: MemoryGraph, memoryId: string): Entity[] {
-  return [...(graph.memoryToEntities.get(memoryId) ?? [])]
-    .map((id) => graph.entities.get(id))
-    .filter((e): e is Entity => !!e);
+function sameTags(a: string[] | undefined, b: string[] | undefined): boolean {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /**
- * What the graph knows about one entity: its memories and its strongest
- * connections, most-corroborated first. This is the "what do I know about Sarah?"
- * query that keyword search cannot answer.
+ * Whether two memories are the same AS FAR AS THE GRAPH IS CONCERNED — every field
+ * `buildMemoryGraph` reads, and nothing else. Access bookkeeping (`accessCount`,
+ * `lastAccessedAt`) is deliberately absent: it cannot change an entity or an edge.
  */
-export function neighbourhood(
-  graph: MemoryGraph,
-  entityId: string,
-): { entity: Entity | undefined; memoryIds: string[]; related: Array<{ entity: Entity; edge: GraphEdge }> } {
-  const related: Array<{ entity: Entity; edge: GraphEdge }> = [];
-  for (const neighbourId of graph.adjacency.get(entityId) ?? []) {
-    const edge = graph.edges.get(edgeKey(entityId, neighbourId));
-    const entity = graph.entities.get(neighbourId);
-    if (edge && entity) related.push({ entity, edge });
-  }
-  related.sort(
-    (x, y) => y.edge.weight - x.edge.weight || y.edge.lastAssertedAt - x.edge.lastAssertedAt,
+function sameGraphInput(a: Memory, b: Memory): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.id === b.id &&
+    a.content === b.content &&
+    a.supersededBy === b.supersededBy &&
+    a.confidence === b.confidence &&
+    (a.updatedAt || a.createdAt || 0) === (b.updatedAt || b.createdAt || 0) &&
+    sameTags(a.tags, b.tags)
   );
+}
 
-  return {
-    entity: graph.entities.get(entityId),
-    memoryIds: [...(graph.entityToMemories.get(entityId) ?? [])],
-    related,
-  };
+/**
+ * The graph for these memories, built once per distinct CONTENT.
+ *
+ * Array identity alone was not a usable key. It is a sound one — the store updates
+ * immutably — but every send handler calls `touchMemory` once per retrieved memory
+ * immediately after retrieval, and each touch maps the array: up to 20 fresh array
+ * identities per message. Measured hit rate after the first message: zero. The
+ * graph was rebuilt on every single message, which is the whole cost the cache
+ * exists to avoid.
+ *
+ * So a new array falls back to comparing against the last build, field by field,
+ * over exactly what the graph reads. That is O(n) pointer comparisons plus a few
+ * field comparisons for the handful of objects a touch replaced — a rounding error
+ * against a rebuild — and unlike a revision counter it cannot be bypassed by a
+ * direct `setState`.
+ */
+export function graphFor(memories: Memory[]): MemoryGraph {
+  if (!Array.isArray(memories)) return emptyGraph();
+
+  const cached = graphCache.get(memories);
+  if (cached) return cached;
+
+  const prev = lastBuild;
+  if (
+    prev &&
+    prev.memories.length === memories.length &&
+    memories.every((m, i) => sameGraphInput(m, prev.memories[i]))
+  ) {
+    graphCache.set(memories, prev.graph);
+    // Compare against the newest array next time, so a long run of touches stays
+    // one comparison deep rather than drifting further from the cached build.
+    lastBuild = { memories, graph: prev.graph };
+    return prev.graph;
+  }
+
+  const graph = buildMemoryGraph(memories);
+  graphCache.set(memories, graph);
+  lastBuild = { memories, graph };
+  return graph;
 }

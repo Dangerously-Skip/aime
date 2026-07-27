@@ -77,21 +77,40 @@ function recencyScore(lastAccessedAt: number): number {
   return Math.max(0, 1 - ageDays / 30);
 }
 
+export interface RankedMemory {
+  memory: Memory;
+  /** TF-IDF weighted keyword overlap, 0-1. A query-less retrieval scores 0.5. */
+  relevance: number;
+  /** relevance 40% + confidence 30% + recency 30%, so 0-1. */
+  score: number;
+}
+
+export interface RankedMemories {
+  /** Up to 3 most recent episodic memories, pinned ahead of the ranking. */
+  episodic: Memory[];
+  /** Every other candidate, best first. NOT truncated — callers apply the limit. */
+  ranked: RankedMemory[];
+}
+
 /**
- * Retrieve and rank memories for a given context.
+ * Filter and rank, without applying a limit.
+ *
+ * Exposed so a re-ranker (the graph boost) can add to the REAL score instead of
+ * inferring one from list position. Position-derived scores are length-dependent —
+ * one rank is worth 1/n — so a fixed additive boost moved a memory ~1.5 ranks in a
+ * 12-memory set and ~70 in a 600-memory one. Ranking here is the single source of
+ * the keyword score, so there is nothing for a second implementation to drift from.
  *
  * 1. Filter: active (not superseded) + scope match (global + current project)
- * 2. Separate episodic memories — always include top 3 most recent
- * 3. Rank non-episodic by: TF-IDF relevance (40%) + confidence (30%) + recency (30%)
- * 4. Merge episodic + ranked, limit to top N (default 20)
+ * 2. Separate episodic — the 3 most recent are pinned as session context
+ * 3. Rank the rest by TF-IDF relevance (40%) + confidence (30%) + recency (30%)
  */
-export function getMemoriesForContext(
+export function rankMemories(
   memories: Memory[],
   ctx: RetrievalContext = {}
-): Memory[] {
-  const { projectId = null, query = '', limit = 20, categories } = ctx;
+): RankedMemories {
+  const { projectId = null, query = '', categories } = ctx;
 
-  // 1. Filter
   const filtered = memories.filter((m) => {
     if (m.supersededBy) return false;
     if (m.scope === 'project' && m.projectId !== projectId) return false;
@@ -99,7 +118,6 @@ export function getMemoriesForContext(
     return true;
   });
 
-  // 2. Separate episodic from non-episodic
   const episodic = filtered
     .filter((m) => m.category === 'episodic')
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -107,31 +125,44 @@ export function getMemoriesForContext(
 
   const nonEpisodic = filtered.filter((m) => m.category !== 'episodic');
 
-  // 3. Rank non-episodic with TF-IDF
   const queryKeywords = extractKeywords(query);
   const df = buildDocumentFrequency(nonEpisodic);
   const totalDocs = nonEpisodic.length;
 
-  const scored = nonEpisodic.map((m) => {
+  const ranked = nonEpisodic.map((m) => {
     const relevance = queryKeywords.size > 0
       ? tfidfScore(queryKeywords, m, df, totalDocs)
       : 0.5;
-    const confidence = m.confidence;
     const recency = recencyScore(m.lastAccessedAt);
-    const score = relevance * 0.4 + confidence * 0.3 + recency * 0.3;
-    return { memory: m, score };
+    return {
+      memory: m,
+      relevance,
+      score: relevance * 0.4 + m.confidence * 0.3 + recency * 0.3,
+    };
   });
 
-  scored.sort((a, b) => b.score - a.score);
+  // Array#sort is stable, so equal scores keep input order — the same inputs give
+  // the same order every time.
+  ranked.sort((a, b) => b.score - a.score);
 
-  // 4. Merge: episodic first, then ranked non-episodic, up to limit
-  const episodicIds = new Set(episodic.map((m) => m.id));
-  const ranked = scored
-    .filter((s) => !episodicIds.has(s.memory.id))
-    .slice(0, limit - episodic.length)
-    .map((s) => s.memory);
+  return { episodic, ranked };
+}
 
-  return [...episodic, ...ranked];
+/**
+ * Retrieve and rank memories for a given context, capped at `limit` (default 20).
+ */
+export function getMemoriesForContext(
+  memories: Memory[],
+  ctx: RetrievalContext = {}
+): Memory[] {
+  const { limit = 20 } = ctx;
+  const { episodic, ranked } = rankMemories(memories, ctx);
+
+  // Slice AFTER merging. Slicing only the non-episodic tail by
+  // `limit - episodic.length` goes negative once episodic fills the limit, and
+  // Array#slice reads a negative end as "all but the last n" — so a limit of 1
+  // against 15 memories returned 12 of them.
+  return [...episodic, ...ranked.map((r) => r.memory)].slice(0, Math.max(0, limit));
 }
 
 /**

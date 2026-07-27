@@ -22,8 +22,15 @@
  *
  * What is NOT knowable locally is revocation — a user removing the app from
  * their Google account leaves our metadata untouched. That needs a live probe,
- * which is network-bound and rate-limited, so it stays a deliberate "check now"
+ * which is network-bound and rate-limited, so it would have to be a deliberate
  * action rather than something that runs on every render.
+ *
+ * NOT IMPLEMENTED, and this docstring used to imply otherwise by describing a
+ * "check now" action in the present tense. There is no such action anywhere in the
+ * app: nothing probes, so nothing writes `lastProbeFailed`, so the 'revoked'
+ * verdict below is unreachable in production. The field and the branch are kept
+ * because they are the shape the probe will report through — see `lastProbeFailed`
+ * for the same statement at the point a reader would trust it.
  *
  * Pure: metadata and clock in, verdict out.
  */
@@ -55,11 +62,21 @@ export interface ConnectionMeta {
   tokenEndpoint?: string;
   clientId?: string;
   /**
-   * Set by a failed live probe. NOTHING IN PRODUCTION WRITES THIS YET — the
-   * "check now" action described above is still the deliberate future work, so
-   * the 'revoked' verdict below is currently reachable only from a hand-edited
-   * config (and from tests). Stated rather than implied, because the previous
-   * comment pointed at a `markProbeResult` that does not exist.
+   * NOT-YET-IMPLEMENTED, both of them. Intended to be set by a failed live probe,
+   * but no probe exists (see the module docstring), so:
+   *
+   *   - `lastProbeFailed` is READ below and written NOWHERE in production. The
+   *     'revoked' verdict is therefore reachable only from a hand-edited config
+   *     and from tests — it cannot fire for a real user.
+   *   - `lastProbeAt` is neither read nor written by anything. It is here so the
+   *     probe has a place to record when it last ran.
+   *
+   * Spelled out because the comment this replaced named `markProbeResult` as the
+   * writer, and no function by that name has ever existed in this codebase — so a
+   * reader chasing the 'revoked' path went looking for code that was never
+   * written. The route DOES carry these fields across a re-enable
+   * (`/api/connectors/provision` inherits `_meta` when the credential is
+   * unchanged), which is forwarding, not writing.
    */
   lastProbeFailed?: boolean;
   lastProbeAt?: number;

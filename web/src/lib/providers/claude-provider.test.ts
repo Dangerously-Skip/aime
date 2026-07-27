@@ -869,12 +869,16 @@ describe('DocumentCreate — the print hop (P4.2b)', () => {
 
   it('asks the client to print, waits, and reports the PDF', async () => {
     const { resolveDocumentPrint } = await import('../pending-documents');
+    const fsp = await import('fs/promises');
     const requests: Array<{ toolUseId: string; outputPath: string }> = [];
 
     const handler = await toolWith(async (toolUseId, payload) => {
       requests.push({ toolUseId, outputPath: payload.outputPath });
-      // Stand in for the client round trip.
-      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true, path: payload.outputPath, bytes: 1234 }), 0);
+      // Stand in for the client round trip. It has to actually WRITE the file:
+      // the tool no longer takes a reported success on trust (see the
+      // "only reported if it exists" regression suite below).
+      await fsp.writeFile(payload.outputPath, '%PDF-1.4 stand-in bytes', 'utf-8');
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true, bytes: 1234 }), 0);
     });
 
     const result = await handler({ title: 'Report', markdown: '# Hi' });
@@ -891,7 +895,7 @@ describe('DocumentCreate — the print hop (P4.2b)', () => {
 
     const handler = await toolWith(async (toolUseId, payload) => {
       sent = payload.printOptions;
-      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true, path: payload.outputPath }), 0);
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true }), 0);
     });
     await handler({ title: 'R', markdown: 'x', theme: 'proposal' });
 
@@ -1532,5 +1536,303 @@ describe('MCP approval gate — remembered decisions', () => {
     await vi.waitFor(() => expect(asked).toHaveLength(2));
     resolveAnswer('m-2', { x: 'Deny' });
     expect((await second).behavior).toBe('deny');
+  });
+});
+
+/**
+ * DEFECT 1 (regression): `connectorOutcomes` was keyed by connector id and never
+ * deleted — a per-connector last-write-wins slot, one layer above a rendezvous
+ * that is correctly keyed by tool-use id. Two RequestConnector blocks for the SAME
+ * connector in one turn crossed in BOTH directions against the real canUseTool: a
+ * user who CONNECTED was told "Not connected: user declined", and a user who
+ * DECLINED was told "slack is now connected".
+ *
+ * The "at most one per turn" rule was prose in the tool description, enforced
+ * nowhere — unlike CronCreate, which has an `alreadyQueued` guard three hundred
+ * lines away. The existing cross-talk test used two DIFFERENT connectors, so it
+ * passed against the broken behaviour.
+ */
+describe('RequestConnector — outcomes bound to their own call (regression)', () => {
+  async function capture() {
+    await run(new ClaudeProvider(), { onConnectorRequest: async () => {} });
+    const call = queryMock.mock.calls.at(-1)![0] as {
+      options: {
+        canUseTool: CanUseTool;
+        mcpServers: Record<string, { tools?: Array<{ name: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }>;
+      };
+    };
+    const tool = call.options.mcpServers.aime.tools!.find((t) => t.name === 'RequestConnector')!;
+    return { canUseTool: call.options.canUseTool, handler: tool.handler };
+  }
+
+  const say = async (
+    handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }>,
+    connectorId: string,
+  ) => (await handler({ connectorId, reason: 'r' })).content[0].text;
+
+  beforeEach(() => scriptChunks([]));
+
+  it('does not tell a user who CONNECTED that they declined', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool, handler } = await capture();
+
+    // Two blocks for the same connector, both dispatched before either is
+    // answered — the SDK client demonstrably permits concurrent can_use_tool.
+    const first = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r1' }, { toolUseID: 'x1-a' });
+    const second = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r2' }, { toolUseID: 'x1-b' });
+
+    await vi.waitFor(() => expect(resolveConnectorRequest('x1-a', { connected: true })).toBe(true));
+    await first;
+    await second;
+
+    const text = await say(handler, 'slack');
+    expect(text).toContain('now connected');
+    expect(text).not.toContain('Not connected');
+  });
+
+  it('does not tell a user who DECLINED that the service is connected', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool, handler } = await capture();
+
+    const first = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r1' }, { toolUseID: 'x2-a' });
+    const second = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r2' }, { toolUseID: 'x2-b' });
+
+    await vi.waitFor(() =>
+      expect(resolveConnectorRequest('x2-a', { connected: false, reason: 'user declined' })).toBe(true),
+    );
+    await first;
+    await second;
+
+    const text = await say(handler, 'slack');
+    expect(text).toContain('Not connected');
+    expect(text).toContain('user declined');
+    expect(text).not.toContain('now connected');
+  });
+
+  it('enforces the one-per-connector rule the tool description claims', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool } = await capture();
+
+    const first = canUseTool('RequestConnector', { connectorId: 'github', reason: 'r' }, { toolUseID: 'x3-a' });
+    await vi.waitFor(() => expect(resolveConnectorRequest('x3-a', { connected: true })).toBe(true));
+    await first;
+
+    const second = await canUseTool('RequestConnector', { connectorId: 'github', reason: 'again' }, { toolUseID: 'x3-b' });
+    expect(second.behavior).toBe('deny');
+    expect(second.message).toMatch(/already/i);
+    // ...and no second card was ever pushed to the user.
+  });
+
+  it('consumes the outcome, so a replayed handler call cannot re-report it', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool, handler } = await capture();
+
+    const pending = canUseTool('RequestConnector', { connectorId: 'figma', reason: 'r' }, { toolUseID: 'x4-a' });
+    await vi.waitFor(() => expect(resolveConnectorRequest('x4-a', { connected: true })).toBe(true));
+    await pending;
+
+    expect(await say(handler, 'figma')).toContain('now connected');
+    // A second handler invocation for the same id is not a second connect.
+    expect(await say(handler, 'figma')).toContain('Not connected');
+  });
+
+  it('still lets the agent ask for a genuinely different service', async () => {
+    const { resolveConnectorRequest } = await import('../pending-connectors');
+    const { canUseTool } = await capture();
+
+    const a = canUseTool('RequestConnector', { connectorId: 'figma', reason: 'r' }, { toolUseID: 'x5-a' });
+    await vi.waitFor(() => expect(resolveConnectorRequest('x5-a', { connected: true })).toBe(true));
+    await a;
+
+    const b = canUseTool('RequestConnector', { connectorId: 'slack', reason: 'r' }, { toolUseID: 'x5-b' });
+    await vi.waitFor(() => expect(resolveConnectorRequest('x5-b', { connected: false, reason: 'nope' })).toBe(true));
+    expect((await b).behavior).toBe('allow');
+  });
+});
+
+/**
+ * DEFECT 2 (regression): the documented "no connected client" fallback was
+ * unreachable on the HTTP path. Printability was decided by `if (!onDocumentPrint)`,
+ * but the chat route defines that callback for EVERY request. The webhook route
+ * server-side fetches /api/chat/<surface> and never reads response.body, so
+ * `document_print` cannot possibly be acted on — and the tool stalled for the full
+ * 60s budget and then told the model "PDF rendering timed out.", an invented
+ * failure, instead of "PDF rendering needs the desktop app, so only the HTML was
+ * written."
+ *
+ * The precondition is whether anyone is ACTING on the stream, which the callback's
+ * existence does not indicate. So silence is now reported as silence.
+ */
+describe('DocumentCreate — a consumer that ignores the event (regression)', () => {
+  let workDir: string;
+
+  async function toolWith(onDocumentPrint?: QueryParams['onDocumentPrint']) {
+    await run(new ClaudeProvider(), { cwd: workDir, onDocumentPrint });
+    const captured = queryMock.mock.calls.at(-1)![0] as {
+      options: { mcpServers: Record<string, { tools?: Array<{ name: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }> };
+    };
+    return captured.options.mcpServers.aime.tools!.find((t) => t.name === 'DocumentCreate')!.handler;
+  }
+
+  beforeEach(async () => {
+    const fsp = await import('fs/promises');
+    workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aime-docsilence-'));
+    scriptChunks([]);
+  });
+
+  afterEach(async () => {
+    const fsp = await import('fs/promises');
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  it('tells the model the honest truth, not that rendering timed out', async () => {
+    const { DOCUMENT_PRINT_TIMEOUT_MS, pendingDocumentCount } = await import('../pending-documents');
+    // A consumer that receives document_print and does nothing with it — exactly
+    // what the webhook path is.
+    const handler = await toolWith(async () => {});
+
+    // Captured BEFORE faking: vi.useFakeTimers() replaces globalThis.setImmediate
+    // too, so a tick taken afterwards would never fire and the real fs work below
+    // could never complete.
+    const realSetImmediate = setImmediate;
+    const realTick = () => new Promise((resolve) => realSetImmediate(resolve));
+    vi.useFakeTimers();
+    try {
+      const promise = handler({ title: 'Silent', markdown: '# Hi' });
+      while (pendingDocumentCount() === 0) await realTick();
+      await vi.advanceTimersByTimeAsync(DOCUMENT_PRINT_TIMEOUT_MS + 10);
+
+      const text = (await promise).content[0].text;
+      expect(text).toMatch(/needs the desktop app/);
+      expect(text).not.toMatch(/timed out/i);
+      expect(text).not.toContain('silent.pdf');
+      expect(text).toContain('silent.html');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * DEFECT 3 (regression): /api/chat/document-result is an unauthenticated localhost
+ * route that bound nothing to the requester, so any local process could resolve a
+ * pending print with `ok: true` and a fabricated `path` — and the model would go on
+ * to tell the user about a PDF that does not exist. Whatever one thinks of the
+ * attacker model for a desktop app, a fabricated success reaching the model is a
+ * correctness problem, so the claim is now checked against the filesystem.
+ */
+describe('DocumentCreate — a PDF is only reported if it exists (regression)', () => {
+  let workDir: string;
+
+  async function toolWith(onDocumentPrint?: QueryParams['onDocumentPrint']) {
+    await run(new ClaudeProvider(), { cwd: workDir, onDocumentPrint });
+    const captured = queryMock.mock.calls.at(-1)![0] as {
+      options: { mcpServers: Record<string, { tools?: Array<{ name: string; handler: (i: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> }> }> };
+    };
+    return captured.options.mcpServers.aime.tools!.find((t) => t.name === 'DocumentCreate')!.handler;
+  }
+
+  beforeEach(async () => {
+    const fsp = await import('fs/promises');
+    workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'aime-docfake-'));
+    scriptChunks([]);
+  });
+
+  afterEach(async () => {
+    const fsp = await import('fs/promises');
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  it('does not claim a PDF when the reported success wrote nothing', async () => {
+    const { resolveDocumentPrint } = await import('../pending-documents');
+    const handler = await toolWith(async (toolUseId) => {
+      // A fabricated success: ok, plausible byte count, no file anywhere.
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true, bytes: 24_000 }), 0);
+    });
+
+    const text = (await handler({ title: 'Ghost', markdown: 'x' })).content[0].text;
+    expect(text).not.toContain('ghost.pdf');
+    expect(text).toContain('ghost.html');
+  });
+
+  it('reports the PDF when one is genuinely on disk', async () => {
+    const { resolveDocumentPrint } = await import('../pending-documents');
+    const fsp = await import('fs/promises');
+    const handler = await toolWith(async (toolUseId, payload) => {
+      await fsp.writeFile(payload.outputPath, '%PDF-1.4 real bytes', 'utf-8');
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true, bytes: 19 }), 0);
+    });
+
+    const text = (await handler({ title: 'Real', markdown: 'x' })).content[0].text;
+    expect(text).toContain('real.pdf');
+  });
+
+  it('does not believe an empty file either', async () => {
+    const { resolveDocumentPrint } = await import('../pending-documents');
+    const fsp = await import('fs/promises');
+    const handler = await toolWith(async (toolUseId, payload) => {
+      await fsp.writeFile(payload.outputPath, '', 'utf-8');
+      setTimeout(() => resolveDocumentPrint(toolUseId, { ok: true }), 0);
+    });
+
+    const text = (await handler({ title: 'Empty', markdown: 'x' })).content[0].text;
+    expect(text).not.toContain('empty.pdf');
+    expect(text).toContain('empty.html');
+  });
+});
+
+/**
+ * DEFECT 6 (regression): none of the four rendezvous modules cancelled its entry
+ * when the stream aborted, so pressing Stop with a connector card open left a live
+ * timer and a captured resolve closure for the full five minutes. The provider is
+ * the only place that holds both the query's AbortSignal and the waits, so it has
+ * to thread one into the other.
+ */
+describe('aborting a query cancels its outstanding rendezvous', () => {
+  it('frees a pending connector card the moment the user presses Stop', async () => {
+    const { pendingConnectorCount } = await import('../pending-connectors');
+    const provider = new ClaudeProvider();
+    let outcome: { behavior: string } | undefined;
+
+    queryMock.mockImplementation(async function* (args: { options: { canUseTool: CanUseTool } }) {
+      const baseline = pendingConnectorCount();
+      const pending = args.options.canUseTool(
+        'RequestConnector',
+        { connectorId: 'slack', reason: 'r' },
+        { toolUseID: 'stop-1' },
+      );
+      await vi.waitFor(() => expect(pendingConnectorCount()).toBe(baseline + 1));
+
+      // What POST /api/abort does.
+      expect(provider.abort('stop-chat')).toBe(true);
+
+      outcome = await pending;
+      expect(pendingConnectorCount()).toBe(baseline);
+      const err = new Error('aborted');
+      err.name = 'AbortError';
+      throw err;
+    });
+
+    await run(provider, { chatId: 'stop-chat', onConnectorRequest: async () => {} });
+    // The turn unblocks at once rather than five minutes later.
+    expect(outcome).toMatchObject({ behavior: 'allow' });
+  });
+
+  it('frees a pending document print too', async () => {
+    const { pendingDocumentCount, waitForDocumentPrint } = await import('../pending-documents');
+    const provider = new ClaudeProvider();
+    let result: { ok: boolean } | undefined;
+
+    queryMock.mockImplementation(async function* (args: { abortSignal: AbortSignal }) {
+      const baseline = pendingDocumentCount();
+      const pending = waitForDocumentPrint('stop-doc-1', { signal: args.abortSignal });
+      expect(pendingDocumentCount()).toBe(baseline + 1);
+      provider.abort('stop-chat-2');
+      result = await pending;
+      expect(pendingDocumentCount()).toBe(baseline);
+    });
+
+    await run(provider, { chatId: 'stop-chat-2' });
+    expect(result).toMatchObject({ ok: false });
   });
 });

@@ -1,35 +1,38 @@
 /**
- * In-memory registry for pending AskUserQuestion tool calls.
+ * Cross-request bridge for pending AskUserQuestion tool calls.
  *
- * When the Claude Agent SDK calls AskUserQuestion, the canUseTool callback
- * creates a promise here and blocks. The client collects the user's answers
- * and POSTs them to /api/chat/answer, which calls resolveAnswer() to unblock
- * the waiting promise.
+ * When the Claude Agent SDK calls AskUserQuestion, the canUseTool callback parks
+ * a promise here and blocks. The client collects the user's answers and POSTs
+ * them to /api/chat/answer, which calls resolveAnswer() to unblock it.
+ *
+ * The mechanics live in rendezvous.ts, shared with the browser-tool, connector
+ * and document bridges. All this file decides is the budget (five minutes — a
+ * human has to read and click) and that silence REJECTS: an unanswered question
+ * is not an answer, and the caller distinguishes "the prompt expired" from "they
+ * said no".
  */
+import { createRendezvous, type WaitOptions } from './rendezvous';
 
-interface PendingEntry {
-  resolve: (answers: Record<string, string>) => void;
-  reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
+const questions = createRendezvous<Record<string, string>>({
+  label: 'pending-questions',
+  timeoutMs: 300_000,
+  onTimeout: { reject: 'Question timed out' },
+  // A cancelled turn is not a decline. The caller reports the difference.
+  onAbort: { reject: 'Question cancelled — the turn was stopped' },
+});
 
-const pending = new Map<string, PendingEntry>();
+/** Five minutes: the user has to read the card and click. */
+export const QUESTION_TIMEOUT_MS = questions.timeoutMs;
 
 /**
- * Wait for the user to answer a question. Returns a promise that resolves
- * when resolveAnswer() is called with the matching toolUseId.
+ * Wait for the user to answer a question. Resolves when resolveAnswer() is
+ * called with the matching toolUseId; rejects on timeout or on abort.
  */
-export function waitForAnswer(toolUseId: string): Promise<Record<string, string>> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (pending.has(toolUseId)) {
-        pending.delete(toolUseId);
-        reject(new Error('Question timed out'));
-      }
-    }, 300_000);
-
-    pending.set(toolUseId, { resolve, reject, timer });
-  });
+export function waitForAnswer(
+  toolUseId: string,
+  options?: WaitOptions,
+): Promise<Record<string, string>> {
+  return questions.wait(toolUseId, options);
 }
 
 /**
@@ -37,10 +40,10 @@ export function waitForAnswer(toolUseId: string): Promise<Record<string, string>
  * Returns true if the question was found and resolved.
  */
 export function resolveAnswer(toolUseId: string, answers: Record<string, string>): boolean {
-  const entry = pending.get(toolUseId);
-  if (!entry) return false;
-  clearTimeout(entry.timer);
-  pending.delete(toolUseId);
-  entry.resolve(answers);
-  return true;
+  return questions.settle(toolUseId, answers);
+}
+
+/** Test/observability helper — how many questions are awaiting an answer. */
+export function pendingQuestionCount(): number {
+  return questions.size();
 }

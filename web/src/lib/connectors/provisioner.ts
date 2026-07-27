@@ -15,7 +15,14 @@ import type { ConnectorDefinition } from './types';
  */
 export async function provisionConnector(
   connector: ConnectorDefinition,
-  token: string,
+  /**
+   * The credential, when the client actually holds one. Omit it on the re-enable
+   * path: `intent=disable` preserved the stored secret, so the server reuses what
+   * it already has. Sending a placeholder instead — the Connectors screen used to
+   * send the literal word `provisioned` — is how a live token came to be replaced
+   * by a string no service accepts.
+   */
+  token?: string,
   tokenMeta?: {
     refreshToken?: string;
     expiresAt?: number;
@@ -30,7 +37,9 @@ export async function provisionConnector(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       connectorId: connector.id,
-      token,
+      // Absent, not empty: `''` and "no token supplied" mean the same thing to the
+      // route, and omitting the key keeps the request honest about what we know.
+      ...(token !== undefined ? { token } : {}),
       refreshToken: tokenMeta?.refreshToken,
       expiresAt: tokenMeta?.expiresAt,
       oauthClientId: tokenMeta?.oauthClientId,
@@ -46,12 +55,34 @@ export async function provisionConnector(
 }
 
 /**
- * Deprovision a connector — removes its MCP server entry from the configuration.
+ * What "turn this connector off" is supposed to mean.
+ *
+ * `disable` — reversible. Unmounts the MCP entry and keeps everything needed to
+ *   switch it back on: the encrypted credential, the refresh token, the expiry,
+ *   the token endpoint. This is what the on/off toggle does.
+ * `disconnect` — destructive. Deletes the stored credential and revokes the grant
+ *   upstream, so reconnecting is a fresh authorization. This is what the
+ *   Disconnect button does.
  */
-export async function deprovisionConnector(connectorId: string): Promise<void> {
-  const response = await fetch(`/api/connectors/provision?connectorId=${encodeURIComponent(connectorId)}`, {
-    method: 'DELETE',
-  });
+export type DeprovisionIntent = 'disable' | 'disconnect';
+
+/**
+ * Deprovision a connector — removes its MCP server entry from the configuration.
+ *
+ * The intent is REQUIRED. The route defaults an omitted intent to `disable`,
+ * which is the safe default for a route but the wrong one for a caller: sending
+ * nothing is how Disconnect came to leave the credential encrypted at rest with
+ * the grant still live. There is no correct default for "destroy the user's
+ * credential or not", so every call site says which it means.
+ */
+export async function deprovisionConnector(
+  connectorId: string,
+  intent: DeprovisionIntent,
+): Promise<void> {
+  const response = await fetch(
+    `/api/connectors/provision?connectorId=${encodeURIComponent(connectorId)}&intent=${intent}`,
+    { method: 'DELETE' },
+  );
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));

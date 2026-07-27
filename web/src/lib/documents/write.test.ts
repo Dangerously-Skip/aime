@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { resolveDocumentTarget, canPrintPdf, describeOutcome } from './write';
+import path from 'path';
+import { resolveDocumentTarget, describeOutcome } from './write';
+import { resolveContainedChild } from '../path-containment';
 
 describe('resolveDocumentTarget', () => {
   it('turns a human title into a confined filename pair', () => {
@@ -42,16 +44,35 @@ describe('resolveDocumentTarget', () => {
       { numRuns: 1000 },
     );
   });
-});
 
-describe('canPrintPdf', () => {
-  it('detects a usable bridge', () => {
-    expect(canPrintPdf({ printPdf: async () => ({ ok: true }) })).toBe(true);
+  it('regression: confines a document under a Windows output directory', () => {
+    // The containment check here used to be a string-prefix comparison against a
+    // '/'-terminated base — the same form that made every plugin install fail on
+    // a shipped Windows build. Untestable then, because the module read ambient
+    // `path`; the shared helper takes a flavour, so the win32 verdict is asserted
+    // on a posix runner.
+    const r = resolveDocumentTarget('C:\\Users\\u\\Documents', 'Q3 Board Pack', {
+      flavour: path.win32,
+    });
+    expect(r.ok && r.target).toMatchObject({
+      dir: 'C:\\Users\\u\\Documents',
+      slug: 'q3-board-pack',
+      htmlPath: 'C:\\Users\\u\\Documents\\q3-board-pack.html',
+      pdfPath: 'C:\\Users\\u\\Documents\\q3-board-pack.pdf',
+    });
   });
 
-  it('rejects anything else', () => {
-    for (const v of [undefined, null, {}, { printPdf: 'no' }, 42]) {
-      expect(canPrintPdf(v), String(v)).toBe(false);
+  it('the containment check is real, not a tautology over the slug', () => {
+    // Both this and resolveSkillDir were only ever fed a slug, which cannot
+    // contain a separator — so the guard could not fail and asserted nothing,
+    // while reading at the call site as the boundary for a model-chosen filename.
+    // Driving the shared helper directly proves the boundary now holds, so the
+    // obvious next change (accepting a title that is not slugified first) is safe.
+    for (const segment of ['../../etc/passwd', 'a/b', '..', '', 'C:\\Windows']) {
+      expect(
+        resolveContainedChild('/out', segment, { error: 'nope' }).ok,
+        JSON.stringify(segment),
+      ).toBe(false);
     }
   });
 });

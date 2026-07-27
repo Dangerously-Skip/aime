@@ -2,7 +2,7 @@ export const runtime = 'nodejs';
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { readFile, mkdir, stat, rm, rename } from 'fs/promises';
+import { readFile, mkdir, mkdtemp, stat, rm, rename, readdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import {
@@ -60,6 +60,66 @@ async function git(args: string[]): Promise<void> {
 }
 
 /**
+ * Scratch directories are dot-prefixed so the plugin scanners skip them, and they
+ * live INSIDE the plugins directory rather than os.tmpdir() — the promotion below
+ * is a `rename`, which cannot cross filesystems.
+ */
+const TEMP_PREFIX = '.tmp-';
+/** Long enough that no live clone is ever swept; short enough to not accumulate. */
+const TEMP_SWEEP_AGE_MS = 2 * GIT_TIMEOUT_MS;
+
+/**
+ * Publish a staged tree as the installed plugin — atomically, or not at all.
+ *
+ * `rename` is the whole mechanism. The kernel refuses to rename a directory onto
+ * a POPULATED one, and that refusal is the concurrency control: a second install
+ * of the same name cannot merge into, clobber, or half-overwrite the first. It
+ * loses and says so.
+ *
+ * This is why the clone is staged rather than written straight to its final home.
+ * Cloning into `targetDir` meant an interrupted or racing clone left a partially
+ * populated plugin directory there — and `dirExists(targetDir)` then short-circuits
+ * every future install, so nothing could ever repair it.
+ */
+async function promote(srcDir: string, targetDir: string): Promise<'installed' | 'raced'> {
+  try {
+    await rename(srcDir, targetDir);
+    return 'installed';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // ENOTEMPTY on POSIX, EEXIST/EPERM on Windows.
+    const occupied = code === 'ENOTEMPTY' || code === 'EEXIST' || code === 'EPERM';
+    if (occupied && (await dirExists(targetDir))) return 'raced';
+    throw err;
+  }
+}
+
+/**
+ * Remove scratch directories a previous process abandoned (a crash, a SIGKILL).
+ *
+ * Opportunistic and never fatal: an install must not fail because a leftover
+ * could not be tidied. Age-gated so it can never touch a clone that is still
+ * running, including one belonging to a concurrent request.
+ */
+async function sweepAbandonedScratch(now: number): Promise<void> {
+  try {
+    const entries = await readdir(PLUGINS_DIR, { withFileTypes: true });
+    await Promise.all(
+      entries
+        .filter((e) => e.isDirectory() && e.name.startsWith(TEMP_PREFIX))
+        .map(async (e) => {
+          const dir = join(PLUGINS_DIR, e.name);
+          const s = await stat(dir).catch(() => null);
+          if (!s || now - s.mtimeMs < TEMP_SWEEP_AGE_MS) return;
+          await rm(dir, { recursive: true, force: true }).catch(() => {});
+        }),
+    );
+  } catch {
+    // Nothing here is required for the install to succeed.
+  }
+}
+
+/**
  * POST /api/mcp/install
  * Body: { name, source }
  */
@@ -102,32 +162,41 @@ export async function POST(request: Request) {
       });
     }
 
-    if (plan.value.subpath) {
-      // Clone to a scratch dir, then promote the requested subdirectory.
-      // The suffix keeps concurrent installs of different plugins apart; the
-      // name is already restricted to a single safe path segment.
-      tempDir = join(PLUGINS_DIR, `.tmp-${safeName.value}`);
-      await rm(tempDir, { recursive: true, force: true });
-      await git(buildCloneArgs(plan.value, tempDir));
+    await sweepAbandonedScratch(Date.now());
 
-      const srcDir = join(tempDir, plan.value.subpath);
-      if (!(await dirExists(srcDir))) {
-        return Response.json(
-          { error: `Subpath ${plan.value.subpath} not found in repo` },
-          { status: 404 },
-        );
-      }
-      await rename(srcDir, targetDir);
-    } else {
-      await git(buildCloneArgs(plan.value, targetDir));
+    // EVERY install stages into its own scratch directory and is then promoted by
+    // a single rename. Two reasons, both of which used to bite:
+    //
+    //  - The scratch path must be unique per REQUEST. `.tmp-${name}-${Date.now()}`
+    //    became `.tmp-${name}`, and the comment was softened to claim only that it
+    //    "keeps concurrent installs of DIFFERENT plugins apart" — so two installs
+    //    of the SAME name shared one directory. The second one's `rm -rf` deleted
+    //    the first one's clone out from under it, and whichever ordering won could
+    //    promote a partially populated tree with `success: true`. mkdtemp is the
+    //    right tool: the kernel guarantees the name, so there is no window.
+    //  - Nothing may ever be cloned directly into `targetDir`. An interrupted
+    //    clone there leaves a half plugin that `dirExists` treats as installed
+    //    forever, and Install can never repair it.
+    tempDir = await mkdtemp(join(PLUGINS_DIR, `${TEMP_PREFIX}${safeName.value}-`));
+    const cloneDir = join(tempDir, 'repo');
+    await git(buildCloneArgs(plan.value, cloneDir));
+
+    const srcDir = plan.value.subpath ? join(cloneDir, plan.value.subpath) : cloneDir;
+    if (!(await dirExists(srcDir))) {
+      return Response.json(
+        { error: `Subpath ${plan.value.subpath} not found in repo` },
+        { status: 404 },
+      );
     }
 
-    const manifest = await readManifest(targetDir);
+    const outcome = await promote(srcDir, targetDir);
 
     return Response.json({
       success: true,
-      alreadyInstalled: false,
-      manifest,
+      // A same-name install that lost the race did not install anything, but the
+      // plugin the user asked for IS now there — reporting a 500 would be wrong.
+      alreadyInstalled: outcome === 'raced',
+      manifest: await readManifest(targetDir),
     });
   } catch (error) {
     console.error('[MCP Install] Error:', error);

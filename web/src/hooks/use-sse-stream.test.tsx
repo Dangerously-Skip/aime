@@ -290,7 +290,7 @@ function lastMessage(chatId: string): Message {
 
 /** Seeds a chat that is mid-turn: user message + streaming assistant placeholder. */
 function seedStreamingChat(chatId: string) {
-  useChatStore.setState({ messages: {}, currentChatId: chatId, isStreaming: false, streamError: null });
+  useChatStore.setState({ messages: {}, currentChatId: chatId, isStreaming: false });
   const s = useChatStore.getState();
   s.addMessage(chatId, { id: `${chatId}-u`, role: 'user', content: 'do the thing', timestamp: Date.now() });
   s.addMessage(chatId, {
@@ -324,10 +324,7 @@ function setupWithStore(chatId: string) {
         }
       },
       setIsStreaming: (v) => useChatStore.getState().setIsStreaming(v),
-      setStreamError: (e) => {
-        spies.setStreamError(e);
-        useChatStore.getState().setStreamError(e);
-      },
+      setStreamError: (e) => spies.setStreamError(e),
       onDone: () => {
         spies.onDone();
         useChatStore.getState().completeRunningTools(chatId);
@@ -372,7 +369,6 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     expect(spies.onDone).not.toHaveBeenCalled();
     // A user-initiated stop is not a timeout — not in the final state, and not
     // transiently either.
-    expect(useChatStore.getState().streamError).toBeNull();
     const reported = spies.setStreamError.mock.calls.map(([e]) => e ?? '');
     expect(reported.filter((e) => /timed out/i.test(e))).toEqual([]);
     expect(useChatStore.getState().isStreaming).toBe(false);
@@ -398,7 +394,7 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     const last = lastMessage('stop-chat');
     expect(last.isStreaming).toBe(false);
     expect(last.isLoading).toBe(false);
-    expect(useChatStore.getState().streamError).toBeNull();
+    expect(spies.setStreamError).not.toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
     expect(spies.onError).not.toHaveBeenCalled();
   });
 
@@ -417,7 +413,7 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     expect(last.isLoading).toBe(false);
     expect(last.content).not.toContain('**Error:**');
     expect(spies.onError).not.toHaveBeenCalled();
-    expect(useChatStore.getState().streamError).toBeNull();
+    expect(spies.setStreamError).not.toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
   });
 
   it('a 120s inactivity timeout surfaces as an error and clears the message spinner', async () => {
@@ -432,7 +428,7 @@ describe('useSSEStream — aborted streams finalise message state', () => {
 
     expect(spies.onError).toHaveBeenCalledTimes(1);
     expect(spies.onError.mock.calls[0][0].message).toMatch(/timed out/i);
-    expect(useChatStore.getState().streamError).toMatch(/timed out/i);
+    expect(spies.setStreamError).toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
     expect(spies.onDone).not.toHaveBeenCalled();
 
     const last = lastMessage('timeout-chat');

@@ -1,41 +1,41 @@
 /**
- * In-memory registry for pending browser tool calls.
+ * Cross-request bridge for pending browser tool calls.
  *
- * When the Claude Agent SDK encounters a browser tool (navigate, click, etc.),
- * the canUseTool callback creates a promise here and blocks. The client
- * executes the tool in the webview and POSTs the result to
- * /api/chat/browser-tool-result, which calls resolveBrowserToolResult()
- * to unblock the waiting promise.
+ * When the Claude Agent SDK reaches a browser tool (navigate, click, …), the
+ * canUseTool callback parks a promise here and blocks. The client executes the
+ * tool in the webview and POSTs the result to /api/chat/browser-tool-result,
+ * which calls resolveBrowserToolResult() to unblock it.
  *
- * Same pattern as pending-questions.ts.
+ * Mechanics in rendezvous.ts. What is specific here: the budget is machine-paced
+ * (one DOM operation, not a human decision), and silence REJECTS — a browser step
+ * that never ran is a genuine tool failure, not a result.
  */
+import { createRendezvous, type WaitOptions } from './rendezvous';
 
-interface PendingEntry {
-  resolve: (result: { output: string; isError: boolean }) => void;
-  reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+export interface BrowserToolResult {
+  output: string;
+  isError: boolean;
 }
 
-const pending = new Map<string, PendingEntry>();
+const browserTools = createRendezvous<BrowserToolResult>({
+  label: 'pending-browser-tools',
+  timeoutMs: 60_000,
+  onTimeout: { reject: 'Browser tool execution timed out' },
+  onAbort: { reject: 'Browser tool cancelled — the turn was stopped' },
+});
+
+/** One DOM operation in the webview: machine-paced, so a minute is generous. */
+export const BROWSER_TOOL_TIMEOUT_MS = browserTools.timeoutMs;
 
 /**
- * Wait for a browser tool to execute in the client webview.
- * Returns a promise that resolves when resolveBrowserToolResult()
- * is called with the matching toolUseId.
+ * Wait for a browser tool to execute in the client webview. Rejects on timeout
+ * or when the query is aborted.
  */
 export function waitForBrowserToolResult(
   toolUseId: string,
-): Promise<{ output: string; isError: boolean }> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (pending.has(toolUseId)) {
-        pending.delete(toolUseId);
-        reject(new Error('Browser tool execution timed out'));
-      }
-    }, 60_000);
-
-    pending.set(toolUseId, { resolve, reject, timer });
-  });
+  options?: WaitOptions,
+): Promise<BrowserToolResult> {
+  return browserTools.wait(toolUseId, options);
 }
 
 /**
@@ -47,10 +47,10 @@ export function resolveBrowserToolResult(
   output: string,
   isError: boolean,
 ): boolean {
-  const entry = pending.get(toolUseId);
-  if (!entry) return false;
-  clearTimeout(entry.timer);
-  pending.delete(toolUseId);
-  entry.resolve({ output, isError });
-  return true;
+  return browserTools.settle(toolUseId, { output, isError });
+}
+
+/** Test/observability helper. */
+export function pendingBrowserToolCount(): number {
+  return browserTools.size();
 }

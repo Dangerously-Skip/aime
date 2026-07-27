@@ -77,6 +77,8 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import type { Capability } from "@/lib/models/types";
 import { useRunRecorder } from "@/hooks/use-run-recorder";
+import { useCloseRunOnAbort } from "@/hooks/use-close-run-on-abort";
+import { watchStuckTool } from "@/lib/stuck-tool-watchdog";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { useDocumentPrint } from "@/hooks/use-document-print";
@@ -706,7 +708,6 @@ export function CoworkSurface() {
   const stopStreaming = useCoworkStore((s) => s.stopStreaming);
   const setCurrentChat = useCoworkStore((s) => s.setCurrentChat);
   const setIsStreaming = useCoworkStore((s) => s.setIsStreaming);
-  const setStreamError = useCoworkStore((s) => s.setStreamError);
   const updateConversation = useConversationStore((s) => s.updateConversation);
   const updateConversationMetrics = useConversationStore((s) => s.updateConversationMetrics);
   const addConversation = useConversationStore((s) => s.addConversation);
@@ -783,11 +784,20 @@ export function CoworkSurface() {
   // Records a Run per turn so every execution leaves a durable trace with its
   // cost attached (P6 substrate — see lib/runs).
   const runRecorder = useRunRecorder("cowork");
+  // A Stop, a conversation switch or a stuck-tool abort never reaches onDone or
+  // onError below, so without this the Run would stay 'running' for ever.
+  const ownsChat = useCallback(
+    (id: string) => !!useCoworkStore.getState().messages[id]?.length,
+    [],
+  );
+  useCloseRunOnAbort(runRecorder.finish, ownsChat);
 
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
-    setStreamError,
+    // Required by the hook, read by nothing: stream failures reach the user via
+    // `onError` below. The write-only store field it fed is gone.
+    setStreamError: () => undefined,
     onUsage(usage) {
       // Composed: the run recorder captures cost first (it must not be skipped
       // by the no-active-conversation early return below), then the existing
@@ -915,26 +925,19 @@ export function CoworkSurface() {
             status: "running",
             startTime: Date.now(),
           });
-          // Auto-abort if a single tool runs longer than 120s — the Agent SDK
-          // can hang on certain operations (e.g. large PDF reads).
-          const toolAbortTimer = setTimeout(() => {
-            const msgs = useCoworkStore.getState().messages[chatId];
-            const lastMsg = msgs?.at(-1);
-            const tc = lastMsg?.toolCalls?.find((t) => t.id === toolId);
-            if (tc?.status === "running") {
-              console.warn(`[Cowork] Tool ${toolName} (${toolId}) timed out after 120s — aborting stream`);
-              streamRegistry.abort(chatId);
-            }
-          }, 120_000);
-          // Clear timer if tool completes normally (via text/turn_start/onDone)
-          const unsubToolTimer = useCoworkStore.subscribe((state) => {
-            const msgs = state.messages[chatId];
-            const lastMsg = msgs?.at(-1);
-            const tc = lastMsg?.toolCalls?.find((t) => t.id === toolId);
-            if (!tc || tc.status !== "running") {
-              clearTimeout(toolAbortTimer);
-              unsubToolTimer();
-            }
+          // Auto-abort if a single tool stops making progress — the Agent SDK can
+          // hang on certain operations (e.g. large PDF reads). The watchdog cancels
+          // itself as soon as the tool completes normally.
+          watchStuckTool({
+            chatId,
+            toolId,
+            toolName,
+            getToolStatus: () =>
+              useCoworkStore
+                .getState()
+                .messages[chatId]?.at(-1)
+                ?.toolCalls?.find((t) => t.id === toolId)?.status,
+            subscribe: (listener) => useCoworkStore.subscribe(listener),
           });
           // Detect QUARRY_CRON pattern in Bash commands — model echoes this to schedule reminders
           if (toolName === "Bash") {
@@ -1298,6 +1301,15 @@ export function CoworkSurface() {
       if (chatId) {
         updateMessage(chatId, toolUseId, { questionAnswered: true });
       }
+    },
+    [chatId, updateMessage]
+  );
+
+  // Persist a connect card's answer on the message, so switching conversation
+  // does not bring its Connect / Not now buttons back for a settled request.
+  const handleConnectorSettled = useCallback(
+    (toolUseId: string) => {
+      if (chatId) updateMessage(chatId, toolUseId, { connectorRequestSettled: true });
     },
     [chatId, updateMessage]
   );
@@ -1810,7 +1822,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={handleQuestionAnswered} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
+            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={handleQuestionAnswered} onConnectorSettled={handleConnectorSettled} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">

@@ -55,7 +55,7 @@ describe('chat-store — aborted streams finalise the turn', () => {
   ];
 
   beforeEach(() => {
-    useChatStore.setState({ messages: {}, isStreaming: false, streamError: null });
+    useChatStore.setState({ messages: {}, isStreaming: false });
   });
 
   it('clears message-level streaming flags and running tools', () => {
