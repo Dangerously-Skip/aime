@@ -201,3 +201,62 @@ describe('classifier is total (fuzz)', () => {
     );
   });
 });
+
+describe('classifyToolCall — camelCase tool names (regression)', () => {
+  /**
+   * Both verb lists anchor on `([_-]|$)`, so before splitCamelCase every
+   * camelCase name fell through to 'unknown'. Real MCP servers name tools in
+   * camelCase, so the classifier was blind to most of what it exists to judge:
+   * reads were gated as unknowns — pausing unattended runs on plain lookups —
+   * and write verbs were caught only by the fail-closed default.
+   */
+  it('classifies the real Atlassian tool names correctly', () => {
+    // These exact names appear in canvas/dispatch.ts, so they are not invented.
+    expect(classifyToolCall('mcp__aime-mcp-atlassian__searchJiraIssuesUsingJql')).toBe('read');
+    expect(classifyToolCall('mcp__aime-mcp-atlassian__getTransitionsForJiraIssue')).toBe('read');
+    expect(classifyToolCall('mcp__aime-mcp-atlassian__getAccessibleAtlassianResources')).toBe('read');
+    expect(classifyToolCall('mcp__aime-mcp-atlassian__addCommentToJiraIssue')).toBe('consequential');
+  });
+
+  it('reads camelCase read verbs as reads', () => {
+    for (const n of ['getIssue', 'searchIssues', 'listProjects', 'readFile', 'fetchThread', 'findUser']) {
+      expect(classifyToolCall(n), n).toBe('read');
+    }
+  });
+
+  it('reads camelCase write verbs as consequential', () => {
+    for (const n of ['deleteIssue', 'sendEmail', 'createPage', 'updateRecord', 'setFlag', 'publishPost']) {
+      expect(classifyToolCall(n), n).toBe('consequential');
+    }
+  });
+
+  it('keeps acronyms intact — the first segment is still the verb', () => {
+    expect(classifyToolCall('getURLData')).toBe('read');
+    expect(classifyToolCall('deleteDNSRecord')).toBe('consequential');
+  });
+
+  it('still fails closed on a name with no recognisable verb', () => {
+    expect(classifyToolCall('frobnicate')).toBe('unknown');
+    expect(classifyToolCall('doTheThing')).toBe('unknown');
+  });
+
+  it('leaves snake_case and kebab-case classification unchanged', () => {
+    expect(classifyToolCall('get_issue')).toBe('read');
+    expect(classifyToolCall('delete_issue')).toBe('consequential');
+    expect(classifyToolCall('search-threads')).toBe('read');
+  });
+
+  it('does not reclassify an exact built-in match', () => {
+    // BUILTIN lookup happens before verb matching; Write must stay consequential
+    // even though splitCamelCase would leave it alone.
+    expect(classifyToolCall('Write')).toBe('consequential');
+    expect(classifyToolCall('Read')).toBe('read');
+  });
+
+  it('a camelCase read no longer pauses an unattended run', () => {
+    // The user-visible consequence: standing orders touching Jira used to stop
+    // on every lookup because the read classified as unknown.
+    expect(evaluateApproval('consequential', 'mcp__x__getIssue').allow).toBe(true);
+    expect(evaluateApproval('consequential', 'mcp__x__deleteIssue').allow).toBe(false);
+  });
+});

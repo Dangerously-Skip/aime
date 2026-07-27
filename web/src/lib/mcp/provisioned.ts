@@ -165,5 +165,22 @@ export async function loadProvisionedMcpServers(): Promise<Record<string, unknow
     readMcpConfigFile(join(claudeDir, '.mcp.json')),
     readMcpConfigFile(appConfigPath),
   ]);
-  return { ...claudeCodeServers, ...appServers };
+  const merged = { ...claudeCodeServers, ...appServers };
+
+  // Push the C3 classifier down to the SDK as a per-tool permission policy
+  // (P3.6b), so a newly added remote server's destructive tools are always_ask
+  // instead of running unprompted in an interactive session. Only http/sse
+  // configs accept this — stdio cannot, an SDK constraint.
+  const { readObservedTools } = await import('./observed-tools');
+  const { applyToolPolicies } = await import('./tool-policy');
+  const observed = await readObservedTools(appConfigPath);
+  const { servers, applied, unsupported } = applyToolPolicies(merged, observed);
+  if (applied.length > 0) {
+    const gated = applied.reduce((n, a) => n + a.asked, 0);
+    console.log(`[MCP] Tool policy: ${gated} tool(s) require approval across ${applied.length} server(s)`);
+  }
+  if (unsupported.length > 0) {
+    console.log(`[MCP] No SDK tool policy possible for stdio server(s): ${unsupported.join(', ')}`);
+  }
+  return servers;
 }

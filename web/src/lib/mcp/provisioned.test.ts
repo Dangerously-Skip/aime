@@ -223,3 +223,77 @@ describe('token refresh — when it runs at all', () => {
     expect(servers['aime-connector-github']._meta).toBeUndefined();
   });
 });
+
+describe('loadProvisionedMcpServers — per-tool policy (P3.6b)', () => {
+  const observedPath = () => join(dir, '.aime-mcp-tools.json');
+
+  it('attaches always_ask to a remote server\'s destructive tools', async () => {
+    await write({
+      'aime-mcp-acme': {
+        transport: 'streamable-http',
+        url: 'https://mcp.acme.com/mcp',
+        headers: { Authorization: 'Bearer t' },
+      },
+    });
+    await writeFile(
+      observedPath(),
+      JSON.stringify({
+        'aime-mcp-acme': ['mcp__aime-mcp-acme__getIssue', 'mcp__aime-mcp-acme__deleteIssue'],
+      }),
+    );
+
+    const { loadProvisionedMcpServers } = await import('./provisioned');
+    const servers = (await loadProvisionedMcpServers()) as Record<string, Record<string, unknown>>;
+
+    expect(servers['aime-mcp-acme'].tools).toEqual([
+      { name: 'deleteIssue', permission_policy: 'always_ask' },
+      { name: 'getIssue', permission_policy: 'always_allow' },
+    ]);
+    // the token still reaches the SDK
+    expect(servers['aime-mcp-acme'].headers).toEqual({ Authorization: 'Bearer t' });
+  });
+
+  it('leaves a stdio server alone — the SDK config has no tools field', async () => {
+    await write({
+      'aime-connector-buildkite': {
+        transport: 'stdio',
+        command: 'npx',
+        env: { BUILDKITE_API_TOKEN: 't' },
+      },
+    });
+    await writeFile(
+      observedPath(),
+      JSON.stringify({ 'aime-connector-buildkite': ['mcp__aime-connector-buildkite__triggerBuild'] }),
+    );
+
+    const { loadProvisionedMcpServers } = await import('./provisioned');
+    const servers = (await loadProvisionedMcpServers()) as Record<string, Record<string, unknown>>;
+
+    expect(servers['aime-connector-buildkite'].tools).toBeUndefined();
+    expect(servers['aime-connector-buildkite'].command).toBe('npx');
+  });
+
+  it('mounts a server with no observations unpoliced rather than with an empty policy', async () => {
+    // An empty tools array could read as "nothing permitted" and break the
+    // server on its first ever use — which is exactly the first session.
+    await write({
+      'aime-mcp-fresh': { transport: 'streamable-http', url: 'https://mcp.fresh.com/mcp' },
+    });
+
+    const { loadProvisionedMcpServers } = await import('./provisioned');
+    const servers = (await loadProvisionedMcpServers()) as Record<string, Record<string, unknown>>;
+
+    expect('tools' in servers['aime-mcp-fresh']).toBe(false);
+    expect(servers['aime-mcp-fresh'].type).toBe('http');
+  });
+
+  it('is unaffected by a corrupt observations file', async () => {
+    await write({ 'aime-mcp-acme': { transport: 'streamable-http', url: 'https://x/mcp' } });
+    await writeFile(observedPath(), 'not json');
+
+    const { loadProvisionedMcpServers } = await import('./provisioned');
+    const servers = (await loadProvisionedMcpServers()) as Record<string, Record<string, unknown>>;
+    expect(servers['aime-mcp-acme']).toBeDefined();
+    expect(servers['aime-mcp-acme'].tools).toBeUndefined();
+  });
+});

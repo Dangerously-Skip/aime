@@ -66,6 +66,25 @@ export function baseToolName(toolName: string): string {
   return toolName;
 }
 
+/**
+ * Insert a separator at camelCase boundaries so the verb regexes see a first
+ * segment they can match.
+ *
+ * Both verb lists anchor on `([_-]|$)`, which meant a camelCase name never
+ * matched: `getIssue` fell through to 'unknown'. Since real MCP servers name
+ * tools in camelCase — Atlassian ships `searchJiraIssuesUsingJql` and
+ * `transitionJiraIssue` — that made the classifier blind to the majority of tool
+ * names it exists to classify. Reads were gated as unknowns (so unattended runs
+ * paused on ordinary lookups) and genuine write verbs were only caught by the
+ * fail-closed default rather than being recognised for what they are.
+ *
+ * A boundary is a lower-case letter or digit followed by an upper-case one, so
+ * acronyms survive: `getURLData` → `get_URLData`, whose first segment is `get`.
+ */
+export function splitCamelCase(name: string): string {
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2');
+}
+
 // ── Bash ──────────────────────────────────────────────────────────────────
 
 /** Binaries whose plain invocation only reads. */
@@ -134,8 +153,11 @@ export function classifyToolCall(toolName: string, input?: Record<string, unknow
   // but only inside the app's own browser surface — 'app' either way.
   if (name.startsWith('browser_')) return 'app';
 
-  if (READ_VERBS.test(name)) return 'read';
-  if (CONSEQUENTIAL_VERBS.test(name)) return 'consequential';
+  // Verb matching runs against a camelCase-split form so `getIssue` is read the
+  // same way `get_issue` is — see splitCamelCase.
+  const forVerbs = splitCamelCase(name);
+  if (READ_VERBS.test(forVerbs)) return 'read';
+  if (CONSEQUENTIAL_VERBS.test(forVerbs)) return 'consequential';
   return 'unknown';
 }
 
