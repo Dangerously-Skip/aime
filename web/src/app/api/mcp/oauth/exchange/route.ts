@@ -134,7 +134,19 @@ export async function POST(request: Request) {
       },
     };
 
-    // Owner-only: this file now holds a live access token, a refresh token and
+    // Secrets to the encrypted store; structure + placeholder to the file (DR-14).
+    {
+      const { extractSecrets, isEmptySecrets } = await import('@/lib/mcp/secrets');
+      const { getMcpSecretStore } = await import('@/lib/mcp/secret-store');
+      const store = getMcpSecretStore();
+      if (store.mode === 'encrypted') {
+        const { entry: publicEntry, secrets } = extractSecrets(mcpConfig.mcpServers[serverKey]);
+        if (!isEmptySecrets(secrets)) await store.set(serverKey, secrets);
+        mcpConfig.mcpServers[serverKey] = publicEntry as Record<string, unknown>;
+      }
+    }
+
+    // Owner-only: this file may still hold a live access token, a refresh token and
     // possibly a client secret. `mode` only applies on create, so chmod covers
     // configs written before this was enforced.
     await writeFile(mcpConfigFile, JSON.stringify(mcpConfig, null, 2), {
