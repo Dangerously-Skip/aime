@@ -103,3 +103,42 @@ describe('BrowseConnectors — connection health', () => {
     expect(screen.queryByText('Reconnect')).toBeNull();
   });
 });
+
+describe('BrowseConnectors — tool budget (P3.5)', () => {
+  it('reports the mounted tool count once a session has been observed', async () => {
+    const { useToolBudgetStore } = await import('@/stores/tool-budget-store');
+    useToolBudgetStore.getState().setReport({
+      total: 42,
+      perServer: [{ server: 'aime-connector-github', count: 40 }],
+      builtinCount: 2,
+      overBudget: false,
+    });
+    render(<BrowseConnectors />);
+    expect(await screen.findByText(/42 tools mounted across 1 service\./)).toBeTruthy();
+  });
+
+  it('warns and names what to switch off when over budget', async () => {
+    const { useToolBudgetStore } = await import('@/stores/tool-budget-store');
+    useToolBudgetStore.getState().setReport({
+      total: 260,
+      perServer: [
+        { server: 'aime-connector-github', count: 200 },
+        { server: 'aime-mcp-atlassian', count: 60 },
+      ],
+      builtinCount: 0,
+      overBudget: true,
+      advice: '260 tools are mounted (over 120). The largest is aime-connector-github with 200 — switching off services you are not using will improve tool selection.',
+    });
+    render(<BrowseConnectors />);
+    expect(await screen.findByText(/over 120/)).toBeTruthy();
+    expect(screen.getByText(/aime-connector-github with 200/)).toBeTruthy();
+  });
+
+  it('says nothing before any session has been observed', async () => {
+    const { useToolBudgetStore } = await import('@/stores/tool-budget-store');
+    useToolBudgetStore.getState().clear();
+    render(<BrowseConnectors />);
+    await screen.findByText('GitHub');
+    expect(screen.queryByText(/tools mounted/)).toBeNull();
+  });
+});

@@ -46,6 +46,8 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useRunRecorder } from "@/hooks/use-run-recorder";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
+import { useToolBudgetStore } from "@/stores/tool-budget-store";
+import type { ToolBudgetReport } from "@/lib/mcp/filter";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -291,6 +293,13 @@ export function ChatSurface() {
           });
           if (!document.hasFocus()) {
             showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
+          }
+          break;
+        case "system_init":
+          // Record how many tools actually got mounted so the Connectors screen can
+          // warn when connecting more has started to hurt tool selection (P3.5).
+          if (event.toolBudget) {
+            useToolBudgetStore.getState().setReport(event.toolBudget as ToolBudgetReport);
           }
           break;
         case "connector_request":

@@ -22,6 +22,10 @@ export interface SystemInitData {
   mcp_servers?: unknown[];
   slash_commands?: unknown[];
   agents?: unknown[];
+  /** Tool names the session actually mounted — the input to the tool budget (P3.5). */
+  tools?: string[];
+  /** Summary of how many tools each MCP server contributed. */
+  toolBudget?: import('../mcp/filter').ToolBudgetReport;
   [key: string]: unknown;
 }
 
@@ -756,6 +760,16 @@ export class ClaudeProvider extends BaseProvider {
           if (data.mcp_servers) initData.mcp_servers = data.mcp_servers as unknown[];
           if (data.slash_commands) initData.slash_commands = data.slash_commands as unknown[];
           if (data.agents) initData.agents = data.agents as unknown[];
+          // Tool budget (P3.5): connecting more services must not silently
+          // degrade tool selection, so count what actually got mounted.
+          if (Array.isArray(data.tools)) {
+            const toolNames = (data.tools as unknown[]).filter((t): t is string => typeof t === 'string');
+            initData.tools = toolNames;
+            const { summarizeToolBudget } = await import('../mcp/filter');
+            const budget = summarizeToolBudget(toolNames);
+            initData.toolBudget = budget;
+            if (budget.overBudget) console.warn('[Claude] Tool budget:', budget.advice);
+          }
           this.lastInitData = initData;
           console.log('[Claude] system:init data cached:', Object.keys(initData).join(', '));
 
