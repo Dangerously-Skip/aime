@@ -162,6 +162,7 @@ export function ChatSurface() {
   );
   const displayName = useSettingsStore((s) => s.displayName);
   const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
+  const activeSurface = useAppStore((s) => s.activeSurface);
   const printDocument = useDocumentPrint();
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
@@ -624,16 +625,17 @@ export function ChatSurface() {
   );
 
 
-  // Push-to-talk: the global hotkey routes to the same handler as the mic
-
-  // button, so dictation works without focusing the window (P4.1).
-
+  // Push-to-talk: the global hotkey routes to the same handler as the mic button,
+  // so dictation works without focusing the window (P4.1).
+  //
+  // Gated on the ACTIVE surface. Every surface stays mounted (see surface-router),
+  // so without this both chat and cowork held the shortcut: one press started two
+  // MediaRecorders, transcribed twice against the shared Whisper pipeline, and
+  // appended the text to both composers — and either one's cleanup released the OS
+  // shortcut for the other.
   usePushToTalk({
-
     onTranscript: handleVoiceTranscript,
-
-    enabled: pushToTalkEnabled,
-
+    enabled: pushToTalkEnabled && activeSurface === 'chat',
   });
 
   // Merged suggestions: slash takes priority

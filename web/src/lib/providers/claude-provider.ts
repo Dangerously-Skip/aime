@@ -358,6 +358,27 @@ export class ClaudeProvider extends BaseProvider {
               });
 
               await fsp.mkdir(resolved.target.dir, { recursive: true });
+
+              // Refuse to clobber. SkillCreate, forty lines below, already refuses
+              // for the same reason — "the user would lose work with no way to tell
+              // it had happened" — and this wrote blindly. Chat sends no cwd, so the
+              // target is ~/Documents: a document titled "Report" destroyed an
+              // existing Report.pdf, and in cowork a title of "Index" overwrote
+              // index.html in the project folder.
+              for (const existing of [resolved.target.htmlPath, resolved.target.pdfPath]) {
+                try {
+                  await fsp.access(existing);
+                  return {
+                    content: [{
+                      type: "text" as const,
+                      text:
+                        `Did not write the document: ${existing} already exists. Ask the user ` +
+                        `whether to replace it, or use a different title.`,
+                    }],
+                  };
+                } catch { /* absent — good */ }
+              }
+
               // The HTML always lands, so there is a usable document even when
               // Chromium is not available to print.
               await fsp.writeFile(resolved.target.htmlPath, html, "utf-8");

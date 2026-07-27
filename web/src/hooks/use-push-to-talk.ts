@@ -21,7 +21,15 @@ import { useVoiceInput } from "./use-voice-input";
 interface UsePushToTalkOptions {
   /** Called with each completed transcript. */
   onTranscript: (text: string) => void;
-  /** Off by default so a hotkey is never registered behind the user's back. */
+  /**
+   * Off by default so a hotkey is never registered behind the user's back.
+   *
+   * MUST be true in at most ONE mounted component. Every surface mounts at once
+   * (see surface-router), so two enabled instances meant one hotkey press started
+   * two MediaRecorders, transcribed twice against the shared Whisper pipeline, and
+   * appended the text to both composers — and either one's cleanup released the OS
+   * shortcut for the other. Callers gate on the active surface.
+   */
   enabled?: boolean;
 }
 
@@ -90,8 +98,14 @@ export function usePushToTalk({
     return () => {
       unsubscribe?.();
       void api!.setPushToTalkEnabled!(false);
+      // Stop any capture in flight. Turning the setting off mid-dictation used to
+      // leave MediaRecorder running: the hook is not unmounted (only `enabled`
+      // flipped), so use-voice-input's own teardown never ran either, and the
+      // hotkey that would have stopped it had just been released. The only way out
+      // was quitting the app.
+      if (listeningRef.current) stopListening();
     };
-  }, [enabled, canRegister, api]);
+  }, [enabled, canRegister, api, stopListening]);
 
   return { isListening, isTranscribing, isAvailable: canRegister && isSupported, toggle };
 }

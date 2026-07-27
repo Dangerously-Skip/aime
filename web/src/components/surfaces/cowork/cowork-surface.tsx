@@ -716,6 +716,7 @@ export function CoworkSurface() {
   const conversations = useConversationStore((s) => s.conversations);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
+  const activeSurface = useAppStore((s) => s.activeSurface);
   const printDocument = useDocumentPrint();
   const displayName = useSettingsStore((s) => s.displayName);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
@@ -1491,16 +1492,17 @@ export function CoworkSurface() {
   );
 
 
-  // Push-to-talk: the global hotkey routes to the same handler as the mic
-
-  // button, so dictation works without focusing the window (P4.1).
-
+  // Push-to-talk: the global hotkey routes to the same handler as the mic button,
+  // so dictation works without focusing the window (P4.1).
+  //
+  // Gated on the ACTIVE surface. Every surface stays mounted (see surface-router),
+  // so without this both chat and cowork held the shortcut: one press started two
+  // MediaRecorders, transcribed twice against the shared Whisper pipeline, and
+  // appended the text to both composers — and either one's cleanup released the OS
+  // shortcut for the other.
   usePushToTalk({
-
     onTranscript: handleVoiceTranscript,
-
-    enabled: pushToTalkEnabled,
-
+    enabled: pushToTalkEnabled && activeSurface === 'cowork',
   });
 
   // Fire a background agent run on the cowork surface (used by heartbeat + cron)
