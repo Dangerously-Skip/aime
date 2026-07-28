@@ -151,7 +151,33 @@ function mapToolChoice(tc: AnthropicMessagesRequest['tool_choice']): OpenAIChatR
  * a `$ref` elsewhere may point at them, and removing the target would turn a
  * valid schema into a dangling one, which is worse than leaving both.
  */
-const DROPPED_SCHEMA_KEYS = new Set(['$schema', '$id', '$comment']);
+const DROPPED_SCHEMA_KEYS = new Set([
+  '$schema',
+  '$id',
+  '$comment',
+  // Not representable in Google's Schema. Left in place, the converter discards
+  // the object rather than the keyword — see collapseUnionType.
+  'additionalProperties',
+]);
+
+/**
+ * JSON Schema allows `type: ['string','number','boolean']`; Google's Schema does
+ * not. Faced with one, the converter drops the PROPERTY, and any `required`
+ * naming it is then dangling — which is exactly what surfaced as
+ * "properties[edits].items.required[0]: property is not defined".
+ *
+ * Collapsing to the first non-null member keeps the property present and
+ * described. It widens in the model's favour: it may send a string where a
+ * number was also allowed, which the tool handler already tolerates, whereas
+ * losing the property outright fails the entire request.
+ */
+function collapseUnionType(type: unknown): { type: unknown; nullable?: boolean } {
+  if (!Array.isArray(type)) return { type };
+  const members = type.filter((t): t is string => typeof t === 'string');
+  const nonNull = members.filter((t) => t !== 'null');
+  const picked = nonNull[0] ?? 'string';
+  return members.includes('null') ? { type: picked, nullable: true } : { type: picked };
+}
 
 /**
  * Make an Anthropic tool schema safe for a strict OpenAI-compatible validator.
@@ -181,6 +207,12 @@ export function sanitizeToolSchema(schema: unknown): Record<string, unknown> {
     for (const [k, v] of Object.entries(src)) {
       if (DROPPED_SCHEMA_KEYS.has(k)) continue;
       out[k] = walk(v);
+    }
+
+    if ('type' in out) {
+      const { type, nullable } = collapseUnionType(out.type);
+      out.type = type;
+      if (nullable) out.nullable = true;
     }
 
     // Prune `required` down to names this object actually defines. With no
