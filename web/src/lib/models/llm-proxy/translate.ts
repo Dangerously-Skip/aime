@@ -146,6 +146,66 @@ function mapToolChoice(tc: AnthropicMessagesRequest['tool_choice']): OpenAIChatR
 }
 
 /**
+ * Pure metadata: carries no validation meaning and some validators reject
+ * unknown top-level keys. Deliberately NOT including `$defs`/`definitions` —
+ * a `$ref` elsewhere may point at them, and removing the target would turn a
+ * valid schema into a dangling one, which is worse than leaving both.
+ */
+const DROPPED_SCHEMA_KEYS = new Set(['$schema', '$id', '$comment']);
+
+/**
+ * Make an Anthropic tool schema safe for a strict OpenAI-compatible validator.
+ *
+ * Gemini via OpenRouter rejected real requests with, verbatim:
+ *
+ *   GenerateContentRequest.tools[0].function_declarations[34]
+ *     .parameters.properties[edits].items.required[0]: property is not defined
+ *
+ * i.e. an object listing a name in `required` that its `properties` does not
+ * define. Anthropic ignores that; Gemini refuses the entire request, so ONE
+ * sloppy tool schema disabled every model behind the shim. (34 was MultiEdit's
+ * `edits`, 36 an Excel tool's `sheets`.)
+ *
+ * A required name with no schema carries no information, so pruning it changes
+ * nothing semantically — it just stops the request being thrown out. Recurses
+ * through `properties`, `items` and the combinators, since the offending node was
+ * nested two levels down.
+ */
+export function sanitizeToolSchema(schema: unknown): Record<string, unknown> {
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (!node || typeof node !== 'object') return node;
+
+    const src = node as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(src)) {
+      if (DROPPED_SCHEMA_KEYS.has(k)) continue;
+      out[k] = walk(v);
+    }
+
+    // Prune `required` down to names this object actually defines. With no
+    // `properties` at all, `required` cannot refer to anything — drop it.
+    if (Array.isArray(out.required)) {
+      const props = out.properties;
+      const defined =
+        props && typeof props === 'object' ? new Set(Object.keys(props as object)) : new Set<string>();
+      const kept = (out.required as unknown[]).filter(
+        (name): name is string => typeof name === 'string' && defined.has(name),
+      );
+      if (kept.length > 0) out.required = kept;
+      else delete out.required;
+    }
+
+    return out;
+  };
+
+  const result = walk(schema);
+  return result && typeof result === 'object' && !Array.isArray(result)
+    ? (result as Record<string, unknown>)
+    : {};
+}
+
+/**
  * Translate an Anthropic Messages request into an OpenAI Chat Completions
  * request. `model` is the upstream (OpenAI-side) model id to target.
  */
@@ -167,7 +227,11 @@ export function anthropicToOpenAI(req: AnthropicMessagesRequest, model: string):
   if (req.tools?.length) {
     out.tools = req.tools.map((t) => ({
       type: 'function',
-      function: { name: t.name, description: t.description, parameters: t.input_schema },
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: sanitizeToolSchema(t.input_schema),
+      },
     }));
   }
   const tc = mapToolChoice(req.tool_choice);
