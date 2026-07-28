@@ -245,6 +245,49 @@ describe('withheld tools are actually withheld', () => {
     expect(denied).not.toContain('AskUserQuestion');
   });
 
+  it('forwards the two enforced security toggles to the provider', async () => {
+    // Prompt text alone is what these used to be. The provider now gates on
+    // them, so they have to arrive — and arrive as booleans, not as whatever
+    // the request body happened to contain.
+    await post('cowork', {
+      message: 'hi',
+      chatId: 'c1',
+      cwd: '/tmp/proj',
+      securitySettings: { blockDangerousCommands: true, restrictToProjectFolder: true },
+    });
+    expect(providerParams().securitySettings).toEqual({
+      blockDangerousCommands: true,
+      restrictToProjectFolder: true,
+    });
+
+    await post('cowork', {
+      message: 'hi',
+      chatId: 'c1',
+      securitySettings: { blockDangerousCommands: false, restrictToProjectFolder: false },
+    });
+    expect(providerParams().securitySettings).toEqual({
+      blockDangerousCommands: false,
+      restrictToProjectFolder: false,
+    });
+  });
+
+  it('sends nothing when the caller sent nothing, so a headless run gains no gate', async () => {
+    await post('cowork', { message: 'hi', chatId: 'c1' });
+    expect(providerParams().securitySettings).toBeUndefined();
+  });
+
+  it('tells the model it will be ASKED about destructive commands, not to refuse them', async () => {
+    await post('cowork', {
+      message: 'hi',
+      chatId: 'c1',
+      securitySettings: { blockDangerousCommands: true },
+    });
+    // The old rule said "NEVER run … Refuse the request", which would have the
+    // model decline work the user is about to be asked about and would approve.
+    expect(promptText()).toMatch(/shown to the user for approval/);
+    expect(promptText()).not.toMatch(/NEVER run destructive shell commands/);
+  });
+
   it('accumulates across steps rather than letting the last one win', async () => {
     await post('cowork', {
       message: 'hi',

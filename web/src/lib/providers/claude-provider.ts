@@ -9,6 +9,12 @@ import { waitForConnector } from '../pending-connectors';
 import { waitForDocumentPrint } from '../pending-documents';
 import { issueHandle } from '../rendezvous';
 import { expandCanvasTemplate } from '../canvas/templates';
+import {
+  SHELL_TOOLS,
+  classifyCommand,
+  buildCommandApprovalQuestion,
+} from '../security/destructive-commands';
+import { FILE_WRITE_TOOLS, writeTargetAllowed } from '../security/write-scope';
 import { describeThemes as describeThemesForPrompt } from '../documents/themes';
 import {
   buildToolGate,
@@ -120,6 +126,7 @@ export class ClaudeProvider extends BaseProvider {
       mcpServers: explicitMcpServers,
       allowedTools: explicitAllowedTools,
       deniedTools,
+      securitySettings,
       maxTurns: explicitMaxTurns,
       systemPrompt: explicitSystemPrompt,
       model: explicitModel,
@@ -881,6 +888,103 @@ export class ClaudeProvider extends BaseProvider {
             `settings. Do not try it again or look for another way to run it. Tell the ` +
             `user which part of the task needs it and do what you can without it.`,
         };
+      }
+
+      // ── Writes must stay inside the working directory ───────────────────
+      // Enforced here rather than requested in the prompt, because a path is one
+      // of the few things about a tool call that IS decidable: resolve it, and
+      // either it is under the base or it is not.
+      //
+      // Honest about its scope. It governs the file TOOLS; a shell redirect
+      // (`echo x > /etc/y`) resolves nothing here and walks straight past, which
+      // is why the setting's description now says so and why the command gate
+      // below is what watches the shell.
+      if (securitySettings?.restrictToProjectFolder && cwd && FILE_WRITE_TOOLS.has(toolName)) {
+        const target = (input.file_path ?? input.notebook_path ?? input.path) as unknown;
+        if (typeof target === 'string' && target) {
+          if (!writeTargetAllowed(target, cwd, chatId)) {
+            console.warn('[SECURITY] Blocked a write outside the working directory:', target);
+            return {
+              behavior: 'deny' as const,
+              message:
+                `${toolName} was refused: ${target} is outside the working directory, and this ` +
+                `session is restricted to it. Do not retry it or try to reach the same place ` +
+                `another way. Write inside the working directory, or tell the user what you ` +
+                `need to put where and let them decide.`,
+            };
+          }
+        }
+      }
+
+      // ── Destructive shell commands: ask a human ─────────────────────────
+      // A prompt, not a block — see lib/security/destructive-commands for why a
+      // shell blocklist is the wrong shape and why asking is the right one.
+      if (
+        securitySettings?.blockDangerousCommands &&
+        SHELL_TOOLS.has(toolName) &&
+        typeof input.command === 'string'
+      ) {
+        const command = input.command;
+        const verdict = classifyCommand(command);
+        if (verdict.destructive) {
+          // Keyed by the COMMAND, not the tool: declining one `rm -rf` must not
+          // silently refuse every later `ls`. Tool-name keying is right for the
+          // MCP gate, where the name is the risk; here the risk is the argument.
+          const key = `shell:${command}`;
+          if (deniedThisTurn.has(key)) {
+            return {
+              behavior: 'deny' as const,
+              message:
+                `That command was already declined in this turn and will not be asked again. ` +
+                `Stop retrying it and finish what you can without it.`,
+            };
+          }
+          if (!onInputRequest) {
+            // Unattended: nothing can ask, so under this setting it does not run.
+            console.warn('[SECURITY] Cannot ask about a destructive command here; denying');
+            return {
+              behavior: 'deny' as const,
+              message:
+                `That command looks like ${verdict.reason} and needs the user's approval, but ` +
+                `this session cannot ask them (no interactive client attached). It was not run. ` +
+                `Say what you would have done and let them run it from a chat window.`,
+            };
+          }
+
+          const question = buildCommandApprovalQuestion(command, verdict.reason!);
+          awaitingHuman.add(toolUseID);
+          // A nonce, not the SDK's toolUseID — /api/chat/answer authenticates
+          // nothing else, so presenting this is the only proof an "Allow" came
+          // from the card the user was actually shown. See issueHandle.
+          const approvalHandle = issueHandle(toolUseID);
+          let decision: ApprovalDecision;
+          let unanswered = false;
+          try {
+            await onInputRequest(approvalHandle, [question]);
+            decision = readApprovalAnswer(await waitForAnswer(approvalHandle, waitOptions), question.question);
+          } catch {
+            decision = 'deny';
+            unanswered = true;
+          } finally {
+            awaitingHuman.delete(toolUseID);
+          }
+          console.log('[SECURITY] Destructive command approval →', decision);
+
+          // The card offers Allow once / Deny only, and readApprovalAnswer fails
+          // closed, so anything that is not an explicit allow is a refusal.
+          if (decision !== 'allow-once' && decision !== 'always-allow') {
+            deniedThisTurn.add(key);
+            return {
+              behavior: 'deny' as const,
+              message: unanswered
+                ? `That command was not run: the approval prompt timed out because the user did ` +
+                  `not respond. Do not retry it. Tell them it is still waiting on them and carry on.`
+                : `That command was not run — the user did not approve it. Do not retry it or ` +
+                  `look for another way to do the same thing. Tell them which part of the task ` +
+                  `you could not do, and carry on with the rest.`,
+            };
+          }
+        }
       }
 
       // ── Per-tool MCP policy: the user's standing denial ─────────────────

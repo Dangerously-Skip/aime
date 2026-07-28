@@ -77,6 +77,22 @@ export interface QueryParams {
    * enforcement does not rest on the SDK honouring an option.
    */
   deniedTools?: string[];
+  /**
+   * The user's security toggles, for the two that are enforced rather than
+   * merely asked for in the system prompt. Absent ⇒ off: a headless caller that
+   * sends nothing must not silently acquire a gate that can pause its turn.
+   */
+  securitySettings?: {
+    /**
+     * Route a destructive-looking shell command through the human approval gate
+     * instead of running it. Named for the settings key, which predates the
+     * behaviour — it asks now, it does not block. See lib/security for why
+     * asking is the right shape and blocking is not.
+     */
+    blockDangerousCommands?: boolean;
+    /** Refuse file-tool writes that resolve outside `cwd`. */
+    restrictToProjectFolder?: boolean;
+  };
   maxTurns?: number;
   systemPrompt?: string | { type: string; preset: string; append?: string };
   model?: string;
