@@ -170,19 +170,91 @@ describe('provider parameter assembly', () => {
     await post('chat', { message: 'hi', chatId: 'c1', toolProfile: 'minimal' });
 
     const allowed = providerParams().allowedTools!;
-    const permitted = new Set(['WebSearch', 'WebFetch', 'AskUserQuestion', 'Agent', 'TodoWrite']);
+    // The profile's own set, plus the in-app plumbing PLUMBING_TOOLS exempts:
+    // asking, delegating, todos, canvas and the connector card render or ask —
+    // none of them acts on the world, and TOOL_PROFILES never enumerated them.
+    const permitted = new Set([
+      'WebSearch', 'WebFetch',
+      'AskUserQuestion', 'Agent', 'TodoWrite',
+      'mcp__aime__canvas', 'mcp__aime__RequestConnector',
+    ]);
     expect(allowed.length).toBeGreaterThan(0);
     for (const tool of allowed) {
       expect(permitted.has(tool), `unexpected tool: ${tool}`).toBe(true);
     }
   });
+});
 
-  it('removes Bash when disableBashTool is set', async () => {
+/**
+ * Narrowing `allowedTools` restricts NOTHING on its own — it is the SDK's
+ * auto-approve list, on a run with `permissionMode: 'bypassPermissions'` and a
+ * `canUseTool` that ends in a catch-all allow. Every control here used to do
+ * only that, so "Disable Bash tool" left Bash fully working. What the provider
+ * acts on is `deniedTools`; these assert the route computes it.
+ *
+ * It has to be the DIFFERENCE at each narrowing step, never the complement of
+ * `allowedTools`: the surface lists have never been exhaustive, so "absent"
+ * does not mean "denied" (WidgetCreate is on no list and works everywhere).
+ */
+describe('withheld tools are actually withheld', () => {
+  it('denies the whole shell family for disableBashTool, not just the list entry', async () => {
     await post('cowork', { message: 'hi', chatId: 'c1' });
     expect(providerParams().allowedTools).toContain('Bash');
+    expect(providerParams().deniedTools).not.toContain('Bash');
 
     await post('cowork', { message: 'hi', chatId: 'c1', securitySettings: { disableBashTool: true } });
     expect(providerParams().allowedTools).not.toContain('Bash');
+    // BashOutput/KillShell operate on background shells; leaving them would hand
+    // back most of what the setting is meant to take away.
+    expect(providerParams().deniedTools).toEqual(
+      expect.arrayContaining(['Bash', 'BashOutput', 'KillShell']),
+    );
+  });
+
+  it('denies what a tool profile takes away', async () => {
+    await post('cowork', { message: 'hi', chatId: 'c1', toolProfile: 'minimal' });
+    const denied = providerParams().deniedTools!;
+    expect(denied).toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']));
+  });
+
+  it('never denies the in-app plumbing a profile was not written to cover', async () => {
+    await post('chat', { message: 'hi', chatId: 'c1', toolProfile: 'minimal' });
+    const denied = providerParams().deniedTools!;
+    for (const t of ['AskUserQuestion', 'Agent', 'mcp__aime__canvas', 'mcp__aime__RequestConnector']) {
+      expect(denied, t).not.toContain(t);
+    }
+    // ...but a profile-restricted run really does lose the world-side tools.
+    expect(denied).toContain('mcp__aime__DocumentCreate');
+  });
+
+  it('denies nothing on the full profile with no security settings', async () => {
+    await post('cowork', { message: 'hi', chatId: 'c1', toolProfile: 'full' });
+    expect(providerParams().deniedTools).toEqual([]);
+  });
+
+  it('denies what an agent scopes away, plumbing aside', async () => {
+    mocks.loadAgentsMock.mockReturnValue([
+      { name: 'reader', triggers: [], allowedTools: ['Read', 'Grep'] },
+    ]);
+    mocks.matchAgentMock.mockReturnValue({ name: 'reader', triggers: [], allowedTools: ['Read', 'Grep'] });
+
+    await post('cowork', { message: 'hi', chatId: 'c1' });
+    const denied = providerParams().deniedTools!;
+    expect(denied).toEqual(expect.arrayContaining(['Write', 'Edit', 'Bash']));
+    expect(denied).not.toContain('Read');
+    expect(denied).not.toContain('AskUserQuestion');
+  });
+
+  it('accumulates across steps rather than letting the last one win', async () => {
+    await post('cowork', {
+      message: 'hi',
+      chatId: 'c1',
+      toolProfile: 'coding',
+      securitySettings: { disableBashTool: true },
+    });
+    const denied = providerParams().deniedTools!;
+    expect(denied).toContain('Bash');              // from the security setting
+    expect(denied).toContain('mcp__aime__SkillCreate'); // from the profile
   });
 
   it('injects security rules into the system prompt', async () => {

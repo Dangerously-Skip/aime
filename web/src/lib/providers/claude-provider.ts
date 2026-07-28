@@ -119,6 +119,7 @@ export class ClaudeProvider extends BaseProvider {
       surfaceId,
       mcpServers: explicitMcpServers,
       allowedTools: explicitAllowedTools,
+      deniedTools,
       maxTurns: explicitMaxTurns,
       systemPrompt: explicitSystemPrompt,
       model: explicitModel,
@@ -149,6 +150,13 @@ export class ClaudeProvider extends BaseProvider {
     const allowedTools = explicitAllowedTools
       || surfaceConfig?.allowedTools
       || this.defaultAllowedTools;
+    /**
+     * Tools withheld from this run. `allowedTools` cannot do this — it is an
+     * auto-approve list, so narrowing it leaves the tool mounted and reachable
+     * (see QueryParams). WebSearch has always been here; the caller's list joins
+     * it, and everything downstream treats the two the same.
+     */
+    const denied = new Set<string>(['WebSearch', ...(deniedTools ?? [])]);
     const maxTurns = explicitMaxTurns
       ?? surfaceConfig?.maxTurns
       ?? this.defaultMaxTurns;
@@ -706,7 +714,9 @@ export class ClaudeProvider extends BaseProvider {
     // Build query options
     const queryOptions: Record<string, unknown> = {
       allowedTools,
-      disallowedTools: ['WebSearch'],
+      // Removes them from the model's context entirely, so it never reaches for
+      // one and never has to be refused mid-turn.
+      disallowedTools: [...denied],
       maxTurns,
       mcpServers: {
         ...mcpServers,
@@ -852,6 +862,27 @@ export class ClaudeProvider extends BaseProvider {
       input: Record<string, unknown>,
       { toolUseID }: { toolUseID: string },
     ) => {
+      // ── Withheld tools ──────────────────────────────────────────────────
+      // Before everything, including the MCP policy: this is the configuration
+      // saying the tool does not exist for this run.
+      //
+      // `disallowedTools` above should already mean the model never asks — but
+      // that is the SDK's promise about its own context assembly, and this gate
+      // is the one piece that runs whatever `permissionMode` says. The whole
+      // class of bug being fixed here is a control that looked enforced because
+      // a name had been filtered out of a list somewhere upstream, so the check
+      // that matters lives where nothing can route around it.
+      if (denied.has(toolName)) {
+        console.warn('[SECURITY] Blocked a tool withheld from this run:', toolName);
+        return {
+          behavior: 'deny' as const,
+          message:
+            `${toolName} is not available in this session — it has been turned off in ` +
+            `settings. Do not try it again or look for another way to run it. Tell the ` +
+            `user which part of the task needs it and do what you can without it.`,
+        };
+      }
+
       // ── Per-tool MCP policy: the user's standing denial ─────────────────
       // First, and in every mode. A tool the user blocked must not run because
       // the run happens to be unattended, or because a later branch allows it.
