@@ -7,6 +7,30 @@ const net = require('net');
 const { spawn } = require('child_process');
 const path = require('path');
 
+/**
+ * The dev renderer must keep the SAME origin between launches.
+ *
+ * localStorage is scoped per origin, so `http://localhost:54321` and
+ * `http://localhost:61003` are separate stores. Picking a free port every launch
+ * therefore handed the app a blank profile every time: name, providers,
+ * onboarding and conversations all "reset", while ~/.aime/credentials.enc — which
+ * is server-side and NOT origin-scoped — kept accumulating a fresh copy of the
+ * API key per run.
+ *
+ * main-web.js already pins 19532 for packaged builds, with the comment "so
+ * localStorage persists across launches". Dev simply never got the same
+ * treatment. 19533 keeps dev distinct from a packaged install running alongside.
+ */
+const PREFERRED_DEV_PORT = 19533;
+
+function canBind(port) {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.once('error', () => resolve(false));
+    s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)));
+  });
+}
+
 function findFreePort() {
   return new Promise((resolve) => {
     const server = net.createServer().listen(0, '127.0.0.1', () => {
@@ -73,8 +97,20 @@ function mintCredentialKey(webDir) {
 }
 
 (async () => {
-  const port = await findFreePort();
-  console.log(`[dev-with-port] Using port ${port}`);
+  let port = PREFERRED_DEV_PORT;
+  if (await canBind(PREFERRED_DEV_PORT)) {
+    console.log(`[dev-with-port] Using port ${port}`);
+  } else {
+    port = await findFreePort();
+    // Worth shouting about: a different origin means an empty localStorage, so
+    // the app will look like a first run and any state saved this session is
+    // stranded under this port.
+    console.warn(
+      `[dev-with-port] Port ${PREFERRED_DEV_PORT} is busy — using ${port} instead.\n` +
+      `[dev-with-port] localStorage is per-origin, so settings, providers and ` +
+      `conversations from previous runs will NOT be visible this session.`,
+    );
+  }
 
   const webDir = path.join(__dirname, '..');
 
