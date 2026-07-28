@@ -3,6 +3,7 @@ import fc from 'fast-check';
 import path from 'path';
 import {
   resolveContainedChild,
+  resolveWithinTree,
   DEFAULT_CONTAINMENT_ERROR,
   type PathFlavour,
 } from './path-containment';
@@ -189,4 +190,70 @@ describe('property: an accepted segment is always an immediate child', () => {
       );
     });
   }
+});
+
+/**
+ * The subtree form, added for "may the agent write here" (see
+ * lib/security/write-scope). Same resolution and the same `flavour` seam as its
+ * immediate-child sibling, minus the single-segment rules — a real edit is
+ * nested and usually absolute, so `resolveContainedChild` answers the wrong
+ * question for it.
+ */
+describe('resolveWithinTree', () => {
+  const BASE = '/home/u/project';
+
+  it('accepts a nested path, which the child form rejects', () => {
+    expect(resolveWithinTree(BASE, `${BASE}/src/lib/x.ts`).ok).toBe(true);
+    // The distinction that made a second function necessary.
+    expect(resolveContainedChild(BASE, 'src/lib/x.ts').ok).toBe(false);
+  });
+
+  it('resolves a relative target against the base', () => {
+    expect(resolveWithinTree(BASE, 'src/x.ts')).toMatchObject({
+      ok: true,
+      path: `${BASE}/src/x.ts`,
+    });
+  });
+
+  it('refuses an escape however it is spelled', () => {
+    for (const target of ['../other/x', `${BASE}/../other/x`, '/etc/passwd', '../../..']) {
+      expect(resolveWithinTree(BASE, target), target).toEqual({
+        ok: false,
+        error: DEFAULT_CONTAINMENT_ERROR,
+      });
+    }
+  });
+
+  it('refuses the base itself — a directory is not a file in it', () => {
+    expect(resolveWithinTree(BASE, BASE).ok).toBe(false);
+    expect(resolveWithinTree(BASE, '.').ok).toBe(false);
+  });
+
+  it('refuses empty and non-string input rather than defaulting open', () => {
+    for (const bad of ['', null, undefined, 42, {}]) {
+      expect(resolveWithinTree(BASE, bad).ok, String(bad)).toBe(false);
+      expect(resolveWithinTree(bad, '/x').ok, String(bad)).toBe(false);
+    }
+  });
+
+  it('gives the same verdict on win32, asserted from a posix runner', () => {
+    const WIN = 'C:\\Users\\u\\project';
+    expect(resolveWithinTree(WIN, `${WIN}\\src\\x.ts`, { flavour: path.win32 }).ok).toBe(true);
+    expect(resolveWithinTree(WIN, 'D:\\elsewhere\\x.ts', { flavour: path.win32 }).ok).toBe(false);
+    expect(resolveWithinTree(WIN, '..\\other\\x.ts', { flavour: path.win32 }).ok).toBe(false);
+  });
+
+  it('never reports containment for a path that resolves outside the base', () => {
+    fc.assert(
+      fc.property(fc.array(fc.string(), { maxLength: 6 }), (segments) => {
+        const target = segments.join('/');
+        const outcome = resolveWithinTree(BASE, target);
+        if (!outcome.ok) return true;
+        // The invariant the callers rely on: an ok verdict means the resolved
+        // path really is under the base, with no string trickery in between.
+        return outcome.path.startsWith(`${BASE}/`) && outcome.path !== BASE;
+      }),
+      { numRuns: 2000 },
+    );
+  });
 });

@@ -125,3 +125,41 @@ export function resolveContainedChild(
 
   return { ok: true, path: target, base };
 }
+
+/**
+ * The looser sibling: prove a path lands ANYWHERE inside `baseDir`, at any
+ * depth.
+ *
+ * `resolveContainedChild` answers "is this one name directly inside that
+ * directory", which is right for a slug becoming a folder and wrong for the
+ * question "may the agent write here" — real edits are nested (`src/lib/x.ts`)
+ * and usually absolute. Same resolution and the same `flavour` seam, minus the
+ * single-segment rules.
+ *
+ * Being inside the base is still refused for the base *itself*: writing to the
+ * directory node is not writing a file in it, and every caller here means a file.
+ */
+export function resolveWithinTree(
+  baseDir: unknown,
+  target: unknown,
+  opts: ContainOptions = {},
+): Containment {
+  const p = opts.flavour ?? nodePath;
+  const error = opts.error ?? DEFAULT_CONTAINMENT_ERROR;
+
+  if (typeof baseDir !== 'string' || baseDir === '') return { ok: false, error };
+  if (typeof target !== 'string' || target === '') return { ok: false, error };
+
+  const base = p.resolve(baseDir);
+  // A relative target resolves against the base, which is what "the working
+  // directory" means to a tool call that passed `src/lib/x.ts`.
+  const resolved = p.resolve(base, target);
+  const rel = p.relative(base, resolved);
+
+  // '' is the base itself; '..' and '../…' are above it; an absolute remainder
+  // means another root entirely (a drive change on win32).
+  if (rel === '' || rel === '..' || rel.startsWith(`..${p.sep}`) || p.isAbsolute(rel)) {
+    return { ok: false, error };
+  }
+  return { ok: true, path: resolved, base };
+}

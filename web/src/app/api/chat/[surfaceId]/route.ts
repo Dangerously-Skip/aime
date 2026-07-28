@@ -487,8 +487,12 @@ export async function POST(
       // Build security rules block for system prompt
       const securityRules: string[] = [];
       if (securitySettings?.blockDangerousCommands) {
+        // Matches what actually happens now: the command is shown to the user
+        // for approval rather than refused outright (see canUseTool). Telling the
+        // model to refuse outright as well would have it decline work the user is
+        // about to be asked about and would happily approve.
         securityRules.push(
-          '- NEVER run destructive shell commands: rm -rf, sudo, mkfs, dd, chmod 777, or any command that modifies system files (/etc, /usr, /boot). Refuse the request and explain why.'
+          '- Destructive shell commands (rm -rf, sudo, mkfs, dd, chmod 777, writes into /etc, /usr, /boot) are shown to the user for approval before they run. Do not avoid them when they are genuinely the right step — run them and expect to be asked. Do prefer a narrower command where one does the job, and never use one to work around a refusal.'
         );
       }
       if (securitySettings?.blockNetworkCommands) {
@@ -498,7 +502,7 @@ export async function POST(
       }
       if (securitySettings?.restrictToProjectFolder && cwd) {
         securityRules.push(
-          `- ONLY write or delete files within the project folder: ${cwd}. Reading files outside this folder is allowed, but writing, editing, or deleting files outside it is FORBIDDEN. Refuse and explain if asked.`
+          `- ONLY write or delete files within the project folder: ${cwd}. Reading outside it is allowed. The file tools enforce this and will refuse a path outside it (scratch and temp directories excepted), so do not try to route around a refusal — say what you need to put where and let the user decide.`
         );
       }
 
@@ -879,6 +883,15 @@ export async function POST(
           surfaceId,
           allowedTools: surfaceConfig.allowedTools,
           deniedTools: [...deniedTools],
+          // The two toggles the provider ENFORCES. The other two stay prompt-only
+          // and are appended to the system prompt above; see the security section
+          // in Settings, whose copy says which is which.
+          securitySettings: securitySettings
+            ? {
+                blockDangerousCommands: !!securitySettings.blockDangerousCommands,
+                restrictToProjectFolder: !!securitySettings.restrictToProjectFolder,
+              }
+            : undefined,
           maxTurns: surfaceConfig.maxTurns,
           systemPrompt,
           attachments: attachments || undefined,

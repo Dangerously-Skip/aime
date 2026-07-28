@@ -10,34 +10,43 @@ interface SecurityToggle {
   warning?: string
 }
 
+/**
+ * The wording here is load-bearing — keep it honest when a toggle changes.
+ *
+ * Each of these is either ENFORCED (the server refuses it: "asks", "refuse",
+ * "removes") or ASKED FOR (a line in the system prompt: "Instructs Claude to…").
+ * A toggle that overstates its reach is worse than one that admits to being a
+ * request, because users calibrate on the label — "Disable Bash tool" once
+ * claimed to "completely remove" a tool that in fact kept working.
+ */
 const toggles: SecurityToggle[] = [
   {
     key: 'blockDangerousCommands',
     setter: 'setBlockDangerousCommands',
-    label: 'Block dangerous commands',
+    label: 'Ask before destructive commands',
     description:
-      'Instructs Claude to refuse rm -rf, sudo, mkfs, dd, chmod 777, and other destructive shell commands.',
+      'Pauses and asks you before running rm -rf, sudo, mkfs, dd, chmod 777, force pushes and the like. Errs towards asking. Unattended runs refuse them instead, since nobody is there to ask.',
   },
   {
     key: 'blockNetworkCommands',
     setter: 'setBlockNetworkCommands',
-    label: 'Block network commands',
+    label: 'Discourage network commands',
     description:
-      'Instructs Claude to refuse curl|sh, wget piping, nc, and SSH tunnels. Allows npm install, git push, and brew.',
+      'Instructs Claude to refuse curl|sh, wget piping, nc, and SSH tunnels. Allows npm install, git push, and brew. Guidance only — not enforced.',
   },
   {
     key: 'restrictToProjectFolder',
     setter: 'setRestrictToProjectFolder',
     label: 'Restrict writes to project folder',
     description:
-      'Instructs Claude to only write or delete files within the selected working directory. Reading outside is still allowed.',
+      'The file tools refuse to write outside the working directory (scratch and temp folders excepted). Reading outside is still allowed. Shell commands can still write anywhere — pair this with the setting above.',
   },
   {
     key: 'disableBashTool',
     setter: 'setDisableBashTool',
     label: 'Disable Bash tool',
     description:
-      'Completely removes the Bash tool from Claude\'s available tools.',
+      'Removes Bash, BashOutput and KillShell from the session entirely.',
     warning: 'Prevents Claude from running any terminal commands',
   },
 ]

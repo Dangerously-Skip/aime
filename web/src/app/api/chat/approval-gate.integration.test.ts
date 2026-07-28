@@ -264,6 +264,72 @@ describe('approval gate — what may settle it', () => {
   });
 });
 
+/**
+ * The destructive-command gate rides the SAME rendezvous as the MCP one, so it
+ * gets the same treatment: real route, real provider, real answer route, across
+ * two requests. Worth its own coverage rather than assuming the shared plumbing
+ * carries it, because the card is built elsewhere and the refusal is keyed
+ * differently (by command, not by tool name).
+ */
+describe('destructive commands — the same loop, from the shell', () => {
+  /** Stub the SDK as a turn that runs one shell command and awaits the verdict. */
+  function scriptShell(command: string) {
+    queryMock.mockImplementation((args: { options: Record<string, unknown> }) => {
+      const canUseTool = args.options.canUseTool as (
+        name: string,
+        input: Record<string, unknown>,
+        ctx: { toolUseID: string },
+      ) => Promise<Decision>;
+      return (async function* () {
+        yield { type: 'system', subtype: 'init', session_id: 's1', data: {} };
+        decisions.push(await canUseTool('Bash', { command }, { toolUseID: 'sdk-bash-1' }));
+      })();
+    });
+  }
+
+  const body = (chatId: string) => ({
+    message: 'clean the build',
+    chatId,
+    cwd: '/tmp/proj',
+    securitySettings: { blockDangerousCommands: true },
+  });
+
+  it('parks the turn on rm -rf and runs it once approved', async () => {
+    scriptShell('rm -rf build');
+    const { events, finished } = openStream(body('shell-allow'));
+
+    const { toolUseId, question } = await awaitCard(events);
+    expect(decisions).toHaveLength(0);
+    // The user has to be able to see WHAT they are approving.
+    expect(question.question).toContain('rm -rf build');
+    expect(question.options.map((o) => o.label)).toEqual(['Allow once', 'Deny']);
+
+    expect((await postAnswer(toolUseId, { [question.question]: 'Allow once' })).status).toBe(200);
+    await finished;
+    expect(decisions).toEqual([{ behavior: 'allow' }]);
+  });
+
+  it('refuses it on Deny, and says not to find another route', async () => {
+    scriptShell('sudo rm -rf /var/log');
+    const { events, finished } = openStream(body('shell-deny'));
+
+    const { toolUseId, question } = await awaitCard(events);
+    expect((await postAnswer(toolUseId, { [question.question]: 'Deny' })).status).toBe(200);
+
+    await finished;
+    expect(decisions[0].behavior).toBe('deny');
+    expect(decisions[0].message).toMatch(/another way/i);
+  });
+
+  it('never shows a card for an ordinary command', async () => {
+    scriptShell('npm test');
+    const { events, finished } = openStream(body('shell-ordinary'));
+    await finished;
+    expect(events.some((e) => e.type === 'input_request')).toBe(false);
+    expect(decisions).toEqual([{ behavior: 'allow' }]);
+  });
+});
+
 describe('approval gate — surfaces that cannot ask', () => {
   it('denies rather than runs when nothing can relay a card to a human', async () => {
     scriptToolCall(ACME_DELETE);

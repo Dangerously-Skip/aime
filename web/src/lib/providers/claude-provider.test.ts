@@ -458,6 +458,162 @@ describe('deniedTools', () => {
 });
 
 /**
+ * The two security toggles that are ENFORCED rather than asked for in the
+ * prompt. Both used to be a sentence appended to the system prompt and nothing
+ * more, so the labels ("Block dangerous commands", "Restrict writes…") promised
+ * a boundary that did not exist.
+ *
+ * They are enforced differently on purpose, and the difference is the point:
+ * a write target is decidable, so it is refused outright; a shell command is
+ * not, so it goes to a human instead of a blocklist that would only pretend.
+ */
+describe('security settings that are actually enforced', () => {
+  const asker = (asked: Array<{ handle: string; questions: unknown }>) =>
+    async (handle: string, questions: unknown) => { asked.push({ handle, questions }); };
+
+  describe('restrictToProjectFolder', () => {
+    const params = {
+      cwd: '/Users/x/projects/app',
+      securitySettings: { restrictToProjectFolder: true },
+    };
+
+    it('refuses a write outside the working directory', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), params);
+      const r = await canUseTool('Write', { file_path: '/Users/x/.ssh/authorized_keys' }, { toolUseID: 'w1' });
+      expect(r.behavior).toBe('deny');
+      expect(r.message).toMatch(/outside the working directory/i);
+      // Told not to go looking for another route to the same place.
+      expect(r.message).toMatch(/Do not retry it/i);
+    });
+
+    it('allows a write inside it, nested or relative', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), params);
+      for (const file_path of ['/Users/x/projects/app/src/a.ts', 'src/b.ts', './c.md']) {
+        expect((await canUseTool('Write', { file_path }, { toolUseID: file_path })).behavior, file_path).toBe('allow');
+      }
+    });
+
+    it('covers Edit and NotebookEdit, and leaves Read alone', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), params);
+      expect((await canUseTool('Edit', { file_path: '/etc/hosts' }, { toolUseID: 'e1' })).behavior).toBe('deny');
+      expect((await canUseTool('NotebookEdit', { notebook_path: '/etc/x.ipynb' }, { toolUseID: 'e2' })).behavior).toBe('deny');
+      // The setting says reading outside is still allowed, so it must be.
+      expect((await canUseTool('Read', { file_path: '/etc/hosts' }, { toolUseID: 'e3' })).behavior).toBe('allow');
+    });
+
+    it('does nothing when the setting is off', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), { cwd: params.cwd });
+      expect((await canUseTool('Write', { file_path: '/etc/hosts' }, { toolUseID: 'off' })).behavior).toBe('allow');
+    });
+  });
+
+  describe('blockDangerousCommands — asks, not blocks', () => {
+    const params = { chatId: 'regular-chat', securitySettings: { blockDangerousCommands: true } };
+
+    it('pauses a destructive command until the user answers, then runs it', async () => {
+      const asked: Array<{ handle: string; questions: unknown }> = [];
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        ...params,
+        onInputRequest: asker(asked),
+      });
+
+      let settled = false;
+      const pending = canUseTool('Bash', { command: 'rm -rf build' }, { toolUseID: 'c1' })
+        .then((r) => { settled = true; return r; });
+
+      await vi.waitFor(() => expect(asked).toHaveLength(1));
+      expect(settled).toBe(false); // genuinely parked, not merely logged
+
+      const q = (asked[0].questions as Array<{ question: string }>)[0];
+      expect(q.question).toContain('rm -rf build');
+      await deliver(asked.map((a) => a.handle), resolveAnswer, { [q.question]: 'Allow once' });
+      expect((await pending).behavior).toBe('allow');
+    });
+
+    it('refuses it when the user says no', async () => {
+      const asked: Array<{ handle: string; questions: unknown }> = [];
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        ...params,
+        onInputRequest: asker(asked),
+      });
+      const pending = canUseTool('Bash', { command: 'sudo rm -rf /' }, { toolUseID: 'c2' });
+      await vi.waitFor(() => expect(asked).toHaveLength(1));
+      const q = (asked[0].questions as Array<{ question: string }>)[0];
+      await deliver(asked.map((a) => a.handle), resolveAnswer, { [q.question]: 'Deny' });
+
+      const r = await pending;
+      expect(r.behavior).toBe('deny');
+      expect(r.message).toMatch(/did not approve/i);
+      // The bypass this has to close: don't just try it a different way.
+      expect(r.message).toMatch(/another way/i);
+    });
+
+    it('never prompts for an ordinary command', async () => {
+      const onInputRequest = vi.fn().mockResolvedValue(undefined);
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), { ...params, onInputRequest });
+      for (const command of ['npm test', 'ls -la', 'git status']) {
+        expect((await canUseTool('Bash', { command }, { toolUseID: command })).behavior).toBe('allow');
+      }
+      expect(onInputRequest).not.toHaveBeenCalled();
+    });
+
+    it('remembers a refusal PER COMMAND, not per tool', async () => {
+      const asked: Array<{ handle: string; questions: unknown }> = [];
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        ...params,
+        onInputRequest: asker(asked),
+      });
+      const pending = canUseTool('Bash', { command: 'rm -rf build' }, { toolUseID: 'r1' });
+      await vi.waitFor(() => expect(asked).toHaveLength(1));
+      const q = (asked[0].questions as Array<{ question: string }>)[0];
+      await deliver(asked.map((a) => a.handle), resolveAnswer, { [q.question]: 'Deny' });
+      await pending;
+
+      // Same command again: refused without re-asking, so a model that keeps
+      // retrying cannot pester the user into clicking Allow.
+      const again = await canUseTool('Bash', { command: 'rm -rf build' }, { toolUseID: 'r2' });
+      expect(again.behavior).toBe('deny');
+      expect(again.message).toMatch(/already declined/i);
+      expect(asked).toHaveLength(1);
+
+      // A DIFFERENT, harmless command must still work — the MCP gate keys by
+      // tool name, which here would have refused every later shell call.
+      expect((await canUseTool('Bash', { command: 'npm test' }, { toolUseID: 'r3' })).behavior).toBe('allow');
+    });
+
+    it('fails closed on an unattended run, where nobody can be asked', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), params); // no onInputRequest
+      const r = await canUseTool('Bash', { command: 'rm -rf /tmp/x' }, { toolUseID: 'u1' });
+      expect(r.behavior).toBe('deny');
+      expect(r.message).toMatch(/cannot ask|no interactive client/i);
+    });
+
+    it('does nothing when the setting is off', async () => {
+      const onInputRequest = vi.fn().mockResolvedValue(undefined);
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        chatId: 'regular-chat',
+        onInputRequest,
+      });
+      expect((await canUseTool('Bash', { command: 'rm -rf /' }, { toolUseID: 'off2' })).behavior).toBe('allow');
+      expect(onInputRequest).not.toHaveBeenCalled();
+    });
+
+    it('is outranked by deniedTools — a disabled shell is not a prompt', async () => {
+      const onInputRequest = vi.fn().mockResolvedValue(undefined);
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        ...params,
+        deniedTools: ['Bash'],
+        onInputRequest,
+      });
+      const r = await canUseTool('Bash', { command: 'rm -rf build' }, { toolUseID: 'd2' });
+      expect(r.behavior).toBe('deny');
+      expect(r.message).toMatch(/not available in this session/i);
+      expect(onInputRequest).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
  * WidgetCreate / CronCreate / StandingOrderCreate are in-process MCP tools that
  * only QUEUE — the client-side effect rides out on a chunk emitted after the
  * stream loop. Each returns success to the model the instant it queues, so
