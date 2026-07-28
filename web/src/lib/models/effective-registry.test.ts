@@ -167,17 +167,37 @@ describe('execConfigFor', () => {
     expect(execConfigFor(model, [])).toBeUndefined();
   });
 
-  it('derives transport + base URL from the preset, preferring an override', () => {
+  it('derives base URL from the preset, preferring an override', () => {
     const providers = [provider({ baseUrl: 'https://gw.internal/v1' })];
     const reg = buildEffectiveRegistry(base, [
       provider({ baseUrl: 'https://gw.internal/v1', models: [{ id: 'm', label: 'M', pricing: priced(0.01) }] }),
     ]);
     const model = reg.models.find((m) => m.id === userModelId('or-1', 'm'))!;
-    expect(execConfigFor(model, providers)).toEqual({
-      providerId: 'or-1',
-      transport: 'anthropic-native',
-      baseUrl: 'https://gw.internal/v1',
-    });
+    expect(execConfigFor(model, providers)?.baseUrl).toBe('https://gw.internal/v1');
+    expect(execConfigFor(model, providers)?.providerId).toBe('or-1');
+  });
+
+  /**
+   * The transport is per MODEL, not per provider. This test previously asserted
+   * that a non-Anthropic OpenRouter model got 'anthropic-native' — encoding the
+   * bug that produced "There's an issue with the selected model
+   * (google/gemini-3.6-flash)": OpenRouter's /api/v1/messages serves `anthropic/*`
+   * only, so everything else has to go through the openai-compat shim.
+   */
+  it('sends an aggregator\'s own-vendor model natively and the rest via the shim', () => {
+    const models = [
+      { id: 'anthropic/claude-x', label: 'Claude X', pricing: priced(0.01) },
+      { id: 'google/gemini-3.6-flash', label: 'Gemini', pricing: priced(0.01) },
+      { id: 'moonshotai/kimi-k3', label: 'Kimi', pricing: priced(0.01) },
+    ];
+    const providers = [provider({ models })];
+    const reg = buildEffectiveRegistry(base, [provider({ models })]);
+    const transportOf = (id: string) =>
+      execConfigFor(reg.models.find((m) => m.id === userModelId('or-1', id))!, providers)?.transport;
+
+    expect(transportOf('anthropic/claude-x')).toBe('anthropic-native');
+    expect(transportOf('google/gemini-3.6-flash')).toBe('openai-compat');
+    expect(transportOf('moonshotai/kimi-k3')).toBe('openai-compat');
   });
 });
 
@@ -205,7 +225,9 @@ describe('resolveClientRoute', () => {
     });
     expect(route).toEqual({
       model: 'moonshotai/kimi-k2',
-      providerConfig: { providerId: 'or-1', transport: 'anthropic-native', baseUrl: 'https://openrouter.ai/api/v1' },
+      // Kimi is not an `anthropic/*` model, so it routes via the openai-compat
+      // shim rather than OpenRouter's Anthropic endpoint.
+      providerConfig: { providerId: 'or-1', transport: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' },
     });
   });
 

@@ -75,7 +75,9 @@ describe('buildModelOptions', () => {
     expect(kimi).toMatchObject({ label: 'Kimi K2', group: 'OpenRouter', kind: 'model', model: 'moonshotai/kimi-k2' });
     expect(kimi.providerConfig).toEqual({
       providerId: 'or-1',
-      transport: 'anthropic-native',
+      // Per-model: a non-`anthropic/*` model on an aggregator must use the
+      // openai-compat shim, not the Anthropic-format endpoint.
+      transport: 'openai-compat',
       baseUrl: 'https://openrouter.ai/api/v1',
     });
   });

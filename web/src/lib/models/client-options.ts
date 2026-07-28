@@ -17,6 +17,7 @@ import type { ProviderExecConfig } from './execution';
 import { TIER_ORDER, type Capability, type Tier } from './types';
 import {
   resolveClientRoute,
+  transportForModel,
   userModelId,
   type ClientRoute,
   type ProviderWithModels,
@@ -147,7 +148,13 @@ export function buildModelOptions(
         group: p.label,
         kind: 'model',
         model: m.id,
-        providerConfig: { providerId: p.id, transport, baseUrl },
+        // Per model, not per provider: an aggregator's Anthropic endpoint only
+        // serves its own vendor, so the rest go via the openai-compat shim.
+        providerConfig: {
+          providerId: p.id,
+          transport: transportForModel(p.presetId, m.id, transport),
+          baseUrl,
+        },
       });
     }
   }

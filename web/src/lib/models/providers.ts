@@ -62,6 +62,17 @@ export interface ProviderPreset {
   capabilities: Capability[];
   /** Absent = model discovery not supported (enter models manually). */
   scan?: ScanDescriptor;
+  /**
+   * Aggregators expose many vendors behind one key, but their Anthropic-format
+   * endpoint only serves that vendor's own models. Models whose id starts with
+   * this prefix can use `transport`; everything else must go through the
+   * openai-compat shim. Absent = every model uses `transport`.
+   *
+   * OpenRouter is the case in point: /api/v1/messages serves `anthropic/*` only,
+   * so sending google/gemini-* or moonshotai/kimi-* there is rejected with
+   * "issue with the selected model".
+   */
+  nativeModelPrefix?: string;
   /** True for the free-form "bring any endpoint" escape hatch. */
   custom?: boolean;
 }
@@ -114,6 +125,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultBaseUrl: 'https://openrouter.ai/api/v1',
     credentialFields: ['apiKey'],
     capabilities: ['chat', 'code'],
+    nativeModelPrefix: 'anthropic/',
     scan: { shape: 'openrouter', path: '/models', auth: 'bearer' },
   },
   {
