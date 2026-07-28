@@ -76,8 +76,17 @@ export function OnboardingWizard() {
   const current: StepId = STEPS[step];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-background/80 backdrop-blur-sm py-8">
-      <div className="w-full max-w-[480px] mx-4 my-auto">
+    /* The blurred backdrop and the scroll container are deliberately SEPARATE
+       elements. Putting `backdrop-blur` and `overflow-y-auto` on the same node
+       gives it a compositing context that Electron does not reliably
+       invalidate when the card's height changes between steps: the previous,
+       taller card's footprint stays painted as a grey block, and a stale layer
+       like that can swallow pointer events — a button under it looks normal and
+       does nothing. Blur stays on the static full-screen layer; only the inner
+       wrapper scrolls. */
+    <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm">
+      <div className="h-full overflow-y-auto flex items-center justify-center py-8">
+        <div className="w-full max-w-[480px] mx-4">
         {/* Step indicator dots */}
         <div
           className="flex items-center justify-center gap-2 mb-6"
@@ -151,6 +160,7 @@ export function OnboardingWizard() {
               </button>
             )}
           </div>
+        </div>
         </div>
       </div>
     </div>
