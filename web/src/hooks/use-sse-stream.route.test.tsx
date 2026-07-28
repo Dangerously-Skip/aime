@@ -95,7 +95,9 @@ describe('request body — model routing', () => {
     expect(body.model).toBe('moonshotai/kimi-k2');
     expect(body.providerConfig).toEqual({
       providerId: 'or-1',
-      transport: 'anthropic-native',
+      // Kimi is not an `anthropic/*` model, so it must reach OpenRouter through
+      // the openai-compat shim; the Anthropic-format endpoint rejects it.
+      transport: 'openai-compat',
       baseUrl: 'https://openrouter.ai/api/v1',
     });
   });

@@ -63,6 +63,26 @@ export function kindForTransport(transport: Transport | undefined, presetId: str
   return presetId === 'anthropic' ? 'anthropic' : 'anthropic-compat';
 }
 
+/**
+ * Which wire format a SPECIFIC model on this provider must use.
+ *
+ * Providers used to carry one transport for their whole catalogue, which broke
+ * aggregators: OpenRouter is `anthropic-native`, so google/gemini-* and
+ * moonshotai/kimi-* were sent to /api/v1/messages — an Anthropic-format endpoint
+ * that only serves `anthropic/*` — and came back "There's an issue with the
+ * selected model". Non-native models go through the openai-compat shim instead,
+ * which already exists for exactly this (see execution.ts).
+ */
+export function transportForModel(
+  presetId: string,
+  modelId: string,
+  presetTransport: Transport | undefined,
+): Transport | undefined {
+  const prefix = getPreset(presetId)?.nativeModelPrefix;
+  if (!prefix) return presetTransport;
+  return modelId.startsWith(prefix) ? presetTransport : 'openai-compat';
+}
+
 /** The composite option id used across the client for a user provider's model. */
 export function userModelId(providerId: string, modelId: string): string {
   return `${providerId}:${modelId}`;
@@ -192,7 +212,7 @@ export function execConfigFor(
   const preset = getPreset(provider.presetId);
   return {
     providerId: provider.id,
-    transport: preset?.transport,
+    transport: transportForModel(provider.presetId, model.driverModel, preset?.transport),
     baseUrl: provider.baseUrl ?? preset?.defaultBaseUrl,
   };
 }
