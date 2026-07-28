@@ -12,16 +12,20 @@ import {
 } from "@/components/ui/select";
 import { useProviderStore } from "@/stores/provider-store";
 import { useSettingsStore } from "@/stores/settings-store";
+import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 import {
   buildModelOptions,
+  defaultRoute,
   groupOptions,
   findOption,
   isTierOption,
+  TIER_OPTION_PREFIX,
   type BuiltinModel,
   type ConfiguredProviderLite,
   type ModelOption,
 } from "@/lib/models/client-options";
-import type { TierAssignments } from "@/lib/models/effective-registry";
+import type { ProviderWithModels, TierAssignments } from "@/lib/models/effective-registry";
+import type { Capability } from "@/lib/models/types";
 
 const BUILTINS: BuiltinModel[] = [
   { id: "opus", label: "Opus 4.7" },
@@ -35,6 +39,12 @@ const BUILTINS: BuiltinModel[] = [
  * tier-assigned one, plus the current selection so a pinned model never
  * vanishes from its own dropdown). Legacy callers get built-ins only.
  *
+ * `hasBuiltins` drops the "Built-in (Claude)" group when no Anthropic or Bedrock
+ * credential can reach it — offering a model the install cannot run is how a
+ * BYOK-only user ended up being asked to log in to Anthropic. Legacy (non-rich)
+ * callers keep them regardless: built-ins are their entire dropdown, and an
+ * empty select is worse than an aspirational one.
+ *
  * Exported so the argument choice is directly testable — the dropdown is
  * portalled, so it cannot be opened in jsdom.
  */
@@ -43,12 +53,40 @@ export function buildSelectorOptions(
   tierModels: TierAssignments | undefined,
   value: string,
   rich: boolean,
+  hasBuiltins = true,
 ): ModelOption[] {
   if (!rich) return buildModelOptions(BUILTINS, [], { includeTiers: false });
-  return buildModelOptions(BUILTINS, providers, {
+  return buildModelOptions(hasBuiltins ? BUILTINS : [], providers, {
     tierModels,
     includeModelIds: value ? [value] : [],
   });
+}
+
+/**
+ * What the trigger should read. Normally `value` — but a surface's default is a
+ * built-in id ('sonnet'), and when no built-in credential exists that id is
+ * neither offered nor sent: `resolveSendRoute` quietly routes the turn through a
+ * tier instead. Showing "Sonnet 4.6" over an OpenRouter turn is a lie, so fall
+ * back to the tier `defaultRoute` picks — the same function the send path uses,
+ * so the two cannot drift.
+ *
+ * Returns `value` unchanged when it IS a valid option, and when nothing
+ * resolves (an empty trigger beats a wrong one).
+ */
+export function displayValue(
+  value: string,
+  options: ModelOption[],
+  providers: ProviderWithModels[],
+  opts: {
+    capability: Capability;
+    tierModels?: TierAssignments;
+    hasAnthropicKey?: boolean;
+    hasBedrock?: boolean;
+  },
+): string {
+  if (options.some((o) => o.id === value)) return value;
+  const fallback = defaultRoute(providers, opts);
+  return fallback ? `${TIER_OPTION_PREFIX}${fallback.tier}` : value;
 }
 
 /**
@@ -86,12 +124,24 @@ interface ModelSelectorProps {
    * original behaviour for surfaces not yet wired for it.
    */
   onSelectModel?: (opt: ModelOption) => void;
+  /**
+   * The surface's capability, used only to resolve what an unpinned selection
+   * would route to (see `displayValue`). Defaults to 'chat'.
+   */
+  capability?: Capability;
   className?: string;
 }
 
-export function ModelSelector({ value, onChange, onSelectModel, className }: ModelSelectorProps) {
+export function ModelSelector({
+  value,
+  onChange,
+  onSelectModel,
+  capability = "chat",
+  className,
+}: ModelSelectorProps) {
   const providers = useProviderStore((s) => s.providers);
   const tierModels = useSettingsStore((s) => s.tierModels);
+  const { hasAnthropicKey, hasBedrock, hasBuiltins } = useBuiltinAccess();
 
   // provider-store is rehydrated centrally by StoreHydration, alongside every
   // other persisted store. It used to be pulled in from right here:
@@ -111,10 +161,20 @@ export function ModelSelector({ value, onChange, onSelectModel, className }: Mod
   // the store is now in the central list where it belonged.
 
   const options = useMemo(
-    () => buildSelectorOptions(providers, tierModels, value, !!onSelectModel),
-    [providers, tierModels, value, onSelectModel],
+    () => buildSelectorOptions(providers, tierModels, value, !!onSelectModel, hasBuiltins),
+    [providers, tierModels, value, onSelectModel, hasBuiltins],
   );
   const groups = useMemo(() => groupOptions(options), [options]);
+  const shown = useMemo(
+    () =>
+      displayValue(value, options, providers, {
+        capability,
+        tierModels,
+        hasAnthropicKey,
+        hasBedrock,
+      }),
+    [value, options, providers, capability, tierModels, hasAnthropicKey, hasBedrock],
+  );
 
   const handleChange = (v: string | null) => {
     if (!v) return;
@@ -122,7 +182,7 @@ export function ModelSelector({ value, onChange, onSelectModel, className }: Mod
   };
 
   return (
-    <Select value={value} onValueChange={handleChange}>
+    <Select value={shown} onValueChange={handleChange}>
       <SelectTrigger className={`h-7 w-[130px] text-xs bg-card ${className}`}>
         <SelectValue />
       </SelectTrigger>

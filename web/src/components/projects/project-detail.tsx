@@ -50,6 +50,7 @@ import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
+import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -151,6 +152,9 @@ export function ProjectDetail({
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  // Built-in (Claude) reachability, which is the user's key OR the server's env
+  // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
+  const { hasAnthropicKey, hasBedrock } = useBuiltinAccess();
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
 
@@ -322,7 +326,8 @@ export function ProjectDetail({
     const route = resolveSendRoute(modelRoute, providers, {
       capability: CAPABILITY,
       tierModels,
-      hasAnthropicKey: !!anthropicApiKey,
+      hasAnthropicKey,
+      hasBedrock,
     });
 
     // Open the run record before the turn starts so an immediate failure is
@@ -518,6 +523,7 @@ export function ProjectDetail({
                 value={modelRoute ? modelRoute.id : model}
                 onChange={setModel}
                 onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                capability={CAPABILITY}
                 className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
               />
               <Button

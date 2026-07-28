@@ -89,6 +89,7 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import type { Capability } from "@/lib/models/types";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
+import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 import { watchStuckTool } from "@/lib/stuck-tool-watchdog";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
@@ -736,6 +737,9 @@ export function CoworkSurface() {
   const printDocument = useDocumentPrint();
   const displayName = useSettingsStore((s) => s.displayName);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  // Built-in (Claude) reachability, which is the user's key OR the server's env
+  // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
+  const { hasAnthropicKey, hasBedrock } = useBuiltinAccess();
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
   const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
@@ -762,9 +766,10 @@ export function CoworkSurface() {
       resolveSendRoute(modelRoute, providers, {
         capability,
         tierModels,
-        hasAnthropicKey: !!anthropicApiKey,
+        hasAnthropicKey,
+        hasBedrock,
       }),
-    [modelRoute, providers, tierModels, anthropicApiKey]
+    [modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock]
   );
 
   const handleFolderChange = useCallback(
@@ -1793,6 +1798,7 @@ export function CoworkSurface() {
                     value={modelRoute ? modelRoute.id : model}
                     onChange={setModel}
                     onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                    capability={CAPABILITY}
                     className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                   />
                   <Button
@@ -1879,6 +1885,7 @@ export function CoworkSurface() {
                         value={modelRoute ? modelRoute.id : model}
                         onChange={setModel}
                         onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                        capability={CAPABILITY}
                         className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                       />
                       <Button

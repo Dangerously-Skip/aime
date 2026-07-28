@@ -56,6 +56,35 @@ async function deleteCredentials(providerId: string): Promise<void> {
   }).catch(() => {})
 }
 
+/** Which stored credential ids no provider claims. Ids only — never values. */
+async function listCredentialIds(): Promise<string[]> {
+  const res = await fetch('/api/models/providers/credentials')
+  if (!res.ok) return []
+  const data = (await res.json().catch(() => ({}))) as { providerIds?: string[] }
+  return Array.isArray(data.providerIds) ? data.providerIds : []
+}
+
+/**
+ * Credential records with no provider behind them. Onboarding used to mint a new
+ * uuid on every "Save & verify", so the encrypted store accumulated a copy of
+ * the key per attempt (~12 in one case) that nothing could ever read back.
+ *
+ * `'anthropic'` is reserved: the BYOK key is mirrored there under a fixed id for
+ * unattended/server-side runs and is deliberately not a provider-store entry.
+ *
+ * Reported rather than swept automatically. These are secrets, and the failure
+ * mode of an automatic sweep is losing every key the moment provider-store
+ * hydration hiccups — which is exactly what the dev-port bug did to localStorage
+ * a fortnight ago. A count and a button cost one click and can't do that.
+ */
+export function orphanCredentialIds(
+  stored: string[],
+  providers: ReadonlyArray<{ id: string }>,
+): string[] {
+  const claimed = new Set<string>(['anthropic', ...providers.map((p) => p.id)])
+  return stored.filter((id) => !claimed.has(id))
+}
+
 export function ProviderManager() {
   const providers = useProviderStore((s) => s.providers)
   const addProvider = useProviderStore((s) => s.addProvider)
@@ -64,9 +93,23 @@ export function ProviderManager() {
   const setModels = useProviderStore((s) => s.setModels)
   const setHasCredentials = useProviderStore((s) => s.setHasCredentials)
 
-  // provider-store hydrates lazily (skipHydration).
+  const [orphans, setOrphans] = useState<string[]>([])
+
+  // provider-store hydrates lazily (skipHydration). The orphan scan is chained
+  // off that promise, never run beside it: comparing stored keys against an
+  // un-hydrated (empty) provider list would report every key as an orphan.
   useEffect(() => {
-    void useProviderStore.persist.rehydrate()
+    let cancelled = false
+    void useProviderStore.persist
+      .rehydrate()
+      ?.then(listCredentialIds)
+      .then((ids) => {
+        if (!cancelled) setOrphans(orphanCredentialIds(ids, useProviderStore.getState().providers))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const [adding, setAdding] = useState(false)
@@ -144,6 +187,16 @@ export function ProviderManager() {
   async function handleRemove(providerId: string) {
     await deleteCredentials(providerId)
     removeProvider(providerId)
+  }
+
+  async function handlePurgeOrphans() {
+    setBusy('orphans')
+    try {
+      await Promise.all(orphans.map(deleteCredentials))
+      setOrphans([])
+    } finally {
+      setBusy(null)
+    }
   }
 
   function removeModel(providerId: string, modelId: string) {
@@ -254,6 +307,25 @@ export function ProviderManager() {
           </div>
         ))}
       </div>
+
+      {orphans.length > 0 && (
+        <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/30 px-3 py-2">
+          <p className="text-xs text-muted-foreground">
+            {orphans.length} stored key{orphans.length === 1 ? '' : 's'} belong to providers that no
+            longer exist. Nothing can read {orphans.length === 1 ? 'it' : 'them'}.
+          </p>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto h-7 shrink-0 text-xs hover:text-destructive"
+            onClick={handlePurgeOrphans}
+            disabled={busy === 'orphans'}
+          >
+            {busy === 'orphans' ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : null}
+            Delete {orphans.length === 1 ? 'it' : 'them'}
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

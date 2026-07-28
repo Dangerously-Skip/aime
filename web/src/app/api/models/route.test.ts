@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { GET } from './route';
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('GET /api/models', () => {
   it('returns registry models including Fable, with metadata', async () => {
@@ -26,5 +28,27 @@ describe('GET /api/models', () => {
     expect(body.routing.code).toContain('stallion');
     expect(body.routing.chat).not.toContain('stallion');
     expect(body.capabilities).toEqual(expect.arrayContaining(['chat', 'code']));
+  });
+
+  // The picker gates the "Built-in (Claude)" group on this: a BYOK-only user was
+  // offered three Claude models their key could never reach.
+  describe('built-in credential reporting', () => {
+    it('reports an env Anthropic key as a boolean, never the key', async () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-secret');
+      const body = await (await GET()).json();
+      expect(body.anthropic).toBe(true);
+      expect(JSON.stringify(body)).not.toContain('sk-ant-secret');
+    });
+
+    it('reports false with no env key', async () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      const body = await (await GET()).json();
+      expect(body.anthropic).toBe(false);
+    });
+
+    it('still reports Bedrock alongside it', async () => {
+      const body = await (await GET()).json();
+      expect(typeof body.bedrock).toBe('boolean');
+    });
   });
 });

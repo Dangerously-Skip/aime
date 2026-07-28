@@ -35,6 +35,12 @@ export async function GET() {
     capabilities: Object.keys(reg.routing),
     routing,
     default: { capability: 'chat', tier: 'good' },
+    // Which built-in (Claude) credentials this server can reach. Booleans only —
+    // no key material. The picker needs them to decide whether to OFFER the
+    // built-in models at all: a BYOK-only user was shown "Built-in (Claude)"
+    // entries that could never run. The user's own key lives client-side in the
+    // settings store; only the env/Bedrock half has to come from here.
+    anthropic: !!process.env.ANTHROPIC_API_KEY,
     bedrock: isBedrockConfigured(),
   });
 }

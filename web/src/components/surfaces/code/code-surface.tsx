@@ -66,6 +66,7 @@ import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
+import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
@@ -543,6 +544,7 @@ function CodeInput({
             value={model}
             onChange={onModelChange}
             onSelectModel={onSelectModel}
+            capability={CAPABILITY}
             className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
           />
           <Button
@@ -606,6 +608,9 @@ export function CodeSurface() {
   const model = useCodeStore((s) => s.model);
   const modelRoute = useCodeStore((s) => s.modelRoute);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  // Built-in (Claude) reachability, which is the user's key OR the server's env
+  // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
+  const { hasAnthropicKey, hasBedrock } = useBuiltinAccess();
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
@@ -1083,7 +1088,8 @@ export function CodeSurface() {
       const route = resolveSendRoute(modelRoute, providers, {
         capability: CAPABILITY,
         tierModels,
-        hasAnthropicKey: !!anthropicApiKey,
+        hasAnthropicKey,
+        hasBedrock,
       });
 
       // Open the run record before the turn starts so an immediate failure is
@@ -1114,6 +1120,8 @@ export function CodeSurface() {
       providers,
       tierModels,
       anthropicApiKey,
+      hasAnthropicKey,
+      hasBedrock,
       folder,
       attachments,
       addMessage,
