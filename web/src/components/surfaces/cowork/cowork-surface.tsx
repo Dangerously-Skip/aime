@@ -90,6 +90,7 @@ import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import type { Capability } from "@/lib/models/types";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { watchStuckTool } from "@/lib/stuck-tool-watchdog";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
@@ -1180,6 +1181,18 @@ export function CoworkSurface() {
             }
           } catch (e) {
             console.error('[Cowork] CronCreate parse error:', e);
+          }
+          break;
+        }
+        case "widget_create": {
+          // WidgetCreate lives on the in-process `aime` MCP server, so it is
+          // reachable from EVERY surface — but only chat and assistant handled the
+          // event it emits. This switch has no `default:`, so on cowork the widget
+          // was dropped without a trace while the model reported it pinned.
+          try {
+            handleWidgetCreateEvent(event as Record<string, unknown>);
+          } catch (e) {
+            console.error('[Cowork] WidgetCreate parse error:', e);
           }
           break;
         }
