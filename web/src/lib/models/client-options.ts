@@ -65,6 +65,13 @@ export interface ConfiguredProviderLite {
   models: Array<{ id: string; label?: string }>;
 }
 
+/**
+ * Which tier to try first when nothing is pinned and the user has no built-in
+ * credentials. Mid-range first: the cheapest tier is often a tiny model, and the
+ * premium tiers are frequently unpopulated for a single provider.
+ */
+const DEFAULT_TIER_PREFERENCE: readonly Tier[] = ['good', 'smort', 'cheap', 'stallion'];
+
 export const TIER_OPTION_PREFIX = 'tier:';
 
 /** Is this select value a tier route rather than a pinned model? */
@@ -183,7 +190,31 @@ export function resolveSendRoute(
     hasBedrock?: boolean;
   },
 ): ClientRoute | null {
-  if (!selection) return null;
+  // No explicit selection. Every surface defaults to a BUILT-IN Claude id
+  // ('sonnet'), which needs Anthropic credentials — so a user whose only
+  // provider is OpenRouter went down the built-in path, no key was found, and
+  // the Agent SDK asked them to log in to Anthropic. That defeats the purpose of
+  // BYOK: the reason to bring an OpenRouter key is not needing an Anthropic
+  // account at all.
+  //
+  // With nothing pinned and no Anthropic/Bedrock credential, resolve through the
+  // effective registry instead — it already knows how to land a tier on a user
+  // provider's model. Here rather than in each surface, because all four call
+  // this function and one forgetting is how the gap appeared.
+  if (!selection) {
+    if (opts.hasAnthropicKey || opts.hasBedrock) return null;
+    if (!providers.some((p) => p.enabled && p.models.length > 0)) return null;
+    for (const tier of DEFAULT_TIER_PREFERENCE) {
+      const route = resolveClientRoute(opts.capability, tier, providers, {
+        base: createDefaultRegistry(),
+        tierAssignments: opts.tierModels,
+        hasAnthropicKey: opts.hasAnthropicKey,
+        hasBedrock: opts.hasBedrock,
+      });
+      if (route) return route;
+    }
+    return null;
+  }
   if (selection.kind === 'model') {
     return selection.model
       ? { model: selection.model, providerConfig: selection.providerConfig }
