@@ -37,29 +37,33 @@ working by the user: Kimi K2.7, Kimi K3, DeepSeek V4, Gemini 3.6 Flash.
 
 ## Open items, roughly prioritised
 
-1. **Model picker offers "Built-in (Claude)" with no Anthropic key.**
-   `buildModelOptions` injects three hardcoded built-ins unconditionally. The
-   user's ask: offer only what the entered key actually reaches. Quickest win.
-2. **~12 orphaned credentials in `~/.aime/credentials.enc`.** Every "Save &
-   verify" mints a fresh `crypto.randomUUID()` provider id and stores another
-   copy of the key (`step-providers.tsx`). Re-running setup for the same preset
-   should UPDATE the existing provider. Prune the strays too. Largely a
-   consequence of the port bug, so it should stop regrowing.
+Items 1, 2, 5 and 8 are done — see "Closed since" below.
+
 3. **A widget created in chat could not run.** The review noted cowork has no
    `widget_create` handler; likely related, unverified.
 4. **WebFetch may not work; the agent falls back to Bash/curl.** Unverified —
    check the surface's allowed tools and what WebFetch actually returns.
-5. **Selector displays "sonnet" while routing elsewhere.** Cosmetic but
-   misleading; should show the resolved route when no built-in credential exists.
 6. **`thumbs-up-robot.png`** on the onboarding summary is still a raster icon,
    against the user's "outline icons except brand marks" rule. Undecided whether
    the mascot is deliberate.
 7. **The blocking approval gate in `canUseTool` has never fired in a real turn.**
    Highest-risk untested path — it can pause a turn awaiting a human.
-8. **Rename `master` → `main`** (user prefers `main`). Not done: it changes the
-   default branch on a shared repo, `.github/workflows/ci.yml` triggers on
-   `branches: [master]`, and a second worktree at `~/dev/OSS/aime` has master
-   checked out.
+
+## Closed since
+
+- **8** — `master` → `main` renamed; CI now triggers on `main` (`5d09995`).
+- **1 + 5** (`f6437b7`) — built-in reachability is now the union of the user's
+  key, the server's `ANTHROPIC_API_KEY`, and Bedrock. `/api/models` reports the
+  latter two as booleans; `useBuiltinAccess` joins them. The picker drops the
+  "Built-in (Claude)" group when none apply, and the trigger falls back to the
+  tier `defaultRoute` resolves — the same function the send path calls, extracted
+  from `resolveSendRoute` so label and route cannot drift. Optimistic until the
+  server answers, so an env-key install doesn't flicker on every boot.
+- **2** (`f6437b7`) — onboarding reuses the provider id already configured for a
+  preset instead of minting a uuid per press. Existing strays are *reported* in
+  Settings → API Access with a delete button, not swept: they're secrets, and an
+  automatic sweep loses every key the moment provider-store hydration hiccups —
+  precisely what the dev-port bug did to localStorage.
 
 ## Things the user asked for that are NOT derivable from the code
 
