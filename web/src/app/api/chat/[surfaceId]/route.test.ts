@@ -270,7 +270,8 @@ describe('provider parameter assembly', () => {
     const p = providerParams();
     expect(p.model).toBe('moonshotai/kimi-k2');
     expect(p.apiKey).toBe('sk-or-transient');
-    expect(p.baseUrl).toBe('https://openrouter.ai/api/v1');
+    // Trailing /v1 stripped: the SDK adds `/v1/messages` itself.
+    expect(p.baseUrl).toBe('https://openrouter.ai/api');
   });
 
   it('leaves base URL unset on the default Anthropic path', async () => {
