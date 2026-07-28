@@ -37,17 +37,19 @@ working by the user: Kimi K2.7, Kimi K3, DeepSeek V4, Gemini 3.6 Flash.
 
 ## Open items, roughly prioritised
 
-Items 1, 2, 5 and 8 are done — see "Closed since" below.
+All of 1–5, 7 and 8 are done — see "Closed since". Two remain.
 
-3. **A widget created in chat could not run.** The review noted cowork has no
-   `widget_create` handler; likely related, unverified.
-4. **WebFetch may not work; the agent falls back to Bash/curl.** Unverified —
-   check the surface's allowed tools and what WebFetch actually returns.
 6. **`thumbs-up-robot.png`** on the onboarding summary is still a raster icon,
    against the user's "outline icons except brand marks" rule. Undecided whether
-   the mascot is deliberate.
-7. **The blocking approval gate in `canUseTool` has never fired in a real turn.**
-   Highest-risk untested path — it can pause a turn awaiting a human.
+   the mascot is deliberate. (Explicitly deferred by the user on 2026-07-29.)
+9. **`blockDangerousCommands` and `restrictToProjectFolder` are prompt-only.**
+   Found while fixing the `allowedTools` hole below, and the same shape of
+   problem: both settings only append a sentence asking the model nicely, so
+   they read as guards and are not. Unlike the tool switches this cannot be
+   fixed by wiring — it needs command-string and path inspection in
+   `canUseTool`, and a false positive there breaks legitimate work. A design
+   call, not a wiring fix. `lib/path-containment.ts` already exists and is used
+   by the document/skill writers, so the containment half has a foundation.
 
 ## Closed since
 
@@ -64,6 +66,38 @@ Items 1, 2, 5 and 8 are done — see "Closed since" below.
   Settings → API Access with a delete button, not swept: they're secrets, and an
   automatic sweep loses every key the moment provider-store hydration hiccups —
   precisely what the dev-port bug did to localStorage.
+- **7** (`1305b1e`) — the gate is exercised end to end across BOTH requests now
+  (`api/chat/approval-gate.integration.test.ts`). The pieces were each covered;
+  the seam between them — canUseTool parks a promise, a *separate* POST to
+  /api/chat/answer settles it — was not, and the seam is the mechanism. Nothing
+  on that path is mocked but the SDK. Draining the stream with `res.text()`
+  deadlocks, which is the feature. `QuestionCard` also had no test at all.
+  Both mutation-verified, not just green.
+- **3** (`183d487`) — cowork and code now handle the `widget_create` chunk;
+  only chat and assistant ever did (`9087d8a` wired exactly those), and the
+  switches have no `default:`, so it vanished silently. Separately, the flush
+  emitting widget/cron/standing-order chunks sat after the stream loop inside
+  `try`, which the abort path never reaches — Stop or the 90s watchdog lost the
+  widget on chat too. Now `drainPending()`, called on both paths.
+- **4** (`183d487`) — WebFetch was reachable all along; nothing filters it. The
+  prompt was the bug. Search is opt-in on `SEARXNG_INSTANCES` (set nowhere, not
+  even in `.env.example`), yet cowork/code told the model unconditionally that
+  `web_search` was its only search tool, banned the built-in WebSearch (already
+  in `disallowedTools`), banned curl, and framed WebFetch as a follow-up to
+  search results that could never arrive. Hence the curl flailing.
+  `webSearchPrompt()` now picks its text from the same env var that decides the
+  mounting, in the same process.
+- **NEW, found on the way** (`0129fbe`) — **the tool restrictions did not
+  restrict.** "Disable Bash tool", the tool profiles, and an agent's tool list
+  all worked by filtering `allowedTools`, which is the SDK's *auto-approve*
+  list, not the set of mounted tools. With `bypassPermissions` and a catch-all
+  allow in `canUseTool`, they changed nothing: probed it, `canUseTool('Bash',
+  {command: 'rm -rf ~/x'})` returned `allow`. Each step now records what it
+  removed, and the provider enforces that set as `disallowedTools` *and* in
+  `canUseTool`. Note the two traps avoided, both documented in code: the
+  complement of `allowedTools` is not a deny list (those lists were never
+  exhaustive), and a profile must not withhold the app's own plumbing
+  (`PLUMBING_TOOLS`).
 
 ## Things the user asked for that are NOT derivable from the code
 
