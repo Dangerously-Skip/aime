@@ -97,6 +97,71 @@ describe('sanitizeToolSchema', () => {
   });
 });
 
+describe('constructs Google\'s Schema cannot represent', () => {
+  /**
+   * The REAL cause, found by capturing all 42 tool schemas the SDK actually
+   * sends. Our own ExcelEdit declares:
+   *
+   *   value: { type: ['string','number','boolean'] }
+   *   ...
+   *   required: ['cell','value'], additionalProperties: false
+   *
+   * Google's Schema supports neither a union `type` array nor
+   * `additionalProperties`. The converter drops the PROPERTY it cannot
+   * represent, and only THEN does `required` dangle — so pruning `required`
+   * alone (the first fix) treated a symptom that appears downstream.
+   */
+  it('collapses a union type so the property survives conversion', () => {
+    const out = sanitizeToolSchema({
+      type: 'object',
+      properties: { value: { type: ['string', 'number', 'boolean'], description: 'v' } },
+      required: ['value'],
+    });
+    const value = (out.properties as Record<string, Record<string, unknown>>).value;
+    expect(value.type).toBe('string');
+    expect(value.description).toBe('v'); // still described
+    expect(out.required).toEqual(['value']); // and still required
+  });
+
+  it('marks a nullable union nullable rather than losing the type', () => {
+    const out = sanitizeToolSchema({ type: 'object', properties: { a: { type: ['string', 'null'] } } });
+    const a = (out.properties as Record<string, Record<string, unknown>>).a;
+    expect(a.type).toBe('string');
+    expect(a.nullable).toBe(true);
+  });
+
+  it('drops additionalProperties, which the converter also cannot represent', () => {
+    const out = sanitizeToolSchema({ type: 'object', properties: {}, additionalProperties: false });
+    expect('additionalProperties' in out).toBe(false);
+  });
+
+  it('handles the real ExcelEdit shape end to end', () => {
+    const out = sanitizeToolSchema({
+      type: 'object',
+      properties: {
+        edits: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              cell: { type: 'string' },
+              value: { type: ['string', 'number', 'boolean'] },
+            },
+            required: ['cell', 'value'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['edits'],
+    });
+    const items = (out.properties as Record<string, { items: Record<string, unknown> }>).edits.items;
+    const props = items.properties as Record<string, Record<string, unknown>>;
+    expect(props.value.type).toBe('string');
+    expect(items.required).toEqual(['cell', 'value']); // nothing dangles now
+    expect('additionalProperties' in items).toBe(false);
+  });
+});
+
 describe('anthropicToOpenAI — tools are sanitised on the way through', () => {
   it('sends a schema the upstream validator will accept', () => {
     const out = anthropicToOpenAI(
