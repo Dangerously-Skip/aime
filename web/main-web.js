@@ -367,6 +367,31 @@ app.setName("AIME");
 
 let mainWindow;
 
+// --- Single instance ---
+// A second instance is not merely redundant, it is silently BROKEN. Chromium's
+// Local Storage is a LevelDB with a single-writer lock, and every window here
+// uses the on-disk `persist:quarry` partition — so the second process cannot
+// open it, gets an empty in-memory store instead, and NOTHING it writes
+// survives. The visible symptom is that onboarding can never be completed: the
+// wizard finishes in memory, the next launch has no record of it, and the user
+// is returned to the first step forever. Settings, conversations and connector
+// state are lost the same way, just less visibly.
+//
+// Requested after setName() so the lock is keyed to the same userData directory
+// the sessions use, and before any window or session is created.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  console.warn("[AIME] Another instance is already running — focusing it and exiting.");
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
+
 function createWindow(port) {
   mainWindow = new BrowserWindow({
     width: 1200,
