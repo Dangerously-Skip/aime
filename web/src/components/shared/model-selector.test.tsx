@@ -1,10 +1,22 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
-import { ModelSelector, buildSelectorOptions, dispatchSelection } from './model-selector';
+import {
+  ModelSelector,
+  buildSelectorOptions,
+  dispatchSelection,
+  displayValue,
+} from './model-selector';
 import { useProviderStore } from '@/stores/provider-store';
 import { useSettingsStore } from '@/stores/settings-store';
-import { TIER_GROUP, TIER_LABELS, type ModelOption } from '@/lib/models/client-options';
+import { resetServerCredentials } from '@/hooks/use-builtin-access';
+import {
+  BUILTIN_GROUP,
+  TIER_GROUP,
+  TIER_LABELS,
+  type ModelOption,
+} from '@/lib/models/client-options';
+import type { ProviderWithModels } from '@/lib/models/effective-registry';
 
 const PROVIDER = {
   id: 'openrouter-1',
@@ -15,8 +27,27 @@ const PROVIDER = {
   models: [{ id: 'moonshotai/kimi-k2', label: 'Kimi K2' }],
 };
 
+/** Same provider, priced — `defaultRoute` needs a price to infer a tier. */
+const PRICED_PROVIDER: ProviderWithModels = {
+  ...PROVIDER,
+  models: [
+    {
+      id: 'moonshotai/kimi-k2',
+      label: 'Kimi K2',
+      pricing: { inputPer1kUsd: 0.001, outputPer1kUsd: 0.002 },
+    },
+  ],
+};
+
+beforeEach(() => {
+  resetServerCredentials();
+  // The selector asks /api/models whether the server can reach Claude.
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ anthropic: false, bedrock: false })));
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   useProviderStore.setState({ providers: [] });
   useSettingsStore.setState({ tierModels: {} });
 });
@@ -75,6 +106,57 @@ describe('ModelSelector', () => {
     const options = buildSelectorOptions([PROVIDER], { good: 'openrouter-1:moonshotai/kimi-k2' }, 'sonnet', false);
     expect(options.every((o) => o.kind === 'model' && !o.providerConfig)).toBe(true);
     expect(options.map((o) => o.id)).toEqual(['opus', 'sonnet', 'haiku']);
+  });
+});
+
+describe('offering only what a key can actually reach', () => {
+  it('drops the Built-in (Claude) group with no Anthropic/Bedrock credential', () => {
+    const options = buildSelectorOptions([PROVIDER], {}, 'sonnet', true, false);
+    expect(options.some((o) => o.group === BUILTIN_GROUP)).toBe(false);
+    // The tier routes stay — they are how a BYOK-only user reaches their models.
+    expect(options.filter((o) => o.group === TIER_GROUP)).toHaveLength(4);
+  });
+
+  it('keeps them when a credential exists', () => {
+    const options = buildSelectorOptions([PROVIDER], {}, 'sonnet', true, true);
+    expect(options.filter((o) => o.group === BUILTIN_GROUP).map((o) => o.id)).toEqual([
+      'opus',
+      'sonnet',
+      'haiku',
+    ]);
+  });
+
+  it('keeps them for legacy callers regardless — they are the whole dropdown', () => {
+    const options = buildSelectorOptions([PROVIDER], {}, 'sonnet', false, false);
+    expect(options.map((o) => o.id)).toEqual(['opus', 'sonnet', 'haiku']);
+  });
+});
+
+describe('displayValue — the trigger must not lie about the route', () => {
+  const opts = { capability: 'chat' as const };
+
+  it('shows the tier the turn will actually take when "sonnet" is unreachable', () => {
+    const options = buildSelectorOptions([PRICED_PROVIDER], {}, 'sonnet', true, false);
+    // The surface default is still 'sonnet', but no built-in credential exists,
+    // so resolveSendRoute sends the turn to OpenRouter via a tier.
+    expect(displayValue('sonnet', options, [PRICED_PROVIDER], opts)).toBe('tier:good');
+  });
+
+  it('leaves a value that IS offered alone', () => {
+    const options = buildSelectorOptions([PRICED_PROVIDER], {}, 'sonnet', true, true);
+    expect(displayValue('sonnet', options, [PRICED_PROVIDER], { ...opts, hasAnthropicKey: true }))
+      .toBe('sonnet');
+  });
+
+  it('leaves the value alone when nothing else resolves either', () => {
+    const options = buildSelectorOptions([], {}, 'sonnet', true, false);
+    expect(displayValue('sonnet', options, [], opts)).toBe('sonnet');
+  });
+
+  it('keeps a pinned provider model as-is', () => {
+    const id = 'openrouter-1:moonshotai/kimi-k2';
+    const options = buildSelectorOptions([PRICED_PROVIDER], {}, id, true, false);
+    expect(displayValue(id, options, [PRICED_PROVIDER], opts)).toBe(id);
   });
 });
 

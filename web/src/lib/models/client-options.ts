@@ -181,6 +181,50 @@ export function groupOptions(options: ModelOption[]): Array<{ group: string; ite
   return groups;
 }
 
+/** How a credential-less selection resolves: which tier won, and where it lands. */
+export interface DefaultRoute {
+  tier: Tier;
+  route: ClientRoute;
+}
+
+/**
+ * Where a turn goes when NOTHING is pinned. Every surface defaults to a BUILT-IN
+ * Claude id ('sonnet'), which needs Anthropic credentials — so a user whose only
+ * provider is OpenRouter went down the built-in path, no key was found, and the
+ * Agent SDK asked them to log in to Anthropic. That defeats the purpose of BYOK:
+ * the reason to bring an OpenRouter key is not needing an Anthropic account.
+ *
+ * With no Anthropic/Bedrock credential we resolve through the effective registry
+ * instead — it already knows how to land a tier on a user provider's model.
+ * Returns null when a built-in credential exists (the surface default is then
+ * correct) or when nothing resolves.
+ *
+ * Shared so the picker can DISPLAY the same route the send path will take: the
+ * selector used to show "Sonnet 4.6" while every turn went to OpenRouter.
+ */
+export function defaultRoute(
+  providers: ProviderWithModels[],
+  opts: {
+    capability: Capability;
+    tierModels?: TierAssignments;
+    hasAnthropicKey?: boolean;
+    hasBedrock?: boolean;
+  },
+): DefaultRoute | null {
+  if (opts.hasAnthropicKey || opts.hasBedrock) return null;
+  if (!providers.some((p) => p.enabled && p.models.length > 0)) return null;
+  for (const tier of DEFAULT_TIER_PREFERENCE) {
+    const route = resolveClientRoute(opts.capability, tier, providers, {
+      base: createDefaultRegistry(),
+      tierAssignments: opts.tierModels,
+      hasAnthropicKey: opts.hasAnthropicKey,
+      hasBedrock: opts.hasBedrock,
+    });
+    if (route) return { tier, route };
+  }
+  return null;
+}
+
 /**
  * What to send for the current selection. A pinned model is sent as-is; a tier
  * is resolved through the effective registry (so it can land on a user
@@ -197,31 +241,10 @@ export function resolveSendRoute(
     hasBedrock?: boolean;
   },
 ): ClientRoute | null {
-  // No explicit selection. Every surface defaults to a BUILT-IN Claude id
-  // ('sonnet'), which needs Anthropic credentials — so a user whose only
-  // provider is OpenRouter went down the built-in path, no key was found, and
-  // the Agent SDK asked them to log in to Anthropic. That defeats the purpose of
-  // BYOK: the reason to bring an OpenRouter key is not needing an Anthropic
-  // account at all.
-  //
-  // With nothing pinned and no Anthropic/Bedrock credential, resolve through the
-  // effective registry instead — it already knows how to land a tier on a user
-  // provider's model. Here rather than in each surface, because all four call
-  // this function and one forgetting is how the gap appeared.
-  if (!selection) {
-    if (opts.hasAnthropicKey || opts.hasBedrock) return null;
-    if (!providers.some((p) => p.enabled && p.models.length > 0)) return null;
-    for (const tier of DEFAULT_TIER_PREFERENCE) {
-      const route = resolveClientRoute(opts.capability, tier, providers, {
-        base: createDefaultRegistry(),
-        tierAssignments: opts.tierModels,
-        hasAnthropicKey: opts.hasAnthropicKey,
-        hasBedrock: opts.hasBedrock,
-      });
-      if (route) return route;
-    }
-    return null;
-  }
+  // Nothing pinned — resolve the implicit route (see defaultRoute). Done here
+  // rather than in each surface, because all four call this function and one
+  // forgetting is how the gap appeared.
+  if (!selection) return defaultRoute(providers, opts)?.route ?? null;
   if (selection.kind === 'model') {
     return selection.model
       ? { model: selection.model, providerConfig: selection.providerConfig }

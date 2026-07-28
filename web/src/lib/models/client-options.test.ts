@@ -8,6 +8,7 @@ import {
   isTierOption,
   tierFromOptionId,
   resolveSendRoute,
+  defaultRoute,
   BUILTIN_GROUP,
   TIER_GROUP,
   type ConfiguredProviderLite,
@@ -163,6 +164,61 @@ describe('resolveSendRoute', () => {
   it('returns null when a tier cannot resolve, so the caller can fall back', () => {
     const sel = buildTierOptions().find((o) => o.tier === 'good')!;
     expect(resolveSendRoute(sel, [], { capability: 'chat', hasAnthropicKey: false })).toBeNull();
+  });
+});
+
+describe('defaultRoute — where an unpinned turn actually goes', () => {
+  const providers: ProviderWithModels[] = [
+    {
+      id: 'or-1',
+      presetId: 'openrouter',
+      label: 'OpenRouter',
+      enabled: true,
+      createdAt: 0,
+      models: [
+        {
+          id: 'moonshotai/kimi-k2',
+          label: 'Kimi K2',
+          pricing: { inputPer1kUsd: 0.001, outputPer1kUsd: 0.002 },
+        },
+      ],
+    },
+  ];
+
+  it('lands a BYOK-only user on their own provider, and says which tier', () => {
+    const d = defaultRoute(providers, { capability: 'chat' })!;
+    expect(d.tier).toBe('good'); // mid-range first — see DEFAULT_TIER_PREFERENCE
+    expect(d.route.model).toBe('moonshotai/kimi-k2');
+    expect(d.route.providerConfig?.providerId).toBe('or-1');
+  });
+
+  it('defers to the surface default when a built-in credential exists', () => {
+    expect(defaultRoute(providers, { capability: 'chat', hasAnthropicKey: true })).toBeNull();
+    expect(defaultRoute(providers, { capability: 'chat', hasBedrock: true })).toBeNull();
+  });
+
+  it('is null with no credentials at all, so the caller can fall back', () => {
+    expect(defaultRoute([], { capability: 'chat' })).toBeNull();
+    expect(defaultRoute([{ ...providers[0], enabled: false }], { capability: 'chat' })).toBeNull();
+    expect(defaultRoute([{ ...providers[0], models: [] }], { capability: 'chat' })).toBeNull();
+  });
+
+  it('agrees with resolveSendRoute — the picker and the send path share it', () => {
+    const opts = { capability: 'chat' as const };
+    expect(resolveSendRoute(null, providers, opts)).toEqual(defaultRoute(providers, opts)!.route);
+  });
+
+  it('falls through the tier preference when the first tier is unpopulated', () => {
+    // Priced into 'stallion' only, so 'good' and 'smort' cannot resolve.
+    const pricey: ProviderWithModels[] = [
+      {
+        ...providers[0],
+        models: [{ id: 'x/big', label: 'Big', pricing: { inputPer1kUsd: 0.1, outputPer1kUsd: 0.2 } }],
+      },
+    ];
+    const d = defaultRoute(pricey, { capability: 'chat' })!;
+    expect(d.tier).toBe('stallion');
+    expect(d.route.model).toBe('x/big');
   });
 });
 

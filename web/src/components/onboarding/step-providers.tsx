@@ -51,6 +51,27 @@ async function scan(presetId: string, apiKey?: string, baseUrl?: string) {
   return (data.models ?? []) as import("@/lib/models/providers").ScannedModel[];
 }
 
+/**
+ * The provider id to write for this preset: the existing one if this preset is
+ * already configured, otherwise a fresh uuid.
+ *
+ * Onboarding used to mint `crypto.randomUUID()` unconditionally, so every press
+ * of "Save & verify" created ANOTHER provider and stored ANOTHER copy of the key
+ * under a new id in `~/.aime/credentials.enc`. One user's store had ~12 orphaned
+ * records. Reusing the id makes a re-run an update — which is what "Reconfigure"
+ * has always claimed to do.
+ *
+ * Matching on preset (not label) is deliberate: this step only ever offers one
+ * provider per preset. Adding a *second* OpenRouter account is a Settings → API
+ * Access job, where the ids are managed explicitly.
+ */
+export function providerIdForPreset(
+  presetId: string,
+  existing: ReadonlyArray<{ id: string; presetId: string }>,
+): string {
+  return existing.find((p) => p.presetId === presetId)?.id ?? globalThis.crypto.randomUUID();
+}
+
 const PATHS: Array<{ id: Path; icon: typeof KeyRound; title: string; blurb: string }> = [
   {
     id: "anthropic",
@@ -100,7 +121,7 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
         if (!key) return;
         // Scan first — fail fast on a bad key before persisting anything.
         const models = await scan("openrouter", key);
-        const id = globalThis.crypto.randomUUID();
+        const id = providerIdForPreset("openrouter", useProviderStore.getState().providers);
         await saveCredential(id, key);
         addProvider({
           id,
@@ -115,7 +136,7 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
         const url = baseUrl.trim() || getPreset("local")?.defaultBaseUrl || "";
         const models = await scan("local", undefined, url);
         addProvider({
-          id: globalThis.crypto.randomUUID(),
+          id: providerIdForPreset("local", useProviderStore.getState().providers),
           presetId: "local",
           label: "Local (Ollama)",
           baseUrl: url,
