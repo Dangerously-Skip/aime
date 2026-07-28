@@ -9,6 +9,7 @@ import { useCodeStore } from "@/stores/code-store";
 import { useBrowserStore } from "@/stores/browser-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useProjectStore } from "@/stores/project-store";
+import { useProviderStore } from "@/stores/provider-store";
 import { useMemoryStore } from "@/stores/memory-store";
 import { useConnectorStore } from "@/stores/connector-store";
 import { useCronStore } from "@/stores/cron-store";
@@ -79,6 +80,7 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
       useBrowserStore.persist.rehydrate(),
       useSettingsStore.persist.rehydrate(),
       useProjectStore.persist.rehydrate(),
+      useProviderStore.persist.rehydrate(),
       useMemoryStore.persist.rehydrate(),
       useConnectorStore.persist.rehydrate(),
       useCronStore.persist.rehydrate(),
@@ -87,7 +89,7 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
       // Log any individual failures
       results.forEach((r, i) => {
         if (r.status === 'rejected') {
-          const names = ['app', 'conversation', 'chat', 'cowork', 'code', 'browser', 'settings', 'project', 'memory', 'connector', 'cron', 'heartbeat'];
+          const names = ['app', 'conversation', 'chat', 'cowork', 'code', 'browser', 'settings', 'project', 'provider', 'memory', 'connector', 'cron', 'heartbeat'];
           console.error(`[StoreHydration] ${names[i]} store rehydration failed:`, r.reason);
         }
       });
