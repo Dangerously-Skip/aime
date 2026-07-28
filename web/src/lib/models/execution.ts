@@ -49,6 +49,31 @@ export function buildShimBaseUrl(shimOrigin: string, providerId: string, upstrea
  * `loadKey` is injected so the route wires it to the keychain and tests can
  * stub it without an OS credential store.
  */
+/**
+ * Normalise a provider base URL for the Agent SDK, which appends `/v1/messages`
+ * itself.
+ *
+ * A preset's `defaultBaseUrl` serves three consumers with different
+ * expectations: model scanning wants `<base>/models`, the openai-compat shim
+ * wants `<base>/chat/completions`, and the SDK wants the base WITHOUT `/v1`.
+ * OpenRouter's is `https://openrouter.ai/api/v1`, which suits the first two and
+ * made the SDK request `/api/v1/v1/messages`.
+ *
+ * Verified against the live API: `/api/v1/messages` answers 401 for a bad key
+ * (the route exists), `/api/v1/v1/messages` answers 404 with an HTML error page.
+ * The SDK reported that 404 as "There's an issue with the selected model
+ * (anthropic/claude-opus-5-fast). It may not exist or you may not have access to
+ * it" — which reads as a catalogue or permissions problem and sent the search in
+ * entirely the wrong direction.
+ *
+ * Only a TRAILING `/v1` is removed, so a gateway mounted at `/v1/proxy`, or a
+ * base with no version segment, is untouched.
+ */
+export function baseUrlForSdk(baseUrl: string | undefined): string | undefined {
+  if (!baseUrl) return baseUrl;
+  return baseUrl.replace(/\/v1\/?$/, '');
+}
+
 export async function resolveExecution(opts: {
   providerConfig?: ProviderExecConfig | null;
   requestApiKey?: string | null;
@@ -82,5 +107,5 @@ export async function resolveExecution(opts: {
     return { apiKey };
   }
   // anthropic-native: drive the SDK directly against the provider's base URL.
-  return { apiKey, baseUrl: providerConfig.baseUrl };
+  return { apiKey, baseUrl: baseUrlForSdk(providerConfig.baseUrl) };
 }

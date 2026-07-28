@@ -23,7 +23,10 @@ describe('resolveExecution', () => {
       loadKey,
     });
     expect(loadKey).toHaveBeenCalledWith('openrouter-1');
-    expect(exec).toEqual({ apiKey: 'sk-keychain', baseUrl: 'https://openrouter.ai/api/v1' });
+    // The SDK appends `/v1/messages`, so the trailing /v1 must be gone or the
+    // request becomes /api/v1/v1/messages — a 404 the SDK reports as "issue with
+    // the selected model".
+    expect(exec).toEqual({ apiKey: 'sk-keychain', baseUrl: 'https://openrouter.ai/api' });
   });
 
   it('prefers a transient request key over the keychain and does not read it', async () => {
@@ -41,7 +44,7 @@ describe('resolveExecution', () => {
     const exec = await resolveExecution({
       providerConfig: { providerId: 'gw', baseUrl: 'https://gw.internal/v1' },
     });
-    expect(exec.baseUrl).toBe('https://gw.internal/v1');
+    expect(exec.baseUrl).toBe('https://gw.internal'); // trailing /v1 dropped for the SDK
   });
 
   it('routes an openai-compat provider through the shim when an origin is known', async () => {
