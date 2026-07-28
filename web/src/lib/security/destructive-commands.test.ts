@@ -51,25 +51,51 @@ const DESTRUCTIVE: Array<[string, string]> = [
   [':(){ :|:& };:', 'a fork bomb'],
 ];
 
+/**
+ * The corpus that keeps the rules from getting BROADER.
+ *
+ * Deliberately large, and it grew after mutation testing scored this file at
+ * 61%: almost every surviving mutant was a widening one (a dropped `\b`, an
+ * alternation collapsed to `true`), and a widening mutation is only killed by an
+ * ordinary command that starts matching. Eighteen examples could not do that.
+ *
+ * This is the failure mode that actually matters for a recall-tuned list. Too
+ * many false prompts and people click Allow without reading, which is worse than
+ * no gate at all — the gate would then be laundering approval rather than
+ * obtaining it. So: when you add a rule, add the near-misses here too.
+ */
 const ORDINARY = [
-  'ls -la',
-  'npm test',
-  'npm ci',
-  'npm run build',
-  'git status',
-  'git push origin main',
-  'git push --force-with-lease origin feature',
-  'git commit -m "wip"',
-  'grep -r TODO src/',
-  'cat package.json',
-  'mkdir -p src/lib',
-  'python3 script.py',
-  'pip3 install openpyxl',
-  'echo "hello" > out.txt',
-  'chmod +x run.sh',
+  // everyday
+  'ls -la', 'pwd', 'whoami', 'date', 'cat package.json', 'head -20 README.md',
+  'touch newfile.ts', 'mkdir -p src/lib', 'cp a.ts b.ts', 'mv old.ts new.ts',
+  'diff a.txt b.txt', 'wc -l src/*.ts', 'which node', 'echo "hello" > out.txt',
+  // search
+  'grep -r TODO src/', 'rg --files-with-matches useEffect', 'find . -name "*.ts"',
+  'find . -type d -maxdepth 2', 'find src -newer package.json',
+  // package managers and builds
+  'npm test', 'npm ci', 'npm run build', 'npm install --save-dev vitest',
+  'npm run test:mutation', 'pip3 install openpyxl', 'brew install jq',
+  'yarn install', 'pnpm build', 'cargo build --release', 'make test',
+  // git, including the safe cousins of rules that DO match
+  'git status', 'git diff', 'git log --oneline -10', 'git add -A',
+  'git commit -m "wip"', 'git push origin main', 'git pull --rebase',
+  'git push --force-with-lease origin feature', 'git clean -n',
+  'git reset HEAD~1', 'git stash', 'git checkout -b feature',
+  'git branch -d merged-branch', 'git rebase main',
+  // network that is not exfiltration
   'curl -s https://api.example.com/data > data.json',
-  'rm build.log',
-  'touch newfile.ts',
+  'curl -fsSL https://example.com/file.tar.gz -o file.tar.gz',
+  'wget https://example.com/data.csv',
+  'gh pr list', 'gh pr create --fill', 'gh repo view',
+  // permissions and deletes that are narrow enough not to be alarming
+  'chmod +x run.sh', 'chmod 644 notes.md', 'chmod u+w file.ts',
+  'chown me file.ts', 'rm build.log', 'rm ./tmp.txt', 'rmdir emptydir',
+  // scripts and tooling
+  'python3 script.py', 'node scripts/build.mjs', 'npx tsc --noEmit',
+  'docker ps', 'docker build -t app .', 'psql -c "SELECT count(*) FROM users"',
+  'psql -c "CREATE TABLE t (id int)"', 'sqlite3 db.sqlite ".tables"',
+  'tar -czf archive.tar.gz src/', 'unzip data.zip', 'open reports/index.html',
+  'ps aux', 'lsof -i :3000', 'kill 12345',
 ];
 
 describe('classifyCommand', () => {

@@ -51,3 +51,7 @@ next-env.d.ts
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Mutation testing reports (regenerate with `npm run test:mutation`)
+reports/
+.stryker-tmp/

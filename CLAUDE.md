@@ -24,6 +24,40 @@ Unit tests use Vitest (`web/vitest.config.ts`, node environment by default, `@/`
 
 Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming (server + client hook), memory retriever/dedup, store actions (conversation, cowork, assistant, context-bus, memory), settings migrations (v1→v7 via real rehydrate), minute-tick hooks (cron, heartbeat), API routes (cron, webhooks CRUD + trigger), ClaudeProvider (SDK mocked: option assembly, session resumption, stream translation, canUseTool governance/loop-detection/interception), the chat SSE route (validation, streaming, tool profiles, agent routing, security injection, memory extraction), canvas templates (registry + expansion), gateway/bedrock env mapping, pending-questions bridge, xlsx extractor (real files), and browser-boot smoke E2E.
 
+### Security controls: the bar is a failing test, not a careful reading
+
+Four security toggles once shipped doing nothing — `disableBashTool` said it
+"completely removes the Bash tool" while filtering a name out of the SDK's
+*auto-approve* list on a run with `permissionMode: 'bypassPermissions'`, so Bash
+kept working. All four had passing tests. The tests asserted the list had been
+filtered, which was true and irrelevant.
+
+The general principle ("don't mock the boundary a test exists to prove") was
+already written down when all four shipped, so more prose is not the fix. Two
+mechanisms are, and both fail the build rather than asking you to remember:
+
+1. **`enforcement: 'enforced' | 'guidance'`** on every entry in
+   `SECURITY_TOGGLES` (`settings/sections/security-section.tsx`). Declaring
+   `'enforced'` is a claim `security-section.enforcement.test.ts` checks by
+   driving the real `canUseTool` — the one hook that runs whatever
+   `permissionMode` says. A new enforced toggle with no probe fails. The badge is
+   rendered in Settings, so the claim is visible to the user too.
+2. **`npm run test:mutation`** (Stryker, scoped to `lib/security/**`,
+   `path-containment.ts`, `tool-policy.ts`; weekly in CI, never per-push). A green
+   suite says the code ran; only this says the assertions would notice if it
+   stopped working.
+
+**Definition of done for a change to a user-facing security control:** disable
+the enforcement, run the suite, name the tests that fail, restore it — and put
+those test names in the commit message. If nothing fails, the control is not
+enforced yet, whatever the label says.
+
+The recurring shape to watch for: a claim in the UI, a system prompt, or a
+dropdown with no server-side refusal behind it. `allowedTools` is the classic
+trap — it is an auto-approve list, so narrowing it restricts nothing; use
+`deniedTools`. And its complement is *not* a deny list: those arrays have never
+been exhaustive (`WidgetCreate` is on none of them and works everywhere).
+
 ## Architecture
 
 **Next.js + Electron** (all code in `web/`):

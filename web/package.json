@@ -20,6 +20,7 @@
     "dist:win": "next build && electron-builder --win",
     "dist:linux": "next build && electron-builder --linux",
     "test:e2e": "playwright test",
+    "test:mutation": "stryker run",
     "lint:strict": "eslint --max-warnings 30"
   },
   "build": {
@@ -199,6 +200,8 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@tailwindcss/postcss": "^4",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
