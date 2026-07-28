@@ -101,13 +101,40 @@ export async function* translateStream(
     }
   };
 
+  // Set once the upstream reports the content is complete. We stop reading at
+  // that point rather than draining to `[DONE]`:
+  //
+  // With `stream_options.include_usage` the upstream sends the finish_reason
+  // chunk, THEN a usage-only chunk, THEN `[DONE]`. Draining meant the
+  // terminating message_delta/message_stop were withheld for that whole tail —
+  // which OpenRouter can take seconds over while it aggregates billing from the
+  // underlying provider. The user saw the complete answer while the composer
+  // stayed disabled and the Stop button stayed up, but only for non-Anthropic
+  // models, because an Anthropic-native stream ends as soon as it is done.
+  //
+  // Usage seen in or before the finish chunk is still used; otherwise the
+  // existing character estimate applies. Responsiveness is worth more than an
+  // exact token count that arrives after the turn is visibly over.
+  let contentComplete = false;
+
   for await (const chunk of chunks) {
     if (chunk.usage?.completion_tokens != null) outputTokens = chunk.usage.completion_tokens;
     const choice = chunk.choices?.[0];
-    if (!choice) continue;
-    if (choice.finish_reason) finishReason = choice.finish_reason;
+    if (!choice) {
+      // A usage-only chunk carries no choices; if the content already finished,
+      // we have what we came back for.
+      if (contentComplete) break;
+      continue;
+    }
+    if (choice.finish_reason) {
+      finishReason = choice.finish_reason;
+      contentComplete = true;
+    }
     const delta = choice.delta;
-    if (!delta) continue;
+    if (!delta) {
+      if (contentComplete) break;
+      continue;
+    }
 
     if (typeof delta.content === 'string' && delta.content.length) {
       if (openKind !== 'text') {
@@ -154,6 +181,11 @@ export async function* translateStream(
         };
       }
     }
+
+    // Deltas for this chunk are emitted; if it also carried the finish reason,
+    // the turn is over. Leaving the loop disposes the upstream iterator, which
+    // cancels the reader rather than leaking the connection.
+    if (contentComplete) break;
   }
 
   yield* closeOpen();
