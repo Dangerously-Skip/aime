@@ -54,7 +54,29 @@ export interface QueryParams {
   surfaceId?: string;
   userId?: string;
   mcpServers?: Record<string, unknown>;
+  /**
+   * Tools that are auto-approved — NOT the set of tools that exist.
+   *
+   * That is the SDK's own meaning ("auto-allowed without prompting for
+   * permission… To restrict which tools are available, use the `tools` option
+   * instead"), and it is why removing a name from here restricts nothing: the
+   * tool stays mounted, `permissionMode` is `bypassPermissions`, and
+   * `canUseTool` falls through to allow. Every surface config also omits tools
+   * that demonstrably work — `WidgetCreate` is on no surface's list — so the
+   * complement of this array is not a deny list and must never be used as one.
+   *
+   * To actually withhold a tool, put it in `deniedTools`.
+   */
   allowedTools?: string[];
+  /**
+   * Tools this run must not be able to use, whatever else says otherwise.
+   *
+   * Enforced twice on purpose: handed to the SDK as `disallowedTools`, which
+   * removes them from the model's context so it never reaches for them, and
+   * refused in `canUseTool`, which runs regardless of `permissionMode` so
+   * enforcement does not rest on the SDK honouring an option.
+   */
+  deniedTools?: string[];
   maxTurns?: number;
   systemPrompt?: string | { type: string; preset: string; append?: string };
   model?: string;

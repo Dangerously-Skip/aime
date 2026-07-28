@@ -14,6 +14,28 @@ const TOOL_PROFILES: Record<string, string[]> = {
   full: [], // empty = no restriction (use surface defaults)
 };
 
+/**
+ * Never withheld by a profile or an agent's tool list, however narrow.
+ *
+ * These are how the app talks to itself, not capabilities the user is choosing
+ * between: asking a question, tracking a todo, delegating, drawing a canvas,
+ * requesting a connector. None of them touches the world. `TOOL_PROFILES` was
+ * written as a list of world-side capabilities and never enumerated this
+ * plumbing — the pre-existing `AskUserQuestion`/`Agent`/`TodoWrite` carve-out is
+ * the same observation, found the same way — so treating a profile as an
+ * exhaustive deny list would silently break the connector card and the canvas.
+ *
+ * Anything that creates, writes or fetches is deliberately NOT here: a user who
+ * picks "WebSearch + WebFetch only" should not still get DocumentCreate.
+ */
+const PLUMBING_TOOLS = new Set([
+  'AskUserQuestion',
+  'Agent',
+  'TodoWrite',
+  'mcp__aime__canvas',
+  'mcp__aime__RequestConnector',
+]);
+
 /** Read a persona/identity file, returning '' if missing. */
 async function readIdentityFile(filePath: string): Promise<string> {
   try {
@@ -334,16 +356,37 @@ export async function POST(
       // Get surface-specific config
       const surfaceConfig = getSurfaceConfig(surfaceId);
 
+      /**
+       * Tools withheld from this run, sent to the provider as `deniedTools`.
+       *
+       * Every narrowing below used to only shrink `surfaceConfig.allowedTools`,
+       * which is the SDK's AUTO-APPROVE list, not the set of mounted tools. With
+       * `permissionMode: 'bypassPermissions'` and a `canUseTool` that allows
+       * anything it does not recognise, removing a name from it changed nothing
+       * at all: "Disable Bash tool" filtered `Bash` out of an approve-list on a
+       * run where approval was already skipped, and Bash kept working.
+       *
+       * So each step now records what it took away. It must be a difference, not
+       * the complement of `allowedTools` — the surface lists have never been
+       * exhaustive (`WidgetCreate` is on none of them and works everywhere), so
+       * treating "absent" as "denied" would break tools nobody asked to remove.
+       */
+      const deniedTools = new Set<string>();
+      /** Narrow `allowedTools`, remembering the difference as a real denial. */
+      const withhold = (keep: (t: string) => boolean) => {
+        if (!surfaceConfig.allowedTools) return;
+        const before = surfaceConfig.allowedTools;
+        surfaceConfig.allowedTools = before.filter(keep);
+        for (const t of before) if (!keep(t)) deniedTools.add(t);
+      };
+
       // ── Tool profile filtering ─────────────────────────────────────────
       // Apply tool profile to intersect surface allowedTools with profile set
       if (toolProfile && toolProfile !== 'full' && surfaceConfig.allowedTools) {
         const profileTools = TOOL_PROFILES[toolProfile as keyof typeof TOOL_PROFILES];
         if (profileTools && profileTools.length > 0) {
           // Always keep AskUserQuestion and Agent regardless of profile
-          const alwaysAllow = new Set(['AskUserQuestion', 'Agent', 'TodoWrite']);
-          surfaceConfig.allowedTools = surfaceConfig.allowedTools.filter(
-            (t: string) => alwaysAllow.has(t) || profileTools.includes(t)
-          );
+          withhold((t) => PLUMBING_TOOLS.has(t) || profileTools.includes(t));
           console.log('[TOOLS] Applied tool profile:', toolProfile, '| Remaining:', surfaceConfig.allowedTools.join(', '));
         }
       }
@@ -368,9 +411,7 @@ export async function POST(
             }
             // Override allowedTools if agent specifies them
             if (matched.allowedTools && surfaceConfig.allowedTools) {
-              surfaceConfig.allowedTools = surfaceConfig.allowedTools.filter(
-                (t: string) => (matched.allowedTools as string[]).includes(t)
-              );
+              withhold((t) => PLUMBING_TOOLS.has(t) || (matched.allowedTools as string[]).includes(t));
             }
             // Prepend agent system prompt if available
             const agentPrompt = readAgentSystemPrompt(matched);
@@ -434,11 +475,13 @@ export async function POST(
 
       // ── Security settings ──────────────────────────────────────────────
       // Filter Bash from allowedTools if disabled
-      if (securitySettings?.disableBashTool && surfaceConfig.allowedTools) {
-        surfaceConfig.allowedTools = surfaceConfig.allowedTools.filter(
-          (t: string) => t !== 'Bash'
-        );
-        console.log('[SECURITY] Bash tool removed from allowedTools');
+      if (securitySettings?.disableBashTool) {
+        // The whole shell family, not just `Bash`: `BashOutput` and `KillShell`
+        // operate on background shells, so leaving them would hand back most of
+        // what the setting is meant to take away.
+        for (const t of ['Bash', 'BashOutput', 'KillShell']) deniedTools.add(t);
+        withhold((t) => t !== 'Bash');
+        console.log('[SECURITY] Shell tools withheld from this run');
       }
 
       // Build security rules block for system prompt
@@ -835,6 +878,7 @@ export async function POST(
           model: effectiveModel,
           surfaceId,
           allowedTools: surfaceConfig.allowedTools,
+          deniedTools: [...deniedTools],
           maxTurns: surfaceConfig.maxTurns,
           systemPrompt,
           attachments: attachments || undefined,

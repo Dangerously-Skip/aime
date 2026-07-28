@@ -376,6 +376,88 @@ describe('stream translation', () => {
 });
 
 /**
+ * `deniedTools` — the difference between a control that looks enforced and one
+ * that is.
+ *
+ * `allowedTools` is the SDK's AUTO-APPROVE list, not the set of mounted tools:
+ * "To restrict which tools are available, use the `tools` option instead." We
+ * never set `tools`, `permissionMode` is `bypassPermissions`, and `canUseTool`
+ * ends in a catch-all allow. So "Disable Bash tool" — which filtered `Bash` out
+ * of `allowedTools` — removed a name from an approve-list on a run where
+ * approval was already skipped, and Bash kept working. Probed directly before
+ * fixing: `canUseTool('Bash', {command: 'rm -rf ~/x'})` returned
+ * `{behavior: 'allow'}`.
+ *
+ * Enforced in both places, because they fail differently: `disallowedTools`
+ * keeps the tool out of the model's context (it never asks), while the
+ * `canUseTool` check is the one that runs whatever `permissionMode` says.
+ */
+describe('deniedTools', () => {
+  it('refuses a denied tool in canUseTool — the check permissionMode cannot skip', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      deniedTools: ['Bash'],
+    });
+    const r = await canUseTool('Bash', { command: 'rm -rf ~/x' }, { toolUseID: 'd1' });
+    expect(r.behavior).toBe('deny');
+    expect(r.message).toMatch(/not available in this session/i);
+    // Told not to go looking for another way round it.
+    expect(r.message).toMatch(/Do not try it again/i);
+  });
+
+  it('also keeps it out of the model context, so it never asks', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      deniedTools: ['Bash', 'BashOutput', 'KillShell'],
+    });
+    expect(options.disallowedTools).toEqual(
+      expect.arrayContaining(['Bash', 'BashOutput', 'KillShell']),
+    );
+  });
+
+  it('keeps denying WebSearch when the caller denies nothing', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {});
+    expect(options.disallowedTools).toEqual(['WebSearch']);
+    expect((await captureOptions(new ClaudeProvider(), {})).canUseTool).toBeDefined();
+  });
+
+  it('leaves every other tool alone', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      deniedTools: ['Bash'],
+    });
+    for (const t of ['Read', 'Write', 'Glob', 'WebFetch', 'mcp__aime__DocumentCreate']) {
+      expect((await canUseTool(t, {}, { toolUseID: `ok-${t}` })).behavior, t).toBe('allow');
+    }
+  });
+
+  it('does NOT infer a denial from absence in allowedTools', async () => {
+    // The trap this fix had to avoid: surface lists have never been exhaustive.
+    // WidgetCreate is on no surface's allowedTools and is expected to work.
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      allowedTools: ['Read'],
+      deniedTools: [],
+    });
+    expect((await canUseTool('mcp__aime__WidgetCreate', { title: 't', recipe: 'r' }, { toolUseID: 'w1' })).behavior)
+      .toBe('allow');
+    expect((await canUseTool('Write', { file_path: '/x' }, { toolUseID: 'w2' })).behavior).toBe('allow');
+  });
+
+  it('outranks an MCP tool policy that would otherwise allow it', async () => {
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'regular-chat',
+      mcpServers: {
+        'aime-mcp-acme': {
+          type: 'http',
+          url: 'https://mcp.acme.com/mcp',
+          tools: [{ name: 'getIssue', permission_policy: 'always_allow' }],
+        },
+      },
+      deniedTools: ['mcp__aime-mcp-acme__getIssue'],
+    });
+    const r = await canUseTool('mcp__aime-mcp-acme__getIssue', {}, { toolUseID: 'p1' });
+    expect(r.behavior).toBe('deny');
+  });
+});
+
+/**
  * WidgetCreate / CronCreate / StandingOrderCreate are in-process MCP tools that
  * only QUEUE — the client-side effect rides out on a chunk emitted after the
  * stream loop. Each returns success to the model the instant it queues, so
