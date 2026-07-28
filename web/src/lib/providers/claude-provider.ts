@@ -210,6 +210,44 @@ export class ClaudeProvider extends BaseProvider {
       allowWeb?: boolean;
     }> = [];
 
+    const providerName = this.name;
+    /**
+     * Emit the client-side effects the in-process MCP tools queued, and empty the
+     * queues so a second drain yields nothing.
+     *
+     * Run on the abort path as well as the normal one. These handlers return
+     * success to the model the instant they queue, so "pinned to your Cockpit" is
+     * already in the transcript by the time the turn ends — and the flush used to
+     * sit after the stream loop inside `try`, unreachable once the user pressed
+     * Stop or the 90s tool watchdog fired. The user was left holding a promise
+     * and no widget, with nothing in the UI to say why.
+     *
+     * Splices rather than reads, so the normal path and the abort path can both
+     * call it without the risk of emitting a job twice.
+     */
+    function* drainPending(): Generator<StreamChunk> {
+      for (const job of pendingCronJobs.splice(0)) {
+        yield { type: 'cron_create', input: job, id: `cron_${Date.now()}`, provider: providerName };
+      }
+      for (const order of pendingStandingOrders.splice(0)) {
+        yield {
+          type: 'standing_order_create',
+          input: order,
+          id: `so_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          provider: providerName,
+        };
+      }
+      // P6/K5, the chat → Cockpit pin loop.
+      for (const widget of pendingWidgets.splice(0)) {
+        yield {
+          type: 'widget_create',
+          input: widget,
+          id: `wg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          provider: providerName,
+        };
+      }
+    }
+
     /**
      * RequestConnector calls made during this request, keyed by connector id (P3.3).
      *
@@ -1441,35 +1479,7 @@ export class ClaudeProvider extends BaseProvider {
         }
       }
 
-      // Emit cron_create events for any jobs created via the CronCreate MCP tool
-      for (const job of pendingCronJobs) {
-        yield {
-          type: 'cron_create',
-          input: job,
-          id: `cron_${Date.now()}`,
-          provider: this.name,
-        };
-      }
-
-      // Emit standing_order_create events for orders created via StandingOrderCreate MCP tool
-      for (const order of pendingStandingOrders) {
-        yield {
-          type: 'standing_order_create',
-          input: order,
-          id: `so_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          provider: this.name,
-        };
-      }
-
-      // Emit widget_create events for widgets pinned via WidgetCreate (P6/K5)
-      for (const widget of pendingWidgets) {
-        yield {
-          type: 'widget_create',
-          input: widget,
-          id: `wg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          provider: this.name,
-        };
-      }
+      yield* drainPending();
 
       // Signal completion
       yield {
@@ -1481,6 +1491,9 @@ export class ClaudeProvider extends BaseProvider {
     } catch (error: unknown) {
       if (error instanceof Error && error.name === 'AbortError') {
         console.log('[Claude] Query aborted for chatId:', chatId);
+        // Before reporting the abort: whatever was already created is still
+        // created, and the model has already told the user so. See drainPending.
+        yield* drainPending();
         const trip = watchdogTrip[0];
         if (trip) {
           // Surface the watchdog reason so the user sees what hung

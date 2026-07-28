@@ -1,5 +1,6 @@
 import type { SurfaceConfig } from './index';
 import { APP_NAME } from '@/config/branding';
+import { webSearchPrompt } from './shared/web-search-prompt';
 
 export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -18,11 +19,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
 Do not use emojis in your responses. Keep output clean, professional, and text-only.
 Prefer prose over bullet points in conversational responses.
 
-## Web search
-You have web search available via the web-search MCP server (tool: web_search). This is your ONLY search mechanism.
-- Trust the results and use them directly. Do NOT fall back to Bash curl commands to scrape Google, DuckDuckGo, or other search engines.
-- Do NOT use a built-in WebSearch tool — it is not available in this environment.
-- If the first search doesn't find what you need, refine your query and search again with the MCP tool.`,
+${webSearchPrompt()}`,
     },
     settingSources: ['user', 'project', 'local'],
     enableFileCheckpointing: true,

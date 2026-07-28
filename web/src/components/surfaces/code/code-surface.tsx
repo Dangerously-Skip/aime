@@ -67,6 +67,7 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
@@ -940,6 +941,15 @@ export function CodeSurface() {
             event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
             chatId,
           );
+          break;
+        case "widget_create":
+          // Same gap as cowork had: the tool is mounted everywhere, the handler
+          // was not. See the note in cowork-surface.tsx.
+          try {
+            handleWidgetCreateEvent(event as Record<string, unknown>);
+          } catch (e) {
+            console.error('[Code] WidgetCreate parse error:', e);
+          }
           break;
         case "error":
           appendToLastAssistant(

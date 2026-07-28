@@ -375,6 +375,63 @@ describe('stream translation', () => {
   });
 });
 
+/**
+ * WidgetCreate / CronCreate / StandingOrderCreate are in-process MCP tools that
+ * only QUEUE — the client-side effect rides out on a chunk emitted after the
+ * stream loop. Each returns success to the model the instant it queues, so
+ * "Widget X pinned to the Cockpit" is already in the transcript.
+ *
+ * That flush used to sit inside `try` AFTER the loop, which the abort path never
+ * reaches. Press Stop, or let the 90s tool watchdog fire, and the user was left
+ * with the model's confirmation and no widget — and nothing anywhere saying why.
+ */
+describe('queued creations survive an aborted turn', () => {
+  /** Drive the SDK so it calls one of the aime server's tools, then aborts. */
+  function scriptToolThenAbort(toolName: string, input: Record<string, unknown>) {
+    queryMock.mockImplementation((args: { options: Record<string, unknown> }) => {
+      const aime = (args.options.mcpServers as Record<string, { tools: Array<{ name: string; handler: (i: unknown) => Promise<unknown> }> }>).aime;
+      const t = aime.tools.find((x) => x.name === toolName)!;
+      return (async function* () {
+        await t.handler(input);
+        const err = new Error('user pressed Stop');
+        err.name = 'AbortError';
+        throw err;
+      })();
+    });
+  }
+
+  it('emits widget_create before aborted, not instead of it', async () => {
+    scriptToolThenAbort('WidgetCreate', { title: 'Burn-up', recipe: 'count open issues' });
+    const chunks = await run(new ClaudeProvider(), {});
+
+    const widget = chunks.find((c) => c.type === 'widget_create');
+    expect(widget).toBeDefined();
+    expect(widget!.input).toMatchObject({ title: 'Burn-up', recipe: 'count open issues' });
+    // Order matters: the client must bank the widget before it tears the turn down.
+    expect(chunks.findIndex((c) => c.type === 'widget_create'))
+      .toBeLessThan(chunks.findIndex((c) => c.type === 'aborted'));
+  });
+
+  it('does the same for a cron job queued before the abort', async () => {
+    scriptToolThenAbort('CronCreate', { expression: '0 9 * * *', prompt: 'stand-up' });
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.find((c) => c.type === 'cron_create')?.input).toMatchObject({ expression: '0 9 * * *' });
+  });
+
+  it('does not double-emit on the normal path', async () => {
+    queryMock.mockImplementation((args: { options: Record<string, unknown> }) => {
+      const aime = (args.options.mcpServers as Record<string, { tools: Array<{ name: string; handler: (i: unknown) => Promise<unknown> }> }>).aime;
+      const t = aime.tools.find((x) => x.name === 'WidgetCreate')!;
+      return (async function* () {
+        await t.handler({ title: 'Once', recipe: 'r' });
+      })();
+    });
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.filter((c) => c.type === 'widget_create')).toHaveLength(1);
+    expect(chunks.at(-1)?.type).toBe('done');
+  });
+});
+
 describe('canUseTool interception', () => {
   it('denies governed write tools in background runs (incl. MCP-prefixed)', async () => {
     const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42' });
