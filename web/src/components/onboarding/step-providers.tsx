@@ -195,7 +195,17 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
             className="font-mono text-sm"
           />
         )}
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        {error && <p className="text-sm font-medium text-destructive">{error}</p>}
+        {configured === path && !error && (
+          // The only success signal used to be a small check beside the path
+          // title and the button below changing label from "Skip" to "Continue".
+          // Both are easy to miss, which reads as "I entered my key and nothing
+          // happened" — so say it, and say what to do next.
+          <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+            <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
+            Saved and verified — press Continue below.
+          </p>
+        )}
         <Button
           onClick={() => void configure()}
           disabled={!canConfigure || busy}
