@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # For the mutation job only — it is too slow to gate every push, so it runs
+  # weekly and on demand instead. See that job for why it exists at all.
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
 
 jobs:
   test:
@@ -66,3 +71,44 @@ jobs:
           name: playwright-report
           path: web/playwright-report/
           retention-days: 7
+
+  # Mutation testing for the security surface (see web/stryker.conf.json).
+  #
+  # Why this is a job and not a code comment: four security controls shipped that
+  # did nothing, all four with passing tests, because the tests asserted a name
+  # had been filtered out of a list rather than that the control refused
+  # anything. A green suite says the code ran; it does not say the assertions
+  # would notice if it stopped working. This is the only check that tells those
+  # apart, and it is scoped to the files where a silent failure is a security
+  # hole rather than a bug.
+  #
+  # Weekly and on-demand, never a per-push gate — a slow check on every push is a
+  # check people learn to skip.
+  mutation:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      # Fails below the ratchet in stryker.conf.json, which sits just under the
+      # current score so a drop in test strength is what breaks it.
+      - name: Mutation tests
+        working-directory: web
+        run: npm run test:mutation
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: web/reports/mutation/
+          retention-days: 14

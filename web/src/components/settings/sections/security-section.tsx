@@ -2,11 +2,34 @@
 
 import { useSettingsStore, type SettingsStore } from '@/stores/settings-store'
 
-interface SecurityToggle {
-  key: 'blockDangerousCommands' | 'blockNetworkCommands' | 'restrictToProjectFolder' | 'disableBashTool'
+export type SecurityKey =
+  | 'blockDangerousCommands'
+  | 'blockNetworkCommands'
+  | 'restrictToProjectFolder'
+  | 'disableBashTool'
+
+/**
+ * Whether the server actually refuses this, or merely asks the model to.
+ *
+ * A FIELD rather than a comment because every one of these was once the wrong
+ * one: `disableBashTool` claimed to "completely remove" a tool it left fully
+ * working, and the other three described themselves as blocks while appending a
+ * sentence to the system prompt. Prose beside the code did not stop that. This
+ * declaration is checked by `security-section.enforcement.test.ts`, which drives
+ * the real `canUseTool` and fails if an `'enforced'` toggle does not deny.
+ *
+ * Setting this to 'enforced' is therefore a claim the build will test. If you add
+ * a toggle and that test fails, the toggle is guidance: say so here and in the
+ * description, or go and enforce it.
+ */
+export type Enforcement = 'enforced' | 'guidance'
+
+export interface SecurityToggle {
+  key: SecurityKey
   setter: keyof Pick<SettingsStore, 'setBlockDangerousCommands' | 'setBlockNetworkCommands' | 'setRestrictToProjectFolder' | 'setDisableBashTool'>
   label: string
   description: string
+  enforcement: Enforcement
   warning?: string
 }
 
@@ -19,9 +42,10 @@ interface SecurityToggle {
  * request, because users calibrate on the label — "Disable Bash tool" once
  * claimed to "completely remove" a tool that in fact kept working.
  */
-const toggles: SecurityToggle[] = [
+export const SECURITY_TOGGLES: SecurityToggle[] = [
   {
     key: 'blockDangerousCommands',
+    enforcement: 'enforced',
     setter: 'setBlockDangerousCommands',
     label: 'Ask before destructive commands',
     description:
@@ -29,6 +53,7 @@ const toggles: SecurityToggle[] = [
   },
   {
     key: 'blockNetworkCommands',
+    enforcement: 'guidance',
     setter: 'setBlockNetworkCommands',
     label: 'Discourage network commands',
     description:
@@ -36,6 +61,7 @@ const toggles: SecurityToggle[] = [
   },
   {
     key: 'restrictToProjectFolder',
+    enforcement: 'enforced',
     setter: 'setRestrictToProjectFolder',
     label: 'Restrict writes to project folder',
     description:
@@ -43,6 +69,7 @@ const toggles: SecurityToggle[] = [
   },
   {
     key: 'disableBashTool',
+    enforcement: 'enforced',
     setter: 'setDisableBashTool',
     label: 'Disable Bash tool',
     description:
@@ -64,7 +91,7 @@ export function SecuritySection() {
       </div>
 
       <div className="space-y-3">
-        {toggles.map((toggle) => (
+        {SECURITY_TOGGLES.map((toggle) => (
           <label
             key={toggle.key}
             className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
@@ -80,7 +107,29 @@ export function SecuritySection() {
               className="mt-0.5"
             />
             <div className="flex-1">
-              <div className="text-sm font-medium">{toggle.label}</div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{toggle.label}</span>
+                {/*
+                  Shown, not just declared. The point of the field is that a user
+                  can tell at a glance which of these is a boundary and which is
+                  a polite request — the distinction they had no way to see, and
+                  that three of these four toggles got wrong.
+                */}
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+                    toggle.enforcement === 'enforced'
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                      : 'bg-muted text-muted-foreground'
+                  }`}
+                  title={
+                    toggle.enforcement === 'enforced'
+                      ? 'The server refuses this — not just a request to the model'
+                      : 'Guidance in the system prompt; the model can still do it'
+                  }
+                >
+                  {toggle.enforcement}
+                </span>
+              </div>
               <div className="text-xs text-muted-foreground">
                 {toggle.description}
               </div>

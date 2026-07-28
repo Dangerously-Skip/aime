@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": [
+    "Mutation testing for the security surface only — deliberately NOT the whole repo.",
+    "",
+    "WHY THIS EXISTS. Four security controls shipped that did nothing, all four with",
+    "passing tests: the tests asserted a name had been filtered out of a list, which",
+    "was true and irrelevant. A green suite says the code ran; it does not say the",
+    "assertions would notice if the code stopped working. Mutation testing is the only",
+    "thing that tells those apart, and it is what caught every one of them (by hand,",
+    "before this config existed).",
+    "",
+    "WHY SCOPED. Mutating the whole repo is slow enough that nobody runs it, and a",
+    "check nobody runs is worth nothing. These are the files where a silent failure is",
+    "a security hole rather than a bug, and they are pure functions, so the run is",
+    "fast. Add to this list when you add a control; do not add the world.",
+    "",
+    "NOT a per-commit gate. Run it when touching these files, and on the weekly job.",
+    "  npm run test:mutation"
+  ],
+  "packageManager": "npm",
+  "testRunner": "vitest",
+  "vitest": { "configFile": "vitest.config.ts" },
+  "reporters": ["html", "clear-text", "progress"],
+  "htmlReporter": { "fileName": "reports/mutation/index.html" },
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/lib/security/**/*.ts",
+    "!src/lib/security/**/*.test.ts",
+    "src/lib/path-containment.ts",
+    "src/lib/mcp/tool-policy.ts"
+  ],
+  "_thresholds_comment": [
+    "`break` is a RATCHET, not a target: it sits just below the current score so a",
+    "regression in test strength fails the run, and it should be raised as the score",
+    "improves. Same stance the repo already takes with lint (errors gated at 0,",
+    "warnings allowed with `lint:strict` as the local ratchet).",
+    "",
+    "Do not expect 100 here, and do not chase it. Scores by file, measured 2026-07-29:",
+    "  write-scope.ts          100%  — pure logic, every mutant killed",
+    "  path-containment.ts      92%  — pure logic",
+    "  tool-policy.ts           76%  — pre-existing, worth attention",
+    "  destructive-commands.ts  61%  — a REGEX TABLE",
+    "",
+    "That last one is the interesting number and it is not simply a test gap. Stryker",
+    "generates many mutants per pattern, and a large share are equivalent: overlapping",
+    "rules mean a neutered rule is still matched by another, and widening a pattern",
+    "changes nothing unless a real command starts matching. Proof: the 'must not",
+    "prompt' corpus went from 18 commands to 74 and killed exactly ZERO extra mutants.",
+    "Chasing that number would mean writing tests to satisfy the tool rather than to",
+    "catch a bug. The rules are guarded by the 112-case corpus instead."
+  ],
+  "thresholds": {
+    "high": 90,
+    "low": 80,
+    "break": 70
+  },
+  "timeoutMS": 20000,
+  "concurrency": 4
+}
