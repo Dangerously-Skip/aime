@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import {
   Select,
   SelectContent,
@@ -93,11 +93,22 @@ export function ModelSelector({ value, onChange, onSelectModel, className }: Mod
   const providers = useProviderStore((s) => s.providers);
   const tierModels = useSettingsStore((s) => s.tierModels);
 
-  // provider-store hydrates lazily (skipHydration); pull it in once so enabled
-  // provider models are available to select.
-  useEffect(() => {
-    if (onSelectModel) void useProviderStore.persist.rehydrate();
-  }, [onSelectModel]);
+  // provider-store is rehydrated centrally by StoreHydration, alongside every
+  // other persisted store. It used to be pulled in from right here:
+  //
+  //   useEffect(() => { if (onSelectModel) void useProviderStore.persist.rehydrate(); },
+  //            [onSelectModel]);
+  //
+  // which froze the app. `onSelectModel` is a function prop and every call site
+  // passes an inline arrow, so its identity changes on each parent render: the
+  // effect re-ran, rehydrate() replaced the providers array, subscribers
+  // re-rendered, the prop was recreated, and the effect re-ran — forever, at
+  // 100% CPU, rebuilding the option list over every model each cycle. With a
+  // 341-model OpenRouter provider configured the renderer never painted again,
+  // so the window kept showing its last frame and looked simply unresponsive.
+  //
+  // A component reaching out to rehydrate a global store was the deeper mistake;
+  // the store is now in the central list where it belonged.
 
   const options = useMemo(
     () => buildSelectorOptions(providers, tierModels, value, !!onSelectModel),
