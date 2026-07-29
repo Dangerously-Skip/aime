@@ -10,9 +10,14 @@ on:
     - cron: '0 3 * * 1'
   workflow_dispatch:
 
+# Runners: org-level self-hosted boxes (Default group, visibility: all), labelled
+# `self-hosted, Linux, X64, contabo`. GitHub-hosted runners are unavailable on
+# this account (billing), so `ubuntu-latest` jobs never start — which is why
+# every push went ungated. Use `contabo` in place of `linux` to pin to that box
+# specifically if runners are ever added elsewhere.
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -43,7 +48,7 @@ jobs:
         run: npm test
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -86,7 +91,7 @@ jobs:
   # check people learn to skip.
   mutation:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
 

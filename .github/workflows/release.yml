@@ -10,6 +10,9 @@ permissions:
 
 jobs:
   build-mac:
+    # Still GitHub-hosted: a macOS build needs macOS, and the self-hosted pool is
+    # Linux only. Releases therefore remain blocked until either the billing is
+    # settled or a mac runner joins the pool.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +67,7 @@ jobs:
           retention-days: 7
 
   build-win:
+    # Same as build-mac: needs Windows, so it cannot move to the Linux pool.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -166,7 +170,7 @@ jobs:
 
   create-release:
     needs: [build-mac, build-win]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
