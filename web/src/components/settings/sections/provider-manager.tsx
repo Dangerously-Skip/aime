@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useProviderStore } from '@/stores/provider-store'
 import { PROVIDER_PRESETS, getPreset, needsApiKey } from '@/lib/models/providers'
+import { isProviderCredentialId } from '@/lib/models/credentials'
 import type { ScannedModel } from '@/lib/models/providers'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -69,20 +70,35 @@ async function listCredentialIds(): Promise<string[]> {
  * uuid on every "Save & verify", so the encrypted store accumulated a copy of
  * the key per attempt (~12 in one case) that nothing could ever read back.
  *
- * `'anthropic'` is reserved: the BYOK key is mirrored there under a fixed id for
- * unattended/server-side runs and is deliberately not a provider-store entry.
+ * ## Three guards, each for a failure this function actually had
  *
- * Reported rather than swept automatically. These are secrets, and the failure
- * mode of an automatic sweep is losing every key the moment provider-store
- * hydration hiccups — which is exactly what the dev-port bug did to localStorage
- * a fortnight ago. A count and a button cost one click and can't do that.
+ * 1. **Allowlist, not denylist.** The first version was
+ *    `stored.filter(id => !claimed.has(id))` with `claimed = providers + 'anthropic'`.
+ *    But connector OAuth tokens live in the SAME encrypted store under
+ *    `mcp:<serverKey>` (lib/mcp/secret-store.ts writes through
+ *    `getCredentialStore()`), so every connected GitHub/Slack/Atlassian account
+ *    was reported as junk and the delete button wiped them. Now only ids that
+ *    LOOK like a provider record are even considered — see
+ *    `isProviderCredentialId`. A namespace added later is not classified rather
+ *    than misclassified, which is the safe direction when the output feeds a
+ *    delete.
+ *
+ * 2. **An empty provider list means "don't know", not "all orphaned".**
+ *    `providers` is empty both when there genuinely are none and when
+ *    localStorage was cleared or read from a different origin — the dev-port bug
+ *    did exactly that. The two are indistinguishable here, so we report nothing.
+ *
+ * 3. The caller confirms before deleting, and shows the ids.
  */
 export function orphanCredentialIds(
   stored: string[],
   providers: ReadonlyArray<{ id: string }>,
 ): string[] {
-  const claimed = new Set<string>(['anthropic', ...providers.map((p) => p.id)])
-  return stored.filter((id) => !claimed.has(id))
+  // Guard 2: with nothing to compare against, every id looks unclaimed.
+  if (providers.length === 0) return []
+  const claimed = new Set<string>(providers.map((p) => p.id))
+  // Guard 1: only provider-namespace ids are ours to call orphaned.
+  return stored.filter((id) => isProviderCredentialId(id) && !claimed.has(id))
 }
 
 export function ProviderManager() {
@@ -190,6 +206,15 @@ export function ProviderManager() {
   }
 
   async function handlePurgeOrphans() {
+    // Deleting secrets is irreversible and the ids are opaque, so the user sees
+    // exactly what goes before anything goes. The first version deleted on one
+    // click behind a message that confidently misdescribed the contents.
+    const ok = globalThis.confirm(
+      `Permanently delete ${orphans.length} stored key${orphans.length === 1 ? '' : 's'}?\n\n` +
+        `${orphans.join('\n')}\n\n` +
+        `Connector logins and your Anthropic key are never included. This cannot be undone.`,
+    )
+    if (!ok) return
     setBusy('orphans')
     try {
       await Promise.all(orphans.map(deleteCredentials))

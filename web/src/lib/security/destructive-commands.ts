@@ -36,34 +36,74 @@ interface Rule {
   pattern: RegExp;
   /** Shown on the card, so it reads as a reason rather than a regex. */
   reason: string;
+  /**
+   * Match against the RAW command rather than the quote-blanked one.
+   *
+   * Quoted text is blanked by default so prose cannot trip a rule — `git commit
+   * -m "remove sudo from setup"` is not an escalation. But some dangerous
+   * payloads only ever appear inside quotes, SQL being the obvious one:
+   * `psql -c "DROP TABLE users"` has to be read through the quotes or it can
+   * never be seen. Those rules opt in here.
+   *
+   * The cost is a false positive on `grep -r "DROP TABLE" docs/`, which is far
+   * rarer than a commit message mentioning `sudo`, and cheap when the answer is
+   * a prompt rather than a refusal.
+   */
+  raw?: true;
 }
+
+/**
+ * Longest command we will classify. Beyond this we ask rather than scan.
+ *
+ * `classifyCommand` runs synchronously inside `canUseTool` on a model-controlled
+ * string, so a regex that backtracks is a self-DoS on the single-threaded
+ * server: the original `rm` rule was cleanly O(n²) — measured at 6ms for 2KB,
+ * 618ms for 20KB and ~62s for 200KB — which stalls every SSE stream, cron tick
+ * and API route, INCLUDING `/api/chat/answer`, the endpoint the approval card
+ * needs to resolve. The patterns below are no longer ambiguous, and this cap is
+ * the belt to that braces: a command too long to scan is treated as destructive,
+ * because a 4KB one-liner deserves a human glance anyway.
+ */
+const MAX_SCANNED = 4096;
 
 /**
  * Ordered: the first match wins, so put the specific before the general.
  * `\b` boundaries are avoided where a command can be reached through a path
  * (`/bin/rm`) or a prefix (`sudo rm`).
+ *
+ * Two rules for every pattern here:
+ *
+ * 1. **No ambiguous quantifiers.** Nothing of the form `(a*b*)+` or a greedy
+ *    `.*`/`[^x]*` that another quantifier can also consume — that is what made
+ *    the original quadratic. Prefer a bounded `{0,N}` or a negated class that
+ *    cannot overlap its neighbour.
+ * 2. **`[\s\S]` not `.`** when crossing a command. `.` does not match a newline
+ *    without the `s` flag, so `dd if=/dev/zero \<newline> of=/dev/rdisk0` — an
+ *    ordinary multi-line invocation — slipped past a rule its neighbours caught.
  */
 const RULES: Rule[] = [
-  { pattern: /:\s*\(\s*\)\s*\{.*\|.*&\s*\}\s*;/, reason: 'a fork bomb' },
-  { pattern: /\brm\s+(-\w*[rRf]\w*\s+)+/, reason: 'a recursive or forced delete' },
-  { pattern: /\brm\s+[^|;&]*[*?]/, reason: 'a delete with a wildcard' },
-  { pattern: /\brm\s+(-\S+\s+)*(\/|~)\S*/, reason: 'a delete by absolute path' },
+  { pattern: /:\s*\(\s*\)\s*\{[\s\S]{0,200}?\|[\s\S]{0,200}?&\s*\}\s*;/, reason: 'a fork bomb' },
+  // Short flag cluster (-rf, -fr, -r) or the GNU long forms, which the original
+  // single-dash-only pattern missed entirely: `rm --recursive --force build`.
+  { pattern: /\brm\s+(?:-[a-zA-Z]{0,8}[rRf][a-zA-Z]{0,8}|--recursive|--force)\b/, reason: 'a recursive or forced delete' },
+  { pattern: /\brm\s[^|;&\n]{0,200}[*?]/, reason: 'a delete with a wildcard' },
+  { pattern: /\brm\s+(?:-{1,2}[a-zA-Z-]{1,20}\s+){0,4}[/~]/, reason: 'a delete by absolute path' },
   { pattern: /\b(mkfs|fdisk|diskutil|parted)\b/, reason: 'a disk or filesystem operation' },
-  { pattern: /\bdd\s+.*\bof=/, reason: 'a raw write with dd' },
+  { pattern: /\bdd\s[\s\S]{0,200}?\bof=/, reason: 'a raw write with dd' },
   { pattern: /\bshred\b/, reason: 'an unrecoverable overwrite' },
-  { pattern: /(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba)?sh\b/, reason: 'piping a download straight into a shell' },
-  { pattern: /\bbase64\s+(-\w+\s+)*(-d|--decode)\b[^|;&]*\|\s*(ba)?sh\b/, reason: 'executing decoded output' },
+  { pattern: /(curl|wget)\b[^|;&]{0,400}\|\s*(sudo\s+)?(ba)?sh\b/, reason: 'piping a download straight into a shell' },
+  { pattern: /\bbase64\s(?:-[\w-]{1,20}\s){0,4}(?:-d|--decode)\b[^|;&]{0,400}\|\s*(ba)?sh\b/, reason: 'executing decoded output' },
   { pattern: /\bsudo\b|\bdoas\b|\bsu\s+-/, reason: 'an escalation to root' },
-  { pattern: /\bchmod\s+(-\S+\s+)*777\b/, reason: 'making something world-writable' },
-  { pattern: /\b(chmod|chown)\s+(-\S+\s+)*-[rR]\b|\b(chmod|chown)\s+-\w*[rR]/, reason: 'a recursive permission change' },
-  { pattern: /\bfind\b[^|;&]*\s-delete\b/, reason: 'a bulk delete via find' },
-  { pattern: /\bfind\b[^|;&]*-exec\s+rm\b/, reason: 'a bulk delete via find' },
-  { pattern: /\btruncate\s+(-\S+\s+)*-s\s*0/, reason: 'truncating a file to nothing' },
+  { pattern: /\bchmod\s(?:-\S{1,20}\s){0,4}[0-7]?777\b/, reason: 'making something world-writable' },
+  { pattern: /\b(?:chmod|chown)\s(?:-\S{1,20}\s){0,4}(?:-[a-zA-Z]{0,8}[rR]|--recursive)\b/, reason: 'a recursive permission change' },
+  { pattern: /\bfind\b[^|;&]{0,400}\s-delete\b/, reason: 'a bulk delete via find' },
+  { pattern: /\bfind\b[^|;&]{0,400}-exec\s+rm\b/, reason: 'a bulk delete via find' },
+  { pattern: /\btruncate\s(?:-\S{1,20}\s){0,4}-s\s*0\b/, reason: 'truncating a file to nothing' },
   { pattern: />\s*\/(etc|usr|bin|sbin|boot|System|Library)\b/, reason: 'a write into a system directory' },
-  { pattern: /\b(rm|mv|cp)\b[^|;&]*\s\/(etc|usr|bin|sbin|boot|System)\b/, reason: 'touching a system directory' },
-  { pattern: /\bgit\s+(push\b[^|;&]*\s(-f\b|--force(?!-with-lease))|reset\s+--hard|clean\s+-\w*[fd])/, reason: 'a destructive git operation' },
+  { pattern: /\b(?:rm|mv|cp)\s[^|;&\n]{0,200}\s\/(?:etc|usr|bin|sbin|boot|System)\b/, reason: 'touching a system directory' },
+  { pattern: /\bgit\s+(?:push\b[^|;&]{0,200}\s(?:-f\b|--force(?!-with-lease))|reset\s+--hard|clean\s+-[a-zA-Z]{0,8}[fd])/, reason: 'a destructive git operation' },
   { pattern: /\b(killall|pkill)\b/, reason: 'killing processes by name' },
-  { pattern: /\bdrop\s+(table|database)\b/i, reason: 'dropping a database object' },
+  { pattern: /\bdrop\s+(table|database)\b/i, reason: 'dropping a database object', raw: true },
   { pattern: /\b(shutdown|reboot|halt)\b/, reason: 'a shutdown or reboot' },
   { pattern: /\bdefaults\s+delete\b|\blaunchctl\s+(unload|remove)\b/, reason: 'changing system configuration' },
   { pattern: /\bnpm\s+publish\b|\bgh\s+release\s+delete\b|\bgh\s+repo\s+delete\b/, reason: 'an irreversible public action' },
@@ -84,10 +124,38 @@ export interface CommandVerdict {
  */
 export function classifyCommand(command: unknown): CommandVerdict {
   if (typeof command !== 'string' || !command.trim()) return { destructive: false };
+
+  // Too long to scan safely — ask instead of grinding. This runs on the request
+  // thread, so an unbounded scan is a denial of service, and erring towards the
+  // prompt is the whole design (see the header).
+  if (command.length > MAX_SCANNED) {
+    return { destructive: true, reason: 'an unusually long command' };
+  }
+
+  // Match against the command with quoted literals blanked out. `git commit -m
+  // "remove sudo from setup"` and `grep -rn "sudo" src/` are not escalations,
+  // and prompting on them is how a gate gets clicked through without reading —
+  // the failure mode this file's header calls the one that matters. The blanking
+  // preserves length and structure so nothing else shifts.
+  const scannable = blankQuoted(command);
   for (const rule of RULES) {
-    if (rule.pattern.test(command)) return { destructive: true, reason: rule.reason };
+    if (rule.pattern.test(rule.raw ? command : scannable)) {
+      return { destructive: true, reason: rule.reason };
+    }
   }
   return { destructive: false };
+}
+
+/**
+ * Replace the CONTENTS of quoted runs with a filler character, keeping the
+ * quotes and the length.
+ *
+ * Only balanced quotes are blanked; an unterminated quote is left alone, so a
+ * command that opens a quote and never closes it cannot hide the rest of itself
+ * from every rule.
+ */
+export function blankQuoted(command: string): string {
+  return command.replace(/'[^']*'|"[^"]*"/g, (m) => m[0] + 'x'.repeat(m.length - 2) + m[0]);
 }
 
 /** Longest command we will render on a card, so a huge one-liner can't fill the UI. */

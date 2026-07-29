@@ -197,18 +197,16 @@ describe('provider parameter assembly', () => {
  * does not mean "denied" (WidgetCreate is on no list and works everywhere).
  */
 describe('withheld tools are actually withheld', () => {
-  it('denies the whole shell family for disableBashTool, not just the list entry', async () => {
+  /**
+   * `disableBashTool` is applied by the PROVIDER from the stored setting, not
+   * here — see lib/security/settings. The route used to translate it, which
+   * meant the seven callers that assemble their own params never got it. What
+   * this route still owns is the per-request narrowing below.
+   */
+  it('leaves the shell family to the provider, and denies nothing by default', async () => {
     await post('cowork', { message: 'hi', chatId: 'c1' });
     expect(providerParams().allowedTools).toContain('Bash');
-    expect(providerParams().deniedTools).not.toContain('Bash');
-
-    await post('cowork', { message: 'hi', chatId: 'c1', securitySettings: { disableBashTool: true } });
-    expect(providerParams().allowedTools).not.toContain('Bash');
-    // BashOutput/KillShell operate on background shells; leaving them would hand
-    // back most of what the setting is meant to take away.
-    expect(providerParams().deniedTools).toEqual(
-      expect.arrayContaining(['Bash', 'BashOutput', 'KillShell']),
-    );
+    expect(providerParams().deniedTools).toEqual([]);
   });
 
   it('denies what a tool profile takes away', async () => {
@@ -245,34 +243,29 @@ describe('withheld tools are actually withheld', () => {
     expect(denied).not.toContain('AskUserQuestion');
   });
 
-  it('forwards the two enforced security toggles to the provider', async () => {
-    // Prompt text alone is what these used to be. The provider now gates on
-    // them, so they have to arrive — and arrive as booleans, not as whatever
-    // the request body happened to contain.
+  /**
+   * Deliberately NOT forwarded. They arrived on the request body and only two of
+   * nine `provider.query()` callers sent them, so a control the Settings screen
+   * badged ENFORCED did nothing on Chat, subagents, cron, webhooks, standing
+   * orders or widget refresh — and omitting the field was a way to switch it
+   * off. The provider loads them itself now, so every path is covered by
+   * construction, including ones written later.
+   */
+  it('never forwards client-supplied security settings — the provider owns them', async () => {
     await post('cowork', {
       message: 'hi',
       chatId: 'c1',
       cwd: '/tmp/proj',
       securitySettings: { blockDangerousCommands: true, restrictToProjectFolder: true },
     });
-    expect(providerParams().securitySettings).toEqual({
-      blockDangerousCommands: true,
-      restrictToProjectFolder: true,
-    });
+    expect(providerParams().securitySettings).toBeUndefined();
 
+    // Including the case that used to disable the gate: send them as false.
     await post('cowork', {
       message: 'hi',
       chatId: 'c1',
-      securitySettings: { blockDangerousCommands: false, restrictToProjectFolder: false },
+      securitySettings: { blockDangerousCommands: false, restrictToProjectFolder: false, disableBashTool: false },
     });
-    expect(providerParams().securitySettings).toEqual({
-      blockDangerousCommands: false,
-      restrictToProjectFolder: false,
-    });
-  });
-
-  it('sends nothing when the caller sent nothing, so a headless run gains no gate', async () => {
-    await post('cowork', { message: 'hi', chatId: 'c1' });
     expect(providerParams().securitySettings).toBeUndefined();
   });
 
@@ -288,16 +281,17 @@ describe('withheld tools are actually withheld', () => {
     expect(promptText()).not.toMatch(/NEVER run destructive shell commands/);
   });
 
-  it('accumulates across steps rather than letting the last one win', async () => {
-    await post('cowork', {
-      message: 'hi',
-      chatId: 'c1',
-      toolProfile: 'coding',
-      securitySettings: { disableBashTool: true },
-    });
+  it('accumulates across the narrowing steps rather than letting the last one win', async () => {
+    mocks.loadAgentsMock.mockReturnValue([
+      { name: 'reader', triggers: [], allowedTools: ['Read', 'Grep', 'Bash'] },
+    ]);
+    mocks.matchAgentMock.mockReturnValue({ name: 'reader', triggers: [], allowedTools: ['Read', 'Grep', 'Bash'] });
+
+    await post('cowork', { message: 'hi', chatId: 'c1', toolProfile: 'coding' });
     const denied = providerParams().deniedTools!;
-    expect(denied).toContain('Bash');              // from the security setting
     expect(denied).toContain('mcp__aime__SkillCreate'); // from the profile
+    expect(denied).toContain('Write');                  // from the agent's list
+    expect(denied).not.toContain('Read');
   });
 
   it('injects security rules into the system prompt', async () => {

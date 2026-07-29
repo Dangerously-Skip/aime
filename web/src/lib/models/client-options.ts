@@ -209,8 +209,19 @@ export function defaultRoute(
     tierModels?: TierAssignments;
     hasAnthropicKey?: boolean;
     hasBedrock?: boolean;
+    /**
+     * Has built-in reachability actually been determined? Defaults true.
+     *
+     * While the answer is outstanding `hasAnthropicKey` is `false` because it is
+     * unknown, not because it is absent — and rerouting on that sent the turn,
+     * and the billing, to a BYOK provider for a user who had a server-side key.
+     * Unknown means "leave it alone", matching the picker, which keeps offering
+     * the built-ins until it hears otherwise.
+     */
+    known?: boolean;
   },
 ): DefaultRoute | null {
+  if (opts.known === false) return null;
   if (opts.hasAnthropicKey || opts.hasBedrock) return null;
   if (!providers.some((p) => p.enabled && p.models.length > 0)) return null;
   for (const tier of DEFAULT_TIER_PREFERENCE) {
@@ -239,6 +250,8 @@ export function resolveSendRoute(
     tierModels?: TierAssignments;
     hasAnthropicKey?: boolean;
     hasBedrock?: boolean;
+    /** See `defaultRoute` — unknown reachability must not reroute. */
+    known?: boolean;
   },
 ): ClientRoute | null {
   // Nothing pinned — resolve the implicit route (see defaultRoute). Done here

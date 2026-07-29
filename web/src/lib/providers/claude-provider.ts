@@ -14,7 +14,10 @@ import {
   classifyCommand,
   buildCommandApprovalQuestion,
 } from '../security/destructive-commands';
-import { FILE_WRITE_TOOLS, writeTargetAllowed } from '../security/write-scope';
+import { isFileWriteTool, writeTargetAllowed, writeTargetOf } from '../security/write-scope';
+import { toolMatches } from '../security/tool-names';
+import { getScratchDir } from '../app-paths';
+import { loadSecuritySettings } from '../security/settings';
 import { describeThemes as describeThemesForPrompt } from '../documents/themes';
 import {
   buildToolGate,
@@ -163,7 +166,37 @@ export class ClaudeProvider extends BaseProvider {
      * (see QueryParams). WebSearch has always been here; the caller's list joins
      * it, and everything downstream treats the two the same.
      */
-    const denied = new Set<string>(['WebSearch', ...(deniedTools ?? [])]);
+    /**
+     * The user's security toggles.
+     *
+     * Loaded HERE, not taken on trust from the caller, because only two of the
+     * nine `provider.query()` call sites ever sent them — so a control the
+     * Settings screen badged ENFORCED did nothing on Chat, subagents, cron,
+     * webhooks, standing orders or widget refresh, and omitting the field was a
+     * way to switch it off. An explicit set still wins (tests supply one); the
+     * fallback is what makes every other path safe by construction, including
+     * paths written later. See lib/security/settings.ts.
+     */
+    const security = { ...(await loadSecuritySettings()), ...(securitySettings ?? {}) };
+
+    const denied = new Set<string>([
+      'WebSearch',
+      ...(deniedTools ?? []),
+      // Derived from the user setting rather than left to the route, for the same
+      // reason: a caller that assembles its own params cannot forget it.
+      ...(security.disableBashTool ? ['Bash', 'BashOutput', 'KillShell'] : []),
+    ]);
+    /**
+     * The directory the run is ACTUALLY rooted at.
+     *
+     * The write-scope gate used to read `cwd` directly and skip itself entirely
+     * when the caller sent none — which is every Chat turn — so the toggle
+     * rendered an "enforced" badge and did nothing. The provider already falls
+     * back to a per-conversation scratch dir further down (search for
+     * `getScratchDir`); the gate now uses the same value, so a run with no folder
+     * selected is confined to its scratch space rather than unconfined.
+     */
+    const effectiveCwd = cwd || (chatId ? getScratchDir(chatId) : undefined);
     const maxTurns = explicitMaxTurns
       ?? surfaceConfig?.maxTurns
       ?? this.defaultMaxTurns;
@@ -879,7 +912,7 @@ export class ClaudeProvider extends BaseProvider {
       // class of bug being fixed here is a control that looked enforced because
       // a name had been filtered out of a list somewhere upstream, so the check
       // that matters lives where nothing can route around it.
-      if (denied.has(toolName)) {
+      if (toolMatches(toolName, denied)) {
         console.warn('[SECURITY] Blocked a tool withheld from this run:', toolName);
         return {
           behavior: 'deny' as const,
@@ -899,10 +932,10 @@ export class ClaudeProvider extends BaseProvider {
       // (`echo x > /etc/y`) resolves nothing here and walks straight past, which
       // is why the setting's description now says so and why the command gate
       // below is what watches the shell.
-      if (securitySettings?.restrictToProjectFolder && cwd && FILE_WRITE_TOOLS.has(toolName)) {
-        const target = (input.file_path ?? input.notebook_path ?? input.path) as unknown;
-        if (typeof target === 'string' && target) {
-          if (!writeTargetAllowed(target, cwd, chatId)) {
+      if (security.restrictToProjectFolder && effectiveCwd && isFileWriteTool(toolName)) {
+        const target = writeTargetOf(input);
+        if (target) {
+          if (!writeTargetAllowed(target, effectiveCwd)) {
             console.warn('[SECURITY] Blocked a write outside the working directory:', target);
             return {
               behavior: 'deny' as const,
@@ -920,8 +953,8 @@ export class ClaudeProvider extends BaseProvider {
       // A prompt, not a block — see lib/security/destructive-commands for why a
       // shell blocklist is the wrong shape and why asking is the right one.
       if (
-        securitySettings?.blockDangerousCommands &&
-        SHELL_TOOLS.has(toolName) &&
+        security.blockDangerousCommands &&
+        toolMatches(toolName, SHELL_TOOLS) &&
         typeof input.command === 'string'
       ) {
         const command = input.command;

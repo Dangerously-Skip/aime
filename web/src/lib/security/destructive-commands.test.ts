@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyCommand, buildCommandApprovalQuestion, SHELL_TOOLS } from './destructive-commands';
+import { classifyCommand, buildCommandApprovalQuestion, blankQuoted, SHELL_TOOLS } from './destructive-commands';
 
 /**
  * Tuned for RECALL, not precision — a false positive costs one click, a false
@@ -49,6 +49,13 @@ const DESTRUCTIVE: Array<[string, string]> = [
   ['npm publish', 'an irreversible public action'],
   ['gh repo delete me/thing', 'an irreversible public action'],
   [':(){ :|:& };:', 'a fork bomb'],
+  // GNU long forms — the original single-dash-only pattern missed these entirely.
+  ['rm --recursive --force build', 'a recursive or forced delete'],
+  ['rm --force notes.md', 'a recursive or forced delete'],
+  ['chmod --recursive u+w .', 'a recursive permission change'],
+  // A newline is an ordinary line continuation; `.` does not cross one, so the
+  // rules that used `.` were defeated by adding a single character.
+  ['dd if=/dev/zero \\\n  of=/dev/rdisk0 bs=1m', 'a raw write with dd'],
 ];
 
 /**
@@ -96,6 +103,14 @@ const ORDINARY = [
   'psql -c "CREATE TABLE t (id int)"', 'sqlite3 db.sqlite ".tables"',
   'tar -czf archive.tar.gz src/', 'unzip data.zip', 'open reports/index.html',
   'ps aux', 'lsof -i :3000', 'kill 12345',
+  // Quoted arguments that merely CONTAIN a keyword. Prompting on these is how a
+  // gate gets clicked through without being read.
+  'git commit -m "remove sudo from setup"',
+  'grep -rn "sudo" scripts/',
+  'grep -r "rm -rf" docs/',
+  'echo "run sudo apt install x" >> README.md',
+  "echo 'shutdown the server' > notes.txt",
+  'rg "git push --force" --files-with-matches',
 ];
 
 describe('classifyCommand', () => {
@@ -125,6 +140,51 @@ describe('classifyCommand', () => {
   it('catches a destructive command hidden later in a chain', () => {
     expect(classifyCommand('cd /tmp && ls && rm -rf build').destructive).toBe(true);
     expect(classifyCommand('npm test; sudo reboot').destructive).toBe(true);
+  });
+});
+
+describe('quoted arguments are not commands', () => {
+  it('blanks balanced quoted runs, preserving length and structure', () => {
+    expect(blankQuoted('git commit -m "rm -rf x"')).toBe('git commit -m "xxxxxxxx"');
+    expect(blankQuoted("a 'b c' d")).toBe("a 'xxx' d");
+    expect(blankQuoted('no quotes here')).toBe('no quotes here');
+  });
+
+  it('leaves an UNTERMINATED quote alone, so nothing can hide behind it', () => {
+    // Blanking to end-of-string would let `foo "` + anything evade every rule.
+    const evasive = 'echo " && rm -rf /';
+    expect(blankQuoted(evasive)).toBe(evasive);
+    expect(classifyCommand(evasive).destructive).toBe(true);
+  });
+
+  it('still catches a real command that merely follows a quoted one', () => {
+    expect(classifyCommand('echo "hello" && rm -rf build').destructive).toBe(true);
+  });
+});
+
+describe('bounded scanning', () => {
+  /**
+   * `classifyCommand` runs synchronously inside canUseTool on model-controlled
+   * input. The original `rm` rule was O(n²) — 618ms at 20KB, ~62s at 200KB —
+   * which stalls every SSE stream and API route on the single-threaded server,
+   * including the endpoint the approval card needs to resolve.
+   */
+  it('classifies a pathological input in constant-ish time', () => {
+    for (const n of [2_000, 20_000, 200_000]) {
+      const started = process.hrtime.bigint();
+      classifyCommand('rm -' + 'r'.repeat(n));
+      const ms = Number(process.hrtime.bigint() - started) / 1e6;
+      expect(ms, `n=${n} took ${ms}ms`).toBeLessThan(50);
+    }
+    const started = process.hrtime.bigint();
+    classifyCommand('rm '.repeat(20_000));
+    expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(50);
+  });
+
+  it('asks about a command too long to scan, rather than scanning it', () => {
+    const v = classifyCommand('echo ' + 'a'.repeat(5000));
+    expect(v.destructive).toBe(true);
+    expect(v.reason).toMatch(/unusually long/);
   });
 });
 

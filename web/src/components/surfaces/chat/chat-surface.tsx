@@ -165,7 +165,7 @@ export function ChatSurface() {
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   // Built-in (Claude) reachability, which is the user's key OR the server's env
   // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
-  const { hasAnthropicKey, hasBedrock } = useBuiltinAccess();
+  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
   const toolProfile = useSettingsStore((s) => s.toolProfile);
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
@@ -569,6 +569,7 @@ export function ChatSurface() {
         tierModels,
         hasAnthropicKey,
         hasBedrock,
+        known: builtinAccessKnown,
       });
 
       // Open the run record before the turn starts so an immediate failure is
@@ -603,6 +604,7 @@ export function ChatSurface() {
       anthropicApiKey,
       hasAnthropicKey,
       hasBedrock,
+      builtinAccessKnown,
       addMessage,
       startStreaming,
       sendMessage,
