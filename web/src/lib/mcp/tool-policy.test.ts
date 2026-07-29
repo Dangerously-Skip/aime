@@ -870,9 +870,13 @@ describe('applyToolPolicies — the remaining transports and the report', () => 
   });
 
   it('counts what it gated per server, split by outcome', () => {
-    const out = applyToolPolicies(entry('http') as never, observed);
-    // getIssue reads → always_allow; deleteIssue acts → always_ask.
-    expect(out.applied).toEqual([{ server: 'acme', asked: 1, allowed: 1, denied: 0 }]);
+    // Three tools, deliberately UNEQUAL counts: with one-of-each, a filter that
+    // flipped `===` to `!==` still produced 1 and the assertion could not tell.
+    const out = applyToolPolicies(
+      entry('http') as never,
+      { acme: ['getIssue', 'listIssues', 'deleteIssue'] },
+    );
+    expect(out.applied).toEqual([{ server: 'acme', asked: 1, allowed: 2, denied: 0 }]);
   });
 
   it('counts a denial too, so the report is not just ask-vs-allow', () => {
@@ -891,5 +895,186 @@ describe('applyToolPolicies — the remaining transports and the report', () => 
       { zeta: ['x'], alpha: ['y'] },
     );
     expect(out.unsupported).toEqual(['alpha', 'zeta']);
+  });
+});
+
+/**
+ * The last few survivors from mutation testing that are worth killing — each one
+ * a place where an assertion happened to hold for the mutated code too.
+ *
+ * ## Why the file stops at ~91% and not higher
+ *
+ * The remainder was checked by applying each doubtful mutant and running the
+ * suite, rather than assumed. Three equivalence classes account for nearly all
+ * of it:
+ *
+ * 1. **Guards that are redundant with a fail-closed default.** Dropping the
+ *    `typeof x !== 'object'` half of the guards in `readApprovalAnswer` and
+ *    `readToolDecisions` changes nothing observable, because the lookup that
+ *    follows returns undefined for a primitive and the function already denies /
+ *    returns {} on undefined. Verified by applying all three: suite still green.
+ *    That is defence in depth, not dead code — the guard is the readable
+ *    statement of intent and the default is the backstop.
+ *
+ * 2. **Unreachable-by-construction branches.** `at <= 0` vs `at < 0` in the gate:
+ *    at 0 the server half is the empty string, which is never a governed server,
+ *    so both spellings return null. Same for the dedup `continue` (a Map re-set
+ *    preserves insertion order and the value is identical) and the malformed
+ *    `tools` entry guards (a skipped entry and a registered-but-unusable one both
+ *    fall through to the classifier).
+ *
+ * 3. **Copy and log text.** `console.warn` messages, `encoding: 'utf-8'`, and
+ *    `Deny: 'deny'` in the label map — the last is provably equivalent because
+ *    an empty mapping is falsy and falls through to the same fail-closed 'deny'.
+ *
+ * Killing those would mean asserting log strings and the absence of names no
+ * server has. That is writing tests for the mutation tool rather than for the
+ * code, which the header of stryker.conf.json warns against.
+ */
+describe('decisionOptions', () => {
+  it('adapts a stored entry to the optsFor shape', () => {
+    const optsFor = decisionOptions({ acme: { approved: ['a'], denied: ['b'] } });
+    expect(optsFor('acme')).toEqual({ approved: ['a'], denied: ['b'] });
+  });
+
+  it('returns empty lists — not undefined — for a half-filled entry', () => {
+    // `?? []` on both sides: a caller spreads these straight into a Set.
+    const optsFor = decisionOptions({ acme: { approved: ['a'] } as never });
+    expect(optsFor('acme')).toEqual({ approved: ['a'], denied: [] });
+    const other = decisionOptions({ acme: { denied: ['b'] } as never });
+    expect(other('acme')).toEqual({ approved: [], denied: ['b'] });
+  });
+
+  it('returns nothing for a server with no stored decisions', () => {
+    expect(decisionOptions({})('acme')).toEqual({});
+  });
+});
+
+describe('the decision file on disk is stable and survives a bad write', () => {
+  let dir: string;
+  let mcpConfigPath: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aime-decisions2-'));
+    mcpConfigPath = path.join(dir, '.aime-mcp.json');
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('writes both lists sorted, so the file does not churn between surfaces', async () => {
+    for (const t of ['zeta', 'alpha', 'mid']) {
+      await recordToolDecision(mcpConfigPath, 'acme', t, 'always_allow');
+    }
+    for (const t of ['zulu', 'bravo']) {
+      await recordToolDecision(mcpConfigPath, 'acme', t, 'always_deny');
+    }
+    const raw = JSON.parse(fs.readFileSync(toolDecisionsPath(mcpConfigPath), 'utf-8'));
+    expect(raw.acme.approved).toEqual(['alpha', 'mid', 'zeta']);
+    expect(raw.acme.denied).toEqual(['bravo', 'zulu']);
+  });
+
+  it('swallows a write failure rather than throwing into the approval gate', async () => {
+    // This runs inside canUseTool while a turn is paused; an exception here
+    // would escape into the SDK loop instead of just losing a preference.
+    const readOnly = path.join(dir, 'ro');
+    fs.mkdirSync(readOnly);
+    fs.chmodSync(readOnly, 0o500);
+    await expect(
+      recordToolDecision(path.join(readOnly, '.aime-mcp.json'), 'acme', 'x', 'always_allow'),
+    ).resolves.toBeUndefined();
+    fs.chmodSync(readOnly, 0o700);
+  });
+
+  it('refuses the 201st decision but keeps the 200 it has', async () => {
+    // Boundary: 200 is allowed to stand, 201 is not written.
+    const at199 = Array.from({ length: 199 }, (_, i) => `t${i}`);
+    fs.writeFileSync(
+      toolDecisionsPath(mcpConfigPath),
+      JSON.stringify({ acme: { approved: at199, denied: [] } }),
+    );
+    await recordToolDecision(mcpConfigPath, 'acme', 'number200', 'always_allow');
+    expect((await readToolDecisions(mcpConfigPath)).acme?.approved).toHaveLength(200);
+
+    await recordToolDecision(mcpConfigPath, 'acme', 'number201', 'always_allow');
+    const out = await readToolDecisions(mcpConfigPath);
+    expect(out.acme?.approved).toHaveLength(200);
+    expect(out.acme?.approved).not.toContain('number201');
+  });
+});
+
+describe('buildApprovalQuestion — exact wording, not just a substring', () => {
+  it('renders the ordinary header and question verbatim', () => {
+    const q = buildApprovalQuestion({ server: 'aime-mcp-acme', tool: 'deleteIssue' });
+    expect(q.header).toBe('Approval');
+    expect(q.question).toBe('Allow acme to run deleteIssue?');
+  });
+
+  it('renders the money header and question verbatim', () => {
+    const q = buildApprovalQuestion({ server: 'stripe', tool: 'create_refund', handlesMoney: true });
+    expect(q.header).toBe('Approval — moves money');
+    expect(q.question).toBe('stripe can move money. Run create_refund?');
+  });
+
+  it('gives every option a description the user can act on', () => {
+    const q = buildApprovalQuestion({ server: 'acme', tool: 'deleteIssue' });
+    for (const opt of q.options) {
+      expect(opt.description, opt.label).toBeTruthy();
+      expect(opt.description!.length, opt.label).toBeGreaterThan(10);
+    }
+    expect(q.options.find((o) => o.label === 'Always allow')!.description).toContain('deleteIssue');
+    expect(q.options.find((o) => o.label === 'Always deny')!.description).toContain('deleteIssue');
+  });
+
+  it('clips at the boundary, not one either side of it', () => {
+    // 80 chars is the tool limit: exactly 80 is rendered whole, 81 is clipped.
+    const exact = buildApprovalQuestion({ server: 'acme', tool: 'b'.repeat(80) });
+    expect(exact.question).toContain('b'.repeat(80));
+    expect(exact.question).not.toContain('…');
+
+    const over = buildApprovalQuestion({ server: 'acme', tool: 'b'.repeat(81) });
+    expect(over.question).toContain('…');
+    expect(over.question).not.toContain('b'.repeat(81));
+  });
+});
+
+/**
+ * The prefix patterns are anchored at the start. Unanchored, a name only has to
+ * CONTAIN the marker — so a built-in or a hostile server's tool called
+ * `xmcp__acme__getIssue` would be split as though it belonged to `acme`, and
+ * `xaime-mcp-stripe` would inherit stripe's money flag.
+ *
+ * None of these is reachable through the SDK today, which is exactly why they
+ * are worth pinning: the anchors are the reason, and nothing recorded it.
+ */
+describe('prefix matching is anchored', () => {
+  it('splitMcpToolName ignores a name that merely contains the marker', () => {
+    expect(splitMcpToolName('mcp__acme__getIssue')).toEqual({ server: 'acme', tool: 'getIssue' });
+    expect(splitMcpToolName('xmcp__acme__getIssue')).toBeNull();
+    expect(splitMcpToolName(' mcp__acme__getIssue')).toBeNull();
+  });
+
+  it('splitMcpToolName requires a non-empty tool half', () => {
+    expect(splitMcpToolName('mcp__acme__')).toBeNull();
+  });
+
+  it('bareToolName only strips a marker at the start', () => {
+    expect(bareToolName('mcp__acme__getIssue')).toBe('getIssue');
+    expect(bareToolName('xmcp__acme__getIssue')).toBe('xmcp__acme__getIssue');
+  });
+
+  it('groupToolsByServer ignores a name that merely contains the marker', () => {
+    expect(groupToolsByServer(['xmcp__acme__getIssue'])).toEqual({});
+    // It groups by server but keeps the FULL name (buildToolPolicies bares it).
+    expect(groupToolsByServer(['mcp__acme__getIssue'])).toEqual({ acme: ['mcp__acme__getIssue'] });
+  });
+
+  it('serverHandlesMoney only strips a connector prefix at the start', () => {
+    expect(serverHandlesMoney('aime-mcp-stripe')).toBe(true);
+    expect(serverHandlesMoney('xaime-mcp-stripe')).toBe(false);
+    expect(serverHandlesMoney('proxy-for-aime-mcp-stripe')).toBe(false);
+  });
+
+  it('the approval card only strips a connector prefix at the start', () => {
+    // Otherwise the card would name a different service than the one being run.
+    expect(buildApprovalQuestion({ server: 'xaime-mcp-acme', tool: 't' }).question)
+      .toBe('Allow xaime-mcp-acme to run t?');
   });
 });
