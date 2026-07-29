@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { providerIdForPreset } from './step-providers';
+import { providerIdForPreset } from '@/lib/models/provider-setup';
 
 /**
  * Regression: every "Save & verify" minted a fresh `crypto.randomUUID()`, so a

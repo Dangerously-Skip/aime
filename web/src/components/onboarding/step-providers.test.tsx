@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import { StepProviders } from './step-providers';
+import { StepProviders, RECOMMENDED_PATHS, otherPresetIds } from './step-providers';
+import { PROVIDER_PRESETS } from '@/lib/models/providers';
 import { useSettingsStore } from '@/stores/settings-store';
 import { useProviderStore } from '@/stores/provider-store';
 
@@ -45,7 +46,7 @@ const noop = () => {};
 describe('StepProviders', () => {
   it('offers the three provider paths and a skip', () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
-    expect(screen.getByText('Anthropic API key')).toBeTruthy();
+    expect(screen.getByText('Anthropic')).toBeTruthy();
     expect(screen.getByText('OpenRouter')).toBeTruthy();
     expect(screen.getByText(/Local \(Ollama/)).toBeTruthy();
     expect(screen.getByText(/Skip — set up later/)).toBeTruthy();
@@ -53,7 +54,7 @@ describe('StepProviders', () => {
 
   it('Anthropic path saves the key AND mirrors it to the keychain', async () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
-    fireEvent.change(screen.getByPlaceholderText('sk-ant-...'), { target: { value: 'sk-ant-test' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-ant-test' } });
     fireEvent.click(screen.getByText('Save & verify'));
 
     await waitFor(() => expect(useSettingsStore.getState().anthropicApiKey).toBe('sk-ant-test'));
@@ -68,7 +69,7 @@ describe('StepProviders', () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
 
     fireEvent.click(screen.getByText('OpenRouter'));
-    fireEvent.change(screen.getByPlaceholderText('sk-or-...'), { target: { value: 'sk-or-test' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-or-test' } });
     fireEvent.click(screen.getByText('Save & verify'));
 
     await waitFor(() => expect(useProviderStore.getState().providers).toHaveLength(1));
@@ -83,7 +84,7 @@ describe('StepProviders', () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
 
     fireEvent.click(screen.getByText('OpenRouter'));
-    fireEvent.change(screen.getByPlaceholderText('sk-or-...'), { target: { value: 'sk-bad' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-bad' } });
     fireEvent.click(screen.getByText('Save & verify'));
 
     expect(await screen.findByText(/HTTP 401/)).toBeTruthy();
@@ -96,7 +97,7 @@ describe('StepProviders', () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
 
     fireEvent.click(screen.getByText(/Local \(Ollama/));
-    fireEvent.click(screen.getByText('Connect & scan models'));
+    fireEvent.click(screen.getByText('Save & verify'));
 
     await waitFor(() => expect(useProviderStore.getState().providers).toHaveLength(1));
     expect(useProviderStore.getState().providers[0]).toMatchObject({
@@ -108,8 +109,72 @@ describe('StepProviders', () => {
 
   it('configuring flips the skip button into a Continue', async () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
-    fireEvent.change(screen.getByPlaceholderText('sk-ant-...'), { target: { value: 'sk-ant-test' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-ant-test' } });
     fireEvent.click(screen.getByText('Save & verify'));
     expect(await screen.findByText('Continue')).toBeTruthy();
+  });
+});
+
+/**
+ * P1.6: every preset is reachable from onboarding.
+ *
+ * The previous version hardcoded `anthropic | openrouter | local` and had no
+ * route to Bedrock, Vertex, OpenAI, Gemini, Groq, Azure, Fal or a custom
+ * endpoint — eight of eleven presets could only be added later, in Settings,
+ * assuming the user found it.
+ */
+describe('StepProviders — the other presets', () => {
+  it('leaves nothing out: recommended + other covers the whole catalogue', () => {
+    const recommended = RECOMMENDED_PATHS.map((p) => p.presetId as string);
+    const all = [...recommended, ...otherPresetIds()].sort();
+    expect(all).toEqual(PROVIDER_PRESETS.map((p) => p.id).sort());
+  });
+
+  it('does not repeat a recommended path in the others list', () => {
+    for (const r of RECOMMENDED_PATHS) {
+      expect(otherPresetIds()).not.toContain(r.presetId);
+    }
+  });
+
+  it('reveals them behind one click, and lets one be chosen', () => {
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    // Hidden by default — a first-run screen listing eleven presets is worse
+    // than one that leads with a choice.
+    expect(screen.queryByText('AWS Bedrock')).toBeNull();
+
+    fireEvent.click(screen.getByText(/Other providers/));
+    expect(screen.getByText('AWS Bedrock')).toBeTruthy();
+    expect(screen.getByText('Google Vertex (Claude)')).toBeTruthy();
+  });
+
+  it('shows the fields Bedrock needs — it previously had none', () => {
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    fireEvent.click(screen.getByText(/Other providers/));
+    fireEvent.click(screen.getByText('AWS Bedrock'));
+
+    expect(screen.getByText('AWS region')).toBeTruthy();
+    expect(screen.getByText('AWS access key ID')).toBeTruthy();
+    expect(screen.getByText('AWS secret access key')).toBeTruthy();
+    // ...and says that leaving them blank is a real choice.
+    expect(screen.getByText(/ambient AWS credentials/)).toBeTruthy();
+  });
+
+  it('warns when a provider cannot list its models, instead of scanning to nothing', () => {
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    fireEvent.click(screen.getByText(/Other providers/));
+    fireEvent.click(screen.getByText('AWS Bedrock'));
+    expect(screen.getByText(/cannot list its models/)).toBeTruthy();
+    // The button stops promising verification it cannot perform.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+  });
+
+  it('clears typed fields when switching preset, so a key is never resubmitted elsewhere', () => {
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    const key = screen.getByPlaceholderText('sk-…') as HTMLInputElement;
+    fireEvent.change(key, { target: { value: 'sk-ant-secret' } });
+    expect(key.value).toBe('sk-ant-secret');
+
+    fireEvent.click(screen.getByText('OpenRouter'));
+    expect((screen.getByPlaceholderText('sk-…') as HTMLInputElement).value).toBe('');
   });
 });
