@@ -37,11 +37,11 @@
     "warnings allowed with `lint:strict` as the local ratchet).",
     "",
     "Do not expect 100 here, and do not chase it. Scores by file, measured 2026-07-29",
-    "after the review fixes (overall 77.5, up from 74.4):",
+    "(overall 82.4, from 74.4 at the start of the day):",
     "  settings.ts              92%",
     "  path-containment.ts      92%",
+    "  tool-policy.ts           86%  — was 76; the decision store had no tests at all",
     "  write-scope.ts           81%  — the rest is fs-dependent branches",
-    "  tool-policy.ts           76%  — pre-existing, worth attention",
     "  destructive-commands.ts  71%  — a REGEX TABLE (was 61)",
     "  tool-names.ts            69%  — one small regex, few mutants, so the",
     "                                  percentage moves a long way per mutant",
@@ -57,7 +57,7 @@
   "thresholds": {
     "high": 90,
     "low": 80,
-    "break": 75
+    "break": 80
   },
   "timeoutMS": 20000,
   "concurrency": 4
