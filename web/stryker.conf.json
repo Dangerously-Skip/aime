@@ -36,11 +36,15 @@
     "improves. Same stance the repo already takes with lint (errors gated at 0,",
     "warnings allowed with `lint:strict` as the local ratchet).",
     "",
-    "Do not expect 100 here, and do not chase it. Scores by file, measured 2026-07-29:",
-    "  write-scope.ts          100%  — pure logic, every mutant killed",
-    "  path-containment.ts      92%  — pure logic",
+    "Do not expect 100 here, and do not chase it. Scores by file, measured 2026-07-29",
+    "after the review fixes (overall 77.5, up from 74.4):",
+    "  settings.ts              92%",
+    "  path-containment.ts      92%",
+    "  write-scope.ts           81%  — the rest is fs-dependent branches",
     "  tool-policy.ts           76%  — pre-existing, worth attention",
-    "  destructive-commands.ts  61%  — a REGEX TABLE",
+    "  destructive-commands.ts  71%  — a REGEX TABLE (was 61)",
+    "  tool-names.ts            69%  — one small regex, few mutants, so the",
+    "                                  percentage moves a long way per mutant",
     "",
     "That last one is the interesting number and it is not simply a test gap. Stryker",
     "generates many mutants per pattern, and a large share are equivalent: overlapping",
@@ -53,7 +57,7 @@
   "thresholds": {
     "high": 90,
     "low": 80,
-    "break": 70
+    "break": 75
   },
   "timeoutMS": 20000,
   "concurrency": 4

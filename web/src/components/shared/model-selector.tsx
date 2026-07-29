@@ -56,7 +56,14 @@ export function buildSelectorOptions(
   hasBuiltins = true,
 ): ModelOption[] {
   if (!rich) return buildModelOptions(BUILTINS, [], { includeTiers: false });
-  return buildModelOptions(hasBuiltins ? BUILTINS : [], providers, {
+  // With no built-in credential AND no provider models to fall back on there is
+  // nothing reachable at all — and hiding the built-ins then leaves a dropdown of
+  // four tiers that resolve to nothing and a blank trigger, which is the state a
+  // first-run user who skipped onboarding is in. Showing them is more useful than
+  // showing nothing: they are at least the thing to get a key for.
+  const anyProviderModels = providers.some((p) => p.enabled && p.models.length > 0);
+  const showBuiltins = hasBuiltins || !anyProviderModels;
+  return buildModelOptions(showBuiltins ? BUILTINS : [], providers, {
     tierModels,
     includeModelIds: value ? [value] : [],
   });
@@ -176,15 +183,29 @@ export function ModelSelector({
     [value, options, providers, capability, tierModels, hasAnthropicKey, hasBedrock],
   );
 
+  /**
+   * The resolved id is for the LABEL only — it must not become Radix's selected
+   * value.
+   *
+   * Passing it as `value` made the option the trigger already displayed
+   * unselectable: Radix suppresses `onValueChange` when the picked item equals
+   * the current value, so a BYOK-only user seeing "Good — balanced" could not
+   * click "Good — balanced" to actually pin it. The selection stays whatever the
+   * store holds (empty when that id is not on offer, so every item is a change),
+   * and the trigger renders the honest label itself.
+   */
+  const selected = options.some((o) => o.id === value) ? value : '';
+  const shownLabel = findOption(options, shown)?.label ?? '';
+
   const handleChange = (v: string | null) => {
     if (!v) return;
     dispatchSelection(findOption(options, v), v, { onChange, onSelectModel });
   };
 
   return (
-    <Select value={shown} onValueChange={handleChange}>
+    <Select value={selected} onValueChange={handleChange}>
       <SelectTrigger className={`h-7 w-[130px] text-xs bg-card ${className}`}>
-        <SelectValue />
+        {shownLabel ? <span className="truncate">{shownLabel}</span> : <SelectValue />}
       </SelectTrigger>
       <SelectContent>
         {groups.length <= 1

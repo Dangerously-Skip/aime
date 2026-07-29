@@ -46,9 +46,24 @@ describe('GET /api/models', () => {
       expect(body.anthropic).toBe(false);
     });
 
-    it('still reports Bedrock alongside it', async () => {
-      const body = await (await GET()).json();
-      expect(typeof body.bedrock).toBe('boolean');
+    it('reports Bedrock from the real detector, both ways', async () => {
+      // `expect(typeof body.bedrock).toBe('boolean')` passed for a hardcoded
+      // false, which would have removed every Claude model from the picker for a
+      // Bedrock-only user with no failing test anywhere.
+      // isBedrockConfigured wants a region AND a credential source.
+      vi.stubEnv('AWS_REGION', 'us-east-1');
+      vi.stubEnv('AWS_ACCESS_KEY_ID', 'AKIAEXAMPLE');
+      expect((await (await GET()).json()).bedrock).toBe(true);
+
+      // Region alone is not enough — assert the AND, not just the happy path.
+      vi.stubEnv('AWS_ACCESS_KEY_ID', '');
+      vi.stubEnv('AWS_PROFILE', '');
+      vi.stubEnv('AWS_BEARER_TOKEN_BEDROCK', '');
+      expect((await (await GET()).json()).bedrock).toBe(false);
+
+      vi.stubEnv('AWS_REGION', '');
+      vi.stubEnv('AWS_DEFAULT_REGION', '');
+      expect((await (await GET()).json()).bedrock).toBe(false);
     });
   });
 });

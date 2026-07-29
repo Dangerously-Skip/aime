@@ -51,6 +51,7 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -222,6 +223,17 @@ export function ProjectDetail({
           updateToolResult(cid, id, result, event.is_error as boolean | undefined);
           break;
         }
+        case "widget_create":
+          // Same gap cowork and code had: WidgetCreate is mounted on the
+          // in-process `aime` server so it is reachable from every stream, and
+          // this switch has no `default:` — so it vanished while the tool had
+          // already told the user it was pinned.
+          try {
+            handleWidgetCreateEvent(event as Record<string, unknown>);
+          } catch (e) {
+            console.error('[Project] WidgetCreate parse error:', e);
+          }
+          break;
         case "error":
           appendToLastAssistant(cid, `\n\n**Error:** ${(event.message as string) || "An error occurred"}`);
           break;

@@ -6,11 +6,25 @@ import { extractMemories } from '@/lib/memory/extractor';
 import { type SessionControls } from '@/lib/slash-commands';
 import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
+import { baseToolName, toolMatches } from '@/lib/security/tool-names';
 
 /** Tool profile → allowed tool sets (intersected with surface defaults) */
 const TOOL_PROFILES: Record<string, string[]> = {
-  minimal: ['WebSearch', 'WebFetch'],
-  coding: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
+  // `mcp__web-search__web_search` is listed alongside `WebSearch` because it IS
+  // the web search on every surface — the built-in is unconditionally disallowed
+  // by the provider. Omitting it was harmless while the filter was a no-op; now
+  // that a profile produces real denials, leaving it out took away the only
+  // working search from a profile whose own label promises search.
+  minimal: ['WebSearch', 'WebFetch', 'mcp__web-search__web_search'],
+  coding: [
+    'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep', 'Bash',
+    'WebSearch', 'WebFetch', 'mcp__web-search__web_search',
+    // A coding profile that cannot produce a document or a spreadsheet is not
+    // what the label ("Read/Write/Edit/Glob/Grep/Bash + Web tools") promises;
+    // these were never enumerated because the list predates them mattering.
+    'ExcelRead', 'ExcelWrite', 'ExcelEdit',
+    'mcp__aime__DocumentCreate', 'mcp__aime__SkillCreate', 'Skill',
+  ],
   full: [], // empty = no restriction (use surface defaults)
 };
 
@@ -31,6 +45,7 @@ const TOOL_PROFILES: Record<string, string[]> = {
 const PLUMBING_TOOLS = new Set([
   'AskUserQuestion',
   'Agent',
+  'spawn_agent',
   'TodoWrite',
   'mcp__aime__canvas',
   'mcp__aime__RequestConnector',
@@ -375,10 +390,19 @@ export async function POST(
       /** Narrow `allowedTools`, remembering the difference as a real denial. */
       const withhold = (keep: (t: string) => boolean) => {
         if (!surfaceConfig.allowedTools) return;
-        const before = surfaceConfig.allowedTools;
-        surfaceConfig.allowedTools = before.filter(keep);
-        for (const t of before) if (!keep(t)) deniedTools.add(t);
+        // One pass, partitioning: the predicate ran twice per tool before, and a
+        // reader had to prove it was pure to trust that the two lists were
+        // complements.
+        const kept: string[] = [];
+        for (const t of surfaceConfig.allowedTools) {
+          if (keep(t)) kept.push(t);
+          else deniedTools.add(t);
+        }
+        surfaceConfig.allowedTools = kept;
       };
+      /** Profile membership, tolerant of the bare/prefixed split in the configs. */
+      const inList = (list: string[], t: string) =>
+        list.includes(t) || list.includes(baseToolName(t)) || list.some((x) => baseToolName(x) === t);
 
       // ── Tool profile filtering ─────────────────────────────────────────
       // Apply tool profile to intersect surface allowedTools with profile set
@@ -386,7 +410,7 @@ export async function POST(
         const profileTools = TOOL_PROFILES[toolProfile as keyof typeof TOOL_PROFILES];
         if (profileTools && profileTools.length > 0) {
           // Always keep AskUserQuestion and Agent regardless of profile
-          withhold((t) => PLUMBING_TOOLS.has(t) || profileTools.includes(t));
+          withhold((t) => toolMatches(t, PLUMBING_TOOLS) || inList(profileTools, t));
           console.log('[TOOLS] Applied tool profile:', toolProfile, '| Remaining:', surfaceConfig.allowedTools.join(', '));
         }
       }
@@ -411,7 +435,7 @@ export async function POST(
             }
             // Override allowedTools if agent specifies them
             if (matched.allowedTools && surfaceConfig.allowedTools) {
-              withhold((t) => PLUMBING_TOOLS.has(t) || (matched.allowedTools as string[]).includes(t));
+              withhold((t) => toolMatches(t, PLUMBING_TOOLS) || inList(matched.allowedTools as string[], t));
             }
             // Prepend agent system prompt if available
             const agentPrompt = readAgentSystemPrompt(matched);

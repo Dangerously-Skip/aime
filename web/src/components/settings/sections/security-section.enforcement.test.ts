@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { SECURITY_TOGGLES, type SecurityKey } from './security-section';
 
 /**
@@ -27,7 +30,21 @@ import { SECURITY_TOGGLES, type SecurityKey } from './security-section';
  * guidance is genuinely what you meant, and make the description say so too.
  */
 
-const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+const { queryMock, homeRef } = vi.hoisted(() => ({
+  queryMock: vi.fn(),
+  homeRef: { value: '' as string },
+}));
+
+/**
+ * Point the data dir at a throwaway home. `saveSecuritySettings` writes
+ * `<home>/.aime/security.json`, and without this the suite would rewrite the
+ * developer's own security toggles — the same class of mistake as running a
+ * Playwright probe against the real Electron profile.
+ */
+vi.mock('os', async (orig) => {
+  const actual = await orig<typeof import('os')>();
+  return { ...actual, default: actual, homedir: () => homeRef.value || actual.homedir() };
+});
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (a: unknown) => queryMock(a),
@@ -35,14 +52,41 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: (c: unknown) => c,
 }));
 
+beforeAll(() => {
+  homeRef.value = fs.mkdtempSync(path.join(os.tmpdir(), 'aime-enforce-'));
+});
+afterAll(() => {
+  fs.rmSync(homeRef.value, { recursive: true, force: true });
+  homeRef.value = '';
+});
+
 type CanUseTool = (
   toolName: string,
   input: Record<string, unknown>,
   ctx: { toolUseID: string },
 ) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>;
 
-/** Assemble the real SDK options for a turn and hand back its canUseTool. */
-async function canUseToolFor(params: Record<string, unknown>): Promise<CanUseTool> {
+/**
+ * Drive a turn the way the app does: write the toggle to the SERVER-SIDE store
+ * (which is where enforcement reads it from — see lib/security/settings), then
+ * assemble the real SDK options and hand back the real `canUseTool`.
+ *
+ * Nothing about the toggle is translated by hand here. That is the point.
+ */
+async function canUseToolWithToggle(
+  key: SecurityKey,
+  on: boolean,
+  params: Record<string, unknown> = {},
+): Promise<CanUseTool> {
+  const settings = await import('@/lib/security/settings');
+  settings.resetSecuritySettingsCache();
+  await settings.saveSecuritySettings({
+    blockDangerousCommands: false,
+    restrictToProjectFolder: false,
+    disableBashTool: false,
+    [key]: on,
+  });
+
   const { ClaudeProvider } = await import('@/lib/providers/claude-provider');
   queryMock.mockImplementation(async function* () {});
   const provider = new ClaudeProvider();
@@ -61,42 +105,57 @@ async function canUseToolFor(params: Record<string, unknown>): Promise<CanUseToo
  * nobody noticed it wasn't wired", which is exactly how cowork shipped without a
  * widget handler.
  */
-const PROBES: Record<
-  SecurityKey,
-  {
-    /** What `route.ts` sends the provider when this toggle is on. */
-    params: Record<string, unknown>;
-    tool: string;
-    input: Record<string, unknown>;
-    /** The refusal must be legible to the agent, not just a bare deny. */
-    message: RegExp;
-  }
-> = {
+interface Probe {
+  /** A tool call that must be refused BECAUSE this toggle is on. */
+  tool: string;
+  input: Record<string, unknown>;
+  /** The refusal must be legible to the agent, not just a bare deny. */
+  message: RegExp;
+  /** A comparable call that must still be ALLOWED with the toggle on. */
+  control: { tool: string; input: Record<string, unknown> };
+  /** Extra query params the scenario needs (never the toggle itself). */
+  params?: Record<string, unknown>;
+}
+
+const CWD = '/Users/x/projects/app';
+
+/**
+ * Each probe starts from the STORED SETTING, not from a hand-written
+ * translation of it.
+ *
+ * The first version passed `deniedTools: ['Bash', …]` for `disableBashTool` —
+ * i.e. it fed the provider the already-translated result, so deleting the code
+ * that does the translating left the suite green. It proved the provider denies
+ * what it is told to deny, which was never in doubt.
+ *
+ * Each probe also carries a CONTROL: a call that must still be allowed. Without
+ * one, a gate that refused everything would pass, and the first version's
+ * control probed `Glob`, which no gate can reach.
+ */
+const PROBES: Partial<Record<SecurityKey, Probe>> = {
   disableBashTool: {
-    // The route turns this into deniedTools; see its own tests for that half.
-    params: { deniedTools: ['Bash', 'BashOutput', 'KillShell'] },
     tool: 'Bash',
     input: { command: 'rm -rf ~/x' },
     message: /not available in this session/i,
+    control: { tool: 'Read', input: { file_path: `${CWD}/a.ts` } },
   },
   restrictToProjectFolder: {
-    params: { cwd: '/Users/x/projects/app', securitySettings: { restrictToProjectFolder: true } },
+    params: { cwd: CWD },
     tool: 'Write',
     input: { file_path: '/Users/x/.ssh/authorized_keys' },
     message: /outside the working directory/i,
+    // The same tool, inside the folder — so "denies everything" cannot pass.
+    control: { tool: 'Write', input: { file_path: `${CWD}/src/a.ts` } },
   },
   blockDangerousCommands: {
     // No onInputRequest ⇒ nobody can be asked, so it must refuse rather than run.
     // The interactive half (it prompts, and honours the answer) is covered in
     // claude-provider.test.ts and approval-gate.integration.test.ts.
-    params: { securitySettings: { blockDangerousCommands: true } },
     tool: 'Bash',
     input: { command: 'sudo rm -rf /var/log' },
     message: /needs the user's approval|cannot ask/i,
+    control: { tool: 'Bash', input: { command: 'npm test' } },
   },
-  // Declared guidance, so it gets no probe — and the test below proves the
-  // declaration is honest rather than a way to opt out of being checked.
-  blockNetworkCommands: null as never,
 };
 
 const enforced = SECURITY_TOGGLES.filter((t) => t.enforcement === 'enforced');
@@ -106,15 +165,16 @@ describe('every toggle that claims enforcement is enforced', () => {
   it('has a probe for each enforced toggle — a new one cannot slip through', () => {
     for (const toggle of enforced) {
       expect(PROBES[toggle.key], `no probe for '${toggle.key}'`).toBeTruthy();
+      expect(PROBES[toggle.key]!.control, `no control for '${toggle.key}'`).toBeTruthy();
     }
     expect(enforced.length).toBeGreaterThan(0);
   });
 
   it.each(enforced.map((t) => [t.key, t.label] as const))(
-    '%s (%s) is refused by the real canUseTool',
+    '%s (%s) is refused by the real canUseTool when the setting is ON',
     async (key) => {
-      const probe = PROBES[key];
-      const canUseTool = await canUseToolFor(probe.params);
+      const probe = PROBES[key]!;
+      const canUseTool = await canUseToolWithToggle(key, true, probe.params);
       const result = await canUseTool(probe.tool, probe.input, { toolUseID: `probe-${key}` });
 
       expect(result.behavior, `${key} claims to be enforced but allowed the call`).toBe('deny');
@@ -122,13 +182,25 @@ describe('every toggle that claims enforcement is enforced', () => {
     },
   );
 
-  it('leaves an unrelated call alone — a gate that denies everything proves nothing', async () => {
-    for (const toggle of enforced) {
-      const canUseTool = await canUseToolFor(PROBES[toggle.key].params);
-      const ok = await canUseTool('Glob', { pattern: '**/*.ts' }, { toolUseID: `ctl-${toggle.key}` });
-      expect(ok.behavior, `${toggle.key} denied an unrelated tool`).toBe('allow');
-    }
-  });
+  it.each(enforced.map((t) => [t.key] as const))(
+    '%s allows the same call when the setting is OFF — so the toggle is what did it',
+    async (key) => {
+      const probe = PROBES[key]!;
+      const canUseTool = await canUseToolWithToggle(key, false, probe.params);
+      const result = await canUseTool(probe.tool, probe.input, { toolUseID: `off-${key}` });
+      expect(result.behavior, `${key} denied with the setting off`).toBe('allow');
+    },
+  );
+
+  it.each(enforced.map((t) => [t.key] as const))(
+    '%s still allows a comparable call — a gate that denies everything proves nothing',
+    async (key) => {
+      const probe = PROBES[key]!;
+      const canUseTool = await canUseToolWithToggle(key, true, probe.params);
+      const ok = await canUseTool(probe.control.tool, probe.control.input, { toolUseID: `ctl-${key}` });
+      expect(ok.behavior, `${key} denied its control call`).toBe('allow');
+    },
+  );
 });
 
 describe('every toggle that admits to being guidance says so out loud', () => {

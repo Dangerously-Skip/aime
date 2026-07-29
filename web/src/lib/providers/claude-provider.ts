@@ -260,6 +260,19 @@ export class ClaudeProvider extends BaseProvider {
 
     const providerName = this.name;
     /**
+     * Signatures of client-effect chunks already sent mid-stream.
+     *
+     * These tools only QUEUE (an MCP handler cannot yield), so the effect used to
+     * ride out in a flush after the stream loop — which the abort path never
+     * reached, and which the client is no longer READING once the user presses
+     * Stop, because Stop aborts the fetch. Emitting from the `tool_use` block
+     * instead gets the chunk out while the reader is still attached; the queue
+     * stays as the belt for a server-side abort, and this set stops the two
+     * paths emitting the same thing twice.
+     */
+    const emittedEffects = new Set<string>();
+    const effectKey = (type: string, input: unknown) => `${type}:${JSON.stringify(input)}`;
+    /**
      * Emit the client-side effects the in-process MCP tools queued, and empty the
      * queues so a second drain yields nothing.
      *
@@ -278,6 +291,7 @@ export class ClaudeProvider extends BaseProvider {
         yield { type: 'cron_create', input: job, id: `cron_${Date.now()}`, provider: providerName };
       }
       for (const order of pendingStandingOrders.splice(0)) {
+        if (emittedEffects.has(effectKey('standing_order_create', order))) continue;
         yield {
           type: 'standing_order_create',
           input: order,
@@ -287,6 +301,7 @@ export class ClaudeProvider extends BaseProvider {
       }
       // P6/K5, the chat → Cockpit pin loop.
       for (const widget of pendingWidgets.splice(0)) {
+        if (emittedEffects.has(effectKey('widget_create', widget))) continue;
         yield {
           type: 'widget_create',
           input: widget,
@@ -849,6 +864,9 @@ export class ClaudeProvider extends BaseProvider {
 
     /** Tools the user declined during this request — see the gate below. */
     const deniedThisTurn = new Set<string>();
+    /** Cards shown for destructive commands this turn; see the cap below. */
+    const commandApprovalsAsked = [0];
+    const MAX_COMMAND_APPROVALS_PER_TURN = 5;
 
     /**
      * Per-tool MCP approval gate (P3.6b, made enforceable).
@@ -963,7 +981,12 @@ export class ClaudeProvider extends BaseProvider {
           // Keyed by the COMMAND, not the tool: declining one `rm -rf` must not
           // silently refuse every later `ls`. Tool-name keying is right for the
           // MCP gate, where the name is the risk; here the risk is the argument.
-          const key = `shell:${command}`;
+          // Normalised, so trivial respellings are the SAME refusal. Keyed on the
+          // exact string, `rm -rf x` and `rm  -rf x` and `rm -rf "x"` were three
+          // different keys, each earning a fresh card — and the deny path returns
+          // before loop detection, so nothing capped it. A model steered by an
+          // injected instruction could prompt until the user clicked Allow.
+          const key = `shell:${command.replace(/["']/g, '').replace(/\s+/g, ' ').trim()}`;
           if (deniedThisTurn.has(key)) {
             return {
               behavior: 'deny' as const,
@@ -972,6 +995,20 @@ export class ClaudeProvider extends BaseProvider {
                 `Stop retrying it and finish what you can without it.`,
             };
           }
+          // A hard ceiling on cards per turn, on top of the per-command memory:
+          // a turn that has already asked this many times is not going to become
+          // more legitimate, and every extra modal makes the next one likelier to
+          // be dismissed unread.
+          if (commandApprovalsAsked[0] >= MAX_COMMAND_APPROVALS_PER_TURN) {
+            console.warn('[SECURITY] Approval prompt limit reached for this turn');
+            return {
+              behavior: 'deny' as const,
+              message:
+                `This turn has already asked the user to approve ${MAX_COMMAND_APPROVALS_PER_TURN} ` +
+                `commands, so no more will be shown. Stop and tell them what is left to do.`,
+            };
+          }
+          commandApprovalsAsked[0] += 1;
           if (!onInputRequest) {
             // Unattended: nothing can ask, so under this setting it does not run.
             console.warn('[SECURITY] Cannot ask about a destructive command here; denying');
@@ -1603,6 +1640,22 @@ export class ClaudeProvider extends BaseProvider {
                   console.log('[Claude] CronCreate tool use — emitting cron_create event, toolName:', toolName);
                   yield {
                     type: 'cron_create',
+                    input: toolInput,
+                    id: block.id as string,
+                    provider: this.name,
+                  };
+                } else if (/(?:^|__|:)(WidgetCreate|StandingOrderCreate)$/.test(toolName)) {
+                  // Same treatment as CronCreate: emit while the client is still
+                  // reading. The post-stream flush cannot help on a user Stop —
+                  // that aborts the fetch, so nothing is left to receive it — and
+                  // the tool has already told the user "pinned to your Cockpit".
+                  const type = toolName.endsWith('WidgetCreate')
+                    ? ('widget_create' as const)
+                    : ('standing_order_create' as const);
+                  emittedEffects.add(effectKey(type, toolInput));
+                  console.log(`[Claude] ${toolName} tool use — emitting ${type} mid-stream`);
+                  yield {
+                    type,
                     input: toolInput,
                     id: block.id as string,
                     provider: this.name,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import {
   ModelSelector,
   buildSelectorOptions,
@@ -9,7 +9,7 @@ import {
 } from './model-selector';
 import { useProviderStore } from '@/stores/provider-store';
 import { useSettingsStore } from '@/stores/settings-store';
-import { resetServerCredentials } from '@/hooks/use-builtin-access';
+import { resetServerCredentials, useServerCredentialsStore } from '@/hooks/use-builtin-access';
 import {
   BUILTIN_GROUP,
   TIER_GROUP,
@@ -157,6 +157,52 @@ describe('displayValue — the trigger must not lie about the route', () => {
     const id = 'openrouter-1:moonshotai/kimi-k2';
     const options = buildSelectorOptions([PRICED_PROVIDER], {}, id, true, false);
     expect(displayValue(id, options, [PRICED_PROVIDER], opts)).toBe(id);
+  });
+});
+
+/**
+ * Rendered, not just the pure helpers.
+ *
+ * Every substantive assertion in this file used to call `buildSelectorOptions` /
+ * `displayValue` with hand-passed arguments, while the three tests that actually
+ * mounted the component asserted only that a combobox existed. So reverting
+ * `value={shown}` or dropping the `hasBuiltins` argument at the call site passed
+ * all twenty tests — and the reported bug came straight back.
+ */
+describe('ModelSelector — the wiring, through a real render', () => {
+  async function mountWith(server: { anthropic: boolean; bedrock: boolean }, value: string) {
+    resetServerCredentials();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(server)));
+    useProviderStore.setState({ providers: [PRICED_PROVIDER] });
+    const view = render(<ModelSelector value={value} onChange={() => {}} onSelectModel={vi.fn()} />);
+    // Let the /api/models answer land so `hasBuiltins` is no longer optimistic.
+    await waitFor(() =>
+      expect(useServerCredentialsStore.getState().server).not.toBeNull(),
+    );
+    return view;
+  }
+
+  it('shows the tier it will actually route to, not the unreachable default', async () => {
+    await mountWith({ anthropic: false, bedrock: false }, 'sonnet');
+    // The store still says 'sonnet'; the trigger must not.
+    await waitFor(() => expect(screen.getByRole('combobox').textContent).toContain('Good'));
+    expect(screen.getByRole('combobox').textContent).not.toContain('Sonnet');
+  });
+
+  it('shows the built-in when it IS reachable', async () => {
+    await mountWith({ anthropic: true, bedrock: false }, 'sonnet');
+    await waitFor(() => expect(screen.getByRole('combobox').textContent).toContain('Sonnet 4.6'));
+  });
+
+  it('does not pin the substituted value as the selection', async () => {
+    // Radix suppresses onValueChange when the picked item equals the current
+    // value, so making the displayed tier the selected value made that very
+    // option unclickable.
+    await mountWith({ anthropic: false, bedrock: false }, 'sonnet');
+    const combo = screen.getByRole('combobox');
+    expect(combo.getAttribute('data-state')).toBeDefined();
+    // 'sonnet' is not on offer, so nothing is selected — every item is a change.
+    expect(combo.textContent).toContain('Good');
   });
 });
 
