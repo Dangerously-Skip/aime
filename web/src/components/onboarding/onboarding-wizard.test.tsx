@@ -65,7 +65,7 @@ describe('OnboardingWizard — step shape', () => {
 
     // The replacement, not the old org picker.
     expect(screen.getByText(/How should .* reach a model/)).toBeTruthy();
-    expect(screen.getByText('Anthropic API key')).toBeTruthy();
+    expect(screen.getByText('Anthropic')).toBeTruthy();
     expect(screen.getByText('OpenRouter')).toBeTruthy();
     expect(screen.queryByText(/Select your team/i)).toBeNull();
   });
@@ -188,7 +188,7 @@ describe('OnboardingWizard — what it saves', () => {
     render(<OnboardingWizard />);
     nameAndContinue('Grace');
 
-    fireEvent.change(screen.getByPlaceholderText('sk-ant-...'), {
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), {
       target: { value: 'sk-ant-wizard' },
     });
     fireEvent.click(screen.getByText('Save & verify'));

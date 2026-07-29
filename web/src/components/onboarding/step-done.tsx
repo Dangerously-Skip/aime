@@ -23,9 +23,15 @@ export function StepDone({
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const providers = useProviderStore((s) => s.providers);
 
+  // Deduped: the Anthropic path now writes BOTH the settings key and a provider
+  // row (one shared setup flow, rather than a bespoke branch per path), so the
+  // two sources name the same thing and the summary read "Anthropic, Anthropic".
+  // A Set also covers two providers a user happened to give the same label.
   const providerNames = [
-    ...(anthropicApiKey ? ["Anthropic"] : []),
-    ...providers.map((p) => p.label),
+    ...new Set([
+      ...(anthropicApiKey ? ["Anthropic"] : []),
+      ...providers.map((p) => p.label),
+    ]),
   ];
 
   const summaryItems: { label: string; value: string }[] = [];

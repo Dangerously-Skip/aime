@@ -277,7 +277,8 @@ export const CREDENTIAL_FIELD_SPECS: Record<CredentialField, CredentialFieldSpec
   awsSecretAccessKey: {
     label: 'AWS secret access key',
     placeholder: '••••••••',
-    help: 'Leave every AWS field blank to use the machine\'s ambient AWS credentials instead.',
+    // The "leave blank for ambient credentials" note belongs to the whole AWS
+    // group, not to this one field — `providerHint` says it once.
     secret: true,
   },
   vertexProject: {

@@ -1,12 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import {
-  ProviderManager,
-  orphanCredentialIds,
-  collectFieldValues,
-  missingRequiredFields,
-} from './provider-manager';
+import { ProviderManager, orphanCredentialIds } from './provider-manager';
+import { collectFieldValues, missingRequiredFields } from '@/lib/models/provider-setup';
 import { getPreset } from '@/lib/models/providers';
 import { useProviderStore } from '@/stores/provider-store';
 
