@@ -11,6 +11,7 @@ import { useCoworkStore } from "@/stores/cowork-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { streamRegistry } from "@/lib/stream-registry";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useMemoryStore } from "@/stores/memory-store";
@@ -918,6 +919,12 @@ export function CoworkSurface() {
       }).catch(() => {});
     },
     onChunk(event) {
+      // Chunks whose handling is the same on every surface — cron jobs,
+      // standing orders, widgets, memory. Handled in ONE place
+      // (lib/sse/agnostic-chunks) because each surface having its own case
+      // meant three of them were silently dropped on most surfaces.
+      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Cowork' })) return;
+
       switch (event.type) {
         case "turn_start":
           // New assistant turn — previous turn's tools have all completed
@@ -1166,37 +1173,6 @@ export function CoworkSurface() {
         case "canvas":
           onCanvasEvent(event as { doc?: unknown });
           break;
-        case "cron_create": {
-          // Route cron jobs to the standing order engine in the Assistant surface
-          try {
-            const input = event.input as Record<string, unknown>;
-            const expression = (input.cron || input.expression) as string;
-            const prompt = (input.prompt || input.message || input.task) as string;
-            if (expression && prompt) {
-              useAssistantStore.getState().addOrder({
-                instruction: prompt,
-                trigger: { type: 'cron', expression },
-                notifyVia: 'toast',
-              });
-              console.log('[Cowork] Standing order created from CronCreate:', expression, prompt);
-            }
-          } catch (e) {
-            console.error('[Cowork] CronCreate parse error:', e);
-          }
-          break;
-        }
-        case "widget_create": {
-          // WidgetCreate lives on the in-process `aime` MCP server, so it is
-          // reachable from EVERY surface — but only chat and assistant handled the
-          // event it emits. This switch has no `default:`, so on cowork the widget
-          // was dropped without a trace while the model reported it pinned.
-          try {
-            handleWidgetCreateEvent(event as Record<string, unknown>);
-          } catch (e) {
-            console.error('[Cowork] WidgetCreate parse error:', e);
-          }
-          break;
-        }
         case "document_extracting": {
           // Show extraction status in console — could add UI indicator
           console.log('[Cowork] Extracting document:', event.name);
@@ -1217,12 +1193,6 @@ export function CoworkSurface() {
           console.log('[Cowork] Document extracted:', event.name, 'path:', extractedPath, 'length:', event.textLength);
           break;
         }
-        case "memory_extract":
-          handleMemoryExtractEvent(
-            event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
-            chatId,
-          );
-          break;
         case "error":
           appendToLastAssistant(
             chatId,

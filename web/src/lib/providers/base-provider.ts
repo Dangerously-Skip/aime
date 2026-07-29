@@ -24,6 +24,11 @@ export type ChunkType =
   | 'cron_create'
   | 'standing_order_create'
   | 'widget_create'
+  // Emitted by the chat route rather than a provider (route.ts, after the turn),
+  // which is why it was missing here — the union only tracked what providers
+  // yield, so the one chunk type the ROUTE adds was invisible to every
+  // exhaustiveness check.
+  | 'memory_extract'
   | 'connector_request'
   | 'document_print';
 
