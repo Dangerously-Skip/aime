@@ -1,4 +1,4 @@
-import type { Transport } from './providers';
+import type { AgentMode, Transport } from './providers';
 
 /**
  * Non-secret execution descriptor the client sends for a chat request that
@@ -12,6 +12,13 @@ export interface ProviderExecConfig {
   transport?: Transport;
   /** The provider's real base URL (its own anthropic/openai endpoint). */
   baseUrl?: string;
+  /**
+   * How the Agent SDK reaches this provider. `bedrock` and `vertex` are driven
+   * by environment rather than a key + base URL, so they need naming here.
+   *
+   * Absent ⇒ 'api-key', which is what every previously-shipped config meant.
+   */
+  agentMode?: AgentMode;
 }
 
 export interface ResolvedExecution {
@@ -19,6 +26,38 @@ export interface ResolvedExecution {
   apiKey?: string;
   /** Anthropic-compatible base URL for the SDK, or undefined for default. */
   baseUrl?: string;
+  /**
+   * Extra environment for the SDK subprocess — how Bedrock and Vertex are
+   * configured.
+   *
+   * Until this existed, both were reachable ONLY through the server's own
+   * `process.env`: their presets declared `awsRegion`, `vertexProject` and the
+   * rest, the UI could not collect them, and nothing read them if it had. A
+   * provider you could add but never use is worse than one that is not offered.
+   */
+  env?: Record<string, string>;
+}
+
+/** Build the SDK environment for a configured (not ambient) Bedrock provider. */
+export function bedrockEnvFrom(values: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = { CLAUDE_CODE_USE_BEDROCK: '1' };
+  if (values.awsRegion) env.AWS_REGION = values.awsRegion;
+  // Both or neither: a lone access key id cannot authenticate, and passing it
+  // would shadow the ambient credentials that might otherwise have worked.
+  if (values.awsAccessKeyId && values.awsSecretAccessKey) {
+    env.AWS_ACCESS_KEY_ID = values.awsAccessKeyId;
+    env.AWS_SECRET_ACCESS_KEY = values.awsSecretAccessKey;
+    if (values.awsSessionToken) env.AWS_SESSION_TOKEN = values.awsSessionToken;
+  }
+  return env;
+}
+
+/** Build the SDK environment for a configured Vertex provider. */
+export function vertexEnvFrom(values: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = { CLAUDE_CODE_USE_VERTEX: '1' };
+  if (values.vertexProject) env.ANTHROPIC_VERTEX_PROJECT_ID = values.vertexProject;
+  if (values.vertexRegion) env.CLOUD_ML_REGION = values.vertexRegion;
+  return env;
 }
 
 /**
@@ -78,6 +117,8 @@ export async function resolveExecution(opts: {
   providerConfig?: ProviderExecConfig | null;
   requestApiKey?: string | null;
   loadKey?: (providerId: string) => Promise<string | undefined>;
+  /** All stored fields for a provider — needed for Bedrock/Vertex env. */
+  loadFields?: (providerId: string) => Promise<Record<string, string> | undefined>;
   /** Origin (scheme+host+port) of this server, used to build the shim URL. */
   shimOrigin?: string;
 }): Promise<ResolvedExecution> {
@@ -87,6 +128,15 @@ export async function resolveExecution(opts: {
   let apiKey = requestApiKey || undefined;
   if (!apiKey && opts.loadKey) {
     apiKey = await opts.loadKey(providerConfig.providerId);
+  }
+
+  // Bedrock and Vertex are configured by environment, not by key + base URL.
+  const agentMode = providerConfig.agentMode ?? 'api-key';
+  if (agentMode === 'bedrock' || agentMode === 'vertex') {
+    const values = (await opts.loadFields?.(providerConfig.providerId)) ?? {};
+    return {
+      env: agentMode === 'bedrock' ? bedrockEnvFrom(values) : vertexEnvFrom(values),
+    };
   }
 
   const transport: Transport = providerConfig.transport ?? 'anthropic-native';

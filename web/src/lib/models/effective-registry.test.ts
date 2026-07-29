@@ -227,7 +227,14 @@ describe('resolveClientRoute', () => {
       model: 'moonshotai/kimi-k2',
       // Kimi is not an `anthropic/*` model, so it routes via the openai-compat
       // shim rather than OpenRouter's Anthropic endpoint.
-      providerConfig: { providerId: 'or-1', transport: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' },
+      providerConfig: {
+        providerId: 'or-1',
+        transport: 'openai-compat',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        // P1.6: the server needs this to tell an env-driven provider
+        // (Bedrock/Vertex) from an ordinary key + base URL one.
+        agentMode: 'api-key',
+      },
     });
   });
 

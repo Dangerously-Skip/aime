@@ -1,8 +1,15 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useProviderStore } from '@/stores/provider-store'
-import { PROVIDER_PRESETS, getPreset, needsApiKey } from '@/lib/models/providers'
+import {
+  PROVIDER_PRESETS,
+  getPreset,
+  azureBaseUrl,
+  CREDENTIAL_FIELD_SPECS,
+  type CredentialField,
+  type ProviderPreset,
+} from '@/lib/models/providers'
 import { isProviderCredentialId } from '@/lib/models/credentials'
 import type { ScannedModel } from '@/lib/models/providers'
 import { Input } from '@/components/ui/input'
@@ -90,6 +97,39 @@ async function listCredentialIds(): Promise<string[]> {
  *
  * 3. The caller confirms before deleting, and shows the ids.
  */
+/** The non-empty values the user typed, restricted to fields this preset declares. */
+export function collectFieldValues(
+  preset: ProviderPreset,
+  fields: Partial<Record<CredentialField, string>>,
+): Partial<Record<CredentialField, string>> {
+  const out: Partial<Record<CredentialField, string>> = {}
+  for (const f of preset.credentialFields) {
+    const v = fields[f]?.trim()
+    if (v) out[f] = v
+  }
+  return out
+}
+
+/**
+ * Which declared fields are still blank and genuinely required.
+ *
+ * Not every declared field is mandatory: Bedrock and Vertex fall back to the
+ * machine's ambient AWS/gcloud credentials, so leaving them empty is a real
+ * choice rather than an incomplete form. Requiring them would make the guided
+ * setup refuse the most common way those two are actually used.
+ */
+export function missingRequiredFields(
+  preset: ProviderPreset,
+  values: Partial<Record<CredentialField, string>>,
+): CredentialField[] {
+  const optional = new Set<CredentialField>(
+    preset.agentMode === 'bedrock' || preset.agentMode === 'vertex'
+      ? preset.credentialFields
+      : ['azureApiVersion'],
+  )
+  return preset.credentialFields.filter((f) => !optional.has(f) && !values[f])
+}
+
 export function orphanCredentialIds(
   stored: string[],
   providers: ReadonlyArray<{ id: string }>,
@@ -132,7 +172,17 @@ export function ProviderManager() {
   const [presetId, setPresetId] = useState('openrouter')
   const [label, setLabel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
-  const [apiKey, setApiKey] = useState('')
+  /**
+   * One entry per field the chosen preset declares, keyed by field name.
+   *
+   * Was a single `apiKey` string, which is why Bedrock, Vertex and Azure could
+   * not be configured at all: their presets declare `awsRegion`,
+   * `vertexProject`, `azureDeployment` and so on, and the form had no input for
+   * any of them. Driving the form off `credentialFields` means a preset added
+   * later gets its inputs for free.
+   */
+  const [fields, setFields] = useState<Partial<Record<CredentialField, string>>>({})
+  const setField = (f: CredentialField, v: string) => setFields((prev) => ({ ...prev, [f]: v }))
   const [busy, setBusy] = useState<string | null>(null) // 'add' | providerId | null
   const [error, setError] = useState<string | null>(null)
 
@@ -143,7 +193,7 @@ export function ProviderManager() {
     setPresetId('openrouter')
     setLabel(p?.label ?? '')
     setBaseUrl(p?.defaultBaseUrl ?? '')
-    setApiKey('')
+    setFields({})
     setError(null)
     setAdding(true)
   }
@@ -153,6 +203,9 @@ export function ProviderManager() {
     setPresetId(id)
     setLabel(p?.label ?? '')
     setBaseUrl(p?.defaultBaseUrl ?? '')
+    // Clear rather than carry over: a key typed for one provider must not be
+    // silently submitted to another.
+    setFields({})
   }
 
   async function handleAdd() {
@@ -160,22 +213,43 @@ export function ProviderManager() {
     setBusy('add')
     setError(null)
     const id = globalThis.crypto.randomUUID()
-    const keyNeeded = needsApiKey(preset)
     try {
-      // 1. Discover models (transient key). Fail fast before persisting anything.
-      const models = preset.scan ? await scanModels(presetId, { apiKey, baseUrl }) : []
+      const values = collectFieldValues(preset, fields)
+      const missing = missingRequiredFields(preset, values)
+      if (missing.length) {
+        setError(`Fill in: ${missing.map((f) => CREDENTIAL_FIELD_SPECS[f].label).join(', ')}`)
+        return
+      }
+      // Azure routes per deployment, so its endpoint is derived rather than typed.
+      const effectiveBaseUrl =
+        azureBaseUrl(values) ?? ((values.baseUrl || baseUrl).trim() || preset.defaultBaseUrl)
 
-      // 2. Store the secret server-side (keychain) if the provider needs one.
-      if (keyNeeded && apiKey.trim()) {
-        await saveCredentials(id, { apiKey: apiKey.trim() })
+      // 1. Discover models (transient values). Fail fast before persisting.
+      const models = preset.scan
+        ? await scanModels(presetId, { apiKey: values.apiKey, baseUrl: effectiveBaseUrl })
+        : []
+
+      // 2. Store every field server-side. They all live in the same credential
+      //    store, keyed by provider id: `resolveExecution` reads region/project
+      //    back exactly as it reads a key, so a second storage path would earn
+      //    nothing.
+      if (Object.keys(values).length) {
+        await saveCredentials(id, values as Record<string, string>)
       }
 
       // 3. Persist the (non-secret) provider config + kept models.
-      addProvider({ id, presetId, label: label.trim() || preset.label, baseUrl: baseUrl.trim() || undefined, enabled: true, models })
-      if (keyNeeded && apiKey.trim()) setHasCredentials(id, true)
+      addProvider({
+        id,
+        presetId,
+        label: label.trim() || preset.label,
+        baseUrl: effectiveBaseUrl || undefined,
+        enabled: true,
+        models,
+      })
+      if (values.apiKey) setHasCredentials(id, true)
 
       setAdding(false)
-      setApiKey('')
+      setFields({})
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add provider')
     } finally {
@@ -268,18 +342,52 @@ export function ProviderManager() {
             <label className="text-xs text-muted-foreground">Name</label>
             <Input value={label} onChange={(e) => setLabel(e.target.value)} className="h-8 text-xs" placeholder={preset?.label} />
 
-            <label className="text-xs text-muted-foreground">Base URL</label>
-            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="h-8 text-xs font-mono" placeholder={preset?.defaultBaseUrl} />
-
-            {preset && needsApiKey(preset) && (
+            {/* Azure's endpoint is derived from resource + deployment, so it has
+                no Base URL of its own to type. */}
+            {preset && !preset.credentialFields.includes('baseUrl') && preset.id !== 'azure-openai' && (
               <>
-                <label className="text-xs text-muted-foreground">API key</label>
-                <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} className="h-8 text-xs font-mono" placeholder="sk-..." />
+                <label className="text-xs text-muted-foreground">Base URL</label>
+                <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className="h-8 text-xs font-mono" placeholder={preset?.defaultBaseUrl} />
               </>
             )}
+
+            {/* One input per field the preset declares. Bedrock, Vertex and
+                Azure previously had none at all. */}
+            {preset?.credentialFields.map((f) => {
+              const spec = CREDENTIAL_FIELD_SPECS[f]
+              return (
+                <Fragment key={f}>
+                  <label className="text-xs text-muted-foreground">{spec.label}</label>
+                  <div className="space-y-1">
+                    <Input
+                      type={spec.secret ? 'password' : 'text'}
+                      value={fields[f] ?? ''}
+                      onChange={(e) => setField(f, e.target.value)}
+                      className="h-8 text-xs font-mono"
+                      placeholder={spec.placeholder}
+                    />
+                    {spec.help && <p className="text-[11px] text-muted-foreground/80">{spec.help}</p>}
+                  </div>
+                </Fragment>
+              )
+            })}
           </div>
+
+          {preset && (preset.agentMode === 'bedrock' || preset.agentMode === 'vertex') && (
+            <p className="text-[11px] text-muted-foreground">
+              Leave these blank to use this machine&apos;s ambient{' '}
+              {preset.agentMode === 'bedrock' ? 'AWS' : 'gcloud'} credentials.
+              {!preset.scan && ' This provider cannot list models — add them by name after saving.'}
+            </p>
+          )}
+          {preset && !preset.scan && preset.agentMode === 'api-key' && (
+            <p className="text-[11px] text-muted-foreground">
+              This provider cannot list its models — add them by name after saving.
+            </p>
+          )}
+
           <div className="flex items-center gap-2">
-            <Button size="sm" className="h-7 text-xs" onClick={handleAdd} disabled={busy === 'add' || (!!preset && needsApiKey(preset) && !apiKey.trim())}>
+            <Button size="sm" className="h-7 text-xs" onClick={handleAdd} disabled={busy === 'add'}>
               {busy === 'add' ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : null}
               Add &amp; scan
             </Button>

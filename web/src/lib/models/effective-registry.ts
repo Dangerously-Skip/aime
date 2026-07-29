@@ -214,6 +214,9 @@ export function execConfigFor(
     providerId: provider.id,
     transport: transportForModel(provider.presetId, model.driverModel, preset?.transport),
     baseUrl: provider.baseUrl ?? preset?.defaultBaseUrl,
+    // Bedrock/Vertex are environment-driven; without this the server cannot tell
+    // them from an ordinary key+URL provider and they resolve to nothing.
+    agentMode: preset?.agentMode,
   };
 }
 

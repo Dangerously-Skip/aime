@@ -99,6 +99,8 @@ describe('request body — model routing', () => {
       // the openai-compat shim; the Anthropic-format endpoint rejects it.
       transport: 'openai-compat',
       baseUrl: 'https://openrouter.ai/api/v1',
+      // P1.6: distinguishes an env-driven provider from a key + base URL one.
+      agentMode: 'api-key',
     });
   });
 

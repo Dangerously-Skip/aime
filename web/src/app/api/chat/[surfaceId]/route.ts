@@ -728,6 +728,16 @@ export async function POST(
         requestApiKey: apiKey,
         // openai-compat providers route through the shim on this same server.
         shimOrigin: new URL(req.url).origin,
+        // Every stored field, not just the key: Bedrock and Vertex are driven by
+        // environment built from region/project/credentials.
+        loadFields: async (id) => {
+          try {
+            const { getCredentialStore } = await import('@/lib/models/credentials');
+            return await getCredentialStore().get(id);
+          } catch {
+            return undefined;
+          }
+        },
         loadKey: async (id) => {
           try {
             const { getCredentialStore } = await import('@/lib/models/credentials');
@@ -913,6 +923,7 @@ export async function POST(
           webSearch: webSearch || undefined,
           apiKey: exec.apiKey,
           baseUrl: exec.baseUrl,
+          providerEnv: exec.env,
           cwd: (cwd as string) || undefined,
           history: history || undefined,
           sessionControls: sessionControls || undefined,
