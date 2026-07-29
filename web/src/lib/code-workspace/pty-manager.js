@@ -53,6 +53,17 @@ function ensureSpawnHelperExecutable() {
   }
 }
 
+/**
+ * node-pty is an OPTIONAL dependency, and this is the reason the lazy require
+ * and the catch below are load-bearing rather than defensive habit.
+ *
+ * It is a native module: with no prebuild for the platform/node combination it
+ * falls back to node-gyp, which needs a C toolchain. A machine without one — a
+ * bare CI runner, or anyone installing from source — got a hard `npm ci`
+ * failure over a feature they may never open. Optional means the install
+ * succeeds and only the terminal is missing, which is what this function
+ * already reported.
+ */
 function loadPty() {
   if (nodePty || loadError) return nodePty;
   try {
@@ -61,7 +72,11 @@ function loadPty() {
     nodePty = require('node-pty');
   } catch (err) {
     loadError = err;
-    console.error('[pty] failed to load node-pty:', err?.message);
+    console.error(
+      '[pty] node-pty unavailable, terminal disabled:',
+      err?.message,
+      '— install a C toolchain (build-essential/Xcode CLI tools) and reinstall to enable it',
+    );
   }
   return nodePty;
 }
