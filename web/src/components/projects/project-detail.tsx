@@ -6,6 +6,7 @@ import { useConversationStore, type Conversation } from "@/stores/conversation-s
 import { useChatStore } from "@/stores/chat-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream } from "@/hooks/use-sse-stream";
+import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { buildProjectContext } from "@/lib/project/context-builder";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
@@ -201,6 +202,12 @@ export function ProjectDetail({
     setIsStreaming,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
+      // Chunks whose handling is the same on every surface — cron jobs,
+      // standing orders, widgets, memory. Handled in ONE place
+      // (lib/sse/agnostic-chunks) because each surface having its own case
+      // meant three of them were silently dropped on most surfaces.
+      if (handleAgnosticChunk(event, { chatId: launchedConvIdRef.current ?? "", surface: 'Project' })) return;
+
       const cid = launchedConvIdRef.current;
       if (!cid) return;
       switch (event.type) {
@@ -223,17 +230,6 @@ export function ProjectDetail({
           updateToolResult(cid, id, result, event.is_error as boolean | undefined);
           break;
         }
-        case "widget_create":
-          // Same gap cowork and code had: WidgetCreate is mounted on the
-          // in-process `aime` server so it is reachable from every stream, and
-          // this switch has no `default:` — so it vanished while the tool had
-          // already told the user it was pinned.
-          try {
-            handleWidgetCreateEvent(event as Record<string, unknown>);
-          } catch (e) {
-            console.error('[Project] WidgetCreate parse error:', e);
-          }
-          break;
         case "error":
           appendToLastAssistant(cid, `\n\n**Error:** ${(event.message as string) || "An error occurred"}`);
           break;

@@ -17,6 +17,7 @@ import { useCodeStore, type PermissionMode } from "@/stores/code-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
@@ -782,6 +783,12 @@ export function CodeSurface() {
     setIsStreaming,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
+      // Chunks whose handling is the same on every surface — cron jobs,
+      // standing orders, widgets, memory. Handled in ONE place
+      // (lib/sse/agnostic-chunks) because each surface having its own case
+      // meant three of them were silently dropped on most surfaces.
+      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Code' })) return;
+
       switch (event.type) {
         case "turn_start":
           // A new assistant turn means previous turn's tools have all executed.
@@ -934,21 +941,6 @@ export function CodeSurface() {
           });
           if (!document.hasFocus()) {
             showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
-          }
-          break;
-        case "memory_extract":
-          handleMemoryExtractEvent(
-            event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
-            chatId,
-          );
-          break;
-        case "widget_create":
-          // Same gap as cowork had: the tool is mounted everywhere, the handler
-          // was not. See the note in cowork-surface.tsx.
-          try {
-            handleWidgetCreateEvent(event as Record<string, unknown>);
-          } catch (e) {
-            console.error('[Code] WidgetCreate parse error:', e);
           }
           break;
         case "error":

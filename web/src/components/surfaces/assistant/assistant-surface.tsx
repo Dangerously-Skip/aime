@@ -58,6 +58,7 @@ import { exportOrdersToJson } from "@/lib/standing-order-yaml";
 import { Cockpit } from "./cockpit";
 import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
+import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -559,37 +560,14 @@ export function AssistantSurface() {
               useAssistantStore.setState((s) => ({
                 cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: fullText } : c),
               }));
-            } else if (event.type === 'widget_create' && event.input) {
-              handleWidgetCreateEvent(event as Record<string, unknown>);
-            } else if (event.type === 'standing_order_create' && event.input) {
-              const input = event.input as {
-                instruction: string; trigger_type: string; expression?: string;
-                condition?: string; completionCondition?: string; agentName?: string;
-                notifyVia?: string; maxExecutions?: number; expiresInHours?: number;
-              };
-              useAssistantStore.getState().addOrder({
-                instruction: input.instruction,
-                agentName: input.agentName,
-                trigger: {
-                  type: (input.trigger_type as 'cron' | 'interval') || 'interval',
-                  expression: input.expression,
-                },
-                condition: input.condition,
-                completionCondition: input.completionCondition,
-                notifyVia: input.notifyVia || 'assistant',
-                maxExecutions: input.maxExecutions,
-                expiresAt: input.expiresInHours ? Date.now() + input.expiresInHours * 3600000 : undefined,
-              });
-            } else if (event.type === 'cron_create' && event.input) {
-              // Also handle cron_create events — migrate to standing orders
-              const input = event.input as { expression: string; prompt: string };
-              if (input.expression && input.prompt) {
-                useAssistantStore.getState().addOrder({
-                  instruction: input.prompt,
-                  trigger: { type: 'cron', expression: input.expression },
-                  notifyVia: 'assistant',
-                });
-              }
+            } else if (handleAgnosticChunk(event as Record<string, unknown>, {
+              chatId: '',
+              surface: 'Assistant',
+              // This surface owns the order feed, so a created order shows there
+              // rather than as a toast. The only genuinely surface-specific part.
+              notifyVia: 'assistant',
+            })) {
+              // handled centrally — see lib/sse/agnostic-chunks
             }
           } catch { /* ignore parse errors */ }
         }

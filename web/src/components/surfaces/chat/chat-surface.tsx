@@ -8,6 +8,7 @@ import { useChatStore } from "@/stores/chat-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -248,6 +249,12 @@ export function ChatSurface() {
     setIsStreaming,
     onUsage: runRecorder.onUsage,
     onChunk(event) {
+      // Chunks whose handling is the same on every surface — cron jobs,
+      // standing orders, widgets, memory. Handled in ONE place
+      // (lib/sse/agnostic-chunks) because each surface having its own case
+      // meant three of them were silently dropped on most surfaces.
+      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Chat' })) return;
+
       const cid = getChatId();
       switch (event.type) {
         case "turn_start":
@@ -354,32 +361,6 @@ export function ChatSurface() {
         case "canvas":
           onCanvasEvent(event as { doc?: unknown });
           break;
-        case "cron_create": {
-          try {
-            const input = event.input as Record<string, unknown>;
-            const expression = (input.cron || input.expression) as string;
-            const prompt = (input.prompt || input.message || input.task) as string;
-            if (expression && prompt) {
-              useAssistantStore.getState().addOrder({
-                instruction: prompt,
-                trigger: { type: 'cron', expression },
-                notifyVia: 'toast',
-              });
-            }
-          } catch (e) {
-            console.error('[Chat] CronCreate parse error:', e);
-          }
-          break;
-        }
-        case "widget_create": {
-          // The chat → Cockpit pin loop (P6/K5): the model called WidgetCreate.
-          try {
-            handleWidgetCreateEvent(event as Record<string, unknown>);
-          } catch (e) {
-            console.error('[Chat] WidgetCreate parse error:', e);
-          }
-          break;
-        }
         case "prompt_suggestion": {
           const suggestion = event.suggestion as string;
           if (suggestion) {
@@ -403,12 +384,6 @@ export function ChatSurface() {
           }
           break;
         }
-        case "memory_extract":
-          handleMemoryExtractEvent(
-            event.memories as Array<{ content: string; category: string; tags: string[]; confidence: number }>,
-            getChatId(),
-          );
-          break;
         case "error":
           appendToLastAssistant(
             cid,
