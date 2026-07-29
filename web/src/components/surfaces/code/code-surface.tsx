@@ -611,7 +611,7 @@ export function CodeSurface() {
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   // Built-in (Claude) reachability, which is the user's key OR the server's env
   // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
-  const { hasAnthropicKey, hasBedrock } = useBuiltinAccess();
+  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
@@ -1100,6 +1100,7 @@ export function CodeSurface() {
         tierModels,
         hasAnthropicKey,
         hasBedrock,
+        known: builtinAccessKnown,
       });
 
       // Open the run record before the turn starts so an immediate failure is
@@ -1132,6 +1133,7 @@ export function CodeSurface() {
       anthropicApiKey,
       hasAnthropicKey,
       hasBedrock,
+      builtinAccessKnown,
       folder,
       attachments,
       addMessage,

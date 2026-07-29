@@ -740,7 +740,7 @@ export function CoworkSurface() {
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   // Built-in (Claude) reachability, which is the user's key OR the server's env
   // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
-  const { hasAnthropicKey, hasBedrock } = useBuiltinAccess();
+  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
   const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
   const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
@@ -769,8 +769,9 @@ export function CoworkSurface() {
         tierModels,
         hasAnthropicKey,
         hasBedrock,
+        known: builtinAccessKnown,
       }),
-    [modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock]
+    [modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown]
   );
 
   const handleFolderChange = useCallback(

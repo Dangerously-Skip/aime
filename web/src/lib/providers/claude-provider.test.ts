@@ -18,6 +18,19 @@ vi.mock('os', async (orig) => {
   return { ...actual, default: actual, homedir: () => homeRef.value ?? actual.homedir() };
 });
 
+// The provider now loads the user's toggles when the caller passes none. These
+// tests are about behaviour GIVEN a setting, so the stored answer is pinned to
+// all-off and each test opts in to what it is exercising — otherwise every case
+// would depend on whatever is in this machine's ~/.aime/security.json.
+vi.mock('../security/settings', async (orig) => {
+  const actual = await orig<typeof import('../security/settings')>();
+  return { ...actual, loadSecuritySettings: async () => ({
+    blockDangerousCommands: false,
+    restrictToProjectFolder: false,
+    disableBashTool: false,
+  }) };
+});
+
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (args: unknown) => queryMock(args),
   tool: (name: string, description: string, schema: unknown, handler: unknown) =>

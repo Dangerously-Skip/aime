@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect } from 'react'
 import { useSettingsStore, type SettingsStore } from '@/stores/settings-store'
 
 export type SecurityKey =
@@ -78,8 +79,37 @@ export const SECURITY_TOGGLES: SecurityToggle[] = [
   },
 ]
 
+/**
+ * Mirror the toggles to the server, which is where they are enforced from.
+ *
+ * The renderer's store is still the UI's source of truth, but `canUseTool` runs
+ * server-side and used to be told the values by whichever surface remembered to
+ * send them on the chat request — so most paths were ungoverned. The server now
+ * owns them; this keeps its copy in step.
+ */
+async function persistToServer(next: Record<string, boolean>): Promise<void> {
+  await fetch('/api/settings/security', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(next),
+  }).catch(() => {})
+}
+
 export function SecuritySection() {
   const store = useSettingsStore()
+
+  // Push the current values once on mount as well as on change: a profile that
+  // predates the server-side file would otherwise stay unsynced until the user
+  // happened to toggle something.
+  useEffect(() => {
+    void persistToServer({
+      blockDangerousCommands: store.blockDangerousCommands,
+      blockNetworkCommands: store.blockNetworkCommands,
+      restrictToProjectFolder: store.restrictToProjectFolder,
+      disableBashTool: store.disableBashTool,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one sync per mount; per-change syncing happens in the onChange below
+  }, [])
 
   return (
     <div className="space-y-6">
@@ -103,7 +133,16 @@ export function SecuritySection() {
             <input
               type="checkbox"
               checked={store[toggle.key]}
-              onChange={(e) => store[toggle.setter](e.target.checked)}
+              onChange={(e) => {
+                store[toggle.setter](e.target.checked)
+                void persistToServer({
+                  blockDangerousCommands: store.blockDangerousCommands,
+                  blockNetworkCommands: store.blockNetworkCommands,
+                  restrictToProjectFolder: store.restrictToProjectFolder,
+                  disableBashTool: store.disableBashTool,
+                  [toggle.key]: e.target.checked,
+                })
+              }}
               className="mt-0.5"
             />
             <div className="flex-1">

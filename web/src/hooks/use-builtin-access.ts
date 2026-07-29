@@ -42,11 +42,20 @@ export const useServerCredentialsStore = create<ServerCredentialsState>((set) =>
   server: null,
   load: () => {
     inflight ??= fetch('/api/models')
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        // A non-OK response is a FAILURE, not an answer. Treating it as one
+        // cached `{anthropic:false,bedrock:false}` for the whole session, so a
+        // single transient 500 during boot permanently hid the built-in models
+        // from a user who had ANTHROPIC_API_KEY in .env — and, because the
+        // `.catch` was the only place that cleared `inflight`, nothing retried.
+        if (!r.ok) throw new Error(`/api/models ${r.status}`);
+        return r.json();
+      })
       .then((d) => {
         set({ server: { anthropic: !!d?.anthropic, bedrock: !!d?.bedrock } });
       })
       .catch(() => {
+        // Leave `server` null (unknown) and allow a later mount to retry.
         inflight = null;
       });
     return inflight;
@@ -60,6 +69,17 @@ export function resetServerCredentials(): void {
 }
 
 export interface BuiltinAccess {
+  /**
+   * Has the server answered yet?
+   *
+   * Load-bearing, not informational. `hasBuiltins` was optimistic while
+   * unknown but `hasAnthropicKey` was pessimistic, so during the round trip
+   * (and for ever, if it failed) the picker OFFERED 'sonnet' while
+   * `resolveSendRoute` quietly routed the turn — and the billing — to a BYOK
+   * provider. That is precisely the lie `displayValue` exists to prevent, so
+   * callers must not reroute on a `false` they cannot yet trust.
+   */
+  known: boolean;
   /** Anthropic reachable — the user's own key, or one in the server env. */
   hasAnthropicKey: boolean;
   hasBedrock: boolean;
@@ -89,12 +109,14 @@ export function useBuiltinAccess(): BuiltinAccess {
   // effect keyed on an unstable value is exactly how the renderer once ended up
   // at 100% CPU (see the note in model-selector.tsx).
   return useMemo(() => {
+    const known = server !== null;
     const hasAnthropicKey = !!userKey || !!server?.anthropic;
     const hasBedrock = !!server?.bedrock;
     return {
+      known,
       hasAnthropicKey,
       hasBedrock,
-      hasBuiltins: server === null || hasAnthropicKey || hasBedrock,
+      hasBuiltins: !known || hasAnthropicKey || hasBedrock,
     };
   }, [userKey, server]);
 }

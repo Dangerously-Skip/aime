@@ -114,34 +114,57 @@ describe('ProviderManager', () => {
  * — the delete is a user click, because a false positive here destroys secrets.
  */
 describe('orphanCredentialIds', () => {
-  const providers = [{ id: 'uuid-openrouter' }, { id: 'uuid-local' }];
+  // Real uuids: the classifier keys off the shape, because that is what both
+  // provider-creation sites mint.
+  const P1 = '11111111-1111-4111-8111-111111111111'
+  const P2 = '22222222-2222-4222-8222-222222222222'
+  const STRAY = '33333333-3333-4333-8333-333333333333'
+  const providers = [{ id: P1 }, { id: P2 }]
 
-  it('finds records no provider claims', () => {
-    expect(orphanCredentialIds(['uuid-openrouter', 'stray-1', 'stray-2'], providers)).toEqual([
-      'stray-1',
-      'stray-2',
-    ]);
-  });
+  it('finds provider records no provider claims', () => {
+    expect(orphanCredentialIds([P1, STRAY], providers)).toEqual([STRAY])
+  })
+
+  /**
+   * The bug that shipped. Connector OAuth tokens live in the SAME encrypted
+   * store under `mcp:<serverKey>` (lib/mcp/secret-store.ts writes through
+   * getCredentialStore), so the original `!claimed.has(id)` reported every
+   * connected account as junk and the delete button wiped them.
+   */
+  it('NEVER reports connector secrets — they share the store', () => {
+    const stored = [P1, 'mcp:aime-mcp-github', 'mcp:aime-mcp-slack', 'mcp:anything']
+    expect(orphanCredentialIds(stored, providers)).toEqual([])
+  })
 
   it("never reports 'anthropic' — the BYOK mirror has no provider row by design", () => {
-    expect(orphanCredentialIds(['anthropic'], [])).toEqual([]);
-    expect(orphanCredentialIds(['anthropic'], providers)).toEqual([]);
-  });
+    expect(orphanCredentialIds(['anthropic', P1], providers)).toEqual([])
+  })
+
+  it('ignores ids from a namespace it does not recognise, rather than guessing', () => {
+    // Safe direction: a writer added later is unclassified, not deleted.
+    expect(orphanCredentialIds(['future:thing', 'legacy-key', ''], providers)).toEqual([])
+  })
 
   it('reports nothing when every record is claimed', () => {
-    expect(orphanCredentialIds(['uuid-openrouter', 'uuid-local'], providers)).toEqual([]);
-    expect(orphanCredentialIds([], providers)).toEqual([]);
-  });
+    expect(orphanCredentialIds([P1, P2], providers)).toEqual([])
+    expect(orphanCredentialIds([], providers)).toEqual([])
+  })
 
-  // The dangerous case, spelled out: an un-hydrated provider list makes every
-  // key look orphaned. That is why the caller chains off rehydrate() rather than
-  // scanning alongside it — the ordering is load-bearing, not incidental.
-  it('would report everything against an empty provider list', () => {
-    expect(orphanCredentialIds(['uuid-openrouter', 'uuid-local'], [])).toHaveLength(2);
-  });
-});
+  /**
+   * An empty provider list is ambiguous: genuinely none, or localStorage cleared
+   * / read from another origin — which the dev-port bug did for real. Reporting
+   * everything in that state is how working keys get deleted.
+   */
+  it('reports NOTHING against an empty provider list, rather than everything', () => {
+    expect(orphanCredentialIds([P1, P2, STRAY], [])).toEqual([])
+  })
+})
 
 describe('ProviderManager — orphaned credentials', () => {
+  const P1 = '11111111-1111-4111-8111-111111111111';
+  const STRAY_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const STRAY_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
   /** Stored ids come back from the GET; nothing else is called on mount. */
   function mockStored(ids: string[]) {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
@@ -151,11 +174,17 @@ describe('ProviderManager — orphaned credentials', () => {
     });
   }
 
-  it('offers to delete keys no provider claims', async () => {
+  function withProvider() {
     useProviderStore.setState({
-      providers: [{ id: 'p1', presetId: 'openrouter', label: 'OpenRouter', enabled: true, createdAt: 0, models: [] }],
+      providers: [{ id: P1, presetId: 'openrouter', label: 'OpenRouter', enabled: true, createdAt: 0, models: [] }],
     });
-    mockStored(['p1', 'anthropic', 'stray-a', 'stray-b']);
+  }
+
+  it('offers to delete keys no provider claims, after confirmation', async () => {
+    withProvider();
+    mockStored([P1, 'anthropic', STRAY_A, STRAY_B]);
+    const confirmSpy = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('confirm', confirmSpy);
 
     render(<ProviderManager />);
     await waitFor(() => expect(screen.getByText(/2 stored keys belong to providers/i)).toBeTruthy());
@@ -163,17 +192,54 @@ describe('ProviderManager — orphaned credentials', () => {
     fireEvent.click(screen.getByText(/Delete them/i));
     await waitFor(() => expect(screen.queryByText(/stored keys belong/i)).toBeNull());
 
+    // The user is shown exactly what will go before it goes.
+    const prompt = String(confirmSpy.mock.calls[0][0]);
+    expect(prompt).toContain(STRAY_A);
+    expect(prompt).toContain(STRAY_B);
+    expect(prompt).toMatch(/cannot be undone/i);
+
     const deleted = fetchMock.mock.calls
       .filter((c) => c[1]?.method === 'DELETE')
       .map((c) => JSON.parse(c[1].body as string).providerId);
-    expect(deleted.sort()).toEqual(['stray-a', 'stray-b']);
+    expect(deleted.sort()).toEqual([STRAY_A, STRAY_B]);
+  });
+
+  it('deletes nothing when the confirmation is declined', async () => {
+    withProvider();
+    mockStored([P1, STRAY_A]);
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
+
+    render(<ProviderManager />);
+    await waitFor(() => expect(screen.getByText(/1 stored key belongs?|1 stored key/i)).toBeTruthy());
+    fireEvent.click(screen.getByText(/Delete it/i));
+
+    await waitFor(() => expect(screen.getByText(/stored key/i)).toBeTruthy());
+    expect(fetchMock.mock.calls.filter((c) => c[1]?.method === 'DELETE')).toHaveLength(0);
+  });
+
+  /** The bug that shipped: connector tokens share this store. */
+  it('never offers to delete connector logins', async () => {
+    withProvider();
+    mockStored([P1, 'mcp:aime-mcp-github', 'mcp:aime-mcp-slack']);
+
+    render(<ProviderManager />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(screen.queryByText(/stored key/i)).toBeNull();
   });
 
   it('stays quiet when every stored key is accounted for', async () => {
-    useProviderStore.setState({
-      providers: [{ id: 'p1', presetId: 'openrouter', label: 'OpenRouter', enabled: true, createdAt: 0, models: [] }],
-    });
-    mockStored(['p1', 'anthropic']);
+    withProvider();
+    mockStored([P1, 'anthropic']);
+
+    render(<ProviderManager />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(screen.queryByText(/stored key/i)).toBeNull();
+  });
+
+  /** Un-hydrated provider store: ambiguous, so nothing is offered. */
+  it('offers nothing when the provider list is empty', async () => {
+    useProviderStore.setState({ providers: [] });
+    mockStored([STRAY_A, STRAY_B]);
 
     render(<ProviderManager />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());

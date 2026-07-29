@@ -475,14 +475,10 @@ export async function POST(
 
       // ── Security settings ──────────────────────────────────────────────
       // Filter Bash from allowedTools if disabled
-      if (securitySettings?.disableBashTool) {
-        // The whole shell family, not just `Bash`: `BashOutput` and `KillShell`
-        // operate on background shells, so leaving them would hand back most of
-        // what the setting is meant to take away.
-        for (const t of ['Bash', 'BashOutput', 'KillShell']) deniedTools.add(t);
-        withhold((t) => t !== 'Bash');
-        console.log('[SECURITY] Shell tools withheld from this run');
-      }
+      // `disableBashTool` is applied by the provider from the stored setting (it
+      // withholds the whole shell family), so nothing is done here. The prompt
+      // rules below are still assembled from the request body, because they are
+      // guidance rather than enforcement and cost nothing if a caller omits them.
 
       // Build security rules block for system prompt
       const securityRules: string[] = [];
@@ -883,15 +879,10 @@ export async function POST(
           surfaceId,
           allowedTools: surfaceConfig.allowedTools,
           deniedTools: [...deniedTools],
-          // The two toggles the provider ENFORCES. The other two stay prompt-only
-          // and are appended to the system prompt above; see the security section
-          // in Settings, whose copy says which is which.
-          securitySettings: securitySettings
-            ? {
-                blockDangerousCommands: !!securitySettings.blockDangerousCommands,
-                restrictToProjectFolder: !!securitySettings.restrictToProjectFolder,
-              }
-            : undefined,
+          // Deliberately NOT forwarded from the request body: the provider loads
+          // the user's toggles itself, so every caller is covered rather than
+          // just the two surfaces that remembered to send them — and so omitting
+          // the field cannot switch a protection off. See lib/security/settings.
           maxTurns: surfaceConfig.maxTurns,
           systemPrompt,
           attachments: attachments || undefined,
