@@ -5,7 +5,9 @@ import { useProviderStore } from '@/stores/provider-store'
 import { PROVIDER_PRESETS, getPreset, type CredentialField } from '@/lib/models/providers'
 import { planProviderSetup, executeProviderSetup } from '@/lib/models/provider-setup'
 import { ProviderFields, providerHint } from '@/components/shared/provider-fields'
-import { isProviderCredentialId } from '@/lib/models/credentials'
+// From credential-ids, NOT credentials: this is a client component and that
+// module imports `fs`, which cannot be bundled for the browser.
+import { isProviderCredentialId } from '@/lib/models/credential-ids'
 import type { ScannedModel } from '@/lib/models/providers'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'

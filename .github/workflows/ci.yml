@@ -47,6 +47,17 @@ jobs:
         working-directory: web
         run: npm test
 
+      # The gate that was missing. `tsc --noEmit` and the unit suite both pass
+      # for a Next.js client/server boundary violation — a client component
+      # importing a module that reaches `fs` fails only here. That shipped once:
+      # provider-manager.tsx imported lib/models/credentials, which imports
+      # app-paths, which imports fs, and the dev server died with
+      # "Module not found: Can't resolve 'fs'" while typecheck and 2777 tests
+      # were green.
+      - name: Build
+        working-directory: web
+        run: npm run build
+
   e2e:
     runs-on: [self-hosted, linux]
     steps:
