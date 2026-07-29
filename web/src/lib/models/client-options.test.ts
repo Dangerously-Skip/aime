@@ -80,6 +80,9 @@ describe('buildModelOptions', () => {
       // openai-compat shim, not the Anthropic-format endpoint.
       transport: 'openai-compat',
       baseUrl: 'https://openrouter.ai/api/v1',
+      // How the SDK reaches it — Bedrock/Vertex are env-driven, so the server
+      // has to be told which kind this is (P1.6).
+      agentMode: 'api-key',
     });
   });
 
@@ -111,6 +114,7 @@ describe('buildModelOptions', () => {
       providerId: 'local-1',
       transport: 'openai-compat',
       baseUrl: 'http://127.0.0.1:11434/v1',
+      agentMode: 'api-key',
     });
   });
 });

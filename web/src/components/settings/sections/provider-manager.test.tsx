@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import { ProviderManager, orphanCredentialIds } from './provider-manager';
+import {
+  ProviderManager,
+  orphanCredentialIds,
+  collectFieldValues,
+  missingRequiredFields,
+} from './provider-manager';
+import { getPreset } from '@/lib/models/providers';
 import { useProviderStore } from '@/stores/provider-store';
 
 const fetchMock = vi.fn();
@@ -52,7 +58,7 @@ describe('ProviderManager', () => {
     fireEvent.click(screen.getByText(/Add provider/i));
 
     // openrouter (default) needs a key → enter it to enable the button
-    const keyInput = screen.getByPlaceholderText('sk-...');
+    const keyInput = screen.getByPlaceholderText('sk-…');
     fireEvent.change(keyInput, { target: { value: 'sk-or-test' } });
     fireEvent.click(screen.getByText(/Add & scan/i));
 
@@ -84,7 +90,7 @@ describe('ProviderManager', () => {
 
     render(<ProviderManager />);
     fireEvent.click(screen.getByText(/Add provider/i));
-    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'sk-bad' } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-bad' } });
     fireEvent.click(screen.getByText(/Add & scan/i));
 
     await waitFor(() => expect(screen.getByText('bad key')).toBeTruthy());
@@ -244,5 +250,96 @@ describe('ProviderManager — orphaned credentials', () => {
     render(<ProviderManager />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(screen.queryByText(/stored key/i)).toBeNull();
+  });
+});
+
+/**
+ * P1.6: the add-provider form is generated from `preset.credentialFields`.
+ *
+ * It used to render a single hardcoded API-key input, so Bedrock, Vertex and
+ * Azure — which declare `awsRegion`, `vertexProject`, `azureDeployment` and the
+ * rest — had an input for none of the fields they need and could not be
+ * configured at all. (The backend ignored those fields too; see
+ * execution.test.ts for the half that makes them real.)
+ */
+describe('the add-provider form is driven by the preset', () => {
+  function openForm() {
+    fetchMock.mockImplementation(() => jsonOk({ models: [] }));
+    render(<ProviderManager />);
+    fireEvent.click(screen.getByText(/Add provider/i));
+  }
+
+  it('offers an API key for a key-based provider', () => {
+    openForm();
+    expect(screen.getByPlaceholderText('sk-…')).toBeTruthy();
+  });
+
+  it.each([
+    ['bedrock', ['AWS region', 'AWS access key ID', 'AWS secret access key']],
+    ['vertex', ['GCP project id', 'Vertex region']],
+    ['azure-openai', ['API key', 'Resource name', 'Deployment name', 'API version']],
+    ['local', ['Base URL']],
+    ['custom', ['Base URL', 'API key']],
+  ])('declares every field %s needs', (presetId, labels) => {
+    // Asserted through the preset + spec table rather than by driving the
+    // portalled Select, which cannot be opened in jsdom. The component maps
+    // straight over `credentialFields`, so this is the set it renders.
+    const preset = getPreset(presetId)!;
+    const rendered = preset.credentialFields.map(
+      (f) => (
+        {
+          apiKey: 'API key',
+          baseUrl: 'Base URL',
+          awsRegion: 'AWS region',
+          awsAccessKeyId: 'AWS access key ID',
+          awsSecretAccessKey: 'AWS secret access key',
+          vertexProject: 'GCP project id',
+          vertexRegion: 'Vertex region',
+          azureResource: 'Resource name',
+          azureDeployment: 'Deployment name',
+          azureApiVersion: 'API version',
+        } as const
+      )[f],
+    );
+    for (const l of labels) expect(rendered, `${presetId} is missing ${l}`).toContain(l);
+  });
+});
+
+describe('collectFieldValues', () => {
+  const bedrock = getPreset('bedrock')!;
+
+  it('keeps only the fields the preset declares', () => {
+    expect(
+      collectFieldValues(bedrock, { awsRegion: 'us-east-1', apiKey: 'sk-leaked' }),
+    ).toEqual({ awsRegion: 'us-east-1' });
+  });
+
+  it('trims, and drops blanks entirely', () => {
+    expect(collectFieldValues(bedrock, { awsRegion: '  us-east-1  ', awsAccessKeyId: '   ' }))
+      .toEqual({ awsRegion: 'us-east-1' });
+  });
+});
+
+describe('missingRequiredFields', () => {
+  it('requires the key for a key-based provider', () => {
+    expect(missingRequiredFields(getPreset('openrouter')!, {})).toEqual(['apiKey']);
+    expect(missingRequiredFields(getPreset('openrouter')!, { apiKey: 'sk-x' })).toEqual([]);
+  });
+
+  /**
+   * Both fall back to the machine's ambient credentials, which is the most
+   * common way they are actually used — demanding the fields would make the
+   * guided setup refuse the normal case.
+   */
+  it.each(['bedrock', 'vertex'])('requires nothing for %s, which can use ambient creds', (id) => {
+    expect(missingRequiredFields(getPreset(id)!, {})).toEqual([]);
+  });
+
+  it('lets Azure default its API version but not its resource or deployment', () => {
+    const azure = getPreset('azure-openai')!;
+    expect(missingRequiredFields(azure, {})).toEqual(['apiKey', 'azureResource', 'azureDeployment']);
+    expect(
+      missingRequiredFields(azure, { apiKey: 'k', azureResource: 'r', azureDeployment: 'd' }),
+    ).toEqual([]);
   });
 });

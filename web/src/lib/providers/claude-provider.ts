@@ -136,6 +136,7 @@ export class ClaudeProvider extends BaseProvider {
       attachments,
       apiKey,
       baseUrl,
+      providerEnv,
       cwd,
       history,
       sessionControls,
@@ -1406,6 +1407,17 @@ export class ClaudeProvider extends BaseProvider {
         ANTHROPIC_BASE_URL: baseUrl,
       };
       console.log('[Claude] Custom Anthropic-compatible base URL configured');
+    }
+
+    // A configured Bedrock/Vertex provider supplies its own environment, built
+    // server-side from the stored region/project/credentials. Applied last so an
+    // explicitly configured provider beats whatever the host env happens to say
+    // — otherwise picking one in the UI would silently keep using the ambient
+    // one, which is the same "the setting did nothing" shape as the security
+    // toggles.
+    if (providerEnv) {
+      queryOptions.env = { ...safeEnv, ...(queryOptions.env as Record<string, string> || {}), ...providerEnv };
+      console.log('[Claude] Provider-supplied environment applied:', Object.keys(providerEnv).join(', '));
     }
 
     // Check for existing session - matches server.js session resumption logic

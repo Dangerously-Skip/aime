@@ -101,6 +101,12 @@ export interface QueryParams {
    * the default Anthropic API. Ignored by non-Claude providers.
    */
   baseUrl?: string;
+  /**
+   * Extra environment for the SDK subprocess, from a configured Bedrock/Vertex
+   * provider (see lib/models/execution → resolveExecution). Applied over the
+   * ambient env so choosing a provider in the UI actually takes effect.
+   */
+  providerEnv?: Record<string, string>;
   cwd?: string;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   /** Session controls from slash commands (thinking, effort, model override). */

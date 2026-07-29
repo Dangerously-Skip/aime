@@ -230,3 +230,89 @@ export function presetsForCapability(capability: Capability): ProviderPreset[] {
 export function needsApiKey(preset: ProviderPreset): boolean {
   return preset.credentialFields.includes('apiKey');
 }
+
+/**
+ * What to render, and what to say, for each configurable field.
+ *
+ * Declared once here rather than in the form, because the form is generated
+ * FROM `credentialFields` — the previous version hardcoded an API-key input, so
+ * Bedrock, Vertex and Azure had inputs for none of the fields they declare and
+ * simply could not be configured through the UI at all.
+ *
+ * `secret: true` decides masking, and nothing more: every field is stored the
+ * same way, in the server-side credential store keyed by provider id. Region and
+ * project id are not secrets, but they are read back on the server exactly like
+ * one, so splitting the storage would buy nothing and add a second path.
+ */
+export interface CredentialFieldSpec {
+  label: string;
+  placeholder?: string;
+  /** One line under the input: what it is, or where to get it. */
+  help?: string;
+  secret?: boolean;
+}
+
+export const CREDENTIAL_FIELD_SPECS: Record<CredentialField, CredentialFieldSpec> = {
+  apiKey: {
+    label: 'API key',
+    placeholder: 'sk-…',
+    help: 'Stored in your OS keychain, never in the browser.',
+    secret: true,
+  },
+  baseUrl: {
+    label: 'Base URL',
+    placeholder: 'http://localhost:11434/v1',
+    help: 'The OpenAI-compatible endpoint to call.',
+  },
+  awsRegion: {
+    label: 'AWS region',
+    placeholder: 'us-east-1',
+    help: 'The region your Bedrock model access is enabled in.',
+  },
+  awsAccessKeyId: {
+    label: 'AWS access key ID',
+    placeholder: 'AKIA…',
+    secret: true,
+  },
+  awsSecretAccessKey: {
+    label: 'AWS secret access key',
+    placeholder: '••••••••',
+    help: 'Leave every AWS field blank to use the machine\'s ambient AWS credentials instead.',
+    secret: true,
+  },
+  vertexProject: {
+    label: 'GCP project id',
+    placeholder: 'my-project-123',
+    help: 'Vertex uses your ambient gcloud credentials for auth.',
+  },
+  vertexRegion: {
+    label: 'Vertex region',
+    placeholder: 'us-east5',
+    help: 'The region the Claude models are enabled in.',
+  },
+  azureResource: {
+    label: 'Resource name',
+    placeholder: 'my-resource',
+    help: 'The name in https://<resource>.openai.azure.com.',
+  },
+  azureDeployment: {
+    label: 'Deployment name',
+    placeholder: 'gpt-4o',
+    help: 'Azure routes by deployment, not by model id.',
+  },
+  azureApiVersion: {
+    label: 'API version',
+    placeholder: '2024-10-21',
+  },
+};
+
+/**
+ * Azure exposes one deployment per endpoint, so its base URL is derived from
+ * three fields rather than entered. Returns undefined when they are incomplete.
+ */
+export function azureBaseUrl(values: Partial<Record<CredentialField, string>>): string | undefined {
+  const { azureResource, azureDeployment, azureApiVersion } = values;
+  if (!azureResource || !azureDeployment) return undefined;
+  const version = azureApiVersion || '2024-10-21';
+  return `https://${azureResource}.openai.azure.com/openai/deployments/${azureDeployment}?api-version=${version}`;
+}

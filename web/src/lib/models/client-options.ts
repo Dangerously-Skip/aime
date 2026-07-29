@@ -154,6 +154,7 @@ export function buildModelOptions(
           providerId: p.id,
           transport: transportForModel(p.presetId, m.id, transport),
           baseUrl,
+          agentMode: preset?.agentMode,
         },
       });
     }

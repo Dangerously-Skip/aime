@@ -405,6 +405,40 @@ describe('stream translation', () => {
  * keeps the tool out of the model's context (it never asks), while the
  * `canUseTool` check is the one that runs whatever `permissionMode` says.
  */
+/**
+ * P1.6: a configured Bedrock/Vertex provider drives the SDK through env.
+ *
+ * The env is built server-side by `resolveExecution` from the stored region /
+ * project / credentials and arrives as `providerEnv`. Asserted here because the
+ * whole point of the pillar is that choosing a provider in the UI changes where
+ * the turn goes — an env that was computed and then dropped would look exactly
+ * like the setting working.
+ */
+describe('providerEnv', () => {
+  it('reaches the SDK options', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      providerEnv: { CLAUDE_CODE_USE_BEDROCK: '1', AWS_REGION: 'us-east-1' },
+    });
+    expect(options.env).toMatchObject({ CLAUDE_CODE_USE_BEDROCK: '1', AWS_REGION: 'us-east-1' });
+  });
+
+  it('wins over the ambient environment', async () => {
+    // Otherwise picking a Bedrock provider in the UI would silently keep using
+    // whatever the host env said — the "setting did nothing" shape again.
+    vi.stubEnv('AWS_REGION', 'ap-southeast-2');
+    vi.stubEnv('AWS_ACCESS_KEY_ID', 'ambient');
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      providerEnv: { CLAUDE_CODE_USE_BEDROCK: '1', AWS_REGION: 'us-east-1' },
+    });
+    expect((options.env as Record<string, string>).AWS_REGION).toBe('us-east-1');
+  });
+
+  it('is absent for an ordinary key-based run', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), { apiKey: 'sk-test' });
+    expect((options.env as Record<string, string>).CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+  });
+});
+
 describe('deniedTools', () => {
   it('refuses a denied tool in canUseTool — the check permissionMode cannot skip', async () => {
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {

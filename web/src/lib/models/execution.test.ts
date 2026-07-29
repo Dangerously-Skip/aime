@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolveExecution, buildShimBaseUrl } from './execution';
+import { resolveExecution, buildShimBaseUrl , bedrockEnvFrom, vertexEnvFrom } from './execution';
 
 describe('resolveExecution', () => {
   it('passes a transient request key through and sets no base URL by default', async () => {
@@ -96,5 +96,116 @@ describe('resolveExecution', () => {
     });
     expect(exec.apiKey).toBeUndefined();
     expect(exec.baseUrl).toBe('https://x');
+  });
+});
+
+/**
+ * P1.6: Bedrock and Vertex are configured by ENVIRONMENT, not by key + base URL.
+ *
+ * Until this existed, both were reachable only through the server's own
+ * `process.env`. Their presets declared `awsRegion`, `vertexProject` and the
+ * rest, the Settings form had inputs for none of them, and nothing read them if
+ * it had — a provider you could add but never use. Same shape as the security
+ * toggles that filtered a name out of a list and changed nothing.
+ */
+describe('bedrockEnvFrom', () => {
+  it('always turns Bedrock on, and passes the region through', () => {
+    expect(bedrockEnvFrom({ awsRegion: 'us-east-1' })).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      AWS_REGION: 'us-east-1',
+    });
+  });
+
+  it('passes a key pair through, with the session token when present', () => {
+    expect(
+      bedrockEnvFrom({
+        awsRegion: 'eu-west-1',
+        awsAccessKeyId: 'AKIA1',
+        awsSecretAccessKey: 'secret',
+        awsSessionToken: 'tok',
+      }),
+    ).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      AWS_REGION: 'eu-west-1',
+      AWS_ACCESS_KEY_ID: 'AKIA1',
+      AWS_SECRET_ACCESS_KEY: 'secret',
+      AWS_SESSION_TOKEN: 'tok',
+    });
+  });
+
+  /**
+   * A lone id cannot authenticate, and exporting it would SHADOW the ambient
+   * credentials that would otherwise have worked — turning a half-filled form
+   * into a broken provider rather than a working one.
+   */
+  it('emits neither half of an incomplete key pair', () => {
+    expect(bedrockEnvFrom({ awsRegion: 'us-east-1', awsAccessKeyId: 'AKIA1' })).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      AWS_REGION: 'us-east-1',
+    });
+    expect(bedrockEnvFrom({ awsSecretAccessKey: 'secret' })).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: '1',
+    });
+  });
+
+  it('with nothing configured, still selects Bedrock and leaves auth ambient', () => {
+    expect(bedrockEnvFrom({})).toEqual({ CLAUDE_CODE_USE_BEDROCK: '1' });
+  });
+});
+
+describe('vertexEnvFrom', () => {
+  it('maps project and region onto the SDK names', () => {
+    expect(vertexEnvFrom({ vertexProject: 'proj-1', vertexRegion: 'us-east5' })).toEqual({
+      CLAUDE_CODE_USE_VERTEX: '1',
+      ANTHROPIC_VERTEX_PROJECT_ID: 'proj-1',
+      CLOUD_ML_REGION: 'us-east5',
+    });
+  });
+
+  it('still selects Vertex with nothing configured', () => {
+    expect(vertexEnvFrom({})).toEqual({ CLAUDE_CODE_USE_VERTEX: '1' });
+  });
+});
+
+describe('resolveExecution — environment-driven providers', () => {
+  it('returns env for a Bedrock provider, and no key or base URL', async () => {
+    const out = await resolveExecution({
+      providerConfig: { providerId: 'p1', agentMode: 'bedrock' },
+      loadFields: async () => ({ awsRegion: 'us-east-1', awsAccessKeyId: 'A', awsSecretAccessKey: 'S' }),
+    });
+    expect(out.env).toMatchObject({ CLAUDE_CODE_USE_BEDROCK: '1', AWS_REGION: 'us-east-1' });
+    expect(out.apiKey).toBeUndefined();
+    expect(out.baseUrl).toBeUndefined();
+  });
+
+  it('returns env for a Vertex provider', async () => {
+    const out = await resolveExecution({
+      providerConfig: { providerId: 'p2', agentMode: 'vertex' },
+      loadFields: async () => ({ vertexProject: 'proj-1' }),
+    });
+    expect(out.env).toMatchObject({ CLAUDE_CODE_USE_VERTEX: '1', ANTHROPIC_VERTEX_PROJECT_ID: 'proj-1' });
+  });
+
+  it('works with no stored fields at all — ambient credentials', async () => {
+    const out = await resolveExecution({ providerConfig: { providerId: 'p3', agentMode: 'bedrock' } });
+    expect(out.env).toEqual({ CLAUDE_CODE_USE_BEDROCK: '1' });
+  });
+
+  it('leaves an ordinary key-based provider on the key path', async () => {
+    const out = await resolveExecution({
+      providerConfig: { providerId: 'p4', agentMode: 'api-key', baseUrl: 'https://openrouter.ai/api/v1' },
+      loadKey: async () => 'sk-or',
+    });
+    expect(out.env).toBeUndefined();
+    expect(out.apiKey).toBe('sk-or');
+  });
+
+  it('treats a missing agentMode as api-key, so existing configs are unchanged', async () => {
+    const out = await resolveExecution({
+      providerConfig: { providerId: 'p5', baseUrl: 'https://openrouter.ai/api/v1' },
+      loadKey: async () => 'sk-or',
+    });
+    expect(out.env).toBeUndefined();
+    expect(out.apiKey).toBe('sk-or');
   });
 });
