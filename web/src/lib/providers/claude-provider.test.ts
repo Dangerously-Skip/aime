@@ -594,6 +594,48 @@ describe('security settings that are actually enforced', () => {
       expect((await canUseTool('Bash', { command: 'npm test' }, { toolUseID: 'r3' })).behavior).toBe('allow');
     });
 
+    it('treats a respelt command as the SAME refusal, not a fresh card', async () => {
+      const asked: Array<{ handle: string; questions: unknown }> = [];
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        ...params,
+        onInputRequest: asker(asked),
+      });
+      const pending = canUseTool('Bash', { command: 'rm -rf /Users/x/data' }, { toolUseID: 'n1' });
+      await vi.waitFor(() => expect(asked).toHaveLength(1));
+      const q = (asked[0].questions as Array<{ question: string }>)[0];
+      await deliver(asked.map((a) => a.handle), resolveAnswer, { [q.question]: 'Deny' });
+      await pending;
+
+      // Whitespace and quoting variants were three different keys, each earning
+      // another modal — an injected instruction could prompt until Allow.
+      for (const variant of ['rm  -rf /Users/x/data', 'rm -rf "/Users/x/data"', '  rm -rf /Users/x/data  ']) {
+        const again = await canUseTool('Bash', { command: variant }, { toolUseID: variant });
+        expect(again.behavior, variant).toBe('deny');
+        expect(again.message, variant).toMatch(/already declined/i);
+      }
+      expect(asked).toHaveLength(1);
+    });
+
+    it('caps how many cards one turn can raise', async () => {
+      const asked: Array<{ handle: string; questions: unknown }> = [];
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        ...params,
+        onInputRequest: asker(asked),
+      });
+      // Five distinct destructive commands, each approved, then a sixth.
+      for (let i = 0; i < 5; i++) {
+        const pending = canUseTool('Bash', { command: `rm -rf /tmp/d${i}` }, { toolUseID: `c${i}` });
+        await vi.waitFor(() => expect(asked).toHaveLength(i + 1));
+        const q = (asked[i].questions as Array<{ question: string }>)[0];
+        await deliver([asked[i].handle], resolveAnswer, { [q.question]: 'Allow once' });
+        expect((await pending).behavior).toBe('allow');
+      }
+      const sixth = await canUseTool('Bash', { command: 'rm -rf /tmp/d99' }, { toolUseID: 'c99' });
+      expect(sixth.behavior).toBe('deny');
+      expect(sixth.message).toMatch(/already asked the user to approve/i);
+      expect(asked).toHaveLength(5);
+    });
+
     it('fails closed on an unattended run, where nobody can be asked', async () => {
       const { canUseTool } = await captureOptions(new ClaudeProvider(), params); // no onInputRequest
       const r = await canUseTool('Bash', { command: 'rm -rf /tmp/x' }, { toolUseID: 'u1' });

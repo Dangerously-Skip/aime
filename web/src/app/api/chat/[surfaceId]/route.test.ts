@@ -174,8 +174,14 @@ describe('provider parameter assembly', () => {
     // asking, delegating, todos, canvas and the connector card render or ask —
     // none of them acts on the world, and TOOL_PROFILES never enumerated them.
     const permitted = new Set([
-      'WebSearch', 'WebFetch',
-      'AskUserQuestion', 'Agent', 'TodoWrite',
+      // the profile's own set — including the MCP search tool, which IS the web
+      // search (the built-in WebSearch is unconditionally disallowed), and whose
+      // omission took search away from a profile that promises it
+      'WebSearch', 'WebFetch', 'mcp__web-search__web_search',
+      // plus the in-app plumbing PLUMBING_TOOLS exempts: asking, delegating,
+      // todos, canvas and the connector card. None acts on the world, and
+      // TOOL_PROFILES never enumerated them.
+      'AskUserQuestion', 'Agent', 'spawn_agent', 'TodoWrite',
       'mcp__aime__canvas', 'mcp__aime__RequestConnector',
     ]);
     expect(allowed.length).toBeGreaterThan(0);
