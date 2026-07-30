@@ -170,10 +170,20 @@ describe('POST /api/runs/verify — durability', () => {
 
   /**
    * The unwritable path is a regular FILE used as the parent directory, so
-   * `mkdir` fails with ENOTDIR on every platform. It used to be
-   * `/proc/definitely-not-writable`, which is an assumption about the host: it
-   * failed fast on macOS because `/proc` does not exist, and behaved differently
-   * on the Linux CI box.
+   * `mkdir` fails with ENOTDIR on every platform.
+   *
+   * It used to be `/proc/definitely-not-writable`, which timed this test out at
+   * 30s in CI while passing in 31ms locally. Node's recursive `fs.mkdir` on a
+   * nonexistent `/proc` subpath does not fail in a Linux container — it never
+   * settles. Measured in node:22-alpine, same process, same call, only the path
+   * differing:
+   *
+   *   /tmp/control/nested            resolved in 1ms
+   *   /proc/definitely-not-writable  still pending at 3000ms (and at 1 hour)
+   *
+   * Note that busybox `mkdir -p` on that same path fails instantly with ENOENT,
+   * so reasoning about the syscall is not enough to predict this — the hang is in
+   * the recursive walk. Never express "unwritable" as a magic system path.
    *
    * The console assertion is the point. Without it, a path that turned out to be
    * writable would make this test pass while proving nothing — the response is

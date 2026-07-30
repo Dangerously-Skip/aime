@@ -59,6 +59,29 @@ the workflow, not an oversight.
    `lib/code-workspace/pty-manager.js`. The lazy `require` and its catch are
    load-bearing, not defensive habit.
 
+### Two ways a test can pass here and fail only in CI
+
+Both cost a red `test` job, and neither reproduces on a Mac by running the suite
+again. Look for these shapes before calling it a flake.
+
+1. **A file identity that is unique on APFS but recycled on ext4/overlayfs.**
+   `rm` then recreate REUSES the inode on Linux, routinely. A cache keyed on
+   inode is then keyed on nothing — and if it also uses millisecond mtime, two
+   writes in the same tick with equal-length payloads collide on every component.
+   That shipped in `probeCredentialFile`'s memo, complete with a comment
+   asserting the opposite. Key on `ctimeNs` (bigint `statSync`): it moves on
+   creation even when an inode is recycled, and cannot be set.
+
+2. **A magic system path standing in for "this write must fail."** Node's
+   recursive `fs.mkdir` on a nonexistent `/proc` subpath never settles inside a
+   Linux container — measured still pending at one hour, where `/tmp` resolves in
+   1ms. On macOS it fails fast because `/proc` does not exist, so the test looks
+   fine locally and burns the whole `testTimeout` in CI. Busybox `mkdir -p` on
+   that same path returns ENOENT immediately, so reasoning about the syscall does
+   not predict it. Make the parent a regular FILE instead: ENOTDIR, instantly,
+   everywhere. And assert the failure path actually ran (spy the log line) —
+   otherwise a path that turns out to be writable passes while proving nothing.
+
 ### What gates a push
 
 `test` (typecheck → lint → unit → **build**) and `e2e` on every push and PR.
