@@ -73,9 +73,14 @@ jobs:
         working-directory: web
         run: npm ci
 
+      # `--with-deps` shells out to apt and needs root; the self-hosted runner has
+      # no passwordless sudo, so it failed with "a password is required". The OS
+      # libraries are provisioned on the box once instead — see the CI section of
+      # CLAUDE.md — and this installs only the browser binary into the runner's
+      # own cache, which needs no privileges.
       - name: Install Playwright browsers
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       - name: E2E smoke tests
         working-directory: web

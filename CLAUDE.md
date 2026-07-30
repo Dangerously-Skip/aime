@@ -16,7 +16,73 @@ cd web && npm run test:watch     # Vitest watch mode
 cd web && npm run dist           # Build macOS app (next build + electron-builder)
 ```
 
-Run `npm run typecheck` and `npm test` before commits and ships — CI (`.github/workflows/ci.yml`) enforces both on every push/PR. No extra local config is needed: a fresh clone typechecks after `npm install`.
+Run `npm run typecheck` and `npm test` before commits and ships. No extra local
+config is needed: a fresh clone typechecks after `npm install`.
+
+## CI runs on self-hosted runners, and that changes a few things
+
+GitHub-hosted runners are **unavailable on this account** — every `ubuntu-latest`
+job failed in ~9s with *"recent account payments have failed or your spending
+limit needs to be increased"*. So CI is three **self-hosted** runners on the
+Contabo box (`redacted-host`), registered at org level in the Default group with
+visibility: all, labelled:
+
+```
+self-hosted, Linux, X64, contabo
+```
+
+Workflows target `runs-on: [self-hosted, linux]`. Use `contabo` instead of
+`linux` only if runners are ever added elsewhere and a job must pin to this box.
+
+**What still cannot run.** `release.yml`'s `build-mac` and `build-win` need macOS
+and Windows, and the pool is Linux-only — so releases stay blocked until the
+billing is settled or a matching runner joins. That is deliberate and noted in
+the workflow, not an oversight.
+
+### Three things about the box that bite
+
+1. **It is shared and contended.** Three runners serve every repo in the org, and
+   `rekall` alone can queue 17 jobs. The unit suite runs in ~14s locally and took
+   **197s** there. `vitest.config.ts` therefore sets `testTimeout`/`hookTimeout`
+   to 30s: the 5s default is a fast-laptop assumption, and five tests failed on
+   it — the fast-check property suites and the SSE route test — with no bug
+   involved. Do not tune a test to fit 5s; the timeout was the wrong number.
+2. **There is no passwordless sudo.** Anything that shells out to `apt` fails
+   with *"a password is required"*. `npx playwright install --with-deps` did
+   exactly that, so CI installs the browser binary only
+   (`npx playwright install chromium`) and Chromium's OS libraries are
+   provisioned on the host once. If a new Playwright version wants new libs,
+   install them on the box rather than adding `--with-deps` back.
+3. **A C toolchain is present but was not originally.** `build-essential` is
+   installed now; before that, any native dependency failed to build. That is
+   how `node-pty` came to be an `optionalDependency` — see the note in
+   `lib/code-workspace/pty-manager.js`. The lazy `require` and its catch are
+   load-bearing, not defensive habit.
+
+### What gates a push
+
+`test` (typecheck → lint → unit → **build**) and `e2e` on every push and PR.
+`mutation` runs weekly and on `workflow_dispatch` only — a slow check on every
+push is a check people learn to skip.
+
+The **build** step earns its place: `tsc --noEmit` and the whole unit suite pass
+for a Next.js client/server boundary violation. A client component importing a
+module that reaches `fs` fails only in `next build`. That shipped once —
+`provider-manager.tsx` → `lib/models/credentials` → `app-paths` → `fs` — with
+typecheck and 2777 tests green.
+
+### Migrating another repo in the org
+
+Change `runs-on: ubuntu-latest` (and `ubuntu-24.04`, `ubuntu-22.04`) to
+`[self-hosted, linux]`. Leave alone: `macos-*`/`windows-*` (need those OSes),
+`*-arm` (the pool is X64, so moving an arm job breaks the build it exists for),
+`blacksmith-*` (third-party, not GitHub-billed, may still work), and
+matrix-driven `runs-on` (the fix belongs in the matrix).
+
+**Push over git/SSH, not the API.** `gh api` refuses to write under
+`.github/workflows/` — *"refusing to allow an OAuth App to create or update
+workflow … without `workflow` scope"* (and 404s elsewhere, which is GitHub
+masking a 403). A plain `git push` is not subject to that scope check.
 
 ### Testing
 
