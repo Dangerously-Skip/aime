@@ -19,6 +19,9 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
+import { watchStuckTool } from "@/lib/stuck-tool-watchdog";
+import { useDocumentPrint } from "@/hooks/use-document-print";
+import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
@@ -603,6 +606,9 @@ export function CodeSurface() {
   const [pendingFolder, setPendingFolder] = useState<string | null>(null);
   const currentChatId = useCodeStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
+  // Both were absent entirely; see the relay note in the onChunk handler.
+  const printDocument = useDocumentPrint();
+  const onCanvasEvent = useCanvasSseHandler("code", chatId);
   const messages = useCodeStore(
     (s) =>
       (s.currentChatId ? s.messages[s.currentChatId] : undefined) ??
@@ -796,7 +802,27 @@ export function CodeSurface() {
       if (
         handleCoreChunk(event, {
           chatId: chatId,
-          store: { appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          // Code had NONE of the three relay handlers. Each one pauses the turn
+          // server-side, so their absence was not a missing feature — a connector
+          // request stalled for 300s and a document print for 60s before timing
+          // out, with nothing on screen to explain it.
+          printDocument,
+          onCanvas: onCanvasEvent,
+          notify: (title, body) => {
+            if (!document.hasFocus()) showNotification(title, body);
+          },
+          // The watchdog cowork has had all along. Code runs the longest tools of
+          // any surface and had no protection from one that stops progressing.
+          watchTool: (toolId, toolName) =>
+            watchStuckTool({
+              chatId,
+              toolId,
+              toolName,
+              getToolStatus: () =>
+                useCodeStore.getState().messages[chatId]?.at(-1)?.toolCalls?.find((t) => t.id === toolId)?.status,
+              subscribe: (listener) => useCodeStore.subscribe(listener),
+            }),
           skip: ['tool_use', 'tool_result'],
         })
       ) {
@@ -925,19 +951,6 @@ export function CodeSurface() {
           }
           break;
         }
-        case "input_request":
-          addMessage(chatId, {
-            id: (event.toolUseId as string) || `q_${Date.now()}`,
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-            questionData: event.questions,
-            questionToolUseId: event.toolUseId as string,
-          });
-          if (!document.hasFocus()) {
-            showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
-          }
-          break;
       }
     },
     onDone: () => {
