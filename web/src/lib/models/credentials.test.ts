@@ -208,6 +208,45 @@ describe('probeCredentialFile', () => {
     expect(probeCredentialFile(other, file).status).toBe('ok');
     expect(probeCredentialFile(key, file).status).toBe('unreadable');
   });
+
+  /**
+   * The test above passed on macOS and failed on CI, which is the interesting
+   * part: the memo keyed on inode + millisecond mtime + size, and on Linux
+   * `rm` + recreate reuses the inode, both writes landed in the same
+   * millisecond, and `sk-x`/`sk-y` are the same length. All three matched, so
+   * the memo answered for a file that had been rewritten with a different key.
+   *
+   * Reproduced here without depending on the filesystem recycling an inode:
+   * write the replacement IN PLACE (same inode by construction) and force the
+   * mtime back to the millisecond. Only `ctimeNs` distinguishes the two, which
+   * is the whole point — it cannot be set, and it moves on any write.
+   */
+  it('notices a replacement that collides on inode, size and millisecond mtime', async () => {
+    const other = randomBytes(32);
+    // A whole number of milliseconds: `utimesSync` truncates sub-millisecond
+    // precision, so pinning both versions to this is the only way to make the
+    // mtimes byte-identical rather than merely close.
+    const pinned = new Date(1_700_000_000_000);
+
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
+    fs.utimesSync(file, pinned, pinned);
+    const before = fs.statSync(file);
+    expect(probeCredentialFile(other, file).status).toBe('unreadable'); // memoised
+
+    // Same-length payload under the other key, dropped over the original bytes.
+    const donor = path.join(dir, 'donor.json');
+    await createCredentialStore(other, donor).set('openai', { apiKey: 'sk-y' });
+    fs.writeFileSync(file, fs.readFileSync(donor));
+    fs.utimesSync(file, pinned, pinned);
+
+    const after = fs.statSync(file);
+    expect(after.ino).toBe(before.ino);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+
+    expect(probeCredentialFile(other, file).status).toBe('ok');
+    expect(probeCredentialFile(key, file).status).toBe('unreadable');
+  });
 });
 
 /**

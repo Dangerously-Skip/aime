@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { NextRequest } from 'next/server';
@@ -168,12 +168,32 @@ describe('POST /api/runs/verify — durability', () => {
     expect(logged[0].verification).toMatchObject({ passed: true });
   });
 
+  /**
+   * The unwritable path is a regular FILE used as the parent directory, so
+   * `mkdir` fails with ENOTDIR on every platform. It used to be
+   * `/proc/definitely-not-writable`, which is an assumption about the host: it
+   * failed fast on macOS because `/proc` does not exist, and behaved differently
+   * on the Linux CI box.
+   *
+   * The console assertion is the point. Without it, a path that turned out to be
+   * writable would make this test pass while proving nothing — the response is
+   * 200 either way. It is what says the failure path actually ran.
+   */
   it('a failed log write does not fail the response', async () => {
-    process.env.AIME_USER_DATA_DIR = '/proc/definitely-not-writable';
+    const notADir = join(dir, 'not-a-directory');
+    writeFileSync(notADir, 'occupied');
+    process.env.AIME_USER_DATA_DIR = notADir;
     __resetRunLogPath();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     reply('{"passed": true}');
     const res = await post({ goal: goal(), run: run() });
+
     expect(res.status).toBe(200);
     expect((await res.json()).verification.passed).toBe(true);
+    expect(errors.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(
+      /failed to append run record/,
+    );
+    errors.mockRestore();
   });
 });

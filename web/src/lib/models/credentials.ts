@@ -20,7 +20,7 @@ import 'server-only';
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import * as fs from 'fs/promises';
-import { readFileSync, statSync } from 'fs';
+import { readFileSync, statSync, type BigIntStats } from 'fs';
 import * as path from 'path';
 import { getDataDir } from '@/lib/app-paths';
 
@@ -248,10 +248,36 @@ export interface CredentialStoreProbe {
   detail?: string;
 }
 
-/** Memo of the last probe per file, invalidated by the file's identity changing. */
+/**
+ * Memo of the last probe per file, invalidated by the file's identity changing.
+ *
+ * Keyed on NANOSECOND times, and on ctime as well as mtime, because millisecond
+ * mtime + inode + size was not enough to notice a replacement. CI caught it:
+ *
+ *   - `rm` then recreate REUSES the inode on ext4/overlayfs, routinely
+ *   - both writes landed in the same millisecond
+ *   - the two payloads were the same length
+ *
+ * …so all three components matched and the memo returned the previous verdict for
+ * a file that had been completely rewritten with a different key. That is not a
+ * cosmetic staleness: callers decide whether to WRITE on the strength of this
+ * (see lib/mcp/secret-store.ts — migration lifts secrets out of the config only
+ * when the store reads as usable), so a stale `unreadable` refuses to store
+ * secrets and a stale `ok` writes over a file it cannot actually read.
+ *
+ * `ctimeNs` changes on creation even when an inode is recycled, and nanosecond
+ * precision removes the same-tick collision.
+ */
 const probeCache = new Map<
   string,
-  { keyId: string; ino: number; mtimeMs: number; size: number; probe: CredentialStoreProbe }
+  {
+    keyId: string;
+    ino: bigint;
+    mtimeNs: bigint;
+    ctimeNs: bigint;
+    size: bigint;
+    probe: CredentialStoreProbe;
+  }
 >();
 
 /** Identifies a key without keeping it around. */
@@ -273,9 +299,11 @@ function keyFingerprint(key: Buffer): string {
  * lands on a new inode (temp + rename), so the memo self-invalidates.
  */
 export function probeCredentialFile(key: Buffer, filePath: string): CredentialStoreProbe {
-  let stat: ReturnType<typeof statSync>;
+  // bigint stat for `mtimeNs`/`ctimeNs` — see the note on probeCache for why
+  // millisecond precision was not enough.
+  let stat: BigIntStats;
   try {
-    stat = statSync(filePath);
+    stat = statSync(filePath, { bigint: true });
   } catch {
     return { status: 'empty', path: filePath }; // nothing stored yet
   }
@@ -287,7 +315,8 @@ export function probeCredentialFile(key: Buffer, filePath: string): CredentialSt
     cached &&
     cached.keyId === keyId &&
     cached.ino === stat.ino &&
-    cached.mtimeMs === stat.mtimeMs &&
+    cached.mtimeNs === stat.mtimeNs &&
+    cached.ctimeNs === stat.ctimeNs &&
     cached.size === stat.size
   ) {
     return cached.probe;
@@ -310,7 +339,8 @@ export function probeCredentialFile(key: Buffer, filePath: string): CredentialSt
   probeCache.set(cacheKey, {
     keyId,
     ino: stat.ino,
-    mtimeMs: stat.mtimeMs,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
     size: stat.size,
     probe,
   });
