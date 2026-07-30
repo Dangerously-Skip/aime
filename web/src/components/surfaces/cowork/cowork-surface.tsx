@@ -12,6 +12,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
+import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { streamRegistry } from "@/lib/stream-registry";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useMemoryStore } from "@/stores/memory-store";
@@ -925,21 +926,20 @@ export function CoworkSurface() {
       // meant three of them were silently dropped on most surfaces.
       if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Cowork' })) return;
 
+      // The chunks whose handling is identical across surfaces, recorded once in
+      // lib/sse/core-chunks. `skip` names what this surface still owns — see the
+      // note there; it is a visible migration step, not a permanent carve-out.
+      if (
+        handleCoreChunk(event, {
+          chatId: chatId,
+          store: { appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          skip: ['tool_use', 'tool_result'],
+        })
+      ) {
+        return;
+      }
+
       switch (event.type) {
-        case "turn_start":
-          // New assistant turn — previous turn's tools have all completed
-          completeRunningTools(chatId);
-          break;
-        case "text":
-          // If text arrives while tools are still "running", mark them complete.
-          // The Agent SDK doesn't emit tool_result events, so text after tools
-          // means the tools finished.
-          completeRunningTools(chatId);
-          appendToLastAssistant(chatId, (event.content as string) || "");
-          break;
-        case "thinking":
-          appendToLastAssistant(chatId, "", (event.content as string) || "");
-          break;
         case "tool_use": {
           // Complete any previously running tools before starting a new one
           completeRunningTools(chatId);
@@ -1193,12 +1193,6 @@ export function CoworkSurface() {
           console.log('[Cowork] Document extracted:', event.name, 'path:', extractedPath, 'length:', event.textLength);
           break;
         }
-        case "error":
-          appendToLastAssistant(
-            chatId,
-            `\n\n**Error:** ${(event.message as string) || "An error occurred"}`
-          );
-          break;
       }
     },
     onDone: () => {

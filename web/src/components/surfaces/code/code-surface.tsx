@@ -18,6 +18,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
+import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
@@ -789,26 +790,20 @@ export function CodeSurface() {
       // meant three of them were silently dropped on most surfaces.
       if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Code' })) return;
 
+      // The chunks whose handling is identical across surfaces, recorded once in
+      // lib/sse/core-chunks. `skip` names what this surface still owns — see the
+      // note there; it is a visible migration step, not a permanent carve-out.
+      if (
+        handleCoreChunk(event, {
+          chatId: chatId,
+          store: { appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          skip: ['tool_use', 'tool_result'],
+        })
+      ) {
+        return;
+      }
+
       switch (event.type) {
-        case "turn_start":
-          // A new assistant turn means previous turn's tools have all executed.
-          // Mark any still-running tools as complete and check for HTML previews.
-          completeRunningTools(chatId);
-          if (pendingHtmlFiles.current.length > 0) {
-            const lastHtml = pendingHtmlFiles.current[pendingHtmlFiles.current.length - 1];
-            setPreviewUrl(`file://${lastHtml}`);
-            pendingHtmlFiles.current = [];
-            pendingWebAssets.current = [];
-          } else if (pendingWebAssets.current.length > 0) {
-            resolveWebAssetEntryPoint();
-          }
-          break;
-        case "text":
-          appendToLastAssistant(chatId, (event.content as string) || "");
-          break;
-        case "thinking":
-          appendToLastAssistant(chatId, "", (event.content as string) || "");
-          break;
         case "tool_use": {
           const toolName = (event.name as string) || "Unknown";
           const toolInput = (event.input as Record<string, unknown>) || {};
@@ -942,12 +937,6 @@ export function CodeSurface() {
           if (!document.hasFocus()) {
             showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
           }
-          break;
-        case "error":
-          appendToLastAssistant(
-            chatId,
-            `\n\n**Error:** ${(event.message as string) || "An error occurred"}`
-          );
           break;
       }
     },
