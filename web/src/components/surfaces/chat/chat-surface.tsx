@@ -9,6 +9,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
+import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -256,62 +257,39 @@ export function ChatSurface() {
       if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Chat' })) return;
 
       const cid = getChatId();
-      switch (event.type) {
-        case "turn_start":
-          completeRunningTools(cid);
-          break;
-        case "text":
-          completeRunningTools(cid);
-          appendToLastAssistant(cid, (event.content as string) || "");
-          break;
-        case "thinking":
-          appendToLastAssistant(
-            cid,
-            "",
-            (event.content as string) || ""
-          );
-          break;
-        case "tool_use": {
-          completeRunningTools(cid);
-          const toolName = (event.name as string) || "Unknown";
-          const toolInput = (event.input as Record<string, unknown>) || {};
-          addToolCall(cid, {
-            id: (event.id as string) || `tool_${Date.now()}`,
-            name: toolName,
-            input: toolInput,
-            status: "running",
-            startTime: Date.now(),
-          });
-          // Track artifact files from Write/Edit/Bash tool calls
-          const categorized = categorizeToolCall(toolName, toolInput);
-          if (categorized?.category === "artifact" && isValidSidebarEntry(categorized.path)) {
+
+      // The six chunks whose handling is identical on chat, cowork and code —
+      // recorded once in lib/sse/core-chunks against the nine-action store
+      // contract all three already satisfied. Chat's one genuine difference (it
+      // files an artifact against the project) is the callback below, which makes
+      // that difference visible instead of buried in a near-identical switch.
+      if (
+        handleCoreChunk(event, {
+          chatId: cid,
+          store: { appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          onToolStarted: (_toolId, toolName, toolInput) => {
+            const categorized = categorizeToolCall(toolName, toolInput);
+            if (categorized?.category !== "artifact" || !isValidSidebarEntry(categorized.path)) return;
             addArtifactFile(categorized.path);
-            if (currentProjectId) {
-              const fileName = categorized.path.split("/").pop() || categorized.path;
-              useProjectStore.getState().addArtifact(currentProjectId, {
-                id: crypto.randomUUID(),
-                name: fileName,
-                path: categorized.path,
-                type: "file",
-                surface: "chat",
-                conversationId: cid,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              });
-            }
-          }
-          break;
-        }
-        case "tool_result":
-          updateToolResult(
-            cid,
-            (event.tool_use_id as string) || (event.id as string) || "",
-            typeof event.result === "string"
-              ? event.result
-              : JSON.stringify(event.result),
-            event.is_error as boolean | undefined
-          );
-          break;
+            if (!currentProjectId) return;
+            const fileName = categorized.path.split("/").pop() || categorized.path;
+            useProjectStore.getState().addArtifact(currentProjectId, {
+              id: crypto.randomUUID(),
+              name: fileName,
+              path: categorized.path,
+              type: "file",
+              surface: "chat",
+              conversationId: cid,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            });
+          },
+        })
+      ) {
+        return;
+      }
+
+      switch (event.type) {
         case "input_request":
           addMessage(cid, {
             id: (event.toolUseId as string) || `q_${Date.now()}`,
@@ -384,12 +362,6 @@ export function ChatSurface() {
           }
           break;
         }
-        case "error":
-          appendToLastAssistant(
-            cid,
-            `\n\n**Error:** ${(event.message as string) || "An error occurred"}`
-          );
-          break;
       }
     },
     onDone() {
