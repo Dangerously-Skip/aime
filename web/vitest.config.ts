@@ -13,5 +13,20 @@ export default defineConfig({
     // (credential-key.js), so their tests can live next to them.
     include: ['src/**/*.test.{ts,tsx}', '*.test.{js,ts}'],
     environment: 'node',
+    /**
+     * Vitest's 5s default is a fast-laptop assumption. The suite runs in ~14s
+     * locally and took 197s on the self-hosted runner — three runners share one
+     * Contabo box with every other repo in the org, so per-test wall-clock is
+     * roughly an order of magnitude worse. Five tests failed there purely on the
+     * timeout: the fast-check property suites (which do 2000 runs) and the SSE
+     * route test.
+     *
+     * Raised rather than made conditional on CI: a timeout that only bites in one
+     * environment is a test that passes locally and fails on push, which is the
+     * least useful place to find out. These numbers still catch a genuine hang —
+     * nothing here should take 20s of real work.
+     */
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
