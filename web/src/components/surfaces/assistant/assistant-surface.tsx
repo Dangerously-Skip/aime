@@ -522,6 +522,13 @@ export function AssistantSurface() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // No question/connector card UI on this surface, so the turn must never
+          // be parked waiting for one. `canRelayToClient` defaults to TRUE, which
+          // meant the provider was handed onInputRequest/onConnectorRequest and
+          // would block for 300s on an approval nobody could answer. Declaring
+          // false takes the documented "cannot ask" path: canUseTool refuses and
+          // tells the agent to say what it would have done.
+          canRelayToClient: false,
           message: prompt,
           chatId,
           model: 'sonnet',
