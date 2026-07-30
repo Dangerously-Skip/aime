@@ -54,11 +54,11 @@ export const SECURITY_TOGGLES: SecurityToggle[] = [
   },
   {
     key: 'blockNetworkCommands',
-    enforcement: 'guidance',
+    enforcement: 'enforced',
     setter: 'setBlockNetworkCommands',
-    label: 'Discourage network commands',
+    label: 'Ask before commands that reach the network',
     description:
-      'Instructs Claude to refuse curl|sh, wget piping, nc, and SSH tunnels. Allows npm install, git push, and brew. Guidance only — not enforced.',
+      'Pauses and asks you before netcat, socat, SSH tunnels, curl uploads, scp/rsync to a remote host, and piping a download into an interpreter. npm install, pip install, git push and brew are unaffected. Unattended runs refuse them instead, since nobody is there to ask.',
   },
   {
     key: 'restrictToProjectFolder',

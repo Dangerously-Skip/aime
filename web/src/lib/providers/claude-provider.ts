@@ -968,17 +968,25 @@ export class ClaudeProvider extends BaseProvider {
         }
       }
 
-      // ── Destructive shell commands: ask a human ─────────────────────────
+      // ── Shell commands worth asking a human about ───────────────────────
       // A prompt, not a block — see lib/security/destructive-commands for why a
       // shell blocklist is the wrong shape and why asking is the right one.
+      //
+      // Two toggles feed one gate. Passing them as the rule sets to scan, rather
+      // than branching per toggle, is what stops the second one being wired into
+      // half the path: there is a single approval flow and it cannot be reached
+      // with the wrong one enabled.
       if (
-        security.blockDangerousCommands &&
+        (security.blockDangerousCommands || security.blockNetworkCommands) &&
         toolMatches(toolName, SHELL_TOOLS) &&
         typeof input.command === 'string'
       ) {
         const command = input.command;
-        const verdict = classifyCommand(command);
-        if (verdict.destructive) {
+        const verdict = classifyCommand(command, {
+          destructive: security.blockDangerousCommands,
+          network: security.blockNetworkCommands,
+        });
+        if (verdict.ask) {
           // Keyed by the COMMAND, not the tool: declining one `rm -rf` must not
           // silently refuse every later `ls`. Tool-name keying is right for the
           // MCP gate, where the name is the risk; here the risk is the argument.
@@ -1012,7 +1020,7 @@ export class ClaudeProvider extends BaseProvider {
           commandApprovalsAsked[0] += 1;
           if (!onInputRequest) {
             // Unattended: nothing can ask, so under this setting it does not run.
-            console.warn('[SECURITY] Cannot ask about a destructive command here; denying');
+            console.warn(`[SECURITY] Cannot ask about a ${verdict.category} command here; denying`);
             return {
               behavior: 'deny' as const,
               message:
@@ -1022,7 +1030,7 @@ export class ClaudeProvider extends BaseProvider {
             };
           }
 
-          const question = buildCommandApprovalQuestion(command, verdict.reason!);
+          const question = buildCommandApprovalQuestion(command, verdict.reason);
           awaitingHuman.add(toolUseID);
           // A nonce, not the SDK's toolUseID — /api/chat/answer authenticates
           // nothing else, so presenting this is the only proof an "Allow" came

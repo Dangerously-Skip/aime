@@ -516,8 +516,11 @@ export async function POST(
         );
       }
       if (securitySettings?.blockNetworkCommands) {
+        // Same shape as the line above, and for the same reason: the gate ASKS,
+        // so telling the model to refuse outright would have it decline work the
+        // user is about to be shown a card for and would approve.
         securityRules.push(
-          '- NEVER run network exfiltration commands: curl piped to sh/bash, wget piped to sh/bash, nc/netcat, or SSH tunnels. You MAY use npm install, pip install, git push/pull, brew install, and similar package managers.'
+          '- Commands that reach off this machine (nc/netcat, socat, SSH tunnels and port forwards, curl uploads, scp/rsync to a remote host, piping a download into an interpreter) are shown to the user for approval before they run. Package managers and ordinary git remotes — npm install, pip install, git push/pull, brew — are unaffected. Do not avoid a network command that is genuinely the right step; run it and expect to be asked, and never use one to work around a refusal.'
         );
       }
       if (securitySettings?.restrictToProjectFolder && cwd) {
