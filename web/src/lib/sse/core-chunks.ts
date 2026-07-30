@@ -14,10 +14,22 @@ import type { ChunkType } from '@/lib/providers/base-provider';
  * than a fourth divergent copy.
  */
 export interface ConversationStreamStore {
+  addMessage: (chatId: string, message: StreamMessage) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
   addToolCall: (chatId: string, toolCall: ToolCallInit) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   completeRunningTools: (chatId: string) => void;
+}
+
+/** The message shape all three stores accept, narrowed to what the stream sets. */
+export interface StreamMessage {
+  id: string;
+  role: 'assistant';
+  content: string;
+  timestamp: number;
+  questionData?: unknown;
+  questionToolUseId?: string;
+  connectorRequest?: { connectorId: string; reason?: string; toolUseId: string };
 }
 
 /** The tool-call shape all three stores accept. */
@@ -37,7 +49,23 @@ export interface ToolCallInit {
  * which is why they need one passed in — but the logic on top of it is the same
  * everywhere, and was triplicated.
  */
-export type CoreChunkType = 'turn_start' | 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'error';
+export type CoreChunkType =
+  | 'turn_start'
+  | 'text'
+  | 'thinking'
+  | 'tool_use'
+  | 'tool_result'
+  | 'error'
+  // The three RELAY chunks. Each one PAUSES THE TURN server-side until the client
+  // answers, so a surface that does not handle one does not merely lose a feature
+  // — it hangs. `canRelayToClient` defaults to true and no surface overrides it,
+  // so the route hands the provider these callbacks on every stream, from every
+  // surface. Code handled none of the three: a connector request there stalled
+  // the turn for 300s and a document print for 60s before timing out.
+  | 'input_request'
+  | 'connector_request'
+  | 'document_print'
+  | 'canvas';
 
 const CORE: readonly ChunkType[] = [
   'turn_start',
@@ -46,6 +74,10 @@ const CORE: readonly ChunkType[] = [
   'tool_use',
   'tool_result',
   'error',
+  'input_request',
+  'connector_request',
+  'document_print',
+  'canvas',
 ] satisfies readonly CoreChunkType[];
 
 export interface CoreChunkContext {
@@ -70,6 +102,30 @@ export interface CoreChunkContext {
    * of near-identical switch.
    */
   onToolStarted?: (toolId: string, name: string, input: Record<string, unknown>) => void;
+  /**
+   * Print a rendered document. REQUIRED, not optional, and that is the point:
+   * the turn is blocked waiting for this, so a surface that forgets it hangs for
+   * 60s. Making it a required field turns "forgot" into a compile error.
+   */
+  printDocument: (payload: {
+    toolUseId: string;
+    htmlPath: string;
+    outputPath: string;
+    printOptions?: Record<string, unknown>;
+  }) => void;
+  /** Render a canvas document. Required for the same reason. */
+  onCanvas: (event: { doc?: unknown }) => void;
+  /** OS notification when the window is unfocused and the turn needs a human. */
+  notify?: (title: string, body: string) => void;
+  /**
+   * Start a stuck-tool watchdog for a tool that has just begun.
+   *
+   * Existed on cowork ONLY, written when a large PDF read hung there — and chat
+   * and code have the identical failure mode with no watchdog at all. Optional
+   * because it needs the surface's own store to observe tool status, but every
+   * conversation surface should pass it.
+   */
+  watchTool?: (toolId: string, name: string) => void;
   /**
    * Core chunks this surface still handles itself.
    *
@@ -129,6 +185,9 @@ export function handleCoreChunk(
       const raw = (event.input as Record<string, unknown>) || {};
       const input = ctx.normaliseToolInput ? ctx.normaliseToolInput(name, raw) : raw;
       store.addToolCall(chatId, { id: toolId, name, input, status: 'running', startTime: Date.now() });
+      // Watchdog before the surface extras: the point is to catch a tool that
+      // never finishes, so arming it must not depend on what follows.
+      ctx.watchTool?.(toolId, name);
       ctx.onToolStarted?.(toolId, name, input);
       return true;
     }
@@ -147,6 +206,48 @@ export function handleCoreChunk(
         chatId,
         `\n\n**Error:** ${(event.message as string) || 'An error occurred'}`,
       );
+      return true;
+
+    case 'input_request':
+      store.addMessage(chatId, {
+        id: (event.toolUseId as string) || `q_${Date.now()}`,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        questionData: event.questions,
+        questionToolUseId: event.toolUseId as string,
+      });
+      ctx.notify?.('Claude needs your input', 'A question or permission prompt is waiting for you.');
+      return true;
+
+    case 'connector_request':
+      store.addMessage(chatId, {
+        id: (event.toolUseId as string) || `conn_${Date.now()}`,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        connectorRequest: {
+          connectorId: event.connectorId as string,
+          reason: event.reason as string | undefined,
+          toolUseId: event.toolUseId as string,
+        },
+      });
+      ctx.notify?.('A connection is needed', 'AIME is waiting to connect a service.');
+      return true;
+
+    case 'document_print':
+      // Paths only — the document itself never enters the renderer; Electron main
+      // owns Chromium and reads it from disk.
+      ctx.printDocument({
+        toolUseId: event.toolUseId as string,
+        htmlPath: event.htmlPath as string,
+        outputPath: event.outputPath as string,
+        printOptions: event.printOptions as Record<string, unknown> | undefined,
+      });
+      return true;
+
+    case 'canvas':
+      ctx.onCanvas(event as { doc?: unknown });
       return true;
   }
 }

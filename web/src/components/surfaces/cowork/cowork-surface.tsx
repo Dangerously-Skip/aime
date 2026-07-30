@@ -932,7 +932,21 @@ export function CoworkSurface() {
       if (
         handleCoreChunk(event, {
           chatId: chatId,
-          store: { appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          printDocument,
+          onCanvas: onCanvasEvent,
+          notify: (title, body) => {
+            if (!document.hasFocus()) showNotification(title, body);
+          },
+          watchTool: (toolId, toolName) =>
+            watchStuckTool({
+              chatId: chatId,
+              toolId,
+              toolName,
+              getToolStatus: () =>
+                useCoworkStore.getState().messages[chatId]?.at(-1)?.toolCalls?.find((t) => t.id === toolId)?.status,
+              subscribe: (listener) => useCoworkStore.subscribe(listener),
+            }),
           skip: ['tool_use', 'tool_result'],
         })
       ) {
@@ -1122,57 +1136,6 @@ export function CoworkSurface() {
           }
           break;
         }
-        case "input_request": {
-          // Agent is asking the user a question — add a question message
-          addMessage(chatId, {
-            id: (event.toolUseId as string) || `q_${Date.now()}`,
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-            questionData: event.questions,
-            questionToolUseId: event.toolUseId as string,
-          });
-          if (!document.hasFocus()) {
-            showNotification("Claude needs your input", "A question or permission prompt is waiting for you.");
-          }
-          break;
-        }
-        case "system_init":
-          // Record how many tools actually got mounted so the Connectors screen can
-          // warn when connecting more has started to hurt tool selection (P3.5).
-          if (event.toolBudget) {
-            useToolBudgetStore.getState().setReport(event.toolBudget as ToolBudgetReport);
-          }
-          break;
-        case "document_print":
-          // Relay to Electron main, which owns Chromium (P4.2b). Paths only —
-          // the document itself never enters the renderer.
-          void printDocument({
-            toolUseId: event.toolUseId as string,
-            htmlPath: event.htmlPath as string,
-            outputPath: event.outputPath as string,
-            printOptions: event.printOptions as Record<string, unknown> | undefined,
-          });
-          break;
-        case "connector_request":
-          addMessage(chatId, {
-            id: (event.toolUseId as string) || `conn_${Date.now()}`,
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-            connectorRequest: {
-              connectorId: event.connectorId as string,
-              reason: event.reason as string | undefined,
-              toolUseId: event.toolUseId as string,
-            },
-          });
-          if (!document.hasFocus()) {
-            showNotification("A connection is needed", "AIME is waiting to connect a service.");
-          }
-          break;
-        case "canvas":
-          onCanvasEvent(event as { doc?: unknown });
-          break;
         case "document_extracting": {
           // Show extraction status in console — could add UI indicator
           console.log('[Cowork] Extracting document:', event.name);

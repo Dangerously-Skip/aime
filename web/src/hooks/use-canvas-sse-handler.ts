@@ -7,7 +7,15 @@ import { useCoworkStore } from '@/stores/cowork-store';
 import { sendFeatureAdoptionEvent } from '@/lib/telemetry/events';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 
-type SurfaceId = 'chat' | 'cowork';
+/**
+ * `code` renders a canvas but does not persist it per conversation: code-store
+ * has no `canvasArtifacts` field, unlike chat-store and cowork-store. Extending
+ * the union rather than writing a second canvas handler keeps this ONE
+ * implementation — the reason it exists — and makes code's partial support
+ * explicit instead of the canvas being silently dropped, which is what happened
+ * before. Adding persistence is a code-store change, tracked as follow-up.
+ */
+type SurfaceId = 'chat' | 'cowork' | 'code';
 
 /**
  * One canvas SSE handler shared by both surfaces. Each surface used to inline
@@ -37,7 +45,8 @@ export function useCanvasSseHandler(surfaceId: SurfaceId, chatId: string) {
         pushCanvas(surfaceId, doc, chatId || null);
         setCanvasOpen(surfaceId, true);
 
-        if (chatId) {
+        // Persistence is per-surface; code has no artifact store yet.
+        if (chatId && surfaceId !== 'code') {
           const canvasId = crypto.randomUUID();
           const title = doc.title || 'Canvas';
           const payload = { id: canvasId, title, doc };

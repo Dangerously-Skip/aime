@@ -18,13 +18,21 @@ import { useCodeStore } from '@/stores/code-store';
 
 function fakeStore() {
   return {
+    addMessage: vi.fn(),
     appendToLastAssistant: vi.fn(),
     addToolCall: vi.fn(),
     updateToolResult: vi.fn(),
     completeRunningTools: vi.fn(),
   } satisfies ConversationStreamStore;
 }
-const ctx = (store: ReturnType<typeof fakeStore>, extra = {}) => ({ chatId: 'c1', store, ...extra });
+/** The two REQUIRED relay deps default to spies; a test can override either. */
+const ctx = (store: ReturnType<typeof fakeStore>, extra: Record<string, unknown> = {}) => ({
+  chatId: 'c1',
+  store,
+  printDocument: vi.fn(),
+  onCanvas: vi.fn(),
+  ...extra,
+});
 
 describe('all three stores satisfy the contract', () => {
   /**
@@ -39,6 +47,7 @@ describe('all three stores satisfy the contract', () => {
   ])('%s-store', (_name, store) => {
     const s = store.getState() as unknown as Record<string, unknown>;
     for (const action of [
+      'addMessage',
       'appendToLastAssistant',
       'addToolCall',
       'updateToolResult',
@@ -54,17 +63,20 @@ describe('all three stores satisfy the contract', () => {
 
 describe('handleCoreChunk', () => {
   it('claims exactly the core types', () => {
-    for (const t of ['turn_start', 'text', 'thinking', 'tool_use', 'tool_result', 'error']) {
+    for (const t of [
+      'turn_start', 'text', 'thinking', 'tool_use', 'tool_result', 'error',
+      'input_request', 'connector_request', 'document_print', 'canvas',
+    ]) {
       expect(isCoreChunk(t)).toBe(true);
     }
-    for (const t of ['canvas', 'input_request', 'done', 'widget_create']) {
+    for (const t of ['done', 'widget_create', 'system_init', 'browser_tool_use']) {
       expect(isCoreChunk(t)).toBe(false);
     }
   });
 
   it('leaves a non-core chunk to the surface', () => {
     const s = fakeStore();
-    expect(handleCoreChunk({ type: 'canvas' }, ctx(s))).toBe(false);
+    expect(handleCoreChunk({ type: 'browser_tool_use' }, ctx(s))).toBe(false);
   });
 
   /**
@@ -179,12 +191,126 @@ describe('migration status is explicit, not accidental', () => {
   it('no surface still handles a chunk it has delegated', () => {
     for (const [rel, skipped] of Object.entries(EXPECTED)) {
       const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
-      for (const t of ['turn_start', 'text', 'thinking', 'error']) {
+      for (const t of [
+        'turn_start', 'text', 'thinking', 'error',
+        'input_request', 'connector_request', 'document_print', 'canvas',
+      ]) {
         if (skipped.includes(t)) continue;
         expect(src, `${rel} still cases on delegated '${t}'`).not.toMatch(
           new RegExp(`case\\s+["']${t}["']`),
         );
       }
     }
+  });
+});
+
+/**
+ * The three RELAY chunks. Each pauses the turn server-side until the client
+ * answers, so a surface that does not handle one HANGS rather than losing a
+ * feature — a connector request for 300s, a document print for 60s. Code handled
+ * none of the three, which is why the deps are required rather than optional:
+ * forgetting one is now a compile error.
+ */
+describe('relay chunks — the ones that hang when unhandled', () => {
+  it('files an input_request as a question message, and notifies', () => {
+    const s = fakeStore();
+    const notify = vi.fn();
+    expect(handleCoreChunk(
+      { type: 'input_request', toolUseId: 'q1', questions: [{ question: 'ok?' }] },
+      ctx(s, { notify }),
+    )).toBe(true);
+    expect(s.addMessage).toHaveBeenCalledWith('c1', expect.objectContaining({
+      id: 'q1', questionToolUseId: 'q1', questionData: [{ question: 'ok?' }],
+    }));
+    expect(notify).toHaveBeenCalled();
+  });
+
+  it('files a connector_request with the connector it needs', () => {
+    const s = fakeStore();
+    expect(handleCoreChunk(
+      { type: 'connector_request', toolUseId: 'c9', connectorId: 'github', reason: 'read issues' },
+      ctx(s),
+    )).toBe(true);
+    expect(s.addMessage).toHaveBeenCalledWith('c1', expect.objectContaining({
+      connectorRequest: { connectorId: 'github', reason: 'read issues', toolUseId: 'c9' },
+    }));
+  });
+
+  it('relays a document print by PATH, never the markup', () => {
+    const s = fakeStore();
+    const printDocument = vi.fn();
+    handleCoreChunk(
+      { type: 'document_print', toolUseId: 'd1', htmlPath: '/tmp/a.html', outputPath: '/tmp/a.pdf' },
+      ctx(s, { printDocument }),
+    );
+    expect(printDocument).toHaveBeenCalledWith({
+      toolUseId: 'd1', htmlPath: '/tmp/a.html', outputPath: '/tmp/a.pdf', printOptions: undefined,
+    });
+  });
+
+  it('hands a canvas to the surface renderer', () => {
+    const s = fakeStore();
+    const onCanvas = vi.fn();
+    handleCoreChunk({ type: 'canvas', doc: { components: [] } }, ctx(s, { onCanvas }));
+    expect(onCanvas).toHaveBeenCalledWith(expect.objectContaining({ doc: { components: [] } }));
+  });
+
+  it('still files the message when there is no notifier', () => {
+    // notify is optional; the blocking part must not depend on it.
+    const s = fakeStore();
+    expect(handleCoreChunk({ type: 'input_request', toolUseId: 'q' }, ctx(s))).toBe(true);
+    expect(s.addMessage).toHaveBeenCalled();
+  });
+});
+
+describe('the stuck-tool watchdog', () => {
+  /**
+   * Existed on cowork ONLY, written after a large PDF read hung there. Chat and
+   * code have the identical failure mode and had no watchdog at all — code runs
+   * the longest tools of any surface.
+   */
+  it('is armed for every tool call when the surface provides it', () => {
+    const s = fakeStore();
+    const watchTool = vi.fn();
+    handleCoreChunk({ type: 'tool_use', id: 't1', name: 'Read' }, ctx(s, { watchTool }));
+    expect(watchTool).toHaveBeenCalledWith('t1', 'Read');
+  });
+
+  it('is armed BEFORE the surface extras, so it does not depend on them', () => {
+    const order: string[] = [];
+    const s = fakeStore();
+    handleCoreChunk({ type: 'tool_use', id: 't1', name: 'Read' }, ctx(s, {
+      watchTool: () => order.push('watch'),
+      onToolStarted: () => order.push('extras'),
+    }));
+    expect(order).toEqual(['watch', 'extras']);
+  });
+
+  it('every conversation surface arms it', () => {
+    const SRC = path.resolve(__dirname, '../..');
+    for (const rel of [
+      'components/surfaces/chat/chat-surface.tsx',
+      'components/surfaces/cowork/cowork-surface.tsx',
+      'components/surfaces/code/code-surface.tsx',
+    ]) {
+      const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
+      expect(src, `${rel} does not arm the stuck-tool watchdog`).toMatch(/watchTool:/);
+      expect(src, `${rel} does not import it`).toContain('watchStuckTool');
+    }
+  });
+});
+
+/** The relay deps are required, so "forgot one" cannot reach runtime. */
+describe('no surface can forget a relay handler', () => {
+  const SRC = path.resolve(__dirname, '../..');
+  it.each([
+    'components/surfaces/chat/chat-surface.tsx',
+    'components/surfaces/cowork/cowork-surface.tsx',
+    'components/surfaces/code/code-surface.tsx',
+  ])('%s supplies printDocument and onCanvas', (rel) => {
+    const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
+    expect(src).toMatch(/printDocument,?/);
+    expect(src).toMatch(/onCanvas:/);
+    expect(src).toMatch(/notify:/);
   });
 });

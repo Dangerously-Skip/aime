@@ -3,6 +3,8 @@
 import { useAssistantStore } from '@/stores/assistant-store';
 import { handleWidgetCreateEvent } from '@/lib/widgets/handle-create-event';
 import { handleMemoryExtractEvent } from '@/lib/memory/handle-extract-event';
+import { useToolBudgetStore } from '@/stores/tool-budget-store';
+import type { ToolBudgetReport } from '@/lib/mcp/filter';
 import type { ChunkType } from '@/lib/providers/base-provider';
 
 /**
@@ -42,7 +44,12 @@ export type AgnosticChunkType =
   | 'cron_create'
   | 'standing_order_create'
   | 'widget_create'
-  | 'memory_extract';
+  | 'memory_extract'
+  // Writes the mounted-tool count to a global store so the Connectors screen can
+  // warn that adding more has started to hurt tool selection. Purely global, so
+  // it belongs here — it was on chat and cowork only, meaning the warning simply
+  // never appeared for anyone working in code.
+  | 'system_init';
 
 /**
  * Compile-time proof that every agnostic type is a real chunk type. A typo here
@@ -53,6 +60,7 @@ const _agnosticAreRealChunks: readonly ChunkType[] = [
   'standing_order_create',
   'widget_create',
   'memory_extract',
+  'system_init',
 ] satisfies readonly AgnosticChunkType[];
 void _agnosticAreRealChunks;
 
@@ -130,6 +138,11 @@ const HANDLERS: Record<AgnosticChunkType, Handler> = {
   cron_create: addCronOrder,
   standing_order_create: addStandingOrder,
   widget_create: (event) => handleWidgetCreateEvent(event),
+  system_init: (event) => {
+    if (event.toolBudget) {
+      useToolBudgetStore.getState().setReport(event.toolBudget as ToolBudgetReport);
+    }
+  },
   memory_extract: (event, ctx) =>
     handleMemoryExtractEvent(
       event.memories as Array<{
