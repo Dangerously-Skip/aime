@@ -103,6 +103,15 @@ export interface CoreChunkContext {
    */
   onToolStarted?: (toolId: string, name: string, input: Record<string, unknown>) => void;
   /**
+   * Called after a tool result is recorded.
+   *
+   * The counterpart to `onToolStarted`, and the reason cowork can now delegate
+   * `tool_result` too: it sniffs the OUTPUT for a scheduling marker and files
+   * artifacts a Bash command produced. `toolName` is resolved by the surface,
+   * since only it can look the id up in its own message list.
+   */
+  onToolResult?: (toolId: string, output: string, isError: boolean | undefined) => void;
+  /**
    * Print a rendered document. REQUIRED, not optional, and that is the point:
    * the turn is blocked waiting for this, so a surface that forgets it hangs for
    * 60s. Making it a required field turns "forgot" into a compile error.
@@ -192,14 +201,14 @@ export function handleCoreChunk(
       return true;
     }
 
-    case 'tool_result':
-      store.updateToolResult(
-        chatId,
-        (event.tool_use_id as string) || (event.id as string) || '',
-        typeof event.result === 'string' ? event.result : JSON.stringify(event.result),
-        event.is_error as boolean | undefined,
-      );
+    case 'tool_result': {
+      const toolId = (event.tool_use_id as string) || (event.id as string) || '';
+      const output = typeof event.result === 'string' ? event.result : JSON.stringify(event.result);
+      const isError = event.is_error as boolean | undefined;
+      store.updateToolResult(chatId, toolId, output, isError);
+      ctx.onToolResult?.(toolId, output, isError);
       return true;
+    }
 
     case 'error':
       store.appendToLastAssistant(

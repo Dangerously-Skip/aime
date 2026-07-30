@@ -13,6 +13,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
+import { scheduleFromQuarryCron } from "@/lib/sse/quarry-cron";
 import { streamRegistry } from "@/lib/stream-registry";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useMemoryStore } from "@/stores/memory-store";
@@ -986,25 +987,11 @@ export function CoworkSurface() {
                 ?.toolCalls?.find((t) => t.id === toolId)?.status,
             subscribe: (listener) => useCoworkStore.subscribe(listener),
           });
-          // Detect QUARRY_CRON pattern in Bash commands — model echoes this to schedule reminders
+          // The marker can arrive in the command OR in the output — the model
+          // either writes the expression or computes it with a script. Same parse
+          // both times; it lived here twice, verbatim. See lib/sse/quarry-cron.
           if (toolName === "Bash") {
-            const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
-            const cronIdx = cmd.indexOf("QUARRY_CRON:");
-            if (cronIdx !== -1) {
-              const rest = cmd.slice(cronIdx + "QUARRY_CRON:".length).replace(/['"\\]/g, "");
-              const sep = rest.indexOf(":");
-              if (sep !== -1) {
-                const expression = rest.slice(0, sep).trim();
-                const cronPrompt = rest.slice(sep + 1).trim().split("\n")[0];
-                if (expression && cronPrompt) {
-                  const existing = useCronStore.getState().jobs;
-                  if (!existing.some((j) => j.expression === expression && j.prompt === cronPrompt)) {
-                    useAssistantStore.getState().addOrder({ instruction: cronPrompt, trigger: { type: 'cron', expression }, notifyVia: 'toast' });
-                    console.log("[Cowork] Cron job scheduled from Bash command:", expression, cronPrompt);
-                  }
-                }
-              }
-            }
+            scheduleFromQuarryCron(toolInput.command, "Cowork", "command");
           }
           // Parallel search result fetch — the SDK doesn't expose tool results in the stream,
           // so we call searxng directly when we see a web_search tool_use event.
@@ -1082,24 +1069,9 @@ export function CoworkSurface() {
             const allMsgs = useCoworkStore.getState().messages[chatId];
             const lastMsg = allMsgs?.at(-1);
             const matchingTc = lastMsg?.toolCalls?.find((tc) => tc.id === id);
-            // Detect QUARRY_CRON in Bash output (fallback: model computed the expression via a script)
+            // Same marker, the other arrival path — see the note at the command site.
             if (matchingTc?.name === "Bash") {
-              const cronIdx = result.indexOf("QUARRY_CRON:");
-              if (cronIdx !== -1) {
-                const rest = result.slice(cronIdx + "QUARRY_CRON:".length).replace(/['"\\]/g, "");
-                const sep = rest.indexOf(":");
-                if (sep !== -1) {
-                  const expression = rest.slice(0, sep).trim();
-                  const cronPrompt = rest.slice(sep + 1).trim().split("\n")[0];
-                  if (expression && cronPrompt) {
-                    const existing = useCronStore.getState().jobs;
-                    if (!existing.some((j) => j.expression === expression && j.prompt === cronPrompt)) {
-                      useAssistantStore.getState().addOrder({ instruction: cronPrompt, trigger: { type: 'cron', expression }, notifyVia: 'toast' });
-                      console.log("[Cowork] Cron job scheduled from Bash output:", expression, cronPrompt);
-                    }
-                  }
-                }
-              }
+              scheduleFromQuarryCron(result, "Cowork", "output");
             }
             if (matchingTc?.name === "Bash") {
               // Skip scanning curl/wget HTML output — too many false positives from embedded asset URLs

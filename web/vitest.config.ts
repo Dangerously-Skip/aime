@@ -5,6 +5,18 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
+      /**
+       * `server-only` is a guard for the BUNDLER, not for Node. Its main entry
+       * throws on import; Next resolves it to a no-op under the `react-server`
+       * condition, which vitest does not set — so every test touching a
+       * server-marked module blew up with "This module cannot be imported from a
+       * Client Component module".
+       *
+       * Aliased to the package's own empty entry, which is exactly what Next
+       * substitutes on the server. The guard still does its job where it matters:
+       * `next build` fails if a client component imports one of these.
+       */
+      'server-only': path.resolve(__dirname, 'node_modules/server-only/empty.js'),
     },
   },
   test: {
