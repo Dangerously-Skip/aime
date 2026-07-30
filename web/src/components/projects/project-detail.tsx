@@ -7,6 +7,9 @@ import { useChatStore } from "@/stores/chat-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
+import { handleCoreChunk } from "@/lib/sse/core-chunks";
+import { useDocumentPrint } from "@/hooks/use-document-print";
+import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import { buildProjectContext } from "@/lib/project/context-builder";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { AttachmentMenu } from "@/components/shared/attachment-menu";
@@ -52,7 +55,6 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -148,6 +150,9 @@ export function ProjectDetail({
   const startStreaming = useChatStore((s) => s.startStreaming);
   const appendToLastAssistant = useChatStore((s) => s.appendToLastAssistant);
   const addToolCall = useChatStore((s) => s.addToolCall);
+  // Needed by the shared stream handler; this screen never bound it, which is
+  // why a tool left running was never marked complete here.
+  const completeRunningTools = useChatStore((s) => s.completeRunningTools);
   const updateToolResult = useChatStore((s) => s.updateToolResult);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
@@ -181,6 +186,16 @@ export function ProjectDetail({
   // Track the conversation id launched from this page so SSE handlers can target it
   const launchedConvIdRef = useRef<string>("");
   const [activeChatId, setActiveChatId] = useState("");
+  // Required relay deps. This screen streams as the CHAT surface (see
+  // sendMessage below), so it can receive AskUserQuestion, RequestConnector
+  // and DocumentCreate — all three of which park the turn server-side. It
+  // handled none of them, so an approval card here hung for 300s.
+  const printDocument = useDocumentPrint();
+  // `activeChatId`, not the ref: reading a ref during render is a React
+  // violation (eslint caught it), and this value only needs to be the
+  // conversation the canvas belongs to.
+  const onCanvasEvent = useCanvasSseHandler("chat", activeChatId);
+
 
   // Scoped to the conversation this page launched, so an abort here cannot close
   // the Chat surface's Run — both record against the 'chat' surface.
@@ -210,30 +225,24 @@ export function ProjectDetail({
 
       const cid = launchedConvIdRef.current;
       if (!cid) return;
-      switch (event.type) {
-        case "text":
-          appendToLastAssistant(cid, (event.content as string) || "");
-          break;
-        case "tool_use": {
-          addToolCall(cid, {
-            id: (event.id as string) || `tool_${Date.now()}`,
-            name: (event.name as string) || "Unknown",
-            input: (event.input as Record<string, unknown>) || {},
-            status: "running",
-            startTime: Date.now(),
-          });
-          break;
-        }
-        case "tool_result": {
-          const id = (event.tool_use_id as string) || (event.id as string) || "";
-          const result = typeof event.result === "string" ? event.result : JSON.stringify(event.result);
-          updateToolResult(cid, id, result, event.is_error as boolean | undefined);
-          break;
-        }
-        case "error":
-          appendToLastAssistant(cid, `\n\n**Error:** ${(event.message as string) || "An error occurred"}`);
-          break;
+
+      // This screen streams as the CHAT surface, so every chunk chat can receive
+      // it can receive too — including the three that PARK THE TURN until the
+      // client answers. It handled none of them, so an approval card here hung
+      // for 300s with nothing on screen. Delegating gets all of them at once.
+      if (
+        handleCoreChunk(event, {
+          chatId: cid,
+          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          printDocument,
+          onCanvas: onCanvasEvent,
+        })
+      ) {
+        return;
       }
+
+      // No switch left: every chunk this screen handles is now handled centrally.
+      // `tool_use` was the last case and the shared core does it identically.
     },
     onDone() {
       runRecorder.succeed();

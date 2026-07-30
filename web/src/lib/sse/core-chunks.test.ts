@@ -178,6 +178,8 @@ describe('migration status is explicit, not accidental', () => {
     'components/surfaces/chat/chat-surface.tsx': [],
     'components/surfaces/cowork/cowork-surface.tsx': ['tool_use', 'tool_result'],
     'components/surfaces/code/code-surface.tsx': ['tool_use', 'tool_result'],
+    // Fully delegated: its switch is gone entirely.
+    'components/projects/project-detail.tsx': [],
   };
 
   it.each(Object.entries(EXPECTED))('%s skips exactly %j', (rel, expected) => {
@@ -307,10 +309,24 @@ describe('no surface can forget a relay handler', () => {
     'components/surfaces/chat/chat-surface.tsx',
     'components/surfaces/cowork/cowork-surface.tsx',
     'components/surfaces/code/code-surface.tsx',
-  ])('%s supplies printDocument and onCanvas', (rel) => {
+    'components/projects/project-detail.tsx',
+  ])('%s supplies the required relay deps', (rel) => {
     const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
     expect(src).toMatch(/printDocument,?/);
     expect(src).toMatch(/onCanvas:/);
-    expect(src).toMatch(/notify:/);
+  });
+
+  /**
+   * A surface with no card UI must declare `canRelayToClient: false` rather than
+   * leave it defaulting to true — otherwise the provider is handed
+   * onInputRequest/onConnectorRequest and parks the turn for 300s waiting for an
+   * answer that surface cannot possibly collect.
+   */
+  it('the assistant surface opts OUT of relay rather than hanging', () => {
+    const src = fs.readFileSync(
+      path.join(SRC, 'components/surfaces/assistant/assistant-surface.tsx'),
+      'utf8',
+    );
+    expect(src).toMatch(/canRelayToClient:\s*false/);
   });
 });
