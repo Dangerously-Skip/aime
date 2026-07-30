@@ -1,3 +1,11 @@
+import 'server-only';
+// ^ Reaches Node APIs (fs/os/crypto) and must never enter a client bundle.
+// Without this the only thing catching a client import is `next build`, the
+// slowest gate — and it caught one exactly once, after typecheck and the whole
+// unit suite went green. This fails at the IMPORT SITE instead, naming the file
+// that did it. If you hit it: the pure part of what you need probably belongs in
+// a sibling module (see lib/models/credential-ids.ts for the pattern).
+
 /**
  * Keychain-backed credential store (P1.2 / DR-12).
  *
