@@ -21,7 +21,8 @@
     "dist:linux": "next build && electron-builder --linux",
     "test:e2e": "playwright test",
     "test:mutation": "stryker run",
-    "lint:strict": "eslint --max-warnings 30"
+    "lint:strict": "eslint --max-warnings 30",
+    "eval:baseline": "vitest run --config vitest.eval.config.ts"
   },
   "build": {
     "appId": "com.aime.app",
