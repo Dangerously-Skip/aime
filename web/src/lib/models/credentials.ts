@@ -330,6 +330,31 @@ export function probeCredentialFile(key: Buffer, filePath: string): CredentialSt
   return probe;
 }
 
+/**
+ * A fingerprint of the credential blob's CONTENT, or `'absent'` when there is
+ * none, for callers that cache something derived from it.
+ *
+ * Exported so there is one answer to "has the credential file changed". The
+ * connector-health metadata cache had its own copy built from
+ * `ino:mtimeMs:size` — the same shape that was wrong twice here (see the note on
+ * `probeCache`), and wrong in the same way: a replaced file can present
+ * identical metadata, so the cache keeps serving a verdict for a blob that is
+ * gone. There it decides whether a connection reads as renewable or dead.
+ */
+export function credentialFileFingerprint(filePath?: string): string {
+  try {
+    // Path resolution is INSIDE the try: `getCredentialFilePath()` reaches
+    // `getDataDir()` and can throw in its own right. A default parameter would
+    // evaluate it outside, turning a resolvable-path problem into an exception
+    // for a caller that only wanted "has this changed".
+    return createHash('sha256')
+      .update(readFileSync(filePath ?? getCredentialFilePath()))
+      .digest('hex');
+  } catch {
+    return 'absent'; // no blob yet, or unreachable — writing one changes this
+  }
+}
+
 /** Where the process-wide blob lives. */
 export function getCredentialFilePath(): string {
   return path.join(getDataDir(), 'credentials.enc');

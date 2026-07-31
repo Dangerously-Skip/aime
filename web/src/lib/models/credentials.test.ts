@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
 import {
+  credentialFileFingerprint,
   createCredentialStore,
   probeCredentialFile,
   CredentialStoreUnavailable,
@@ -275,6 +276,43 @@ describe('probeCredentialFile', () => {
  * These assert the observable consequences rather than spying on `fs`, since
  * mocking the very boundary under test would prove nothing.
  */
+describe('credentialFileFingerprint', () => {
+  /**
+   * Shared with the connector-health metadata cache, which used to build its own
+   * `ino:mtimeMs:size` identity — the shape that cannot see a replacement whose
+   * metadata coincides. One answer, keyed on content, for both callers.
+   */
+  it('is stable while the bytes are, and changes when they change', async () => {
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
+    const first = credentialFileFingerprint(file);
+    expect(credentialFileFingerprint(file)).toBe(first);
+
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-y' });
+    expect(credentialFileFingerprint(file)).not.toBe(first);
+  });
+
+  it('changes even when inode, size and mtime all match', async () => {
+    const pinned = new Date(1_700_000_000_000);
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
+    fs.utimesSync(file, pinned, pinned);
+    const before = fs.statSync(file);
+    const first = credentialFileFingerprint(file);
+
+    const donor = path.join(dir, 'fp-donor.json');
+    await createCredentialStore(key, donor).set('openai', { apiKey: 'sk-y' });
+    fs.writeFileSync(file, fs.readFileSync(donor));
+    fs.utimesSync(file, pinned, pinned);
+
+    expect(fs.statSync(file).ino).toBe(before.ino);
+    expect(fs.statSync(file).mtimeMs).toBe(before.mtimeMs);
+    expect(credentialFileFingerprint(file)).not.toBe(first);
+  });
+
+  it('reports absent for a missing file rather than throwing', () => {
+    expect(credentialFileFingerprint(path.join(dir, 'nope.json'))).toBe('absent');
+  });
+});
+
 describe('regression: the write must be atomic', () => {
   it('replaces the file by rename instead of truncating it in place', async () => {
     const store = createCredentialStore(key, file);

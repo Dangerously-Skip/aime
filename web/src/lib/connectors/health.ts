@@ -289,17 +289,22 @@ let metadataCache:
  */
 const REFRESH_TOKEN_PRESENT = '<present>';
 
+/**
+ * Was `${ino}:${mtimeMs}:${size}`. That shape cannot see a replacement whose
+ * metadata happens to match — inodes are recycled on Linux, and two writes can
+ * land in the same tick with equal-length payloads — so this cache could keep
+ * serving metadata for a credential blob that had been rewritten. Here the
+ * consequence is a connection reading as renewable when it is dead, which is the
+ * failure P3.4 exists to prevent.
+ *
+ * Delegated rather than reimplemented: one answer to "has the credential file
+ * changed", keyed on content. See `credentialFileFingerprint`.
+ */
 async function credentialFileIdentity(): Promise<string> {
-  try {
-    // Dynamically imported like every other fs use here, so nothing drags node:fs
-    // into a client bundle that only wants the types.
-    const { stat } = await import('fs/promises');
-    const { getCredentialFilePath } = await import('../models/credentials');
-    const s = await stat(getCredentialFilePath());
-    return `${s.ino}:${s.mtimeMs}:${s.size}`;
-  } catch {
-    return 'absent'; // no blob yet — writing one changes this
-  }
+  // Dynamically imported like every other fs use here, so nothing drags node:fs
+  // into a client bundle that only wants the types.
+  const { credentialFileFingerprint } = await import('../models/credentials');
+  return credentialFileFingerprint();
 }
 
 async function mergedMetadata(configRaw: string): Promise<Record<string, ProvisionedEntry>> {
