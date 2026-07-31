@@ -110,19 +110,25 @@ export function displayValue(
 export function dispatchSelection(
   opt: ModelOption | undefined,
   value: string,
-  handlers: { onChange: (v: string) => void; onSelectModel?: (opt: ModelOption) => void },
+  handlers: { onChange?: (v: string) => void; onSelectModel?: (opt: ModelOption) => void },
 ): void {
   if (!opt) {
-    if (!isTierOption(value)) handlers.onChange(value);
+    if (!isTierOption(value)) handlers.onChange?.(value);
     return;
   }
-  if (opt.kind === "model" && !opt.providerConfig) handlers.onChange(value);
+  if (opt.kind === "model" && !opt.providerConfig) handlers.onChange?.(value);
   handlers.onSelectModel?.(opt);
 }
 
 interface ModelSelectorProps {
   value: string;
-  onChange: (value: string) => void;
+  /**
+   * Legacy escape hatch for a built-in enum. Optional because the surfaces now
+   * record EVERY selection as a `modelRoute` — one representation, so an
+   * unpinned selector genuinely means "whatever Settings resolves to" rather
+   * than a hardcoded default the user never chose.
+   */
+  onChange?: (value: string) => void;
   /**
    * Richer callback carrying the full selected option — a tier route, or a
    * pinned model (incl. `providerConfig` for user-added-provider models). When

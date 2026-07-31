@@ -24,7 +24,6 @@ const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 interface CoworkState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
-  model: ModelId;
   /**
    * Selected route — a tier or a pinned model (in-memory); null ⇒ use the
    * built-in `model` enum.
@@ -47,7 +46,6 @@ interface CoworkActions {
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
   attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: A2UIDocument }) => void;
-  setModel: (model: string) => void;
   setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
@@ -80,7 +78,6 @@ export const useCoworkStore = create<CoworkStore>()(
     (set) => ({
       messages: {},
       currentChatId: null,
-      model: 'opus',
       modelRoute: null,
       isStreaming: false,
       folderByChat: {},
@@ -144,14 +141,6 @@ export const useCoworkStore = create<CoworkStore>()(
           };
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
-
-      setModel: (model) => {
-        if (VALID_MODELS.has(model)) {
-          set({ model: model as ModelId, modelRoute: null });
-        } else {
-          console.warn(`[CoworkStore] Invalid model "${model}", keeping current`);
-        }
-      },
 
       setModelRoute: (opt) => set({ modelRoute: opt }),
 
@@ -319,7 +308,6 @@ export const useCoworkStore = create<CoworkStore>()(
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
-        model: state.model,
         currentChatId: state.currentChatId,
         folderByChat: state.folderByChat,
         contextFiles: state.contextFiles,

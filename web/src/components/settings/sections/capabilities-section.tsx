@@ -5,10 +5,6 @@ import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { detectPlatform, formatAcceleratorForDisplay } from '@/lib/voice/accelerator'
 import { useVoiceHotkeyStatus } from '@/hooks/use-voice-input'
-import { useChatStore } from '@/stores/chat-store'
-import { useCoworkStore } from '@/stores/cowork-store'
-import { useCodeStore } from '@/stores/code-store'
-import { useBrowserStore } from '@/stores/browser-store'
 import { useState, useEffect } from 'react'
 import { Badge } from '@/components/ui/badge'
 
@@ -26,15 +22,6 @@ export function CapabilitiesSection() {
   const setToolAccessMode = useSettingsStore((s) => s.setToolAccessMode)
   const toolProfile = useSettingsStore((s) => s.toolProfile)
   const setToolProfile = useSettingsStore((s) => s.setToolProfile)
-
-  const chatModel = useChatStore((s) => s.model)
-  const setChatModel = useChatStore((s) => s.setModel)
-
-  const coworkModel = useCoworkStore((s) => s.model)
-  const setCoworkModel = useCoworkStore((s) => s.setModel)
-
-  const codeModel = useCodeStore((s) => s.model)
-  const setCodeModel = useCodeStore((s) => s.setModel)
 
   const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled)
   const setPushToTalkEnabled = useSettingsStore((s) => s.setPushToTalkEnabled)
@@ -91,23 +78,6 @@ export function CapabilitiesSection() {
   }, [])
 
   const modelOptions = ['sonnet', 'opus', 'haiku'] as const
-
-  /**
-   * Browser is deliberately absent: it has no model of its own. It resolves
-   * through `resolveSendRoute` like every other surface, so the tier grid and
-   * the user's BYOK providers govern it — which is the whole point of a single
-   * chokepoint.
-   *
-   * The three below are a LEGACY fallback, not the primary control. Each of
-   * these surfaces already resolves a route first (`route?.model ?? model`), so
-   * this value is only reached when nothing resolves. Folding them into the tier
-   * grid the same way is the remaining half of the job.
-   */
-  const surfaceStores = [
-    { label: 'Chat', model: chatModel, setModel: setChatModel },
-    { label: 'Cowork', model: coworkModel, setModel: setCoworkModel },
-    { label: 'Code', model: codeModel, setModel: setCodeModel },
-  ]
 
   return (
     <div className="space-y-6">
@@ -274,30 +244,6 @@ export function CapabilitiesSection() {
         </div>
       </div>
 
-      {/* Default Model per Surface */}
-      <div>
-        <label className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          Default Model per Surface
-        </label>
-        <div className="mt-2 space-y-3">
-          {surfaceStores.map(({ label, model, setModel }) => (
-            <div key={label} className="flex items-center justify-between">
-              <span className="text-sm font-medium">{label}</span>
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="text-sm border rounded-md px-2 py-1 bg-background text-foreground"
-              >
-                {modelOptions.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }

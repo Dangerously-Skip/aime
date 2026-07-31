@@ -40,8 +40,6 @@ export function CodeSection() {
 
   const permissionMode = useCodeStore((s) => s.permissionMode)
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode)
-  const model = useCodeStore((s) => s.model)
-  const setModel = useCodeStore((s) => s.setModel)
 
   return (
     <div className="space-y-6">
@@ -98,18 +96,6 @@ export function CodeSection() {
         />
       </div>
 
-      <div>
-        <label className="text-sm font-medium">Default model</label>
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          className="mt-1.5 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <option value="sonnet">Sonnet</option>
-          <option value="opus">Opus</option>
-          <option value="haiku">Haiku</option>
-        </select>
-      </div>
     </div>
   )
 }

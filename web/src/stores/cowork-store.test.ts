@@ -25,7 +25,6 @@ beforeEach(() => {
   useCoworkStore.setState({
     messages: {},
     currentChatId: null,
-    model: 'opus',
     isStreaming: false,
     folderByChat: {},
     contextFiles: {},
@@ -149,15 +148,6 @@ describe('streaming lifecycle', () => {
 
     expect(store().messages['c'][0].isStreaming).toBe(true);
     expect(store().isStreaming).toBe(true);
-  });
-});
-
-describe('model validation', () => {
-  it('accepts only known models', () => {
-    store().setModel('haiku');
-    expect(store().model).toBe('haiku');
-    store().setModel('gpt-4');
-    expect(store().model).toBe('haiku');
   });
 });
 

@@ -78,7 +78,8 @@ interface UseSSEStreamReturn {
     message: string,
     chatId: string,
     surfaceId: string,
-    model: string,
+    /** null ⇒ nothing pinned; the server resolves from the registry. */
+    model: string | null,
     extra?: {
       personalPreferences?: string
       displayName?: string
@@ -140,7 +141,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       message: string,
       chatId: string,
       surfaceId: string,
-      model: string,
+      model: string | null,
       extra?: {
         personalPreferences?: string
         displayName?: string

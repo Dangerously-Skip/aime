@@ -17,7 +17,6 @@ export type ConnectionType = 'local' | 'github';
 interface CodeState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
-  model: ModelId;
   /**
    * Selected route — a tier or a pinned model (in-memory); null ⇒ use the
    * built-in `model` enum.
@@ -37,7 +36,6 @@ interface CodeActions {
   addMessage: (chatId: string, message: Message) => void;
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
-  setModel: (model: string) => void;
   setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
@@ -65,7 +63,6 @@ export const useCodeStore = create<CodeStore>()(
     (set) => ({
       messages: {},
       currentChatId: null,
-      model: 'sonnet',
       modelRoute: null,
       isStreaming: false,
       folderByChat: {},
@@ -113,7 +110,6 @@ export const useCodeStore = create<CodeStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setModel: (model) => set({ model: model as ModelId, modelRoute: null }),
       setModelRoute: (opt) => set({ modelRoute: opt }),
 
       startStreaming: () => set({ isStreaming: true }),
@@ -196,7 +192,6 @@ export const useCodeStore = create<CodeStore>()(
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
-        model: state.model,
         currentChatId: state.currentChatId,
         folderByChat: state.folderByChat,
         permissionMode: state.permissionMode,
