@@ -1546,6 +1546,29 @@ export class ClaudeProvider extends BaseProvider {
       } as Parameters<typeof query>[0])) {
         const c = chunk as Record<string, unknown>;
 
+        /**
+         * The SDK's terminal `result` message carries the turn's REAL usage —
+         * token counts the API reported, plus `total_cost_usd` computed by the
+         * CLI against current prices. It was being dropped, leaving the route to
+         * estimate tokens as `characters / 4` and price from a hardcoded table.
+         *
+         * Forwarded rather than consumed here because the route owns the `done`
+         * event; the provider's job is to stop throwing the numbers away.
+         */
+        if (c.type === 'result') {
+          const usage = c.usage as Record<string, number> | undefined;
+          yield {
+            type: 'usage',
+            provider: this.name,
+            inputTokens: usage?.input_tokens,
+            outputTokens: usage?.output_tokens,
+            cacheCreationInputTokens: usage?.cache_creation_input_tokens,
+            cacheReadInputTokens: usage?.cache_read_input_tokens,
+            totalCostUsd: c.total_cost_usd as number | undefined,
+            numTurns: c.num_turns as number | undefined,
+          };
+        }
+
         // Debug: log all system messages to find session_id
         if (c.type === 'system') {
           console.log('[Claude] System message:', JSON.stringify(c, null, 2));

@@ -886,6 +886,14 @@ export async function POST(
       let collectedResponse = '';
       const inputChars = finalMessage.length;
       let outputChars = 0;
+      /** Real numbers from the provider, when it reports them. See below. */
+      let reported: {
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheReadInputTokens?: number;
+        cacheCreationInputTokens?: number;
+        totalCostUsd?: number;
+      } | null = null;
       let toolCallCount = 0;
       const streamStartMs = Date.now();
       let queryTimedOut = false;
@@ -945,6 +953,20 @@ export async function POST(
             collectedResponse += text;
             outputChars += text.length;
           }
+          // The turn's real usage, forwarded by the provider from the SDK's
+          // terminal result message. Captured rather than relayed: the client
+          // reads usage off the `done` event, and two sources for one number is
+          // how they drift apart.
+          if (chunk.type === 'usage') {
+            reported = {
+              inputTokens: chunk.inputTokens as number | undefined,
+              outputTokens: chunk.outputTokens as number | undefined,
+              cacheReadInputTokens: chunk.cacheReadInputTokens as number | undefined,
+              cacheCreationInputTokens: chunk.cacheCreationInputTokens as number | undefined,
+              totalCostUsd: chunk.totalCostUsd as number | undefined,
+            };
+            continue;
+          }
           await sse.writeEvent(chunk);
         }
       } catch (streamError: unknown) {
@@ -994,15 +1016,32 @@ export async function POST(
         }
       }
 
-      // Emit done event with usage metrics (token estimates from char counts)
+      /**
+       * Usage: the provider's REPORTED numbers when it has them, an estimate
+       * only as a fallback.
+       *
+       * Both halves of the old estimate were wrong in ways that mattered.
+       * Tokens came from `characters / 4`, which ignores cache reads entirely —
+       * and on a long agent turn most input IS a cache read, billed at a tenth.
+       * Price came from a hardcoded table that had drifted a model generation:
+       * anything matching `opus` was charged at $0.015/$0.075 per 1k, while
+       * Opus 5 is $0.005/$0.025 — overstating every Opus run threefold.
+       *
+       * ROI telemetry is the thing this app offers that the reference tools do
+       * not, so a number people act on should come from the API rather than from
+       * arithmetic that silently rots as prices change.
+       */
       const durationMs = Date.now() - streamStartMs;
-      const inputTokens = Math.round(inputChars / 4);
-      const outputTokens = Math.round(outputChars / 4);
-      // Per-token cost estimates (Sonnet pricing as default)
       const modelName = effectiveModel || 'claude-sonnet-4-6';
-      const inputCostPer1k = modelName.includes('opus') ? 0.015 : modelName.includes('haiku') ? 0.00025 : 0.003;
-      const outputCostPer1k = modelName.includes('opus') ? 0.075 : modelName.includes('haiku') ? 0.00125 : 0.015;
-      const cost = (inputTokens / 1000) * inputCostPer1k + (outputTokens / 1000) * outputCostPer1k;
+      const estimated = !reported?.totalCostUsd;
+      const inputTokens =
+        reported?.inputTokens !== undefined
+          ? reported.inputTokens + (reported.cacheReadInputTokens ?? 0) + (reported.cacheCreationInputTokens ?? 0)
+          : Math.round(inputChars / 4);
+      const outputTokens = reported?.outputTokens ?? Math.round(outputChars / 4);
+      const { estimateCostUsd } = await import('@/lib/models/pricing');
+      const cost = reported?.totalCostUsd ?? estimateCostUsd(modelName, inputTokens, outputTokens);
+
       await sse.writeEvent({
         type: 'done',
         usage: {
@@ -1012,6 +1051,12 @@ export async function POST(
           model: modelName,
           durationMs,
           toolCallCount,
+          // Says whether the number above can be trusted. A cost that might be
+          // an estimate and might not, with no way to tell, is worse than either.
+          estimated,
+          ...(reported?.cacheReadInputTokens !== undefined
+            ? { cacheReadInputTokens: reported.cacheReadInputTokens }
+            : {}),
         },
       });
       console.log('[CHAT] Stream completed for surface:', surfaceId);

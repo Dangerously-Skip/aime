@@ -30,7 +30,17 @@ export type ChunkType =
   // exhaustiveness check.
   | 'memory_extract'
   | 'connector_request'
-  | 'document_print';
+  | 'document_print'
+  /**
+   * The turn's REAL usage, from the Agent SDK's terminal `result` message —
+   * token counts the API actually reported and the cost the SDK computed.
+   *
+   * Yielded because the route was otherwise estimating both: tokens as
+   * `characters / 4`, and price from a hardcoded table that had drifted a
+   * generation out of date. An estimate is fine until someone makes a decision
+   * on it, and ROI telemetry is exactly that.
+   */
+  | 'usage';
 
 /**
  * A single streaming chunk yielded by a provider's query() method.
