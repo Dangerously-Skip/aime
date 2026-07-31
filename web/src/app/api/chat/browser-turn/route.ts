@@ -91,6 +91,11 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'messages array is required' }, { status: 400 });
   }
 
+  // Whether the SERVER itself is set up for Bedrock. Needed before the registry
+  // lookup, because it decides whether a Bedrock model is even offerable.
+  const { isBedrockConfigured } = await import('@/lib/bedrock-env');
+  const bedrockConfigured = isBedrockConfigured();
+
   // ── Model: the registry answers, not a map local to this route ──────────
   // Same shape as /api/chat/[surfaceId]: a pinned model wins, otherwise the
   // surface's (capability, tier) intent resolves against what is actually
@@ -105,10 +110,10 @@ export async function POST(req: NextRequest) {
       createDefaultRegistry(),
       capability ?? route.capability,
       tier ?? route.tier,
-      // Bedrock/Vertex are deliberately NOT counted as available here — see the
-      // refusal below. Offering a model this route cannot reach would turn a
-      // clear error into a confusing one.
-      (p) => p.id === 'anthropic',
+      // Bedrock counts as available when the server is configured for it, the
+      // same test /api/chat/[surfaceId] applies. Before this route could reach
+      // Bedrock it had to exclude it, or it would offer a model it could not run.
+      (p) => p.id === 'anthropic' || (p.id === 'bedrock' && bedrockConfigured),
     );
     effectiveModel = resolved?.model.driverModel ?? 'sonnet';
   }
@@ -143,36 +148,26 @@ export async function POST(req: NextRequest) {
   });
 
   /**
-   * Bedrock and Vertex are configured as ENVIRONMENT for the Agent SDK
-   * subprocess (`CLAUDE_CODE_USE_BEDROCK=1`, …). A raw Messages API call cannot
-   * consume that, and neither `@anthropic-ai/bedrock-sdk` nor
-   * `@anthropic-ai/vertex-sdk` is a dependency — so this route genuinely cannot
-   * serve them yet.
-   *
-   * Refusing by name is the point. The old code produced "ANTHROPIC_API_KEY not
-   * configured", which sent a Bedrock user hunting for a key they correctly do
-   * not have.
+   * Bedrock and Vertex used to be refused here with a 501: they are configured
+   * as ENVIRONMENT for the Agent SDK subprocess, and a raw HTTP client has no
+   * subprocess to configure. They work now because `createTurnClient` builds the
+   * matching signing client instead — the Messages surface is identical after
+   * construction, so nothing below this point changes.
    */
-  const gatewayEnv = exec.env ?? {};
-  if (gatewayEnv.CLAUDE_CODE_USE_BEDROCK || gatewayEnv.CLAUDE_CODE_USE_VERTEX) {
-    const which = gatewayEnv.CLAUDE_CODE_USE_BEDROCK ? 'Bedrock' : 'Vertex';
-    return Response.json(
-      {
-        error:
-          `The browser surface cannot use ${which} yet — it calls the Messages API directly, ` +
-          `and ${which} is configured through the Agent SDK's environment. Other surfaces work ` +
-          `on ${which}. Add an Anthropic API key in Settings to use this one.`,
-      },
-      { status: 501 },
-    );
-  }
+  // A server configured for Bedrock but with no provider added in Settings has
+  // no `exec.env`; fill it from the same helper the Agent SDK path uses so both
+  // read one source of truth.
+  const { getBedrockEnv } = await import('@/lib/bedrock-env');
+  const gatewayEnv =
+    exec.env ?? (bedrockConfigured && !exec.apiKey ? getBedrockEnv() : undefined);
 
-  // A user-added provider supplies its own base URL; the default path needs a
-  // key from somewhere the server can read.
+  // A user-added provider supplies its own base URL; Bedrock and Vertex carry
+  // their own credentials; only the plain Anthropic path needs a key.
   const { getServerAnthropicKey } = await import('@/lib/models/credentials');
   const resolvedApiKey =
     exec.apiKey || (await getServerAnthropicKey()) || process.env.ANTHROPIC_API_KEY;
-  if (!resolvedApiKey && !exec.baseUrl) {
+  const usesGatewayCreds = Boolean(gatewayEnv);
+  if (!resolvedApiKey && !exec.baseUrl && !usesGatewayCreds) {
     return Response.json(
       {
         error:
@@ -182,11 +177,30 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const client = new Anthropic({
-    apiKey: resolvedApiKey ?? '',
-    ...(exec.baseUrl ? { baseURL: exec.baseUrl } : {}),
-  });
-  console.log('[BROWSER-TURN] model:', resolvedModel, exec.baseUrl ? '(custom base URL)' : '');
+  const { createTurnClient } = await import('@/lib/models/turn-client');
+  let target;
+  try {
+    target = createTurnClient({
+      exec: { ...exec, env: gatewayEnv },
+      apiKey: resolvedApiKey,
+      model: resolvedModel,
+    });
+  } catch (err) {
+    // The Bedrock and Vertex clients THROW on incomplete configuration (a
+    // missing region, unresolvable Google credentials). Surfacing that as a
+    // clean 400 keeps a setup problem legible instead of a 500 with a stack.
+    return Response.json(
+      { error: `Could not reach the configured provider: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 400 },
+    );
+  }
+  const client = target.client;
+  console.log(
+    '[BROWSER-TURN]',
+    target.backend,
+    target.model,
+    exec.baseUrl ? '(custom base URL)' : '',
+  );
   const sse = createSSEStream();
 
   (async () => {
@@ -194,7 +208,7 @@ export async function POST(req: NextRequest) {
 
     try {
       const streamParams: Anthropic.MessageCreateParams = {
-        model: resolvedModel,
+        model: target.model,
         max_tokens: 4096,
         messages,
         stream: true,

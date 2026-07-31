@@ -15,8 +15,10 @@ import { NextRequest } from 'next/server';
  * would leave us asserting that the route calls the code we told it to call,
  * which is the failure mode `security-section.enforcement.test.ts` documents.
  */
-const { anthropicCtor, streamMock } = vi.hoisted(() => ({
+const { anthropicCtor, bedrockCtor, vertexCtor, streamMock } = vi.hoisted(() => ({
   anthropicCtor: vi.fn(),
+  bedrockCtor: vi.fn(),
+  vertexCtor: vi.fn(),
   streamMock: vi.fn(),
 }));
 
@@ -29,6 +31,37 @@ vi.mock('@anthropic-ai/sdk', () => {
     }
   }
   return { default: FakeAnthropic };
+});
+
+/**
+ * The gateway SDKs are mocked for the same reason as the base one — they are the
+ * network. Their CONSTRUCTORS are the part this route owns, and the real ones
+ * throw on incomplete config, so the fake reproduces that: it is the behaviour
+ * the route's 400 depends on.
+ */
+vi.mock('@anthropic-ai/bedrock-sdk', () => {
+  class FakeBedrock {
+    messages: { stream: typeof streamMock };
+    constructor(opts: Record<string, unknown>) {
+      if (!opts.awsRegion && !process.env.AWS_REGION && !process.env.AWS_DEFAULT_REGION) {
+        throw new Error('No AWS region or base URL found. Set `awsRegion` in the constructor…');
+      }
+      bedrockCtor(opts);
+      this.messages = { stream: streamMock };
+    }
+  }
+  return { AnthropicBedrockMantle: FakeBedrock };
+});
+
+vi.mock('@anthropic-ai/vertex-sdk', () => {
+  class FakeVertex {
+    messages: { stream: typeof streamMock };
+    constructor(opts: Record<string, unknown>) {
+      vertexCtor(opts);
+      this.messages = { stream: streamMock };
+    }
+  }
+  return { AnthropicVertex: FakeVertex };
 });
 
 import { POST } from './route';
@@ -52,21 +85,27 @@ const messages = [{ role: 'user' as const, content: 'hi' }];
 const sentModel = () => (streamMock.mock.calls.at(-1)?.[0] as { model: string } | undefined)?.model;
 
 let priorEnvKey: string | undefined;
+let priorRegion: string | undefined;
 
 beforeEach(() => {
   anthropicCtor.mockReset();
+  bedrockCtor.mockReset();
+  vertexCtor.mockReset();
   streamMock.mockReset();
   streamMock.mockImplementation(() => ({
     on: vi.fn(),
     finalMessage: async () => ({ stop_reason: 'end_turn', usage: { output_tokens: 1 } }),
   }));
   priorEnvKey = process.env.ANTHROPIC_API_KEY;
+  priorRegion = process.env.AWS_REGION;
   process.env.ANTHROPIC_API_KEY = 'sk-env-key';
 });
 
 afterEach(() => {
   if (priorEnvKey === undefined) delete process.env.ANTHROPIC_API_KEY;
   else process.env.ANTHROPIC_API_KEY = priorEnvKey;
+  if (priorRegion === undefined) delete process.env.AWS_REGION;
+  else process.env.AWS_REGION = priorRegion;
 });
 
 describe('POST /api/chat/browser-turn — validation', () => {
@@ -151,30 +190,58 @@ describe('credentials are resolved server-side', () => {
   });
 });
 
-describe('Bedrock and Vertex are refused by name, not mislabelled', () => {
+describe('Bedrock and Vertex actually run now', () => {
   /**
-   * This route calls the Messages API directly, and Bedrock/Vertex are driven by
-   * the Agent SDK subprocess's ENVIRONMENT (`CLAUDE_CODE_USE_BEDROCK=1`), which a
-   * raw HTTP client cannot consume. So it genuinely cannot serve them.
-   *
-   * The old code said "ANTHROPIC_API_KEY not configured", which sent a Bedrock
-   * user hunting for a key they correctly do not have. The assertion below is on
-   * the WORDING for that reason: an honest error is the deliverable here.
+   * These used to return 501 "the browser surface cannot use Bedrock yet",
+   * because Bedrock support lives in the Agent SDK's subprocess and this route
+   * calls the Messages API directly. `createTurnClient` builds the matching
+   * signing client instead — the Messages surface is identical after that.
    */
-  it.each([
-    ['bedrock', /Bedrock/],
-    ['vertex', /Vertex/],
-  ])('refuses %s with a message naming it', async (agentMode, expected) => {
+  const bedrockProvider = { providerId: 'bedrock', agentMode: 'bedrock' };
+
+  it('runs a Bedrock turn with no Anthropic key anywhere', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.AWS_REGION = 'ap-southeast-2';
+
+    const res = await post({ messages, providerConfig: bedrockProvider });
+
+    expect(res.status, 'a configured Bedrock user was still refused').toBe(200);
+    expect(bedrockCtor).toHaveBeenCalled();
+    expect(anthropicCtor, 'went to Anthropic instead of Bedrock').not.toHaveBeenCalled();
+    // Bedrock namespaces its ids; the bare one 404s there.
+    expect(sentModel()).toMatch(/^anthropic\./);
+  });
+
+  it('runs a Vertex turn', async () => {
     delete process.env.ANTHROPIC_API_KEY;
     const res = await post({
       messages,
-      providerConfig: { providerId: agentMode, agentMode },
+      providerConfig: { providerId: 'vertex', agentMode: 'vertex' },
     });
-    expect(res.status).toBe(501);
+
+    expect(res.status).toBe(200);
+    expect(vertexCtor).toHaveBeenCalled();
+    // Vertex takes the bare id — namespacing it would be the Bedrock rule
+    // applied where it does not belong.
+    expect(sentModel()).not.toMatch(/^anthropic\./);
+  });
+
+  /**
+   * The clients THROW on incomplete configuration. A Bedrock user must get a
+   * setup problem, never the old "no API key" message that sent them hunting
+   * for a key they correctly do not have.
+   */
+  it('reports a misconfigured provider as a setup problem, not a missing key', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.AWS_REGION;
+    delete process.env.AWS_DEFAULT_REGION;
+
+    const res = await post({ messages, providerConfig: bedrockProvider });
     const body = JSON.stringify(await res.json());
-    expect(body).toMatch(expected);
-    expect(body).not.toMatch(/ANTHROPIC_API_KEY not configured/);
-    expect(streamMock).not.toHaveBeenCalled();
+
+    expect(res.status).toBe(400);
+    expect(body).toMatch(/region/i);
+    expect(body).not.toMatch(/Settings|ANTHROPIC_API_KEY/);
   });
 });
 
