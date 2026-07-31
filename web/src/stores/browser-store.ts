@@ -6,6 +6,7 @@ import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import type { PendingContextItem } from '@/lib/browser-interactions';
+import { withToolCall, withToolResult } from '@/lib/stores/tool-call-reducers';
 
 export interface BrowserTab {
   id: string;
@@ -140,36 +141,14 @@ export const useBrowserStore = create<BrowserStore>()(
 
       addToolCall: (chatId, toolCall) =>
         set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: [...(last.toolCalls ?? []), toolCall],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
+          const next = withToolCall(state.messages, chatId, toolCall);
+          return next ? { messages: next } : state;
         }),
 
       updateToolResult: (chatId, toolCallId, output, isError) =>
         set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.id === toolCallId
-                ? { ...tc, output, status: (isError ? 'error' : 'complete') as ToolCall['status'], endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
+          const next = withToolResult(state.messages, chatId, toolCallId, output, isError, Date.now());
+          return next ? { messages: next } : state;
         }),
 
       setLoopPhase: (phase) => set({ loopPhase: phase }),

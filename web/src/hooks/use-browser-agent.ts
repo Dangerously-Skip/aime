@@ -12,6 +12,7 @@ import {
   type TabInfo,
   type WebviewRef,
 } from '@/lib/browser-tools';
+import { parseSSELines } from '@/lib/sse/parse-sse-lines';
 import { getBrowserConfig } from '@/lib/surfaces/browser-config';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 
@@ -368,13 +369,13 @@ async function sendTurn(
 
     if (done) {
       if (buffer.trim()) {
-        parseSSEBuffer(buffer + '\n', processEvent);
+        parseSSELines<SSEEvent>(buffer + '\n', processEvent);
       }
       break;
     }
 
     buffer += decoder.decode(value, { stream: true });
-    buffer = parseSSEBuffer(buffer, processEvent);
+    buffer = parseSSELines<SSEEvent>(buffer, processEvent);
   }
 
   // Flush any remaining text
@@ -385,32 +386,3 @@ async function sendTurn(
   return { assistantBlocks, stopReason };
 }
 
-// ── SSE parsing (mirrors use-sse-stream.ts logic) ────────────────────────────
-
-function parseSSEBuffer(buffer: string, onEvent: (event: SSEEvent) => void): string {
-  const lines = buffer.split('\n');
-  let remaining = '';
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (i === lines.length - 1 && !buffer.endsWith('\n')) {
-      remaining = line;
-      continue;
-    }
-
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith(':')) continue;
-
-    if (trimmed.startsWith('data:')) {
-      const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') return '';
-      try {
-        onEvent(JSON.parse(payload));
-      } catch {
-        // Skip unparseable
-      }
-    }
-  }
-
-  return remaining;
-}
