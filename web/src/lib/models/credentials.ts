@@ -20,7 +20,7 @@ import 'server-only';
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import * as fs from 'fs/promises';
-import { readFileSync, statSync, type BigIntStats } from 'fs';
+import { readFileSync } from 'fs';
 import * as path from 'path';
 import { getDataDir } from '@/lib/app-paths';
 
@@ -249,36 +249,33 @@ export interface CredentialStoreProbe {
 }
 
 /**
- * Memo of the last probe per file, invalidated by the file's identity changing.
+ * Memo of the last probe per file, keyed on the file's CONTENT.
  *
- * Keyed on NANOSECOND times, and on ctime as well as mtime, because millisecond
- * mtime + inode + size was not enough to notice a replacement. CI caught it:
+ * It used to key on identity — inode + mtime + size — and that was wrong twice,
+ * each time only on a machine other than the one it was written on:
  *
- *   - `rm` then recreate REUSES the inode on ext4/overlayfs, routinely
- *   - both writes landed in the same millisecond
- *   - the two payloads were the same length
+ *   1. `rm` + recreate REUSES the inode on ext4/overlayfs, and with millisecond
+ *      mtime and equal-length payloads all three components matched. A file
+ *      rewritten under a different key kept its old verdict.
+ *   2. Moving to nanosecond `mtimeNs` + `ctimeNs` fixed that on the machines it
+ *      was tested on, and still failed on a CI runner whose filesystem does not
+ *      distinguish the two writes.
  *
- * …so all three components matched and the memo returned the previous verdict for
- * a file that had been completely rewritten with a different key. That is not a
- * cosmetic staleness: callers decide whether to WRITE on the strength of this
- * (see lib/mcp/secret-store.ts — migration lifts secrets out of the config only
- * when the store reads as usable), so a stale `unreadable` refuses to store
- * secrets and a stale `ok` writes over a file it cannot actually read.
+ * The pattern is the lesson: filesystem timestamp and inode semantics vary by
+ * filesystem, kernel and mount, so any invalidation built on them is correct
+ * only on the hardware you happened to try. Hashing the bytes is correct
+ * everywhere, and cannot be defeated by a clock, a recycled inode or a
+ * coarse-grained tick.
  *
- * `ctimeNs` changes on creation even when an inode is recycled, and nanosecond
- * precision removes the same-tick collision.
+ * This is not a cosmetic staleness: callers decide whether to WRITE on the
+ * strength of it (see lib/mcp/secret-store.ts — migration lifts secrets out of
+ * the config only when the store reads as usable), so a stale `unreadable`
+ * refuses to store secrets and a stale `ok` writes over a file it cannot read.
+ *
+ * The memo still earns its place: it skips the DECRYPT, which is the expensive
+ * part. Reading a few KB and hashing it is not.
  */
-const probeCache = new Map<
-  string,
-  {
-    keyId: string;
-    ino: bigint;
-    mtimeNs: bigint;
-    ctimeNs: bigint;
-    size: bigint;
-    probe: CredentialStoreProbe;
-  }
->();
+const probeCache = new Map<string, { keyId: string; contentHash: string; probe: CredentialStoreProbe }>();
 
 /** Identifies a key without keeping it around. */
 function keyFingerprint(key: Buffer): string {
@@ -294,37 +291,30 @@ function keyFingerprint(key: Buffer): string {
  * wrong destroys credentials. An async probe would leave the decision racing the
  * work it is meant to gate.
  *
- * Memoised on the file's identity (inode + mtime + size) plus a fingerprint of the
- * key, so the common case costs one `stat` rather than a decrypt. Every write
- * lands on a new inode (temp + rename), so the memo self-invalidates.
+ * Memoised on a hash of the file's bytes plus a fingerprint of the key, so a
+ * repeat probe skips the decrypt. See the note on `probeCache` for why it is not
+ * keyed on inode or timestamps.
  */
 export function probeCredentialFile(key: Buffer, filePath: string): CredentialStoreProbe {
-  // bigint stat for `mtimeNs`/`ctimeNs` — see the note on probeCache for why
-  // millisecond precision was not enough.
-  let stat: BigIntStats;
+  let raw: Buffer;
   try {
-    stat = statSync(filePath, { bigint: true });
+    raw = readFileSync(filePath);
   } catch {
     return { status: 'empty', path: filePath }; // nothing stored yet
   }
 
   const cacheKey = path.resolve(filePath);
   const keyId = keyFingerprint(key);
+  const contentHash = createHash('sha256').update(raw).digest('hex');
+
   const cached = probeCache.get(cacheKey);
-  if (
-    cached &&
-    cached.keyId === keyId &&
-    cached.ino === stat.ino &&
-    cached.mtimeNs === stat.mtimeNs &&
-    cached.ctimeNs === stat.ctimeNs &&
-    cached.size === stat.size
-  ) {
+  if (cached && cached.keyId === keyId && cached.contentHash === contentHash) {
     return cached.probe;
   }
 
   let probe: CredentialStoreProbe;
   try {
-    const store = decodeStore(key, readFileSync(filePath));
+    const store = decodeStore(key, raw);
     probe = {
       status: Object.keys(store).length === 0 ? 'empty' : 'ok',
       path: filePath,
@@ -336,14 +326,7 @@ export function probeCredentialFile(key: Buffer, filePath: string): CredentialSt
       detail: err instanceof Error ? err.message : String(err),
     };
   }
-  probeCache.set(cacheKey, {
-    keyId,
-    ino: stat.ino,
-    mtimeNs: stat.mtimeNs,
-    ctimeNs: stat.ctimeNs,
-    size: stat.size,
-    probe,
-  });
+  probeCache.set(cacheKey, { keyId, contentHash, probe });
   return probe;
 }
 

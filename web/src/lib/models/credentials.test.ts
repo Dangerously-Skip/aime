@@ -210,22 +210,26 @@ describe('probeCredentialFile', () => {
   });
 
   /**
-   * The test above passed on macOS and failed on CI, which is the interesting
-   * part: the memo keyed on inode + millisecond mtime + size, and on Linux
-   * `rm` + recreate reuses the inode, both writes landed in the same
-   * millisecond, and `sk-x`/`sk-y` are the same length. All three matched, so
-   * the memo answered for a file that had been rewritten with a different key.
+   * The memo must key on CONTENT, not on filesystem metadata.
    *
-   * Reproduced here without depending on the filesystem recycling an inode:
-   * write the replacement IN PLACE (same inode by construction) and force the
-   * mtime back to the millisecond. Only `ctimeNs` distinguishes the two, which
-   * is the whole point — it cannot be set, and it moves on any write.
+   * This started as a reproduction of one bug and caught a second. Keying on
+   * inode + millisecond mtime + size failed on Linux, where `rm` + recreate
+   * reuses the inode and equal-length payloads collide. Keying on nanosecond
+   * `mtimeNs` + `ctimeNs` fixed that locally and then failed on a CI runner whose
+   * filesystem did not separate the two writes either.
+   *
+   * So the test no longer tries to construct a collision on a particular
+   * filesystem's timestamps — that was chasing the machine rather than the
+   * invariant. It makes every metadata component identical BY CONSTRUCTION
+   * (same inode via an in-place write, same size, mtime pinned to the exact same
+   * value) and requires the probe to notice anyway. Only content can tell these
+   * apart, which is the property that holds on every filesystem.
    */
-  it('notices a replacement that collides on inode, size and millisecond mtime', async () => {
+  it('notices a replacement whose inode, size and mtime are all identical', async () => {
     const other = randomBytes(32);
     // A whole number of milliseconds: `utimesSync` truncates sub-millisecond
-    // precision, so pinning both versions to this is the only way to make the
-    // mtimes byte-identical rather than merely close.
+    // precision, so pinning both versions to this makes the mtimes byte-identical
+    // rather than merely close.
     const pinned = new Date(1_700_000_000_000);
 
     await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
@@ -233,19 +237,31 @@ describe('probeCredentialFile', () => {
     const before = fs.statSync(file);
     expect(probeCredentialFile(other, file).status).toBe('unreadable'); // memoised
 
-    // Same-length payload under the other key, dropped over the original bytes.
+    // Same-length payload under the other key, written over the original bytes.
     const donor = path.join(dir, 'donor.json');
     await createCredentialStore(other, donor).set('openai', { apiKey: 'sk-y' });
     fs.writeFileSync(file, fs.readFileSync(donor));
     fs.utimesSync(file, pinned, pinned);
 
     const after = fs.statSync(file);
-    expect(after.ino).toBe(before.ino);
+    expect(after.ino, 'inode differs — the collision was not constructed').toBe(before.ino);
     expect(after.size).toBe(before.size);
     expect(after.mtimeMs).toBe(before.mtimeMs);
 
     expect(probeCredentialFile(other, file).status).toBe('ok');
     expect(probeCredentialFile(key, file).status).toBe('unreadable');
+  });
+
+  /**
+   * The other half: identical CONTENT must still hit the memo. Without this a
+   * "fix" that simply disabled caching would pass everything above.
+   */
+  it('still memoises when the bytes have not changed', async () => {
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
+    const first = probeCredentialFile(key, file);
+    // Touch the metadata without changing a byte.
+    fs.utimesSync(file, new Date(1_600_000_000_000), new Date(1_600_000_000_000));
+    expect(probeCredentialFile(key, file)).toBe(first); // same object ⇒ cache hit
   });
 });
 
