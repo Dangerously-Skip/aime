@@ -597,13 +597,12 @@ export function BrowserSurface() {
         }
       }
 
-      // Check API key is available before making the request
-      const currentApiKey = useSettingsStore.getState().anthropicApiKey;
-      if (!currentApiKey) {
-        appendToLastAssistant(id, "No API key configured. Go to Settings > Connectors and add your nib AI Studio Gateway key.");
-        stopStreaming(id);
-        return;
-      }
+      // No client-side key gate. It used to refuse the turn unless
+      // `settings.anthropicApiKey` was set — and pointed at the nib AI Studio
+      // Gateway, which was deleted in P0.4 — so the surface was unusable for
+      // anyone whose credentials live server-side (env, the encrypted credential
+      // store, a user-added provider). The server resolves credentials now and
+      // returns a specific, actionable message when there genuinely are none.
 
       const wv = webviewNodeRef.current;
       if (!wv) {
@@ -612,7 +611,14 @@ export function BrowserSurface() {
         return;
       }
 
-      await runAgentLoop(text, model, wv, context.length > 0 ? context : undefined);
+      // `/model` set a modelOverride that this surface ignored entirely; a null
+      // model means unpinned, which the server resolves from the registry.
+      await runAgentLoop(
+        text,
+        sessionControls?.modelOverride ?? model,
+        wv,
+        context.length > 0 ? context : undefined,
+      );
     },
     // sessionControls is read for slash-command handling and was previously
     // missing, so chained slash commands applied against a stale value.

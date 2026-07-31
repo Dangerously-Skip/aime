@@ -73,7 +73,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
   }, []);
 
   const runAgentLoop = useCallback(
-    async (userMessage: string, model: string, initialWebview: WebviewRef, pendingContext?: PendingContextItem[]) => {
+    async (userMessage: string, model: string | null, initialWebview: WebviewRef, pendingContext?: PendingContextItem[]) => {
       let webview = initialWebview;
       // Abort any previous run
       if (abortRef.current) abortRef.current.abort();
@@ -290,7 +290,7 @@ async function handleSwitchTab(
 
 async function sendTurn(
   messages: AnthropicMessage[],
-  model: string,
+  model: string | null,
   system: string,
   signal: AbortSignal,
   callbacks: Pick<UseBrowserAgentOptions, 'onText' | 'onToolUse'>,
@@ -304,9 +304,12 @@ async function sendTurn(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages,
-      model,
+      // Omitted when unpinned, so the server resolves it from the registry.
+      ...(model ? { model } : {}),
       system,
       tools: BROWSER_TOOL_SCHEMAS,
+      // Still sent when the user has a BYOK key in settings, but no longer
+      // required — the server falls back to its own credential store and env.
       ...(apiKey ? { apiKey } : {}),
     }),
     signal,

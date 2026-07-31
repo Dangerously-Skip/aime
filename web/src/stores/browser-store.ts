@@ -19,7 +19,15 @@ export type LoopPhase = 'idle' | 'observing' | 'thinking' | 'acting';
 interface BrowserState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
-  model: ModelId;
+  /**
+   * `null` = unpinned: the server resolves the model from the registry using the
+   * browser surface's (capability, tier) route, exactly as every other surface
+   * does. It used to default to the literal `'sonnet'`, which meant the client
+   * pinned a model on every request and the registry was never consulted — the
+   * surface silently ignored per-surface routing and stayed on whatever that
+   * alias mapped to.
+   */
+  model: ModelId | null;
   isStreaming: boolean;
   loopPhase: LoopPhase;
   tabSessions: Record<string, BrowserTab[]>;
@@ -60,7 +68,7 @@ export const useBrowserStore = create<BrowserStore>()(
     (set, get) => ({
       messages: {},
       currentChatId: null,
-      model: 'sonnet',
+      model: null,
       isStreaming: false,
       loopPhase: 'idle',
       tabSessions: {},
@@ -105,7 +113,9 @@ export const useBrowserStore = create<BrowserStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setModel: (model) => set({ model: model as ModelId }),
+      // `''` from the Settings picker means "unpinned" — stored as null so the
+      // server resolves from the registry rather than receiving an empty string.
+      setModel: (model) => set({ model: (model || null) as ModelId | null }),
 
       startStreaming: () => set({ isStreaming: true }),
 

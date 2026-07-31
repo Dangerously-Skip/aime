@@ -95,11 +95,17 @@ export function CapabilitiesSection() {
 
   const modelOptions = ['sonnet', 'opus', 'haiku'] as const
 
+  // `nullable` = this surface can be left unpinned, letting the server resolve
+  // the model from the registry. Only Browser supports it so far; the other
+  // three stores still default to a hardcoded model, which pins every request
+  // and suppresses capability+tier routing for that surface. Worth unpicking
+  // separately — Cowork already has a newer route-selecting picker
+  // (`modelRoute` + `resolveSendRoute`) that this list predates.
   const surfaceStores = [
-    { label: 'Chat', model: chatModel, setModel: setChatModel },
-    { label: 'Cowork', model: coworkModel, setModel: setCoworkModel },
-    { label: 'Code', model: codeModel, setModel: setCodeModel },
-    { label: 'Browser', model: browserModel, setModel: setBrowserModel },
+    { label: 'Chat', model: chatModel, setModel: setChatModel, nullable: false },
+    { label: 'Cowork', model: coworkModel, setModel: setCoworkModel, nullable: false },
+    { label: 'Code', model: codeModel, setModel: setCodeModel, nullable: false },
+    { label: 'Browser', model: browserModel, setModel: setBrowserModel, nullable: true },
   ]
 
   return (
@@ -273,14 +279,18 @@ export function CapabilitiesSection() {
           Default Model per Surface
         </label>
         <div className="mt-2 space-y-3">
-          {surfaceStores.map(({ label, model, setModel }) => (
+          {surfaceStores.map(({ label, model, setModel, nullable }) => (
             <div key={label} className="flex items-center justify-between">
               <span className="text-sm font-medium">{label}</span>
               <select
-                value={model}
+                // `''` is the unpinned state (stored as null): the server picks
+                // from the registry using the surface's capability+tier route.
+                // Pinning a model here suppresses that routing for the surface.
+                value={model ?? ''}
                 onChange={(e) => setModel(e.target.value)}
                 className="text-sm border rounded-md px-2 py-1 bg-background text-foreground"
               >
+                {nullable && <option value="">Auto</option>}
                 {modelOptions.map((opt) => (
                   <option key={opt} value={opt}>
                     {opt}
