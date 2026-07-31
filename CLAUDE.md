@@ -19,45 +19,54 @@ cd web && npm run dist           # Build macOS app (next build + electron-builde
 Run `npm run typecheck` and `npm test` before commits and ships. No extra local
 config is needed: a fresh clone typechecks after `npm install`.
 
-## CI runs on self-hosted runners, and that changes a few things
+## CI runs on elastic runners, and one detour is worth knowing about
 
-GitHub-hosted runners are **unavailable on this account** — every `ubuntu-latest`
-job failed in ~9s with *"recent account payments have failed or your spending
-limit needs to be increased"*. So CI is three **self-hosted** runners on the
-Contabo box (`redacted-host`), registered at org level in the Default group with
-visibility: all, labelled:
+`ci.yml` targets `runs-on: ${{ vars.FAST_RUNNER || 'self-hosted' }}`, with the
+repo variable set to `blacksmith-4vcpu-ubuntu-2404`. The fallback is deliberate:
+if the variable is ever unset the self-hosted path still works rather than
+hard-failing.
 
-```
-self-hosted, Linux, X64, contabo
-```
+**The detour, because the reasoning was sound and the conclusion still wrong.**
+GitHub-hosted runners genuinely could not start, so `ubuntu-latest` jobs never
+ran and every push went ungated. The mechanism was narrower than the "recent
+account payments have failed" message suggested: the org's 2,000 free minutes
+were exhausted, **1,912 of them by one repo's per-PR macOS jobs at a 10× quota
+multiplier**, after which every hosted job org-wide failed at ASSIGNMENT — zero
+steps, no log. The fix was an org-wide sweep onto `[self-hosted, linux]`, three
+runners on the Contabo box (`redacted-host`).
 
-Workflows target `runs-on: [self-hosted, linux]`. Use `contabo` instead of
-`linux` only if runners are ever added elsewhere and a job must pin to this box.
+That traded *never runs* for *runs and fails*, on the box that serves production.
+24 of the following 25 runs failed, neither cause this repo's code:
 
-**What still cannot run.** `release.yml`'s `build-mac` and `build-win` need macOS
-and Windows, and the pool is Linux-only — so releases stay blocked until the
-billing is settled or a matching runner joins. That is deliberate and noted in
-the workflow, not an oversight.
+  - `e2e` — `libgtk-3.so.0: cannot open shared object file`. Electron could not
+    launch. The workflow asserted those OS libraries had been provisioned on the
+    box by hand instead of via `--with-deps`; they had not been, and nothing
+    verified it. GitHub's Ubuntu images ship them, a bare Contabo box does not.
+  - `test` — 3 failures out of 2803 on a box at load 20–40, with `environment
+    325s` / `import 323s` reported for a 174s suite. Arithmetic, not flakiness.
 
-### Three things about the box that bite
+**What survives from that period and should not be "cleaned up":**
+`vitest.config.ts` sets `testTimeout`/`hookTimeout` to 30s. Five tests failed on
+the 5s default — the fast-check property suites and the SSE route test — with no
+bug involved. The default was a fast-laptop assumption; keep the 30s.
 
-1. **It is shared and contended.** Three runners serve every repo in the org, and
-   `rekall` alone can queue 17 jobs. The unit suite runs in ~14s locally and took
-   **197s** there. `vitest.config.ts` therefore sets `testTimeout`/`hookTimeout`
-   to 30s: the 5s default is a fast-laptop assumption, and five tests failed on
-   it — the fast-check property suites and the SSE route test — with no bug
-   involved. Do not tune a test to fit 5s; the timeout was the wrong number.
-2. **There is no passwordless sudo.** Anything that shells out to `apt` fails
-   with *"a password is required"*. `npx playwright install --with-deps` did
-   exactly that, so CI installs the browser binary only
-   (`npx playwright install chromium`) and Chromium's OS libraries are
-   provisioned on the host once. If a new Playwright version wants new libs,
-   install them on the box rather than adding `--with-deps` back.
-3. **A C toolchain is present but was not originally.** `build-essential` is
-   installed now; before that, any native dependency failed to build. That is
-   how `node-pty` came to be an `optionalDependency` — see the note in
-   `lib/code-workspace/pty-manager.js`. The lazy `require` and its catch are
-   load-bearing, not defensive habit.
+**Still cannot run:** `release.yml`'s `build-mac` and `build-win` need macOS and
+Windows runners. Deliberate, and noted in that workflow.
+
+### Migrating another repo in the org
+
+Set a repo-level `FAST_RUNNER` variable (org-level variables never reach private
+repos — the API returns 200, the value shows in the listing, and workflows
+silently use the fallback). Sync with
+`~/dev/tools/launchpad/bin/ci-runner-sync.sh --apply`.
+
+Leave alone: `macos-*`/`windows-*` (need those OSes), `*-arm` (the pool is X64),
+and matrix-driven `runs-on` (the fix belongs in the matrix).
+
+**Push over git/SSH, not the API.** `gh api` refuses to write under
+`.github/workflows/` — *"refusing to allow an OAuth App to create or update
+workflow … without `workflow` scope"* (and 404s elsewhere, which is GitHub
+masking a 403). A plain `git push` is not subject to that scope check.
 
 ### Two ways a test can pass here and fail only in CI
 
@@ -93,19 +102,6 @@ for a Next.js client/server boundary violation. A client component importing a
 module that reaches `fs` fails only in `next build`. That shipped once —
 `provider-manager.tsx` → `lib/models/credentials` → `app-paths` → `fs` — with
 typecheck and 2777 tests green.
-
-### Migrating another repo in the org
-
-Change `runs-on: ubuntu-latest` (and `ubuntu-24.04`, `ubuntu-22.04`) to
-`[self-hosted, linux]`. Leave alone: `macos-*`/`windows-*` (need those OSes),
-`*-arm` (the pool is X64, so moving an arm job breaks the build it exists for),
-`blacksmith-*` (third-party, not GitHub-billed, may still work), and
-matrix-driven `runs-on` (the fix belongs in the matrix).
-
-**Push over git/SSH, not the API.** `gh api` refuses to write under
-`.github/workflows/` — *"refusing to allow an OAuth App to create or update
-workflow … without `workflow` scope"* (and 404s elsewhere, which is GitHub
-masking a 403). A plain `git push` is not subject to that scope check.
 
 ### Testing
 
@@ -207,7 +203,40 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 
 ### Providers (`web/src/lib/providers/`)
 
-- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` searxng + in-process `aime` server), handles tool interception (canvas, spawn_agent, loop detection), session controls. A multi-provider model registry is the first roadmap pillar.
+- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` searxng + in-process `aime` server), handles tool interception (canvas, spawn_agent, loop detection), session controls.
+
+### Models are configured in exactly one place, and two tests hold that line
+
+The tier grid in Settings is where the user says which model fills each
+capability×tier slot; their BYOK providers populate the catalog it chooses from.
+Every surface then resolves through **`resolveSendRoute`**. That is the entire
+contract, and it is easy to break by accident in two directions:
+
+1. **A surface that skips the chokepoint** does not run "a slightly different
+   model" — it resolves against the BUILT-IN Anthropic registry and then demands
+   an Anthropic key. For an OpenRouter-only user that surface is simply dead
+   while every other one works. The browser surface shipped exactly this, for
+   months, and `resolveSendRoute`'s own comment had warned about it in prose
+   ("all four call this function and one forgetting is how the gap appeared").
+   Prose cannot fail a build; `send-route-coverage.test.ts` can, and derives both
+   sets from source so a new surface is covered without anyone remembering.
+2. **A second place to pick a model.** There were four — three Settings dropdowns
+   plus a hardcoded default in every surface store. The default was the real
+   defect: each surface shipped PINNED, so the tier grid never got a say.
+   `single-setup-point.test.ts` forbids both halves — no store may expose
+   `model`/`setModel`, and no Settings section but the tier grid may render a
+   model chooser.
+
+Corollary worth keeping: a selection is stored as ONE `modelRoute` — tier,
+built-in, or provider model alike. That is what makes *unpinned* expressible, and
+unpinned is what "follow Settings" means. Browser is stricter still: no picker,
+no route, no stored model.
+
+`lib/models/turn-client.ts` is where the raw-Messages-API path (browser only)
+picks its client. Bedrock and Vertex live in the Agent SDK's subprocess
+environment, so an in-process HTTP client cannot use them — it constructs
+`AnthropicBedrockMantle`/`AnthropicVertex` instead. Both THROW on incomplete
+config, hence the try/catch at the call site; that is not defensive habit.
 
 ### Key Libraries (`web/src/lib/`)
 
