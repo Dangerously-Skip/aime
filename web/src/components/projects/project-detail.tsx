@@ -142,9 +142,7 @@ export function ProjectDetail({
   const addConversation = useConversationStore((s) => s.addConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
 
-  const model = useChatStore((s) => s.model);
   const modelRoute = useChatStore((s) => s.modelRoute);
-  const setModel = useChatStore((s) => s.setModel);
   const setModelRoute = useChatStore((s) => s.setModelRoute);
   const addMessage = useChatStore((s) => s.addMessage);
   const startStreaming = useChatStore((s) => s.startStreaming);
@@ -350,8 +348,8 @@ export function ProjectDetail({
 
     // Open the run record before the turn starts so an immediate failure is
     // still attributed rather than lost.
-    runRecorder.begin({ trigger: "chat", model: route?.model ?? model });
-    sendMessage(trimmed, conv.id, "chat", route?.model ?? model, {
+    runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
+    sendMessage(trimmed, conv.id, "chat", route?.model ?? null, {
       personalPreferences: personalPreferences || undefined,
       displayName: displayName || undefined,
       attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
@@ -538,9 +536,8 @@ export function ProjectDetail({
             />
             <div className="flex items-center gap-2">
               <ModelSelector
-                value={modelRoute ? modelRoute.id : model}
-                onChange={setModel}
-                onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                value={modelRoute?.id ?? ''}
+                      onSelectModel={setModelRoute}
                 capability={CAPABILITY}
                 className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
               />

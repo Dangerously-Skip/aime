@@ -307,7 +307,6 @@ function CodeInput({
   permissionMode,
   onPermissionModeChange,
   model,
-  onModelChange,
   onSelectModel,
   placeholder,
   rows,
@@ -334,7 +333,8 @@ function CodeInput({
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
   model: string;
-  onModelChange: (model: string) => void;
+  /** Legacy built-in enum setter; selections are recorded as routes now. */
+  onModelChange?: (model: string) => void;
   onSelectModel?: (opt: import('@/lib/models/client-options').ModelOption) => void;
   placeholder: string;
   rows: number;
@@ -548,7 +548,6 @@ function CodeInput({
         <div className="flex items-center gap-2">
           <ModelSelector
             value={model}
-            onChange={onModelChange}
             onSelectModel={onSelectModel}
             capability={CAPABILITY}
             className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
@@ -614,7 +613,6 @@ export function CodeSurface() {
       (s.currentChatId ? s.messages[s.currentChatId] : undefined) ??
       EMPTY_MESSAGES
   );
-  const model = useCodeStore((s) => s.model);
   const modelRoute = useCodeStore((s) => s.modelRoute);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   // Built-in (Claude) reachability, which is the user's key OR the server's env
@@ -638,7 +636,6 @@ export function CodeSurface() {
     (s) => (chatId ? s.sessionControls[chatId] : undefined) ?? DEFAULT_SESSION_CONTROLS
   );
   const setSessionControls = useCodeStore((s) => s.setSessionControls);
-  const setModel = useCodeStore((s) => s.setModel);
   const setModelRoute = useCodeStore((s) => s.setModelRoute);
   const setFolder = useCodeStore((s) => s.setFolder);
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode);
@@ -1099,8 +1096,8 @@ export function CodeSurface() {
 
       // Open the run record before the turn starts so an immediate failure is
       // still attributed rather than lost.
-      runRecorder.begin({ trigger: "manual", model: route?.model ?? model });
-      await sendMessage(trimmed, id, "code", route?.model ?? model, {
+      runRecorder.begin({ trigger: "manual", model: route?.model ?? undefined });
+      await sendMessage(trimmed, id, "code", route?.model ?? null, {
         apiKey: anthropicApiKey || undefined,
         providerConfig: route?.providerConfig,
         cwd: folder || undefined,
@@ -1119,7 +1116,6 @@ export function CodeSurface() {
     },
     [
       chatId,
-      model,
       runRecorder,
       modelRoute,
       providers,
@@ -1187,9 +1183,8 @@ export function CodeSurface() {
                   isStreaming={isStreaming}
                   permissionMode={permissionMode}
                   onPermissionModeChange={setPermissionMode}
-                  model={modelRoute ? modelRoute.id : model}
-                  onModelChange={setModel}
-                  onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                  model={modelRoute?.id ?? ''}
+                  onSelectModel={setModelRoute}
                   placeholder="Find a small todo in the codebase and do it"
                   rows={2}
                   minHeight="min-h-[72px]"
@@ -1326,9 +1321,8 @@ export function CodeSurface() {
                           isStreaming={isStreaming}
                           permissionMode={permissionMode}
                           onPermissionModeChange={setPermissionMode}
-                          model={modelRoute ? modelRoute.id : model}
-                          onModelChange={setModel}
-                          onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                          model={modelRoute?.id ?? ''}
+                          onSelectModel={setModelRoute}
                           placeholder="Describe a task..."
                           rows={1}
                           minHeight="min-h-[36px]"

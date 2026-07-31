@@ -182,6 +182,48 @@ Cockpit view → remote instructions. Interim recipe for power users: Tailscale 
 the headless server's web UI — BLOCKED on adding auth to the local API routes,
 which currently have none and must never listen beyond localhost until they do.
 
+### P7 — Craft: the quality of what it makes
+
+P4 gave documents a design system. This pillar does the same for **generated
+UI** — the code surface's weakest output, and the one users judge fastest.
+
+Sized against a real comparison: `nexu-io/open-design` composes **50–70 KB** of
+context per generation. Our code surface's config is **34 lines**. See DR-16 for
+what that context actually contains and why we believe it is the lever.
+
+- **P7.1 Craft rulebooks + precedence ladder.** Brand-agnostic rules
+  (typography, colour ration, state coverage, anti-slop) injected into the code
+  surface, plus a numbered authority order — user request > skill/design system >
+  memory > charter. We have more instruction sources than open-design does
+  (`SOUL.md`, `USER.md`, `AGENTS.md`, surface prompt, skills, security rules) and
+  no stated ordering between them.
+- **P7.2 Seed templates staged into the working directory.** Complete, opinionated
+  `template.html` + `layouts.md` + `checklist.md` bundles copied into the scratch
+  dir with a mandated pre-flight read. Transfers cleanly because our code surface
+  already has a real working directory and file tools — the same mechanism
+  open-design uses.
+- **P7.3 A closed direction library.** 4–6 presets with literal OKLch values and
+  font stacks, bound verbatim, so there is no palette improvisation when the user
+  has no brand.
+- **P7.4 A deterministic anti-slop linter, WIRED.** Regex-checkable tells
+  (default Tailwind indigo, the two-stop gradient, emoji as feature icons, ALL
+  CAPS without positive tracking) fed back as a correction turn. Our house rule
+  applies — the bar is a failing test, not a careful reading.
+- **P7.5 A scoped turn-1 question form.** Hard cap of 5 questions, and ONLY for
+  UI-generation briefs: this is a coding surface, and a form in front of "fix
+  this bug" is a tax, not a feature.
+- **P7.6 The visual feedback loop** — finish the dormant `browser_tool_use`
+  bridge so the agent can drive the code surface's own preview pane. Ranked LAST
+  deliberately: it is the piece that *sounds* most important and is the one
+  open-design does not do at all (DR-16). Blocked on the nonce fix in
+  `rendezvous.ts:34-38` — a forged browser-tool result puts attacker text in
+  front of the model as fact.
+
+**Measure it.** open-design ships no benchmarks and its own slim-vs-classic
+prompt split is unresolved *because* the A/B was never finished. So none of the
+above is evidence-backed on output quality. A before/after check on a fixed set
+of briefs is part of the pillar, not an optional extra.
+
 ## Decision records
 
 | # | Question | Status |
@@ -195,6 +237,8 @@ which currently have none and must never listen beyond localhost until they do.
 | DR-7 | **User-data migration** | **DONE (P0.2): migrated** — `nibcowork:*` → `aime:*`, `~/.quarry` → `~/.aime` with fallback read. |
 | DR-8 | **Opencode provider** | **DONE (P0.4): deleted** with the gateway provider. Revisit only if a second engine is ever wanted. |
 | DR-9 | **Composio integration** | Managed tool-integration platform vs built-in connectors vs Nango. Evaluate in P3. UNDECIDED |
+| DR-15 | **Does the browser surface need to run unattended?** | **RESOLVED (2026-08-01): no — attended only.** This was the one question that decided whether the two browser paths merge. Answer is no, so the split stands and is correct on its merits: a client-driven loop is right when a visible browser is on screen and the user can intervene; server-driven SSE is right when the surface owns no browser. Consequences: the browser surface is never a cron/standing-order target; the `browser-turn` route keeps its client loop and only its *inference* moves onto the registry; the SSE `browser_tool_use` bridge is scoped to the code surface's preview pane (P7.6), not to replacing the browser surface. |
+| DR-16 | **What actually makes generated UI good?** | **RESOLVED (2026-08-01): context engineering — not sampling params, not a vision loop, not a critique panel.** From reading `nexu-io/open-design` (82.7k stars, Apache-2.0). It never calls an LLM API for generation — it spawns a coding-agent CLI and parses stdout, so there is no temperature, top-p or thinking budget anywhere in it. The levers, in their own ranking: seed templates the model COPIES rather than authors (staged into cwd, up to 110 KB, *"the single biggest reason … the agent isn't re-deriving good defaults each time"*); the design system as a binding token contract (*"the DESIGN.md above is prose; this is the binding contract"*); dense NEGATIVE constraints; a turn-1 question form; a closed direction library with hard-coded OKLch. Three things that look impressive there and are **off or unwired** — worth knowing before copying: the 5-panelist critique jury is `enabled: false` and skipped for Claude Code adapters; the ~1000-line anti-slop linter has **no caller** (the save route returns `lint: findings` and the sole consumer types the response as `{url, path}` and drops them); and there is **no vision loop at all** — no Playwright, no image blocks, one render as the whole budget, justified on token cost. That last finding is why P7.6 is ranked last rather than first. The unwired linter is the same failure mode as `allowedTools`: a control that reads as enforced and isn't. |
 | DR-13 | **Tier vs. model as the primary control** | The dropdown pins a model, which *suppresses* tier routing. Is the user-facing lever a tier (Cheap/Good/Smort/Stallion, model-pinning as advanced) or a model (tier stays internal fallback)? LEAN: tier-primary. UNDECIDED |
 
 ## Phasing
@@ -236,8 +280,41 @@ Pillar numbers are identities, not execution order. Actual sequence:
    - P4.3 memory graph: entities, temporal edges, traversal — Graphiti's ideas
      without Python+Neo4j, as an additive boost over the TF-IDF retriever
    - Writing voice profile (`VOICE.md`), injected like SOUL/USER
-9. **P5** shared projects + mobile companion (needs a sync layer; interacts with
-   DR-3) ⟵ *next, and different in kind: real infrastructure, real cost*
+9. **P1 remainder** — ✅ complete (2026-08-01). The browser surface had never
+   joined the registry: its route built a bare `new Anthropic({apiKey})` against
+   a hardcoded model map pinned to a DEPRECATED Claude 4 generation, and required
+   a CLIENT-held key. Landed, in the order agreed:
+   - (a) inference through the registry — and the recommendation it started from
+     was wrong. `getProvider() + maxTurns: 1` does not fit: `QueryParams` takes a
+     single `prompt` with no caller-supplied tool schemas, because the Agent SDK
+     owns its tool loop. This agent needs the opposite (message array, 17 client
+     schemas, `tool_use` executed against a live webview), so it is a raw
+     Messages API call by nature. What was wrong was everything around the call.
+   - (a2) **the real fix, found by the user**: resolving server-side was not the
+     same as the user's settings. Every other surface calls `resolveSendRoute`;
+     browser was the forgotten fifth, so on an OpenRouter-only setup it resolved
+     against the built-in Anthropic registry and demanded a key that user does
+     not have. Now guarded by `send-route-coverage.test.ts`, derived from source.
+   - (a3) **Settings became the only place models are set up.** There were four —
+     three Settings dropdowns plus a hardcoded default in every surface store.
+     The default was the defect: each surface shipped PINNED, so the tier grid
+     never got a say. One `modelRoute` representation now makes *unpinned*
+     expressible, which is what "follow Settings" means.
+     Guarded by `single-setup-point.test.ts`.
+   - (b) Bedrock and Vertex work (`lib/models/turn-client.ts`). They live in the
+     Agent SDK subprocess's environment, which an in-process HTTP client cannot
+     use; it constructs `AnthropicBedrockMantle`/`AnthropicVertex` instead.
+   - (c) the duplicated SSE parser and byte-identical store reducers extracted.
+   The surface went from **zero tests** to covered, and writing them is what
+   surfaced the deprecated model map — nothing had been asserting.
+
+   Carried out of this work, unrelated to the browser: a credential-cache key
+   built on `ino:mtimeMs:size` was wrong on Linux, and its nanosecond replacement
+   still raced on a CI runner. Both now key on CONTENT. The same shape existed in
+   `connectors/health.ts` and would have read a dead connection as alive.
+10. **P7** craft — the quality of generated UI (see pillar above)
+11. **P5** shared projects + mobile companion (needs a sync layer; interacts with
+    DR-3) ⟵ *different in kind: real infrastructure, real cost*
 
 ### Known limitations carried into P5
 

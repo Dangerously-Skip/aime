@@ -25,6 +25,20 @@
  * stricter to reduce prompts, and do not let it become the only thing standing
  * between the agent and the disk.
  *
+ * ## Two rule sets, one mechanism
+ *
+ * `RULES` is about damage to the machine; `NETWORK_RULES` is about reaching off
+ * it. They are separate because they are behind separate user toggles, and
+ * identical in every other respect — same recall bias, same approval gate, same
+ * "this is not a boundary" caveat above. A caller asks for whichever sets the
+ * user has enabled.
+ *
+ * Note that `curl … | sh` sits in `RULES`, not `NETWORK_RULES`: piping a
+ * download into a shell is a way to destroy a machine and was caught long before
+ * a network toggle existed. Nothing moved when the second set arrived, because
+ * moving it would have silently stopped catching it for the many users who have
+ * the destructive toggle on and the network one off.
+ *
  * Pure and dependency-free, so the patterns are directly testable.
  */
 import type { ApprovalQuestion } from '../mcp/tool-policy';
@@ -109,11 +123,57 @@ const RULES: Rule[] = [
   { pattern: /\bnpm\s+publish\b|\bgh\s+release\s+delete\b|\bgh\s+repo\s+delete\b/, reason: 'an irreversible public action' },
 ];
 
-export interface CommandVerdict {
-  destructive: boolean;
-  /** Present when destructive — a phrase for the card, never a regex. */
-  reason?: string;
+/**
+ * Commands that reach the network in a way worth a glance. Same two regex rules
+ * as `RULES` above (no ambiguous quantifiers, `[\s\S]` not `.`).
+ *
+ * Scoped to exfiltration and remote-shell shapes, NOT to network access as such.
+ * The toggle's promise is that `npm install`, `pip install`, `git push` and
+ * `brew` keep working, and a rule broad enough to catch "any command that opens a
+ * socket" would prompt on all of them — which trains the click-through this whole
+ * file exists to avoid.
+ */
+const NETWORK_RULES: Rule[] = [
+  { pattern: /(?:^|[\s|;&(])(?:nc|ncat|netcat)\s/, reason: 'a netcat connection' },
+  { pattern: /\bsocat\s/, reason: 'a socat relay' },
+  // Uppercase-only, so `ssh host 'ls -l'` does not match. Quoted text is blanked
+  // before the scan anyway, but the flags a tunnel needs are all capitals.
+  { pattern: /\bssh\s[^|;&\n]{0,200}-[a-zA-Z]{0,8}[LRDW]\b/, reason: 'an SSH tunnel or port forward' },
+  // `raw`: the payload only ever appears inside quotes —
+  // `bash -c "echo hi > /dev/tcp/10.0.0.1/4444"` — so reading through the
+  // quote-blanking is the only way to see it at all. Same reason as the SQL rule.
+  { pattern: /\/dev\/(?:tcp|udp)\//, reason: 'a raw socket opened from the shell', raw: true },
+  { pattern: /\b(?:ngrok|cloudflared|localtunnel|chisel)\b/, reason: 'exposing this machine through a tunnel' },
+  { pattern: /\bcurl\b[^|;&\n]{0,400}(?:\s-T\b|\s--upload-file\b|\s-F\b|\s--form\b)/, reason: 'uploading a file' },
+  // The remote spec must be the DESTINATION — the last argument of the segment.
+  // `scp user@remote:/var/log/app.log ./` is a fetch, and prompting on a download
+  // is noise that gets the toggle switched off. The lookahead ends the segment so
+  // a chained `scp … user@h:/t && echo done` still matches.
+  {
+    pattern: /\b(?:scp|rsync)\s[^|;&\n]{0,200}[\w.-]{1,60}@[\w.-]{1,60}:[^\s|;&]{0,200}\s*(?=$|[;&|])/,
+    reason: 'copying files to a remote host',
+  },
+  // The shell case is in RULES; these are the interpreters it does not cover.
+  { pattern: /(?:curl|wget)\b[^|;&\n]{0,400}\|\s*(?:sudo\s+)?(?:python3?|perl|ruby|node|php)\b/, reason: 'piping a download into an interpreter' },
+];
+
+/** Which rule sets to scan — one per user toggle. */
+export interface ClassifyOptions {
+  /** `blockDangerousCommands`. Defaults on: the caller that omits it is a test. */
+  destructive?: boolean;
+  /** `blockNetworkCommands`. */
+  network?: boolean;
 }
+
+export type CommandVerdict =
+  | { ask: false }
+  | {
+      ask: true;
+      /** A phrase for the card, never a regex. */
+      reason: string;
+      /** Which set matched, so the card can say why in the user's own terms. */
+      category: 'destructive' | 'network';
+    };
 
 /**
  * Does this command look destructive enough to be worth a human's attention?
@@ -122,14 +182,22 @@ export interface CommandVerdict {
  * is NOT reported destructive: this gate adds a prompt, so guessing "yes" on
  * garbage would train users to click through.
  */
-export function classifyCommand(command: unknown): CommandVerdict {
-  if (typeof command !== 'string' || !command.trim()) return { destructive: false };
+export function classifyCommand(
+  command: unknown,
+  opts: ClassifyOptions = { destructive: true },
+): CommandVerdict {
+  const sets: Array<[readonly Rule[], 'destructive' | 'network']> = [];
+  if (opts.destructive) sets.push([RULES, 'destructive']);
+  if (opts.network) sets.push([NETWORK_RULES, 'network']);
+  if (sets.length === 0) return { ask: false };
+
+  if (typeof command !== 'string' || !command.trim()) return { ask: false };
 
   // Too long to scan safely — ask instead of grinding. This runs on the request
   // thread, so an unbounded scan is a denial of service, and erring towards the
   // prompt is the whole design (see the header).
   if (command.length > MAX_SCANNED) {
-    return { destructive: true, reason: 'an unusually long command' };
+    return { ask: true, reason: 'an unusually long command', category: sets[0][1] };
   }
 
   // Match against the command with quoted literals blanked out. `git commit -m
@@ -138,12 +206,14 @@ export function classifyCommand(command: unknown): CommandVerdict {
   // the failure mode this file's header calls the one that matters. The blanking
   // preserves length and structure so nothing else shifts.
   const scannable = blankQuoted(command);
-  for (const rule of RULES) {
-    if (rule.pattern.test(rule.raw ? command : scannable)) {
-      return { destructive: true, reason: rule.reason };
+  for (const [rules, category] of sets) {
+    for (const rule of rules) {
+      if (rule.pattern.test(rule.raw ? command : scannable)) {
+        return { ask: true, reason: rule.reason, category };
+      }
     }
   }
-  return { destructive: false };
+  return { ask: false };
 }
 
 /**

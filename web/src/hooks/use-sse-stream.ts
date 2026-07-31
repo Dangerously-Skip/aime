@@ -7,6 +7,7 @@ import {
   abortReasonOf,
   notifyStreamAborted,
 } from '@/lib/stream-registry';
+import { parseSSELines } from '@/lib/sse/parse-sse-lines';
 
 /** Abort the stream if no data arrives for this long (the server heartbeats ~30s). */
 const INACTIVITY_TIMEOUT_MS = 120_000;
@@ -77,7 +78,8 @@ interface UseSSEStreamReturn {
     message: string,
     chatId: string,
     surfaceId: string,
-    model: string,
+    /** null ⇒ nothing pinned; the server resolves from the registry. */
+    model: string | null,
     extra?: {
       personalPreferences?: string
       displayName?: string
@@ -112,43 +114,6 @@ interface UseSSEStreamReturn {
   abort: () => void;
 }
 
-function parseSSELines(
-  buffer: string,
-  onEvent: (event: SSEEvent) => void,
-  onDone: () => void
-): string {
-  const lines = buffer.split('\n');
-  let remaining = '';
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (i === lines.length - 1 && !buffer.endsWith('\n')) {
-      remaining = line;
-      continue;
-    }
-
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith(':')) continue;
-
-    if (trimmed.startsWith('data:')) {
-      const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') {
-        onDone();
-        return '';
-      }
-      try {
-        const parsed = JSON.parse(payload);
-        // Spread parsed data so all fields (content, name, id, etc.) are directly accessible
-        onEvent(parsed as SSEEvent);
-      } catch {
-        // Skip unparseable lines
-      }
-    }
-  }
-
-  return remaining;
-}
 
 export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
   const optionsRef = useRef(options);
@@ -176,7 +141,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       message: string,
       chatId: string,
       surfaceId: string,
-      model: string,
+      model: string | null,
       extra?: {
         personalPreferences?: string
         displayName?: string
@@ -304,14 +269,14 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           resetInactivityTimer();
           if (result.done) {
             if (buffer.trim()) {
-              parseSSELines(buffer + '\n', pinnedOnChunk, () => {});
+              parseSSELines<SSEEvent>(buffer + '\n', pinnedOnChunk, () => {});
             }
             done = true;
             break;
           }
 
           buffer += decoder.decode(result.value, { stream: true });
-          buffer = parseSSELines(
+          buffer = parseSSELines<SSEEvent>(
             buffer,
             (event) => {
               // Track TTFT on first text/thinking event

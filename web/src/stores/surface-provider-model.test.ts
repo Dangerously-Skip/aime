@@ -16,9 +16,7 @@ const opt: ModelOption = {
  *  parametrized suite can call it regardless of each store's full type). */
 interface ModelRouteStore {
   getState: () => {
-    model: string;
     modelRoute: ModelOption | null;
-    setModel: (m: string) => void;
     setModelRoute: (o: ModelOption | null) => void;
   };
   setState: (patch: { modelRoute: ModelOption | null }) => void;
@@ -31,17 +29,23 @@ describe.each([
 ])('%s-store model-route override', (_name, useStore) => {
   beforeEach(() => useStore.setState({ modelRoute: null }));
 
-  it('records a route selection without touching the built-in enum', () => {
-    const before = useStore.getState().model;
+  it('records a provider model as a route, carrying its providerConfig', () => {
     useStore.getState().setModelRoute(opt);
     expect(useStore.getState().modelRoute).toEqual(opt);
-    expect(useStore.getState().model).toBe(before);
+    // The providerConfig is what makes a BYOK model reachable at all — a route
+    // that loses it silently falls back to the built-in Anthropic path.
+    expect(useStore.getState().modelRoute?.providerConfig?.providerId).toBe('p1');
   });
 
-  it('clears the override when a valid built-in model is selected', () => {
+  /**
+   * There is no built-in model enum to fall back to any more, so "unset" is the
+   * only way to say "follow Settings". Previously each store also carried a
+   * hardcoded default (`sonnet`/`opus`), which meant a surface shipped pinned
+   * and the user's tier grid never got a say.
+   */
+  it('clears back to unpinned rather than to a hardcoded default', () => {
     useStore.getState().setModelRoute(opt);
-    useStore.getState().setModel('opus');
-    expect(useStore.getState().model).toBe('opus');
+    useStore.getState().setModelRoute(null);
     expect(useStore.getState().modelRoute).toBeNull();
   });
 });

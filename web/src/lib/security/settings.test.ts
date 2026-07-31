@@ -40,6 +40,10 @@ describe('defaults', () => {
   it('protects by default, matching the client store', () => {
     expect(DEFAULT_SECURITY_SETTINGS).toEqual({
       blockDangerousCommands: true,
+      // Off, matching the client store: the shapes it catches are ordinary work
+      // for some users, so on-by-default would prompt on the first legitimate
+      // command and get the toggle switched off permanently.
+      blockNetworkCommands: false,
       restrictToProjectFolder: true,
       disableBashTool: false,
     });
@@ -61,6 +65,7 @@ describe('parseSecuritySettings', () => {
   it('falls back per FIELD, so a partial file cannot silently disable the rest', () => {
     expect(parseSecuritySettings({ blockDangerousCommands: false })).toEqual({
       blockDangerousCommands: false,
+      blockNetworkCommands: false,
       restrictToProjectFolder: true,
       disableBashTool: false,
     });
@@ -82,7 +87,7 @@ describe('parseSecuritySettings', () => {
 
   it('drops unknown keys', () => {
     expect(Object.keys(parseSecuritySettings({ nonsense: true })).sort()).toEqual(
-      ['blockDangerousCommands', 'disableBashTool', 'restrictToProjectFolder'],
+      ['blockDangerousCommands', 'blockNetworkCommands', 'disableBashTool', 'restrictToProjectFolder'],
     );
   });
 });
@@ -91,12 +96,14 @@ describe('round trip', () => {
   it('loads back what was saved', async () => {
     await saveSecuritySettings({
       blockDangerousCommands: false,
+      blockNetworkCommands: true,
       restrictToProjectFolder: false,
       disableBashTool: true,
     });
     resetSecuritySettingsCache();
     expect(await loadSecuritySettings()).toEqual({
       blockDangerousCommands: false,
+      blockNetworkCommands: true,
       restrictToProjectFolder: false,
       disableBashTool: true,
     });
