@@ -37,7 +37,40 @@ import { findSlopTells, summariseTells, type Finding } from './slop-tells';
  */
 
 const OUT_ROOT = path.resolve(__dirname, '../../../../.planning/evals');
-const MODEL = 'claude-opus-5';
+
+/**
+ * Pinned so a later run measures the PROMPT change and not the model change.
+ *
+ * Overridable because the same model is spelled differently per provider —
+ * `claude-opus-5` direct, `anthropic/claude-opus-5` on OpenRouter (anything
+ * without that prefix is routed to the openai-compat shim by
+ * `transportForModel`), `anthropic.claude-opus-5` on Bedrock. The override
+ * exists for the spelling, not to change models between runs.
+ *
+ * Whatever is used is RECORDED in every artifact and in the summary. That is the
+ * part that matters: a comparison across two different models is not invalid so
+ * long as you can see that is what it was.
+ */
+const MODEL = process.env.AIME_EVAL_MODEL || 'claude-opus-5';
+
+/** Run a single brief by id — proves the harness before paying for all eight. */
+const ONLY = process.env.AIME_EVAL_BRIEF;
+
+/**
+ * A BYOK provider to run through, as `providerConfig` on the request rather than
+ * as raw environment.
+ *
+ * Setting `ANTHROPIC_BASE_URL` directly looks equivalent and is not: the SDK
+ * appends `/v1/messages`, so a base of `https://openrouter.ai/api/v1` becomes
+ * `/api/v1/v1/messages` and 404s. The app already solves this in
+ * `baseUrlForSdk`, and going through `providerConfig` means the eval exercises
+ * the same resolution a real user's setup does instead of a parallel one.
+ *
+ * (The SDK reports that 404 as "the selected model may not exist or you may not
+ * have access to it", which reads as a catalogue problem and sends the search
+ * somewhere else entirely — it is documented in execution.ts for that reason.)
+ */
+const PROVIDER_BASE_URL = process.env.AIME_EVAL_PROVIDER_BASE_URL;
 const ENABLED = process.env.AIME_EVAL === '1';
 
 /** Files an artifact could plausibly be. */
@@ -47,6 +80,12 @@ interface BriefResult {
   id: string;
   shape: string;
   files: string[];
+  /** Length of the inline reply — an artifact pasted into chat still counts. */
+  replyChars: number;
+  toolCalls: number;
+  /** From the `done` event. Real when the provider reported it. */
+  costUsd?: number;
+  estimatedCost: boolean;
   findings: Finding[];
   durationMs: number;
   error?: string;
@@ -75,29 +114,42 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
     fs.mkdirSync(runDir, { recursive: true });
   });
 
-  it.each(EVAL_BRIEFS.map((b) => [b.id, b] as const))(
+  const briefs = ONLY ? EVAL_BRIEFS.filter((b) => b.id === ONLY) : EVAL_BRIEFS;
+
+  it('resolves the requested briefs', () => {
+    // A typo'd id would otherwise run nothing and report success.
+    expect(briefs.length, `no brief matches AIME_EVAL_BRIEF=${ONLY}`).toBeGreaterThan(0);
+  });
+
+  it.each(briefs.map((b) => [b.id, b] as const))(
     '%s',
     async (id, brief) => {
       const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `aime-eval-${id}-`));
       const started = Date.now();
       let error: string | undefined;
+      let sse = '';
 
-      // Observe the assembled prompt without replacing the provider.
-      const providers = await import('@/lib/providers');
-      const realGetProvider = providers.getProvider;
-      const spy = ((name: string) => {
-        const provider = realGetProvider(name as never);
-        const realQuery = provider.query.bind(provider);
-        return {
-          ...provider,
-          query: (params: Record<string, unknown>) => {
-            if (typeof params.systemPrompt === 'string') prompts.set(id, params.systemPrompt);
-            else if (params.systemPrompt) prompts.set(id, JSON.stringify(params.systemPrompt, null, 2));
-            return realQuery(params as never);
-          },
-        };
-      }) as unknown as typeof providers.getProvider;
-      (providers as { getProvider: typeof providers.getProvider }).getProvider = spy;
+      /**
+       * Observe the assembled prompt without replacing the provider.
+       *
+       * Patched on the PROTOTYPE, not on the module export: ES module exports
+       * are read-only getters, so assigning `providers.getProvider = spy` throws
+       * "Cannot set property getProvider of [object Module] which has only a
+       * getter". The prototype method is an ordinary property and is the seam
+       * that actually exists.
+       *
+       * It delegates to the real implementation — this records what the route
+       * assembled, it does not substitute for it. The prompt bytes are the
+       * independent variable of every later comparison.
+       */
+      const { ClaudeProvider } = await import('@/lib/providers/claude-provider');
+      const realQuery = ClaudeProvider.prototype.query;
+      ClaudeProvider.prototype.query = function (this: unknown, params: Record<string, unknown>) {
+        const sp = params.systemPrompt;
+        if (typeof sp === 'string') prompts.set(id, sp);
+        else if (sp) prompts.set(id, JSON.stringify(sp, null, 2));
+        return (realQuery as (p: unknown) => unknown).call(this, params);
+      } as unknown as typeof ClaudeProvider.prototype.query;
 
       try {
         const { POST } = await import('@/app/api/chat/[surfaceId]/route');
@@ -110,21 +162,84 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
               chatId: `eval-${id}`,
               cwd: workspace,
               model: MODEL,
+              ...(PROVIDER_BASE_URL
+                ? {
+                    providerConfig: {
+                      providerId: 'eval-provider',
+                      transport: 'anthropic-native',
+                      baseUrl: PROVIDER_BASE_URL,
+                    },
+                    apiKey: process.env.ANTHROPIC_API_KEY,
+                  }
+                : {}),
             }),
           }),
           { params: Promise.resolve({ surfaceId: 'code' }) },
         );
-        // Drain the stream — the turn is not finished until it closes.
-        await res.text();
+        // KEEP the stream. Draining it with `await res.text()` and discarding
+        // the result threw away two things that turned out to matter: the
+        // assistant's reply — which IS the artifact when the model answers with
+        // markup inline rather than writing a file — and the `done` event
+        // carrying the turn's real cost. A five-minute Opus run produced neither
+        // a file nor an explanation of why, because both had been dropped.
+        sse = await res.text();
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
       } finally {
-        (providers as { getProvider: typeof providers.getProvider }).getProvider = realGetProvider;
+        ClaudeProvider.prototype.query = realQuery;
       }
+
+      /** Reassemble what the model actually said, and what the turn cost. */
+      const events = sse
+        .split('\n')
+        .filter((l) => l.startsWith('data:'))
+        .map((l) => l.slice(5).trim())
+        .filter((l) => l && l !== '[DONE]')
+        .flatMap((l) => {
+          try {
+            return [JSON.parse(l) as Record<string, unknown>];
+          } catch {
+            return [];
+          }
+        });
+      const replyText = events
+        .filter((e) => e.type === 'text')
+        .map((e) => (e.content as string) ?? '')
+        .join('');
+      /**
+       * TWO events carry `type: 'done'` — one from the provider as it finishes,
+       * one from the route with the usage attached. `.find()` returned the
+       * provider's, which has no `usage`, so every run reported cost as unknown
+       * while the real number was three lines further down the same stream.
+       *
+       * Select on the field that is actually wanted rather than on the type.
+       */
+      const usage = events
+        .filter((e) => e.type === 'done' && e.usage)
+        .map((e) => e.usage as Record<string, unknown>)
+        .pop();
+      const toolNames = events
+        .filter((e) => e.type === 'tool_use')
+        .map((e) => e.name as string);
 
       const files = collectFiles(workspace);
       const briefDir = path.join(runDir, id);
       fs.mkdirSync(briefDir, { recursive: true });
+
+      // The reply is an artifact in its own right: an "artifact" the model
+      // pasted into chat is still the thing being judged, and scanning only
+      // files would score it as producing nothing.
+      if (replyText.trim()) {
+        fs.writeFileSync(path.join(briefDir, '_reply.md'), replyText);
+      }
+      // The raw stream, always. The first attempt at cost capture failed and
+      // there was nothing left to diagnose it from — the same mistake as
+      // deleting the workspace. It is a few KB.
+      fs.writeFileSync(path.join(briefDir, '_stream.sse'), sse);
+      fs.writeFileSync(
+        path.join(briefDir, '_usage.json'),
+        JSON.stringify({ usage, toolCalls: toolNames, durationMs: Date.now() - started }, null, 2),
+      );
 
       const findings: Finding[] = [];
       for (const rel of files) {
@@ -132,6 +247,12 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
         fs.mkdirSync(path.dirname(path.join(briefDir, rel)), { recursive: true });
         fs.writeFileSync(path.join(briefDir, rel), source);
         findings.push(...findSlopTells(source).map((f) => ({ ...f, detail: `${rel}: ${f.detail}` })));
+      }
+
+      if (replyText.trim()) {
+        findings.push(
+          ...findSlopTells(replyText).map((f) => ({ ...f, detail: `reply: ${f.detail}` })),
+        );
       }
 
       const prompt = prompts.get(id);
@@ -145,15 +266,29 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
         id,
         shape: brief.shape,
         files,
+        replyChars: replyText.length,
+        toolCalls: toolNames.length,
+        costUsd: typeof usage?.cost === 'number' ? usage.cost : undefined,
+        estimatedCost: usage?.estimated === true,
         findings,
         durationMs: Date.now() - started,
         error,
       });
 
-      fs.rmSync(workspace, { recursive: true, force: true });
+      if (files.length) {
+        fs.rmSync(workspace, { recursive: true, force: true });
+      } else {
+        // Preserve it for inspection. Deleting the evidence of a failure is how
+        // the first three attempts each cost a full run to diagnose.
+        console.warn(`[eval] ${id} wrote no files; workspace kept at ${workspace}`);
+      }
 
-      // A brief that produced nothing is a result worth seeing, not a pass.
-      expect(files.length, `${id} produced no artifact (${error ?? 'no error reported'})`).toBeGreaterThan(0);
+      // Producing NOTHING is a failure; producing a reply instead of a file is a
+      // finding about the surface, not about the harness.
+      expect(
+        files.length + (replyText.trim() ? 1 : 0),
+        `${id} produced neither files nor a reply (${error ?? 'no error reported'}); tools used: ${toolNames.join(', ') || 'none'}`,
+      ).toBeGreaterThan(0);
     },
     900_000,
   );
@@ -163,26 +298,34 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
       '# P7.0 craft baseline',
       '',
       `Model: \`${MODEL}\` (pinned — see baseline.eval.ts).`,
+      ONLY ? `Partial run: only \`${ONLY}\`. Not a full baseline.` : 'Full brief set.',
       `Captured: ${new Date().toISOString()}`,
       '',
       'The BEFORE for every P7 change. Measured with `slop-tells.ts`; the same',
       'instrument must be used for the after, or the comparison means nothing.',
       '',
-      '| brief | shape | files | tells | duration |',
-      '|---|---|---|---|---|',
-      ...results.map(
-        (r) =>
-          `| ${r.id} | ${r.shape} | ${r.files.length} | ${summariseTells(r.findings)} | ${(r.durationMs / 1000).toFixed(0)}s |`,
-      ),
+      '| brief | shape | files | reply | tools | tells | cost | duration |',
+      '|---|---|---|---|---|---|---|---|',
+      ...results.map((r) => {
+        const produced = r.files.length > 0 || r.replyChars > 0;
+        const cost =
+          r.costUsd === undefined ? '?' : `$${r.costUsd.toFixed(4)}${r.estimatedCost ? ' (est)' : ''}`;
+        return `| ${r.id} | ${r.shape} | ${r.files.length} | ${r.replyChars ? `${r.replyChars}c` : '—'} | ${r.toolCalls} | ${produced ? summariseTells(r.findings) : 'FAILED'} | ${cost} | ${(r.durationMs / 1000).toFixed(0)}s |`;
+      }),
       '',
       '## Findings',
       '',
       ...results.flatMap((r) => [
         `### ${r.id}`,
         '',
-        ...(r.findings.length
-          ? r.findings.map((f) => `- **${f.severity.toUpperCase()} ${f.rule}** — ${f.detail}`)
-          : ['- none']),
+        // "no artifact" and "no tells" must not render the same. A failed brief
+        // showing "none" reads as a clean result, which is the worst possible
+        // way to be wrong about a measurement.
+        ...(r.files.length === 0 && r.replyChars === 0
+          ? [`- **PRODUCED NOTHING** — ${r.error ?? 'no error reported'}. Not a result.`]
+          : r.findings.length
+            ? r.findings.map((f) => `- **${f.severity.toUpperCase()} ${f.rule}** — ${f.detail}`)
+            : ['- no tells found']),
         '',
       ]),
       '## What this cannot tell you',
@@ -192,7 +335,7 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
       'number for those would be false confidence.',
     ];
     fs.writeFileSync(path.join(runDir, 'README.md'), lines.join('\n'));
-    expect(results.length).toBe(EVAL_BRIEFS.length);
+    expect(results.length).toBe(briefs.length);
   });
 });
 
