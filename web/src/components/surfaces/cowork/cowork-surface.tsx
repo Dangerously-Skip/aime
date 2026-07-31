@@ -698,7 +698,6 @@ export function CoworkSurface() {
   const messages = useCoworkStore(
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
-  const model = useCoworkStore((s) => s.model);
   const modelRoute = useCoworkStore((s) => s.modelRoute);
   const isStreaming = useCoworkStore((s) => s.isStreaming);
   const storeFolder = useCoworkStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
@@ -706,7 +705,6 @@ export function CoworkSurface() {
   const contextFiles = useCoworkStore((s) => (chatId ? s.contextFiles[chatId] : undefined) ?? EMPTY_FILES);
   const artifactFiles = useCoworkStore((s) => (chatId ? s.artifactFiles[chatId] : undefined) ?? EMPTY_FILES);
   const canvasArtifacts = useCoworkStore((s) => (chatId ? s.canvasArtifacts[chatId] : undefined) ?? EMPTY_CANVASES);
-  const setModel = useCoworkStore((s) => s.setModel);
   const setModelRoute = useCoworkStore((s) => s.setModelRoute);
   const setFolder = useCoworkStore((s) => s.setFolder);
   const addMessage = useCoworkStore((s) => s.addMessage);
@@ -1209,8 +1207,8 @@ export function CoworkSurface() {
             const route = resolveRoute();
             // A fresh run: the auto-continue is a hook-driven turn of its own,
             // and the turn that triggered it was already closed by succeed().
-            runRecorder.begin({ trigger: "hook", model: route?.model ?? model });
-            void sendMessage(continuePrompt, chatId, "cowork", route?.model ?? model, {
+            runRecorder.begin({ trigger: "hook", model: route?.model ?? undefined });
+            void sendMessage(continuePrompt, chatId, "cowork", route?.model ?? null, {
               personalPreferences: personalPreferences || undefined,
               displayName: displayName || undefined,
               cwd: folder || projectFolder || scratchDir || undefined,
@@ -1353,8 +1351,8 @@ export function CoworkSurface() {
       const route = resolveRoute();
       // Open the run record before the turn starts so an immediate failure is
       // still attributed rather than lost.
-      runRecorder.begin({ trigger: "manual", model: route?.model ?? model });
-      await sendMessage(trimmed, id, "cowork", route?.model ?? model, {
+      runRecorder.begin({ trigger: "manual", model: route?.model ?? undefined });
+      await sendMessage(trimmed, id, "cowork", route?.model ?? null, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         providerConfig: route?.providerConfig,
@@ -1378,7 +1376,6 @@ export function CoworkSurface() {
     },
     [
       chatId,
-      model,
       runRecorder,
       resolveRoute,
       folder,
@@ -1444,8 +1441,8 @@ export function CoworkSurface() {
       const route = resolveRoute();
       // Open the run record before the turn starts so an immediate failure is
       // still attributed rather than lost.
-      runRecorder.begin({ trigger: 'hook', model: route?.model ?? model });
-      void sendMessage(prompt, bgId, 'cowork', route?.model ?? model, {
+      runRecorder.begin({ trigger: 'hook', model: route?.model ?? undefined });
+      void sendMessage(prompt, bgId, 'cowork', route?.model ?? null, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         apiKey: anthropicApiKey || undefined,
@@ -1453,7 +1450,7 @@ export function CoworkSurface() {
         providerConfig: route?.providerConfig,
       });
     },
-    [addConversation, addMessage, startStreaming, sendMessage, model, runRecorder, resolveRoute, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
+    [addConversation, addMessage, startStreaming, sendMessage, runRecorder, resolveRoute, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
   );
 
   // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store
@@ -1466,11 +1463,11 @@ export function CoworkSurface() {
         // Open the run record before the turn starts so an immediate failure is
         // still attributed rather than lost. This site streams the raw fetch
         // itself, so it also closes the record by hand below.
-        runRecorder.begin({ trigger: 'heartbeat', model: route?.model ?? model });
+        runRecorder.begin({ trigger: 'heartbeat', model: route?.model ?? undefined });
         const resp = await fetch('/api/chat/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: route?.model ?? model, apiKey: anthropicApiKey || undefined, ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}) }),
+          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: route?.model ?? null, apiKey: anthropicApiKey || undefined, ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}) }),
         });
         if (!resp.ok || !resp.body) {
           runRecorder.fail(resp.ok ? 'empty response body' : `HTTP ${resp.status}`);
@@ -1513,7 +1510,7 @@ export function CoworkSurface() {
         runRecorder.fail(e instanceof Error ? e.message : String(e));
       }
     },
-    [model, runRecorder, resolveRoute, anthropicApiKey]
+    [runRecorder, resolveRoute, anthropicApiKey]
   );
 
   // Cron and heartbeat hooks removed — standing order engine in the Assistant
@@ -1708,9 +1705,8 @@ export function CoworkSurface() {
                 </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
-                    value={modelRoute ? modelRoute.id : model}
-                    onChange={setModel}
-                    onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                    value={modelRoute?.id ?? ''}
+                    onSelectModel={setModelRoute}
                     capability={CAPABILITY}
                     className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                   />
@@ -1795,9 +1791,8 @@ export function CoworkSurface() {
                     </div>
                     <div className="flex items-center gap-2">
                       <ModelSelector
-                        value={modelRoute ? modelRoute.id : model}
-                        onChange={setModel}
-                        onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                        value={modelRoute?.id ?? ''}
+                            onSelectModel={setModelRoute}
                         capability={CAPABILITY}
                         className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                       />

@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
 import {
+  credentialFileFingerprint,
   createCredentialStore,
   probeCredentialFile,
   CredentialStoreUnavailable,
@@ -208,6 +209,61 @@ describe('probeCredentialFile', () => {
     expect(probeCredentialFile(other, file).status).toBe('ok');
     expect(probeCredentialFile(key, file).status).toBe('unreadable');
   });
+
+  /**
+   * The memo must key on CONTENT, not on filesystem metadata.
+   *
+   * This started as a reproduction of one bug and caught a second. Keying on
+   * inode + millisecond mtime + size failed on Linux, where `rm` + recreate
+   * reuses the inode and equal-length payloads collide. Keying on nanosecond
+   * `mtimeNs` + `ctimeNs` fixed that locally and then failed on a CI runner whose
+   * filesystem did not separate the two writes either.
+   *
+   * So the test no longer tries to construct a collision on a particular
+   * filesystem's timestamps — that was chasing the machine rather than the
+   * invariant. It makes every metadata component identical BY CONSTRUCTION
+   * (same inode via an in-place write, same size, mtime pinned to the exact same
+   * value) and requires the probe to notice anyway. Only content can tell these
+   * apart, which is the property that holds on every filesystem.
+   */
+  it('notices a replacement whose inode, size and mtime are all identical', async () => {
+    const other = randomBytes(32);
+    // A whole number of milliseconds: `utimesSync` truncates sub-millisecond
+    // precision, so pinning both versions to this makes the mtimes byte-identical
+    // rather than merely close.
+    const pinned = new Date(1_700_000_000_000);
+
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
+    fs.utimesSync(file, pinned, pinned);
+    const before = fs.statSync(file);
+    expect(probeCredentialFile(other, file).status).toBe('unreadable'); // memoised
+
+    // Same-length payload under the other key, written over the original bytes.
+    const donor = path.join(dir, 'donor.json');
+    await createCredentialStore(other, donor).set('openai', { apiKey: 'sk-y' });
+    fs.writeFileSync(file, fs.readFileSync(donor));
+    fs.utimesSync(file, pinned, pinned);
+
+    const after = fs.statSync(file);
+    expect(after.ino, 'inode differs — the collision was not constructed').toBe(before.ino);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+
+    expect(probeCredentialFile(other, file).status).toBe('ok');
+    expect(probeCredentialFile(key, file).status).toBe('unreadable');
+  });
+
+  /**
+   * The other half: identical CONTENT must still hit the memo. Without this a
+   * "fix" that simply disabled caching would pass everything above.
+   */
+  it('still memoises when the bytes have not changed', async () => {
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
+    const first = probeCredentialFile(key, file);
+    // Touch the metadata without changing a byte.
+    fs.utimesSync(file, new Date(1_600_000_000_000), new Date(1_600_000_000_000));
+    expect(probeCredentialFile(key, file)).toBe(first); // same object ⇒ cache hit
+  });
 });
 
 /**
@@ -220,6 +276,43 @@ describe('probeCredentialFile', () => {
  * These assert the observable consequences rather than spying on `fs`, since
  * mocking the very boundary under test would prove nothing.
  */
+describe('credentialFileFingerprint', () => {
+  /**
+   * Shared with the connector-health metadata cache, which used to build its own
+   * `ino:mtimeMs:size` identity — the shape that cannot see a replacement whose
+   * metadata coincides. One answer, keyed on content, for both callers.
+   */
+  it('is stable while the bytes are, and changes when they change', async () => {
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
+    const first = credentialFileFingerprint(file);
+    expect(credentialFileFingerprint(file)).toBe(first);
+
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-y' });
+    expect(credentialFileFingerprint(file)).not.toBe(first);
+  });
+
+  it('changes even when inode, size and mtime all match', async () => {
+    const pinned = new Date(1_700_000_000_000);
+    await createCredentialStore(key, file).set('openai', { apiKey: 'sk-x' });
+    fs.utimesSync(file, pinned, pinned);
+    const before = fs.statSync(file);
+    const first = credentialFileFingerprint(file);
+
+    const donor = path.join(dir, 'fp-donor.json');
+    await createCredentialStore(key, donor).set('openai', { apiKey: 'sk-y' });
+    fs.writeFileSync(file, fs.readFileSync(donor));
+    fs.utimesSync(file, pinned, pinned);
+
+    expect(fs.statSync(file).ino).toBe(before.ino);
+    expect(fs.statSync(file).mtimeMs).toBe(before.mtimeMs);
+    expect(credentialFileFingerprint(file)).not.toBe(first);
+  });
+
+  it('reports absent for a missing file rather than throwing', () => {
+    expect(credentialFileFingerprint(path.join(dir, 'nope.json'))).toBe('absent');
+  });
+});
+
 describe('regression: the write must be atomic', () => {
   it('replaces the file by rename instead of truncating it in place', async () => {
     const store = createCredentialStore(key, file);

@@ -76,7 +76,6 @@ export function cleanStaleStreamingFlags(messages: Record<string, Message[]>): R
 interface ChatState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
-  model: ModelId;
   /**
    * The route selected in the model picker: either a tier (resolved through the
    * effective registry at send time) or a pinned model (built-in or on a
@@ -96,7 +95,6 @@ interface ChatActions {
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
   attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }) => void;
-  setModel: (model: string) => void;
   setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
@@ -123,7 +121,6 @@ export const useChatStore = create<ChatStore>()(
     (set) => ({
       messages: {},
       currentChatId: null,
-      model: 'sonnet',
       modelRoute: null,
       isStreaming: false,
       sessionControls: {},
@@ -182,15 +179,6 @@ export const useChatStore = create<ChatStore>()(
           };
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
-
-      setModel: (model) => {
-        if (VALID_MODELS.has(model)) {
-          // Selecting a built-in clears any tier/provider route.
-          set({ model: model as ModelId, modelRoute: null });
-        } else {
-          console.warn(`[ChatStore] Invalid model "${model}", keeping current`);
-        }
-      },
 
       setModelRoute: (opt) => set({ modelRoute: opt }),
 
@@ -334,7 +322,6 @@ export const useChatStore = create<ChatStore>()(
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
-        model: state.model,
         currentChatId: state.currentChatId,
         sessionControls: state.sessionControls,
         canvasArtifacts: state.canvasArtifacts,

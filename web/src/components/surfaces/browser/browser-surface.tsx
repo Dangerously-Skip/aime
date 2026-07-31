@@ -4,6 +4,10 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { InputArea } from "@/components/shared/input-area";
 import { MessageList } from "@/components/shared/message-list";
 import { useBrowserStore } from "@/stores/browser-store";
+import { useProviderStore } from "@/stores/provider-store";
+import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { resolveSendRoute } from "@/lib/models/client-options";
+import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useBrowserAgent } from "@/hooks/use-browser-agent";
@@ -19,6 +23,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Message } from "@/stores/chat-store";
 import { ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
+
+/** Same source of truth the other surfaces use for their capability. */
+const CAPABILITY = getSurfaceRoute("browser").capability;
 import {
   getInspectorInjectionScript,
   getInspectorCleanupScript,
@@ -109,7 +116,17 @@ export function BrowserSurface() {
   const messages = useBrowserStore(
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
-  const model = useBrowserStore((s) => s.model);
+  // This surface has NO model selection of its own. It resolves through the same
+// `resolveSendRoute` chokepoint as chat/cowork/code/project-detail, so whatever
+// the user set in Settings (tier grid + BYOK providers) governs it too. It was
+// the only surface not calling that function — which is exactly the gap that
+// function's own comment warns about ("all four call this... one forgetting is
+// how the gap appeared"). On an OpenRouter-only setup this surface used to
+// resolve against the built-in Anthropic registry and then demand a key the
+// user does not have.
+const providers = useProviderStore((s) => s.providers);
+const tierModels = useSettingsStore((s) => s.tierModels);
+const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
   const isStreaming = useBrowserStore((s) => s.isStreaming);
   const loopPhase = useBrowserStore((s) => s.loopPhase);
   const addMessage = useBrowserStore((s) => s.addMessage);
@@ -597,13 +614,12 @@ export function BrowserSurface() {
         }
       }
 
-      // Check API key is available before making the request
-      const currentApiKey = useSettingsStore.getState().anthropicApiKey;
-      if (!currentApiKey) {
-        appendToLastAssistant(id, "No API key configured. Go to Settings > Connectors and add your nib AI Studio Gateway key.");
-        stopStreaming(id);
-        return;
-      }
+      // No client-side key gate. It used to refuse the turn unless
+      // `settings.anthropicApiKey` was set — and pointed at the nib AI Studio
+      // Gateway, which was deleted in P0.4 — so the surface was unusable for
+      // anyone whose credentials live server-side (env, the encrypted credential
+      // store, a user-added provider). The server resolves credentials now and
+      // returns a specific, actionable message when there genuinely are none.
 
       const wv = webviewNodeRef.current;
       if (!wv) {
@@ -612,11 +628,29 @@ export function BrowserSurface() {
         return;
       }
 
-      await runAgentLoop(text, model, wv, context.length > 0 ? context : undefined);
+      // The one chokepoint: whatever the user configured in Settings (tier grid
+      // + BYOK providers) decides where this turn runs, exactly as on every
+      // other surface. `/model` still pins a model for the session on top of it.
+      const route = resolveSendRoute(null, providers, {
+        capability: CAPABILITY,
+        tierModels,
+        hasAnthropicKey,
+        hasBedrock,
+        known: builtinAccessKnown,
+      });
+      await runAgentLoop(
+        text,
+        {
+          model: sessionControls?.modelOverride ?? route?.model ?? null,
+          providerConfig: route?.providerConfig,
+        },
+        wv,
+        context.length > 0 ? context : undefined,
+      );
     },
     // sessionControls is read for slash-command handling and was previously
     // missing, so chained slash commands applied against a stale value.
-    [model, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext, attachments, sessionControls]
+    [providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext, attachments, sessionControls]
   );
 
   const handleVoiceTranscript = useCallback(

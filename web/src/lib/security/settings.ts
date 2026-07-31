@@ -40,6 +40,8 @@ import { getDataDir } from '../app-paths';
 export interface SecuritySettings {
   /** Route a destructive-looking shell command to the human approval gate. */
   blockDangerousCommands: boolean;
+  /** Route a command that reaches off this machine to the human approval gate. */
+  blockNetworkCommands: boolean;
   /** Refuse file-tool writes that resolve outside the working directory. */
   restrictToProjectFolder: boolean;
   /** Withhold Bash, BashOutput and KillShell entirely. */
@@ -53,6 +55,11 @@ export interface SecuritySettings {
  */
 export const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
   blockDangerousCommands: true,
+  // Off by default, matching the client store. Unlike the destructive set, the
+  // shapes this catches (scp to a host, an SSH forward, a curl upload) are
+  // ordinary work for some users, so defaulting it on would prompt on the first
+  // legitimate command and get the toggle switched off for good.
+  blockNetworkCommands: false,
   restrictToProjectFolder: true,
   disableBashTool: false,
 };
@@ -69,6 +76,7 @@ export function parseSecuritySettings(raw: unknown): SecuritySettings {
     typeof o[k] === 'boolean' ? (o[k] as boolean) : DEFAULT_SECURITY_SETTINGS[k];
   return {
     blockDangerousCommands: pick('blockDangerousCommands'),
+    blockNetworkCommands: pick('blockNetworkCommands'),
     restrictToProjectFolder: pick('restrictToProjectFolder'),
     disableBashTool: pick('disableBashTool'),
   };

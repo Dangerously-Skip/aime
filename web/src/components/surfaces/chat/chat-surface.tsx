@@ -129,10 +129,8 @@ export function ChatSurface() {
       (s.currentChatId ? s.messages[s.currentChatId] : undefined) ??
       EMPTY_MESSAGES
   );
-  const model = useChatStore((s) => s.model);
   const modelRoute = useChatStore((s) => s.modelRoute);
   const isStreaming = useChatStore((s) => s.isStreaming);
-  const setModel = useChatStore((s) => s.setModel);
   const setModelRoute = useChatStore((s) => s.setModelRoute);
   const addMessage = useChatStore((s) => s.addMessage);
   const appendToLastAssistant = useChatStore(
@@ -487,11 +485,11 @@ export function ChatSurface() {
 
       // Open the run record before the turn starts so an immediate failure is
       // still attributed rather than lost.
-      runRecorder.begin({ trigger: "chat", model: route?.model ?? model });
+      runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
       // Pin the target before the stream starts: everything that finalises the
       // turn must land here even if the user has moved on by then.
       streamChatIdRef.current = id;
-      await sendMessage(trimmed, id, "chat", route?.model ?? model, {
+      await sendMessage(trimmed, id, "chat", route?.model ?? null, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
@@ -509,7 +507,6 @@ export function ChatSurface() {
     },
     [
       chatId,
-      model,
       runRecorder,
       modelRoute,
       providers,
@@ -762,9 +759,8 @@ export function ChatSurface() {
                 </div>
                 <div className="flex items-center gap-2">
                   <ModelSelector
-                    value={modelRoute ? modelRoute.id : model}
-                    onChange={setModel}
-                    onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                    value={modelRoute?.id ?? ''}
+                    onSelectModel={setModelRoute}
                     capability={CAPABILITY}
                     className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                   />
@@ -902,9 +898,8 @@ export function ChatSurface() {
                       </div>
                       <div className="flex items-center gap-2">
                         <ModelSelector
-                          value={modelRoute ? modelRoute.id : model}
-                          onChange={setModel}
-                          onSelectModel={(opt) => setModelRoute(opt.kind === 'tier' || opt.providerConfig ? opt : null)}
+                          value={modelRoute?.id ?? ''}
+                                onSelectModel={setModelRoute}
                           capability={CAPABILITY}
                           className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
                         />

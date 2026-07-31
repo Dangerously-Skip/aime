@@ -8,6 +8,7 @@ import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import type { ModelOption } from '@/lib/models/client-options';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
+import { withToolCall, withToolResult } from '@/lib/stores/tool-call-reducers';
 
 export type PermissionMode = 'acceptEdits' | 'default' | 'plan' | 'bypass';
 export type SessionStatus = 'idle' | 'active' | 'streaming';
@@ -16,7 +17,6 @@ export type ConnectionType = 'local' | 'github';
 interface CodeState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
-  model: ModelId;
   /**
    * Selected route — a tier or a pinned model (in-memory); null ⇒ use the
    * built-in `model` enum.
@@ -36,7 +36,6 @@ interface CodeActions {
   addMessage: (chatId: string, message: Message) => void;
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
-  setModel: (model: string) => void;
   setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
@@ -64,7 +63,6 @@ export const useCodeStore = create<CodeStore>()(
     (set) => ({
       messages: {},
       currentChatId: null,
-      model: 'sonnet',
       modelRoute: null,
       isStreaming: false,
       folderByChat: {},
@@ -112,7 +110,6 @@ export const useCodeStore = create<CodeStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      setModel: (model) => set({ model: model as ModelId, modelRoute: null }),
       setModelRoute: (opt) => set({ modelRoute: opt }),
 
       startStreaming: () => set({ isStreaming: true }),
@@ -138,36 +135,14 @@ export const useCodeStore = create<CodeStore>()(
 
       addToolCall: (chatId, toolCall) =>
         set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: [...(last.toolCalls ?? []), toolCall],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
+          const next = withToolCall(state.messages, chatId, toolCall);
+          return next ? { messages: next } : state;
         }),
 
       updateToolResult: (chatId, toolCallId, output, isError) =>
         set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.id === toolCallId
-                ? { ...tc, output, status: (isError ? 'error' : 'complete') as ToolCall['status'], endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
+          const next = withToolResult(state.messages, chatId, toolCallId, output, isError, Date.now());
+          return next ? { messages: next } : state;
         }),
 
       completeRunningTools: (chatId) =>
@@ -217,7 +192,6 @@ export const useCodeStore = create<CodeStore>()(
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
-        model: state.model,
         currentChatId: state.currentChatId,
         folderByChat: state.folderByChat,
         permissionMode: state.permissionMode,
