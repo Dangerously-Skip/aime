@@ -10,14 +10,62 @@ on:
     - cron: '0 3 * * 1'
   workflow_dispatch:
 
-# Runners: org-level self-hosted boxes (Default group, visibility: all), labelled
-# `self-hosted, Linux, X64, contabo`. GitHub-hosted runners are unavailable on
-# this account (billing), so `ubuntu-latest` jobs never start — which is why
-# every push went ungated. Use `contabo` in place of `linux` to pin to that box
-# specifically if runners are ever added elsewhere.
+# Collapse superseded runs. Keyed on the PR number or the ref, never the sha: a
+# sha-keyed group gives every commit its own run, which on a batch merge means N
+# full runs queued at once. One prompt verdict on the final state beats N late
+# verdicts on intermediate ones.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# RUNNERS — `vars.FAST_RUNNER`, currently `blacksmith-4vcpu-ubuntu-2404`.
+#
+# The previous note here was right about the problem and wrong about the fix.
+# GitHub-hosted runners genuinely could not start — not a payment failure, but an
+# exhausted quota: one repo's per-PR macOS jobs bill at a 10x multiplier and
+# consumed 1,912 of the org's 2,000 free minutes, after which every hosted job
+# org-wide failed at ASSIGNMENT with zero steps and no log. So `ubuntu-latest`
+# never ran and every push went ungated. That part was accurate.
+#
+# Moving to `[self-hosted, linux]` traded "never runs" for "runs and fails". Those
+# runners are on the box that serves production, and 24 of the last 25 runs here
+# failed for two reasons, neither of them this repo's code:
+#
+#   e2e   Electron could not launch: `libgtk-3.so.0: cannot open shared object
+#         file`. The Playwright step used to assert those OS libraries had been
+#         "provisioned on the box once instead" of via `--with-deps`; they had
+#         not been, or not completely. GitHub's Ubuntu images ship them, a bare
+#         Contabo box does not, and nothing checked.
+#   test  3 failures out of 2803, on a box running at load 20-40 (that run
+#         reported environment 325s / import 323s for a 174s suite).
+#
+# Blacksmith is not the production box and its Ubuntu image has the system
+# libraries, so it fixes the ENVIRONMENT. It is a REPO-level variable -- org-level
+# variables are accepted by the API and then silently ignored for private repos on
+# the Free plan, which shows up as jobs quietly using the `self-hosted` fallback
+# below. Set it with ~/dev/tools/launchpad/bin/ci-runner-sync.sh.
+#
+# WHAT MOVING RUNNERS DID *NOT* FIX — measured on Blacksmith, not assumed. The
+# first version of this comment claimed the unit failures were "arithmetic more
+# than flakiness". That was wrong. e2e came back 15 passed / 3 skipped / 1 failed,
+# and the unit suite still fails two tests, neither of them contention:
+#
+#   credentials.test.ts:208  probeCredentialFile > "notices when the file changes
+#         under it" -> `expected 'unreadable' to be 'ok'`. The secret store derives
+#         its key from the OS KEYCHAIN (see secret-store.ts). No CI runner has one,
+#         so this fails on ubuntu-latest too. An application decision, not an
+#         infrastructure one — and it sits on a security surface, so do not paper
+#         it over by relaxing the assertion.
+#   route.test.ts  POST /api/runs/verify — durability > "a failed log write ..."
+#         -> `Test timed out in 30000ms`. A 30-second budget is not a contention
+#         artifact.
+#
+# This workflow's job is to stop lying about the environment. Those two are real
+# signal and should stay red until they are actually fixed.
 jobs:
   test:
-    runs-on: [self-hosted, linux]
+    runs-on: ${{ vars.FAST_RUNNER || 'self-hosted' }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -59,7 +107,8 @@ jobs:
         run: npm run build
 
   e2e:
-    runs-on: [self-hosted, linux]
+    runs-on: ${{ vars.FAST_RUNNER || 'self-hosted' }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -73,18 +122,35 @@ jobs:
         working-directory: web
         run: npm ci
 
-      # `--with-deps` shells out to apt and needs root; the self-hosted runner has
-      # no passwordless sudo, so it failed with "a password is required". The OS
-      # libraries are provisioned on the box once instead — see the CI section of
-      # CLAUDE.md — and this installs only the browser binary into the runner's
-      # own cache, which needs no privileges.
+      # Try `--with-deps` first, fall back to the browser binary alone.
+      #
+      # --with-deps shells out to apt and needs root. Blacksmith's Ubuntu image has
+      # passwordless sudo, so the system libraries Electron needs (libgtk-3,
+      # libnss3, ...) get installed and the app can launch. The self-hosted
+      # fallback has no sudo — the previous version of this step assumed those
+      # libraries had been provisioned on that box instead, and they had not:
+      # `libgtk-3.so.0: cannot open shared object file` killed 8 of the last 25
+      # runs. The `||` keeps the fallback runner working rather than hard-failing
+      # on a missing password prompt.
       - name: Install Playwright browsers
         working-directory: web
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium || npx playwright install chromium
 
+      # Under xvfb: Electron is a GUI application, so `electron.launch()` needs a
+      # display even for headless-looking tests. Without one it dies with
+      #   ERROR:ui/ozone/platform/x11/ozone_platform_x11.cc:256] Missing X server
+      #   or $DISPLAY
+      #   ERROR:ui/aura/env.cc:246] The platform failed to initialize. Exiting.
+      # This is a SECOND, separate cause from the `libgtk-3.so.0` one fixed above —
+      # that was a missing library, this is a missing display. Fixing the first
+      # only revealed the second, which is why the failing step moved from
+      # "Install Playwright browsers" to "E2E smoke tests".
+      #
+      # `--auto-servernum` picks a free display number, so parallel jobs on the
+      # same runner cannot collide on :99.
       - name: E2E smoke tests
         working-directory: web
-        run: npm run test:e2e
+        run: xvfb-run --auto-servernum npm run test:e2e
 
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -107,7 +173,8 @@ jobs:
   # check people learn to skip.
   mutation:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, linux]
+    runs-on: ${{ vars.FAST_RUNNER || 'self-hosted' }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
