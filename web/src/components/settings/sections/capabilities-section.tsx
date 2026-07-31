@@ -36,9 +36,6 @@ export function CapabilitiesSection() {
   const codeModel = useCodeStore((s) => s.model)
   const setCodeModel = useCodeStore((s) => s.setModel)
 
-  const browserModel = useBrowserStore((s) => s.model)
-  const setBrowserModel = useBrowserStore((s) => s.setModel)
-
   const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled)
   const setPushToTalkEnabled = useSettingsStore((s) => s.setPushToTalkEnabled)
   const pushToTalkAccelerator = useSettingsStore((s) => s.pushToTalkAccelerator)
@@ -95,17 +92,21 @@ export function CapabilitiesSection() {
 
   const modelOptions = ['sonnet', 'opus', 'haiku'] as const
 
-  // `nullable` = this surface can be left unpinned, letting the server resolve
-  // the model from the registry. Only Browser supports it so far; the other
-  // three stores still default to a hardcoded model, which pins every request
-  // and suppresses capability+tier routing for that surface. Worth unpicking
-  // separately — Cowork already has a newer route-selecting picker
-  // (`modelRoute` + `resolveSendRoute`) that this list predates.
+  /**
+   * Browser is deliberately absent: it has no model of its own. It resolves
+   * through `resolveSendRoute` like every other surface, so the tier grid and
+   * the user's BYOK providers govern it — which is the whole point of a single
+   * chokepoint.
+   *
+   * The three below are a LEGACY fallback, not the primary control. Each of
+   * these surfaces already resolves a route first (`route?.model ?? model`), so
+   * this value is only reached when nothing resolves. Folding them into the tier
+   * grid the same way is the remaining half of the job.
+   */
   const surfaceStores = [
-    { label: 'Chat', model: chatModel, setModel: setChatModel, nullable: false },
-    { label: 'Cowork', model: coworkModel, setModel: setCoworkModel, nullable: false },
-    { label: 'Code', model: codeModel, setModel: setCodeModel, nullable: false },
-    { label: 'Browser', model: browserModel, setModel: setBrowserModel, nullable: true },
+    { label: 'Chat', model: chatModel, setModel: setChatModel },
+    { label: 'Cowork', model: coworkModel, setModel: setCoworkModel },
+    { label: 'Code', model: codeModel, setModel: setCodeModel },
   ]
 
   return (
@@ -279,18 +280,14 @@ export function CapabilitiesSection() {
           Default Model per Surface
         </label>
         <div className="mt-2 space-y-3">
-          {surfaceStores.map(({ label, model, setModel, nullable }) => (
+          {surfaceStores.map(({ label, model, setModel }) => (
             <div key={label} className="flex items-center justify-between">
               <span className="text-sm font-medium">{label}</span>
               <select
-                // `''` is the unpinned state (stored as null): the server picks
-                // from the registry using the surface's capability+tier route.
-                // Pinning a model here suppresses that routing for the surface.
-                value={model ?? ''}
+                value={model}
                 onChange={(e) => setModel(e.target.value)}
                 className="text-sm border rounded-md px-2 py-1 bg-background text-foreground"
               >
-                {nullable && <option value="">Auto</option>}
                 {modelOptions.map((opt) => (
                   <option key={opt} value={opt}>
                     {opt}

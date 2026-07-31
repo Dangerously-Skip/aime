@@ -13,6 +13,18 @@ import {
   type WebviewRef,
 } from '@/lib/browser-tools';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
+import type { ProviderExecConfig } from '@/lib/models/execution';
+
+/**
+ * Where this turn should run. Produced by `resolveSendRoute` in the surface —
+ * the one chokepoint that honours the tier grid and user-added providers.
+ * Both fields null/undefined means "nothing resolved"; the server then falls
+ * back to its own registry lookup.
+ */
+export interface BrowserTurnRoute {
+  model: string | null;
+  providerConfig?: ProviderExecConfig | null;
+}
 import { getBrowserConfig } from '@/lib/surfaces/browser-config';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 
@@ -74,7 +86,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
   }, []);
 
   const runAgentLoop = useCallback(
-    async (userMessage: string, model: string | null, initialWebview: WebviewRef, pendingContext?: PendingContextItem[]) => {
+    async (userMessage: string, route: BrowserTurnRoute, initialWebview: WebviewRef, pendingContext?: PendingContextItem[]) => {
       let webview = initialWebview;
       // Abort any previous run
       if (abortRef.current) abortRef.current.abort();
@@ -150,7 +162,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
 
           const { assistantBlocks, stopReason } = await sendTurn(
             messages,
-            model,
+            route,
             systemPrompt,
             controller.signal,
             optionsRef.current,
@@ -291,7 +303,7 @@ async function handleSwitchTab(
 
 async function sendTurn(
   messages: AnthropicMessage[],
-  model: string | null,
+  route: BrowserTurnRoute,
   system: string,
   signal: AbortSignal,
   callbacks: Pick<UseBrowserAgentOptions, 'onText' | 'onToolUse'>,
@@ -305,8 +317,12 @@ async function sendTurn(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messages,
-      // Omitted when unpinned, so the server resolves it from the registry.
-      ...(model ? { model } : {}),
+      // The route comes from the SAME `resolveSendRoute` chokepoint every other
+      // surface uses, so the user's tier grid and BYOK providers govern this
+      // surface too. Omitted when it resolves to nothing, leaving the server to
+      // fall back to the registry.
+      ...(route.model ? { model: route.model } : {}),
+      ...(route.providerConfig ? { providerConfig: route.providerConfig } : {}),
       system,
       tools: BROWSER_TOOL_SCHEMAS,
       // Still sent when the user has a BYOK key in settings, but no longer

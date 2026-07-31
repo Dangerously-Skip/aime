@@ -20,15 +20,6 @@ export type LoopPhase = 'idle' | 'observing' | 'thinking' | 'acting';
 interface BrowserState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
-  /**
-   * `null` = unpinned: the server resolves the model from the registry using the
-   * browser surface's (capability, tier) route, exactly as every other surface
-   * does. It used to default to the literal `'sonnet'`, which meant the client
-   * pinned a model on every request and the registry was never consulted — the
-   * surface silently ignored per-surface routing and stayed on whatever that
-   * alias mapped to.
-   */
-  model: ModelId | null;
   isStreaming: boolean;
   loopPhase: LoopPhase;
   tabSessions: Record<string, BrowserTab[]>;
@@ -41,7 +32,6 @@ interface BrowserActions {
   addMessage: (chatId: string, message: Message) => void;
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
-  setModel: (model: string) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
   setCurrentChat: (chatId: string | null) => void;
@@ -69,7 +59,6 @@ export const useBrowserStore = create<BrowserStore>()(
     (set, get) => ({
       messages: {},
       currentChatId: null,
-      model: null,
       isStreaming: false,
       loopPhase: 'idle',
       tabSessions: {},
@@ -114,9 +103,6 @@ export const useBrowserStore = create<BrowserStore>()(
           return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
-      // `''` from the Settings picker means "unpinned" — stored as null so the
-      // server resolves from the registry rather than receiving an empty string.
-      setModel: (model) => set({ model: (model || null) as ModelId | null }),
 
       startStreaming: () => set({ isStreaming: true }),
 
@@ -263,7 +249,6 @@ export const useBrowserStore = create<BrowserStore>()(
       storage: createJSONStorage(() => getGatedStorage()),
       partialize: (state) => ({
         messages: state.messages,
-        model: state.model,
         currentChatId: state.currentChatId,
         tabSessions: state.tabSessions,
         activeTabIds: state.activeTabIds,
