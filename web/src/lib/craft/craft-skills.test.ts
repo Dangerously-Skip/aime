@@ -21,7 +21,7 @@ import { findSlopTells } from './slop-tells';
  */
 
 const SKILLS = path.resolve(__dirname, '../../../resources/aime-skills/skills');
-const CRAFT = ['craft-web', 'craft-deck'];
+const CRAFT = ['craft-web', 'craft-deck', 'craft-doc'];
 
 const read = (id: string) => fs.readFileSync(path.join(SKILLS, id, 'SKILL.md'), 'utf-8');
 
@@ -47,11 +47,21 @@ describe('descriptions state where the skill does NOT apply', () => {
     ).toBe(true);
   });
 
-  it('the two do not claim each other’s territory', () => {
-    const web = String(parseSkillMd(read('craft-web')).frontmatter.description);
-    const deck = String(parseSkillMd(read('craft-deck')).frontmatter.description);
-    expect(web).toMatch(/craft-deck/);
-    expect(deck).toMatch(/craft-web/);
+  /**
+   * Three media, three skills, and the boundaries have to be mutual. A skill
+   * that names its own scope but not its neighbours' is the brand-guidelines
+   * failure again: it gets matched by anything adjacent, and the adjacent thing
+   * here is a different medium with contradictory rules — 10pt body type is
+   * correct in print and unreadable projected.
+   */
+  it.each(CRAFT)('%s hands off to both of its siblings', (id) => {
+    const description = String(parseSkillMd(read(id)).frontmatter.description);
+    for (const sibling of CRAFT.filter((s) => s !== id)) {
+      expect(
+        description,
+        `${id} never points at ${sibling}, so a ${sibling} request can match it`,
+      ).toMatch(new RegExp(sibling));
+    }
   });
 
   // A brand is opted into by name; craft is not a brand.
