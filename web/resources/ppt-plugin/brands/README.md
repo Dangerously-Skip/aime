@@ -4,7 +4,7 @@ Each subdirectory contains a complete brand package for generating presentations
 
 ```
 brands/
-├── nib/                          # nib Health Funds (default)
+├── default/                          # default Health Funds (default)
 │   ├── brand_config.yaml         # Colors, typography, spacing
 │   ├── pptx_config.yaml          # Template layout mappings
 │   └── Presentation_Template.pptx # PowerPoint template

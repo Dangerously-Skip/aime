@@ -5,7 +5,7 @@ description: Create visual artifacts — diagrams, flowcharts, dashboards, landi
 
 # Canvas Design
 
-Create beautiful visual artifacts using HTML + SVG + CSS. Output goes into an artifact block so it renders live in the Quarry canvas panel.
+Create beautiful visual artifacts using HTML + SVG + CSS. Output goes into an artifact block so it renders live in the AIME canvas panel.
 
 ## When to use
 

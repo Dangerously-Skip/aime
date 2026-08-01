@@ -1,6 +1,6 @@
 ---
 name: generate-ppt
-description: Generate a PowerPoint presentation from markdown content using nib-ppt
+description: Generate a PowerPoint presentation from markdown content using ppt
 allowed-tools: Bash, Write, Read
 ---
 
@@ -85,18 +85,18 @@ Harbour-bridge views
 
 ```bash
 # Basic generation
-~/.claude/plugins/nib-ppt/generate_presentation.sh input.md output.pptx
+~/.claude/plugins/ppt/generate_presentation.sh input.md output.pptx
 
 # Skip HTML-to-PNG conversion (faster iterations)
-~/.claude/plugins/nib-ppt/generate_presentation.sh --skip-html-gen input.md output.pptx
+~/.claude/plugins/ppt/generate_presentation.sh --skip-html-gen input.md output.pptx
 
 # Don't auto-open
-~/.claude/plugins/nib-ppt/generate_presentation.sh --no-open input.md output.pptx
+~/.claude/plugins/ppt/generate_presentation.sh --no-open input.md output.pptx
 ```
 
 ## Creating Visuals
 
-For charts, metric cards, and custom graphics — create HTML files and reference them as images. nib-ppt automatically converts HTML to PNG during generation.
+For charts, metric cards, and custom graphics — create HTML files and reference them as images. ppt automatically converts HTML to PNG during generation.
 
 ```html
 <!-- visuals/metric-card.html -->
@@ -114,7 +114,7 @@ Reference in markdown:
 
 ## Rules
 
-- Do NOT use python-pptx directly — nib-ppt handles all PowerPoint generation
+- Do NOT use python-pptx directly — ppt handles all PowerPoint generation
 - Always write Fork-formatted markdown first, then run generate_presentation.sh
 - Use relative paths for images
 - Keep HTML visuals simple (no JavaScript)

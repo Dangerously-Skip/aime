@@ -27,7 +27,7 @@ osascript -e 'tell application "Microsoft PowerPoint" to quit' 2>/dev/null
 sleep 1
 
 # Regenerate
-~/.claude/plugins/nib-ppt/generate_presentation.sh presentation.md output.pptx
+~/.claude/plugins/ppt/generate_presentation.sh presentation.md output.pptx
 
 # Verify it opened, force open if not
 sleep 2

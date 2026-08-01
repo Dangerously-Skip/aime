@@ -183,7 +183,7 @@ fork/
 ├── html_to_image.py             # Voltage converter for HTML
 ├── generate_presentation.sh     # The red button - push to detonate
 ├── brands/
-│   └── nib/                     # Brand package (swap for your own)
+│   └── default/                     # Brand package (swap for your own)
 │       ├── pptx_config.yaml     # Layout mapping (circuit diagram)
 │       ├── brand_config.yaml    # Your brand's electrical specs
 │       └── Presentation_Template.pptx  # The PowerPoint chassis
@@ -201,7 +201,7 @@ fork/
 Wire up your layouts:
 
 ```yaml
-template: "brands/nib/Presentation_Template.pptx"
+template: "brands/default/Presentation_Template.pptx"
 
 layouts:
   title_slide: 0          # The main breaker

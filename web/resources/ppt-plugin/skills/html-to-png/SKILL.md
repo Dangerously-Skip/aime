@@ -11,7 +11,7 @@ Convert HTML files (charts, metric cards, diagrams) to PNG images for PowerPoint
 ## Usage
 
 ```bash
-python3 ~/.claude/plugins/nib-ppt/html_to_image.py \
+python3 ~/.claude/plugins/ppt/html_to_image.py \
     --template custom \
     --html visuals/my-chart.html \
     --output visuals/my-chart.png \

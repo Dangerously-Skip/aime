@@ -1,8 +1,8 @@
 {
-  "name": "nib-ppt",
+  "name": "ppt",
   "description": "Generate professional PowerPoint presentations from markdown using Fork format",
   "version": "1.0.0",
   "author": {
-    "name": "nib Redacted team"
+    "name": "AIME contributors"
   }
 }

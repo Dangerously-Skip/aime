@@ -147,9 +147,9 @@ playwright --version
 ls -l generate_presentation.sh | grep -q 'x' && echo '✓ Scripts executable'
 
 # ✓ Brand config exists
-[ -d brands/nib ] && echo '✓ brands/nib/'
-[ -f brands/nib/pptx_config.yaml ] && echo '✓ pptx_config.yaml'
-[ -f brands/nib/brand_config.yaml ] && echo '✓ brand_config.yaml'
+[ -d brands/default ] && echo '✓ brands/default/'
+[ -f brands/default/pptx_config.yaml ] && echo '✓ pptx_config.yaml'
+[ -f brands/default/brand_config.yaml ] && echo '✓ brand_config.yaml'
 
 # ✓ Directories exist
 [ -d visuals ] && echo '✓ visuals/'
@@ -209,7 +209,7 @@ pip3 install python-pptx
 Create a templates directory and add a PowerPoint template:
 
 ```bash
-# The default nib brand is pre-configured in brands/nib/
+# The default default brand is pre-configured in brands/default/
 # To add your own brand:
 mkdir -p brands/my-brand
 cp /path/to/your/template.pptx brands/my-brand/

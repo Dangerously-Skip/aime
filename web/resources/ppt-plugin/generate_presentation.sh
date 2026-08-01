@@ -13,8 +13,8 @@ NC='\033[0m' # No Color
 
 # Default values
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG="${SCRIPT_DIR}/brands/nib/pptx_config.yaml"
-BRAND_CONFIG="${SCRIPT_DIR}/brands/nib/brand_config.yaml"
+CONFIG="${SCRIPT_DIR}/brands/default/pptx_config.yaml"
+BRAND_CONFIG="${SCRIPT_DIR}/brands/default/brand_config.yaml"
 VISUALS_DIR="visuals"
 SKIP_HTML_GENERATION=false
 OPEN_RESULT=true

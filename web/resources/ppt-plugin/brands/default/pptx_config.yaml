@@ -6,7 +6,7 @@ template:
   slide_width: 13.33  # inches
   slide_height: 7.5   # inches
 
-# Layout indices from the template (April 2024 - nib Core Brand)
+# Layout indices from the template (April 2024 - default Core Brand)
 # Inspect the template in PowerPoint to verify layout indices
 # NOTE: Layout 4 (2_Title Slide) requires manual text box placement (dark green bg, needs white text)
 layouts:
