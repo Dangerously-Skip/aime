@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invoices</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --border: #e3e6ea;
+    --border-strong: #cfd4da;
+    --text: #1c2024;
+    --text-muted: #6b7480;
+    --text-faint: #9aa2ad;
+
+    --red: #c0332c;
+    --red-bg: #fdf3f2;
+    --orange: #b1610f;
+    --orange-bg: #fdf6ee;
+    --amber: #8a6d14;
+    --amber-bg: #fbf8ec;
+    --green: #2c6a45;
+    --green-bg: #f1f7f3;
+    --blue: #2a5aa8;
+
+    --radius: 6px;
+    --focus: #2a5aa8;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 32px 24px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; }
+
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 2px;
+    letter-spacing: -0.01em;
+  }
+  .subtitle { color: var(--text-muted); margin: 0 0 20px; font-size: 13px; }
+
+  /* ---------- Summary bar ---------- */
+  .summary {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--red);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin-bottom: 16px;
+  }
+  .summary.clear { border-left-color: var(--green); }
+
+  .stat { display: flex; flex-direction: column; gap: 1px; }
+  .stat-value { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .stat-value.danger { color: var(--red); }
+  .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); font-weight: 500; }
+  .summary-spacer { flex: 1; }
+
+  /* ---------- Controls ---------- */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  .search {
+    position: relative;
+    flex: 1 1 260px;
+    min-width: 200px;
+    max-width: 340px;
+  }
+  .search input {
+    width: 100%;
+    padding: 7px 28px 7px 30px;
+    font: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+  }
+  .search svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--text-faint); }
+  .search-clear {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    border: 0; background: none; cursor: pointer; color: var(--text-faint);
+    padding: 4px; line-height: 0; border-radius: 4px;
+  }
+  .search-clear:hover { color: var(--text); }
+  .search-clear[hidden] { display: none; }
+
+  .seg { display: flex; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
+  .seg button {
+    border: 0; background: none; font: inherit; cursor: pointer;
+    padding: 7px 12px; color: var(--text-muted);
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button:hover { background: #f2f4f6; color: var(--text); }
+  .seg button[aria-pressed="true"] { background: #eceff2; color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--blue); }
+  .seg .count { color: var(--text-faint); font-weight: 400; margin-left: 5px; font-variant-numeric: tabular-nums; }
+
+  .ctrl-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); font-weight: 500; }
+
+  .btn {
+    font: inherit; cursor: pointer;
+    padding: 7px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .btn:hover:not(:disabled) { background: #f2f4f6; }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .btn-link {
+    border: 0; background: none; color: var(--blue);
+    text-decoration: underline; cursor: pointer; font: inherit; padding: 2px 4px;
+  }
+
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  /* ---------- Table ---------- */
+  .table-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .table-scroll { overflow-x: auto; }
+
+  table { width: 100%; border-collapse: separate; border-spacing: 0; }
+
+  thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: #fbfcfd;
+    border-bottom: 1px solid var(--border-strong);
+    padding: 0;
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  thead th button {
+    width: 100%;
+    display: flex; align-items: center; gap: 5px;
+    border: 0; background: none; cursor: pointer;
+    font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+    padding: 9px 12px;
+  }
+  thead th button:hover { background: #f0f2f5; color: var(--text); }
+  th.num button { justify-content: flex-end; }
+  .arrow { color: var(--blue); font-size: 9px; visibility: hidden; }
+  th[aria-sort] .arrow { visibility: visible; }
+  th[aria-sort] { color: var(--text); }
+
+  tbody td {
+    padding: 9px 12px;
+    border-bottom: 1px solid #eef0f3;
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: #fafbfc; }
+
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+  .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--text-muted); }
+  .customer { font-weight: 500; }
+  .amount { font-weight: 600; }
+  .muted { color: var(--text-muted); }
+
+  /* overdue accent: left rail on the row, not a full red fill */
+  td.rail { border-left: 3px solid transparent; padding-left: 12px; }
+  tr.sev-high  td.rail { border-left-color: var(--red); }
+  tr.sev-mid   td.rail { border-left-color: var(--orange); }
+  tr.sev-low   td.rail { border-left-color: var(--amber); }
+  tr.is-overdue td.rail { background: linear-gradient(90deg, var(--red-bg), transparent 60%); }
+  tr.sev-mid  td.rail { background: linear-gradient(90deg, var(--orange-bg), transparent 60%); }
+  tr.sev-low  td.rail { background: linear-gradient(90deg, var(--amber-bg), transparent 60%); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge.overdue   { background: var(--red-bg);    color: var(--red);    box-shadow: inset 0 0 0 1px #f0d5d3; }
+  .badge.due-soon  { background: var(--amber-bg);  color: var(--amber);  box-shadow: inset 0 0 0 1px #eee3bf; }
+  .badge.open      { background: #f2f4f6;          color: var(--text-muted); box-shadow: inset 0 0 0 1px var(--border); }
+  .badge.paid      { background: var(--green-bg);  color: var(--green);  box-shadow: inset 0 0 0 1px #d5e6dc; }
+
+  .late { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .late.sev-high { color: var(--red); }
+  .late.sev-mid  { color: var(--orange); }
+  .late.sev-low  { color: var(--amber); }
+  .soon { color: var(--amber); font-variant-numeric: tabular-nums; }
+  .dash { color: #d5d9de; }
+
+  /* ---------- Empty state ---------- */
+  .empty { padding: 56px 24px; text-align: center; }
+  .empty h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .empty p { color: var(--text-muted); margin: 0 0 14px; }
+
+  /* ---------- Pagination ---------- */
+  .pager {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 11px 14px;
+    border-top: 1px solid var(--border);
+    background: #fcfcfd;
+  }
+  .pager .status { color: var(--text-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .pager-spacer { flex: 1; }
+  .pages { display: flex; align-items: center; gap: 3px; }
+  .pages button {
+    min-width: 30px; height: 29px; padding: 0 7px;
+    border: 1px solid transparent; background: none;
+    border-radius: 5px; cursor: pointer; font: inherit;
+    color: var(--text-muted); font-variant-numeric: tabular-nums;
+  }
+  .pages button:hover:not(:disabled):not([aria-current]) { background: #eceff2; color: var(--text); }
+  .pages button[aria-current="page"] { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
+  .pages .gap { color: var(--text-faint); padding: 0 2px; user-select: none; }
+  select {
+    font: inherit; padding: 6px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface); color: var(--text);
+  }
+
+  .sr {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  .footnote { color: var(--text-faint); font-size: 12px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Invoices</h1>
+  <p class="subtitle">200 invoices &middot; sorted to surface overdue accounts first</p>
+
+  <!-- Summary -->
+  <div class="summary" id="summary"></div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <div class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path>
+      </svg>
+      <label class="sr" for="search">Search by invoice number or customer</label>
+      <input id="search" type="search" placeholder="Search invoice or customer&hellip;" autocomplete="off">
+      <button class="search-clear" id="searchClear" hidden aria-label="Clear search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+          <path d="M18 6L6 18M6 6l12 12"></path>
+        </svg>
+      </button>
+    </div>
+
+    <div class="seg" id="statusFilter" role="group" aria-label="Filter by status"></div>
+
+    <div class="pager-spacer"></div>
+
+    <span class="ctrl-label" id="sortModeLabel">Sort</span>
+    <div class="seg" id="sortMode" role="group" aria-labelledby="sortModeLabel">
+      <button type="button" data-mode="priority">Overdue first</button>
+      <button type="button" data-mode="column" id="sortColumnBtn">By column</button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-card">
+    <div class="table-scroll">
+      <table id="table">
+        <caption class="sr">Customer invoices. Use the column header buttons to sort.</caption>
+        <thead><tr id="headRow"></tr></thead>
+        <tbody id="body"></tbody>
+      </table>
+    </div>
+    <div id="empty" class="empty" hidden>
+      <h2>No invoices match</h2>
+      <p id="emptyDetail"></p>
+      <button class="btn" id="resetAll">Reset filters</button>
+    </div>
+    <div class="pager" id="pager"></div>
+  </div>
+
+  <p class="footnote">
+    Demo data generated relative to today's date, so ageing stays realistic. Hover a row to see its issue date.
+  </p>
+
+  <div class="sr" role="status" aria-live="polite" id="live"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ------------------------------------------------------------------
+  // Dates
+  // ------------------------------------------------------------------
+  var DAY = 86400000;
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var todayMs = today.getTime();
+
+  function addDays(ms, n) { return ms + n * DAY; }
+  function daysBetween(ms) { return Math.round((todayMs - ms) / DAY); }
+
+  var fmtMoney = new Intl.NumberFormat('en-GB', {
+    style: 'currency', currency: 'GBP', maximumFractionDigits: 0
+  });
+  var fmtMoneyPrecise = new Intl.NumberFormat('en-GB', {
+    style: 'currency', currency: 'GBP', minimumFractionDigits: 2
+  });
+  var fmtDate = new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric'
+  });
+
+  // ------------------------------------------------------------------
+  // Seeded data — stable across reloads so the view is trustworthy
+  // ------------------------------------------------------------------
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  var CUSTOMERS = [
+    'Ashgrove Media', 'Belmont Partners', 'Corvid & Co', 'Dunlin Logistics',
+    'Eastgate Foods', 'Fairhaven Clinic', 'Granta Systems', 'Harlow Print',
+    'Ionic Labs', 'Jesmond Retail', 'Kestrel Engineering', 'Lawnmarket Ltd',
+    'Marlowe Design', 'Northaven Freight', 'Oakhill Dental', 'Pentland Group',
+    'Quayside Brewing', 'Redwing Analytics', 'Stonebridge Legal', 'Thornbury Estates',
+    'Underwood Joinery', 'Verity Insurance', 'Wexford Marine', 'Yardley Interiors',
+    'Zephyr Cloud', 'Alderman Recruitment', 'Brackenridge Farms', 'Cloverfield Care',
+    'Drakemoor Studios', 'Elmswood Academy', 'Foxton Rail', 'Glenmore Whisky',
+    'Hawksley Fabrics', 'Inverleith Optics', 'Kirkgate Pharmacy', 'Linfield Sport',
+    'Mossvale Nursery', 'Netherby Tooling', 'Orwell Bindery', 'Pinehurst Hotels',
+    'Ravensworth Steel', 'Saltmarsh Organics', 'Tolbooth Coffee', 'Wickham Audio'
+  ];
+
+  var TERMS = [14, 30, 30, 30, 45, 60];
+
+  function buildInvoices(n) {
+    var rnd = mulberry32(20260801);
+    var out = [];
+
+    for (var i = 0; i < n; i++) {
+      var customer = CUSTOMERS[Math.floor(rnd() * CUSTOMERS.length)];
+      var terms = TERMS[Math.floor(rnd() * TERMS.length)];
+
+      // Due dates spread from 165 days ago to 55 days ahead, weighted to the past.
+      var offset = Math.round(-165 + 220 * Math.pow(rnd(), 0.78));
+      var dueMs = addDays(todayMs, offset);
+      var issuedMs = addDays(dueMs, -terms);
+
+      // Amounts: mostly small, occasional large. Log-ish distribution.
+      var amount = Math.round((180 + Math.pow(rnd(), 3.1) * 24000) / 5) * 5 + rnd() * 4;
+      amount = Math.round(amount * 100) / 100;
+
+      // Payment likelihood: older invoices are mostly settled; a stubborn
+      // minority are not — those are the overdue ones worth surfacing.
+      var paid;
+      if (offset < 0) paid = rnd() < 0.81;
+      else            paid = rnd() < 0.13;
+
+      var daysOverdue = paid ? 0 : Math.max(0, daysBetween(dueMs));
+      var daysUntilDue = paid ? null : -daysBetween(dueMs);
+
+      var status;
+      if (paid)                  status = 'paid';
+      else if (daysOverdue > 0)  status = 'overdue';
+      else if (daysUntilDue <= 10) status = 'due-soon';
+      else                       status = 'open';
+
+      out.push({
+        id: 'INV-' + (10245 + i * 7),
+        customer: customer,
+        issuedMs: issuedMs,
+        dueMs: dueMs,
+        amount: amount,
+        status: status,
+        daysOverdue: daysOverdue,
+        daysUntilDue: daysUntilDue
+      });
+    }
+    return out;
+  }
+
+  var INVOICES = buildInvoices(200);
+
+  function severity(inv) {
+    if (inv.status !== 'overdue') return '';
+    if (inv.daysOverdue > 60) return 'high';
+    if (inv.daysOverdue > 30) return 'mid';
+    return 'low';
+  }
+
+  // ------------------------------------------------------------------
+  // Columns
+  // ------------------------------------------------------------------
+  var STATUS_ORDER = { overdue: 0, 'due-soon': 1, open: 2, paid: 3 };
+  var STATUS_LABEL = { overdue: 'Overdue', 'due-soon': 'Due soon', open: 'Open', paid: 'Paid' };
+
+  var COLUMNS = [
+    { key: 'id',       label: 'Invoice',   get: function (r) { return r.id; } },
+    { key: 'customer', label: 'Customer',  get: function (r) { return r.customer; } },
+    { key: 'dueMs',    label: 'Due',       get: function (r) { return r.dueMs; } },
+    { key: 'amount',   label: 'Amount',    num: true, get: function (r) { return r.amount; } },
+    { key: 'status',   label: 'Status',    get: function (r) { return STATUS_ORDER[r.status]; } },
+    { key: 'age',      label: 'Days late', num: true, get: function (r) { return r.daysOverdue; } }
+  ];
+
+  var FILTERS = [
+    { key: 'all',      label: 'All' },
+    { key: 'overdue',  label: 'Overdue' },
+    { key: 'due-soon', label: 'Due soon' },
+    { key: 'open',     label: 'Open' },
+    { key: 'paid',     label: 'Paid' }
+  ];
+
+  // ------------------------------------------------------------------
+  // State
+  // ------------------------------------------------------------------
+  var state = {
+    sortMode: 'priority',       // 'priority' | 'column'
+    sortKey: 'dueMs',
+    sortDir: 'asc',
+    search: '',
+    status: 'all',
+    page: 1,
+    pageSize: 25
+  };
+
+  var el = {
+    summary: document.getElementById('summary'),
+    search: document.getElementById('search'),
+    searchClear: document.getElementById('searchClear'),
+    statusFilter: document.getElementById('statusFilter'),
+    sortMode: document.getElementById('sortMode'),
+    headRow: document.getElementById('headRow'),
+    body: document.getElementById('body'),
+    table: document.getElementById('table'),
+    empty: document.getElementById('empty'),
+    emptyDetail: document.getElementById('emptyDetail'),
+    resetAll: document.getElementById('resetAll'),
+    pager: document.getElementById('pager'),
+    live: document.getElementById('live')
+  };
+
+  // ------------------------------------------------------------------
+  // Derivation: filter -> sort -> paginate
+  // ------------------------------------------------------------------
+  function applyFilters() {
+    var q = state.search.trim().toLowerCase();
+    return INVOICES.filter(function (r) {
+      if (state.status !== 'all' && r.status !== state.status) return false;
+      if (q && r.customer.toLowerCase().indexOf(q) === -1 &&
+               r.id.toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+  }
+
+  // The scanning order: worst overdue at the top, then what is about to
+  // become a problem, then everything already settled.
+  function priorityCompare(a, b) {
+    var ra = STATUS_ORDER[a.status], rb = STATUS_ORDER[b.status];
+    if (ra !== rb) return ra - rb;
+    if (a.status === 'overdue') return b.daysOverdue - a.daysOverdue || a.amount - b.amount;
+    if (a.status === 'paid')    return b.dueMs - a.dueMs;
+    return a.dueMs - b.dueMs;                    // soonest due first
+  }
+
+  function columnCompare(col, dir) {
+    var sign = dir === 'asc' ? 1 : -1;
+    return function (a, b) {
+      var va = col.get(a), vb = col.get(b);
+      var d = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+      if (d !== 0) return sign * d;
+      return a.id.localeCompare(b.id);            // stable tiebreak
+    };
+  }
+
+  function derive() {
+    var rows = applyFilters();
+    if (state.sortMode === 'priority') {
+      rows.sort(priorityCompare);
+    } else {
+      var col = COLUMNS.filter(function (c) { return c.key === state.sortKey; })[0];
+      rows.sort(columnCompare(col, state.sortDir));
+    }
+    return rows;
+  }
+
+  // ------------------------------------------------------------------
+  // Render
+  // ------------------------------------------------------------------
+  function renderSummary() {
+    var overdue = INVOICES.filter(function (r) { return r.status === 'overdue'; });
+    var atRisk = overdue.reduce(function (s, r) { return s + r.amount; }, 0);
+    var worst = overdue.reduce(function (m, r) { return Math.max(m, r.daysOverdue); }, 0);
+    var dueSoon = INVOICES.filter(function (r) { return r.status === 'due-soon'; }).length;
+    var showingOverdue = state.status === 'overdue';
+
+    el.summary.className = 'summary' + (overdue.length ? '' : ' clear');
+    el.summary.innerHTML =
+      stat(overdue.length, 'Overdue', overdue.length ? 'danger' : '') +
+      stat(fmtMoney.format(atRisk), 'Value at risk', overdue.length ? 'danger' : '') +
+      stat(worst ? worst + ' days' : '—', 'Oldest') +
+      stat(dueSoon, 'Due within 10 days') +
+      '<div class="summary-spacer"></div>' +
+      '<button class="btn" id="focusOverdue" aria-pressed="' + showingOverdue + '">' +
+        (showingOverdue ? 'Show all invoices' : 'Show only overdue') +
+      '</button>';
+
+    document.getElementById('focusOverdue').addEventListener('click', function () {
+      state.status = showingOverdue ? 'all' : 'overdue';
+      state.page = 1;
+      render();
+    });
+  }
+
+  function stat(value, label, cls) {
+    return '<div class="stat">' +
+      '<span class="stat-value ' + (cls || '') + '">' + value + '</span>' +
+      '<span class="stat-label">' + label + '</span>' +
+    '</div>';
+  }
+
+  function renderStatusFilter() {
+    var counts = {};
+    var searchScoped = INVOICES.filter(function (r) {
+      var q = state.search.trim().toLowerCase();
+      if (!q) return true;
+      return r.customer.toLowerCase().indexOf(q) !== -1 || r.id.toLowerCase().indexOf(q) !== -1;
+    });
+    searchScoped.forEach(function (r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+    counts.all = searchScoped.length;
+
+    el.statusFilter.innerHTML = FILTERS.map(function (f) {
+      return '<button type="button" data-status="' + f.key + '" aria-pressed="' +
+        (state.status === f.key) + '">' + f.label +
+        '<span class="count">' + (counts[f.key] || 0) + '</span></button>';
+    }).join('');
+  }
+
+  function renderHead() {
+    el.headRow.innerHTML = COLUMNS.map(function (c) {
+      var active = state.sortMode === 'column' && state.sortKey === c.key;
+      var dir = state.sortDir === 'asc' ? 'ascending' : 'descending';
+      return '<th scope="col"' + (c.num ? ' class="num"' : '') +
+        (active ? ' aria-sort="' + dir + '"' : '') + '>' +
+        '<button type="button" data-key="' + c.key + '">' +
+          '<span>' + c.label + '</span>' +
+          '<span class="arrow" aria-hidden="true">' +
+            (active ? (state.sortDir === 'asc' ? '▲' : '▼') : '▲') +
+          '</span>' +
+        '</button></th>';
+    }).join('');
+  }
+
+  function renderRows(pageRows) {
+    el.body.innerHTML = pageRows.map(function (r) {
+      var sev = severity(r);
+      var cls = (r.status === 'overdue' ? 'is-overdue ' : '') + (sev ? 'sev-' + sev : '');
+
+      // Only overdue and imminent rows print a number here. Open and paid
+      // rows stay blank so the column reads as one clean run of red numbers
+      // — their due date is already in the Due column.
+      var age;
+      if (r.status === 'overdue') {
+        age = '<span class="late sev-' + sev + '">' + r.daysOverdue + '</span>';
+      } else if (r.status === 'due-soon') {
+        age = '<span class="soon">' +
+              (r.daysUntilDue === 0 ? 'today' : 'in ' + r.daysUntilDue) +
+              '</span>';
+      } else {
+        age = '<span class="dash">—</span>';
+      }
+
+      return '<tr class="' + cls + '" title="Issued ' + fmtDate.format(new Date(r.issuedMs)) +
+             ' &middot; ' + fmtMoneyPrecise.format(r.amount) + '">' +
+        '<td class="rail id">' + r.id + '</td>' +
+        '<td class="customer">' + r.customer + '</td>' +
+        '<td class="mono muted">' + fmtDate.format(new Date(r.dueMs)) + '</td>' +
+        '<td class="num amount">' + fmtMoney.format(r.amount) + '</td>' +
+        '<td><span class="badge ' + r.status + '">' + STATUS_LABEL[r.status] + '</span></td>' +
+        '<td class="num">' + age + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  function renderPager(total, start, end) {
+    var pages = Math.max(1, Math.ceil(total / state.pageSize));
+
+    el.pager.innerHTML =
+      '<span class="status">' +
+        (total ? 'Showing <strong>' + (start + 1) + '–' + end + '</strong> of <strong>' + total + '</strong>' : 'No results') +
+      '</span>' +
+      '<div class="pager-spacer"></div>' +
+      '<label class="ctrl-label" for="pageSize">Rows</label>' +
+      '<select id="pageSize">' +
+        [10, 25, 50, 100].map(function (n) {
+          return '<option value="' + n + '"' + (n === state.pageSize ? ' selected' : '') + '>' + n + '</option>';
+        }).join('') +
+      '</select>' +
+      '<nav class="pages" aria-label="Pagination">' +
+        '<button type="button" data-page="prev"' + (state.page === 1 ? ' disabled' : '') + ' aria-label="Previous page">‹</button>' +
+        pageWindow(state.page, pages).map(function (p) {
+          if (p === '…') return '<span class="gap">…</span>';
+          return '<button type="button" data-page="' + p + '"' +
+            (p === state.page ? ' aria-current="page"' : '') +
+            ' aria-label="Page ' + p + '">' + p + '</button>';
+        }).join('') +
+        '<button type="button" data-page="next"' + (state.page >= pages ? ' disabled' : '') + ' aria-label="Next page">›</button>' +
+      '</nav>';
+  }
+
+  function pageWindow(cur, total) {
+    if (total <= 7) {
+      var all = [];
+      for (var i = 1; i <= total; i++) all.push(i);
+      return all;
+    }
+    var out = [1];
+    var lo = Math.max(2, cur - 1), hi = Math.min(total - 1, cur + 1);
+    if (lo > 2) out.push('…');
+    for (var j = lo; j <= hi; j++) out.push(j);
+    if (hi < total - 1) out.push('…');
+    out.push(total);
+    return out;
+  }
+
+  function render() {
+    var rows = derive();
+    var pages = Math.max(1, Math.ceil(rows.length / state.pageSize));
+    if (state.page > pages) state.page = pages;
+
+    var start = (state.page - 1) * state.pageSize;
+    var end = Math.min(start + state.pageSize, rows.length);
+
+    renderSummary();
+    renderStatusFilter();
+    renderHead();
+    renderRows(rows.slice(start, end));
+    renderPager(rows.length, start, end);
+
+    // Sort-mode toggle
+    Array.prototype.forEach.call(el.sortMode.querySelectorAll('button'), function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.mode === state.sortMode));
+    });
+    document.getElementById('sortColumnBtn').textContent =
+      state.sortMode === 'column'
+        ? 'By ' + COLUMNS.filter(function (c) { return c.key === state.sortKey; })[0].label.toLowerCase()
+        : 'By column';
+
+    // Empty state
+    var isEmpty = rows.length === 0;
+    el.table.hidden = isEmpty;
+    el.empty.hidden = !isEmpty;
+    if (isEmpty) {
+      el.emptyDetail.textContent =
+        'Nothing matches' +
+        (state.search ? ' “' + state.search + '”' : '') +
+        (state.status !== 'all' ? ' with status “' + STATUS_LABEL[state.status] + '”' : '') + '.';
+    }
+
+    el.searchClear.hidden = !state.search;
+
+    var overdueShown = rows.filter(function (r) { return r.status === 'overdue'; }).length;
+    el.live.textContent = rows.length
+      ? 'Showing ' + (start + 1) + ' to ' + end + ' of ' + rows.length + ' invoices, ' + overdueShown + ' overdue.'
+      : 'No invoices match the current filters.';
+  }
+
+  // ------------------------------------------------------------------
+  // Events (delegated)
+  // ------------------------------------------------------------------
+  el.headRow.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-key]');
+    if (!btn) return;
+    var key = btn.dataset.key;
+
+    if (state.sortMode === 'column' && state.sortKey === key) {
+      state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      state.sortMode = 'column';
+      state.sortKey = key;
+      // Sensible first click per type: text A→Z, numbers and dates high→low.
+      state.sortDir = (key === 'id' || key === 'customer') ? 'asc' : 'desc';
+    }
+    state.page = 1;
+    render();
+  });
+
+  el.statusFilter.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-status]');
+    if (!btn) return;
+    state.status = btn.dataset.status;
+    state.page = 1;
+    render();
+  });
+
+  el.sortMode.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    state.sortMode = btn.dataset.mode;
+    state.page = 1;
+    render();
+  });
+
+  el.pager.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[data-page]');
+    if (!btn || btn.disabled) return;
+    var v = btn.dataset.page;
+    var pages = Math.max(1, Math.ceil(derive().length / state.pageSize));
+    if (v === 'prev') state.page = Math.max(1, state.page - 1);
+    else if (v === 'next') state.page = Math.min(pages, state.page + 1);
+    else state.page = Number(v);
+    render();
+  });
+
+  el.pager.addEventListener('change', function (e) {
+    if (e.target.id !== 'pageSize') return;
+    var firstRow = (state.page - 1) * state.pageSize;
+    state.pageSize = Number(e.target.value);
+    state.page = Math.floor(firstRow / state.pageSize) + 1;   // keep place
+    render();
+  });
+
+  var searchTimer;
+  el.search.addEventListener('input', function (e) {
+    var v = e.target.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      state.search = v;
+      state.page = 1;
+      render();
+    }, 120);
+  });
+
+  el.searchClear.addEventListener('click', function () {
+    el.search.value = '';
+    state.search = '';
+    state.page = 1;
+    render();
+    el.search.focus();
+  });
+
+  el.resetAll.addEventListener('click', function () {
+    el.search.value = '';
+    state.search = '';
+    state.status = 'all';
+    state.sortMode = 'priority';
+    state.page = 1;
+    render();
+  });
+
+  // "/" focuses search — small affordance for a scanning workflow.
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && document.activeElement !== el.search) {
+      e.preventDefault();
+      el.search.focus();
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

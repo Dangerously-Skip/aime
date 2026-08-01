@@ -1,0 +1,41 @@
+{
+  "usage": {
+    "inputTokens": 1748126,
+    "outputTokens": 35972,
+    "cost": 1.8126,
+    "model": "anthropic/claude-opus-5",
+    "durationMs": 1905924,
+    "toolCallCount": 26,
+    "estimated": false,
+    "cacheReadInputTokens": 1531249
+  },
+  "toolCalls": [
+    "Bash",
+    "Bash",
+    "AskUserQuestion",
+    "Write",
+    "Edit",
+    "Edit",
+    "Bash",
+    "Bash",
+    "Bash",
+    "Bash",
+    "Write",
+    "Bash",
+    "Bash",
+    "Read",
+    "Bash",
+    "Read",
+    "Edit",
+    "Edit",
+    "Bash",
+    "Read",
+    "Edit",
+    "Write",
+    "Bash",
+    "Bash",
+    "Read",
+    "Bash"
+  ],
+  "durationMs": 1905966
+}

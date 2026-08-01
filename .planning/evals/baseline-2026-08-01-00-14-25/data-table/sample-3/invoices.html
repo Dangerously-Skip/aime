@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accounts Receivable — Invoices</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --bg: #F7F8FA;
+    --card: #FFFFFF;
+    --ink: #1E293B;
+    --ink-soft: #64748B;
+    --ink-faint: #94A3B8;
+    --line: #E2E8F0;
+    --line-soft: #EFF2F6;
+    --accent: #8B5CF6;
+    --ok: #059669;
+    --warn: #B45309;
+    --hot: #DC2626;
+    --crit: #991B1B;
+    --radius: 10px;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 56px; }
+
+  /* ---------- header ---------- */
+  header h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: -0.01em; }
+  header p { margin: 0 0 20px; color: var(--ink-soft); font-size: 13px; }
+
+  /* ---------- summary ---------- */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 13px 15px; text-align: left; font: inherit; color: inherit;
+    display: block; width: 100%; transition: box-shadow 150ms ease, border-color 150ms ease, transform 150ms ease;
+  }
+  button.stat { cursor: pointer; }
+  button.stat:hover { border-color: var(--ink-faint); box-shadow: 0 2px 8px rgba(15,23,42,.07); transform: translateY(-1px); }
+  .stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-soft); font-weight: 600; }
+  .stat .v { font-size: 22px; font-weight: 650; margin-top: 5px; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .stat .sub { font-size: 12px; color: var(--ink-faint); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .stat.danger { border-color: #FCA5A5; background: #FEF4F4; }
+  .stat.danger .v, .stat.danger .k { color: var(--hot); }
+  .stat.danger .sub { color: #B45354; }
+  .stat[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* ---------- controls ---------- */
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 12px 14px; border-bottom: 1px solid var(--line);
+  }
+  .search { position: relative; flex: 1 1 230px; min-width: 190px; }
+  .search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--ink-faint); pointer-events: none; }
+  input[type="search"] {
+    width: 100%; height: 36px; padding: 0 30px 0 32px; font: inherit; color: inherit;
+    border: 1px solid var(--line); border-radius: 8px; background: #FCFCFD;
+  }
+  input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+  .clear-search {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    border: 0; background: none; cursor: pointer; color: var(--ink-faint);
+    width: 26px; height: 26px; border-radius: 6px; font-size: 15px; line-height: 1;
+  }
+  .clear-search:hover { background: var(--line-soft); color: var(--ink); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    height: 36px; padding: 0 12px; font: inherit; font-size: 13px; cursor: pointer;
+    border: 1px solid var(--line); background: #FCFCFD; color: var(--ink-soft);
+    border-radius: 8px; display: inline-flex; align-items: center; gap: 6px;
+    transition: all 150ms ease; white-space: nowrap;
+  }
+  .chip:hover { border-color: var(--ink-faint); color: var(--ink); }
+  .chip .n { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; opacity: .65; }
+  .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .chip[aria-pressed="true"] .n { opacity: .8; }
+  .chip.hot[aria-pressed="true"] { background: var(--hot); border-color: var(--hot); }
+  .chip.hot { color: var(--hot); border-color: #FBCFCF; background: #FEF6F6; }
+
+  select {
+    height: 36px; font: inherit; font-size: 13px; color: var(--ink); padding: 0 8px;
+    border: 1px solid var(--line); border-radius: 8px; background: #FCFCFD; cursor: pointer;
+  }
+  .spacer { flex: 1 1 auto; }
+  .reset { border: 0; background: none; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; padding: 8px; border-radius: 6px; }
+  .reset:hover { background: #F5F3FF; }
+
+  /* ---------- table ---------- */
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0; }
+  thead th {
+    position: sticky; top: 0; z-index: 2; background: #FBFCFD;
+    border-bottom: 1px solid var(--line); padding: 0; text-align: left;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-soft); font-weight: 600;
+    white-space: nowrap;
+  }
+  thead th button {
+    width: 100%; height: 100%; padding: 10px 12px; font: inherit; color: inherit;
+    text-transform: inherit; letter-spacing: inherit; font-weight: inherit;
+    background: none; border: 0; cursor: pointer; text-align: inherit;
+    display: flex; align-items: center; gap: 5px;
+  }
+  thead th button:hover { color: var(--ink); background: #F3F5F8; }
+  th.num button, td.num { text-align: right; justify-content: flex-end; }
+  th.num button { flex-direction: row-reverse; }
+  .arrow { font-size: 9px; opacity: 0; transition: opacity 150ms ease; }
+  th[aria-sort] .arrow { opacity: 1; color: var(--accent); }
+
+  tbody td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+  tbody tr:hover td { background: #FBFAFF; }
+  td.num { font-variant-numeric: tabular-nums; }
+  td.amount { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .inv { font-variant-numeric: tabular-nums; color: var(--ink-soft); font-size: 13px; white-space: nowrap; }
+  .cust { font-weight: 500; }
+  .date { color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; }
+
+  /* overdue signalling: left rail + aging chip, no full-row wash (keeps text legible) */
+  tr.od td:first-child { box-shadow: inset 3px 0 0 var(--sev); }
+  tr.od .cust { font-weight: 600; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  }
+  .b-paid { background: #ECFDF5; color: var(--ok); }
+  .b-open { background: #F1F5F9; color: var(--ink-soft); }
+  .b-od   { background: #FEF2F2; color: var(--hot); }
+  .b-disp { background: #FFFBEB; color: var(--warn); }
+
+  .age { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .a1 { background: #FFFBEB; color: #B45309; }
+  .a2 { background: #FFF1E7; color: #C2410C; }
+  .a3 { background: #FEF2F2; color: #DC2626; }
+  .a4 { background: #DC2626; color: #fff; }
+  .age-soft { color: var(--ink-faint); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---------- footer / pagination ---------- */
+  .foot { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 11px 14px; border-top: 1px solid var(--line); }
+  .count { font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .count b { color: var(--ink); font-weight: 600; }
+  .pager { display: flex; gap: 4px; align-items: center; margin-left: auto; }
+  .pg {
+    min-width: 34px; height: 34px; padding: 0 9px; font: inherit; font-size: 13px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
+    border-radius: 7px; cursor: pointer; font-variant-numeric: tabular-nums;
+    transition: all 150ms ease;
+  }
+  .pg:hover:not(:disabled) { border-color: var(--ink-faint); color: var(--ink); }
+  .pg:disabled { opacity: .38; cursor: default; }
+  .pg[aria-current="page"] { background: var(--ink); border-color: var(--ink); color: #fff; font-weight: 600; }
+  .gap { color: var(--ink-faint); padding: 0 2px; user-select: none; }
+
+  .empty { padding: 52px 20px; text-align: center; color: var(--ink-soft); }
+  .empty strong { display: block; color: var(--ink); margin-bottom: 4px; font-size: 15px; }
+
+  .hint { margin: 14px 2px 0; font-size: 12px; color: var(--ink-faint); }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  @media (max-width: 720px) {
+    .hide-sm { display: none; }
+    .stat .v { font-size: 19px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Accounts receivable</h1>
+    <p>200 invoices &middot; as at 1 August 2026</p>
+  </header>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="panel">
+    <div class="controls">
+      <div class="search">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="search" id="q" placeholder="Search invoice no. or customer&hellip;" aria-label="Search invoices">
+        <button class="clear-search" id="qclear" aria-label="Clear search" hidden>&times;</button>
+      </div>
+      <div class="chips" id="chips" role="group" aria-label="Filter by status"></div>
+      <select id="bucket" aria-label="Filter by age of debt">
+        <option value="all">Any age</option>
+        <option value="1">1&ndash;30 days late</option>
+        <option value="2">31&ndash;60 days late</option>
+        <option value="3">61&ndash;90 days late</option>
+        <option value="4">90+ days late</option>
+      </select>
+      <span class="spacer"></span>
+      <button class="reset" id="reset" hidden>Reset</button>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <thead><tr id="head"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div class="foot">
+      <span class="count" id="count"></span>
+      <select id="per" aria-label="Rows per page">
+        <option value="25">25 / page</option>
+        <option value="50">50 / page</option>
+        <option value="100">100 / page</option>
+        <option value="200">Show all</option>
+      </select>
+      <div class="pager" id="pager"></div>
+    </div>
+  </div>
+
+  <p class="hint">Sorted by days overdue by default, so the worst debts sit on page 1. Click any column to re-sort.</p>
+</div>
+
+<script>
+/* ============================================================
+   Data — deterministic so the table is stable across reloads
+   ============================================================ */
+const TODAY = new Date(2026, 7, 1);          // 1 Aug 2026
+const DAY = 86400000;
+
+function rng(seed) {                          // mulberry32
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const CUSTOMERS = [
+  'Northwind Traders','Ashcroft Logistics','Vellum & Vale','Brightline Media','Corvus Analytics',
+  'Halcyon Foods','Ironbridge Steel','Juniper Health','Kestrel Aviation','Lumen Retail Group',
+  'Marlowe Chambers','Nordvik Shipping','Orchid Biotech','Pemberton Estates','Quarry Hill Cement',
+  'Redcastle Insurance','Saltmarsh Energy','Thornbury Press','Umbra Security','Verity Financial',
+  'Westgate Motors','Yarrow Textiles','Zenith Plastics','Barrowfield Farms','Calder & Sons',
+  'Dunmore Ceramics','Eastvale Utilities','Fenwick Interiors','Glasshouse Studio','Havenrock Mining',
+  'Inglewood Timber','Jessop Pharmaceutical','Kirkby Engineering','Larkspur Events','Merrow Water',
+  'Netherby Optics'
+];
+const TERMS = [15, 30, 30, 30, 45, 60];
+
+const INVOICES = (() => {
+  const r = rng(20260801);
+  const out = [];
+  for (let i = 0; i < 200; i++) {
+    const customer = CUSTOMERS[Math.floor(r() * CUSTOMERS.length)];
+    const terms = TERMS[Math.floor(r() * TERMS.length)];
+    // issued between 250 days ago and 20 days in the future-ish window
+    const issued = new Date(TODAY.getTime() - Math.floor(r() * 250 + 4) * DAY);
+    const due = new Date(issued.getTime() + terms * DAY);
+    const daysLate = Math.floor((TODAY - due) / DAY);
+
+    // Older invoices are far more likely to be settled — that's what makes
+    // the remaining old ones the interesting ones.
+    const settleOdds = daysLate > 90 ? 0.93 : daysLate > 30 ? 0.80 : daysLate > 0 ? 0.55 : 0.28;
+    const paid = r() < settleOdds;
+    const disputed = !paid && r() < 0.13;
+
+    // Amounts: mostly mid-size, occasional large one
+    const base = r() < 0.14 ? 18000 + r() * 74000 : 620 + r() * 12800;
+    const amount = Math.round(base / 10) * 10;
+
+    out.push({
+      id: 'INV-' + (10480 + i * 3),
+      customer, terms, issued, due, amount, paid, disputed,
+      daysLate: paid ? 0 : daysLate,
+      overdue: !paid && daysLate > 0
+    });
+  }
+  return out;
+})();
+
+/* ============================================================
+   Helpers
+   ============================================================ */
+const money = n => '$' + n.toLocaleString('en-US');
+const compact = n => n >= 1000 ? '$' + Math.round(n / 1000).toLocaleString('en-US') + 'k' : '$' + n;
+const fmtDate = d => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+
+function severity(d) { return d > 90 ? 4 : d > 60 ? 3 : d > 30 ? 2 : 1; }
+const SEV_COLOR = { 1: '#F59E0B', 2: '#EA580C', 3: '#DC2626', 4: '#991B1B' };
+
+function statusOf(v) {
+  if (v.paid) return { key: 'paid', label: 'Paid', cls: 'b-paid' };
+  if (v.disputed) return { key: 'disputed', label: 'Disputed', cls: 'b-disp' };
+  if (v.overdue) return { key: 'overdue', label: 'Overdue', cls: 'b-od' };
+  return { key: 'open', label: 'Open', cls: 'b-open' };
+}
+
+/* ============================================================
+   State
+   ============================================================ */
+const DEFAULTS = { q: '', status: 'all', bucket: 'all', sort: 'age', dir: 'desc', page: 1, per: 25 };
+const state = { ...DEFAULTS };
+
+const COLUMNS = [
+  { key: 'id',       label: 'Invoice',   sort: v => v.id },
+  { key: 'customer', label: 'Customer',  sort: v => v.customer.toLowerCase() },
+  { key: 'issued',   label: 'Issued',    sort: v => +v.issued, num: false, sm: true },
+  { key: 'due',      label: 'Due',       sort: v => +v.due },
+  { key: 'status',   label: 'Status',    sort: v => statusOf(v).label },
+  // Paid rows are noise when hunting overdue, so they sink to the bottom on
+  // a descending age sort rather than interleaving with on-time invoices.
+  { key: 'age',      label: 'Overdue',   sort: v => v.paid ? -1e6 : v.daysLate },
+  { key: 'amount',   label: 'Amount',    sort: v => v.amount, num: true }
+];
+
+/* ============================================================
+   Derive
+   ============================================================ */
+function matchStatus(v, s) {
+  if (s === 'all') return true;
+  if (s === 'overdue') return v.overdue;        // includes disputed-and-late: still money at risk
+  return statusOf(v).key === s;
+}
+
+function filtered() {
+  const q = state.q.trim().toLowerCase();
+  return INVOICES.filter(v => {
+    if (q && !v.customer.toLowerCase().includes(q) && !v.id.toLowerCase().includes(q)) return false;
+    if (!matchStatus(v, state.status)) return false;
+    if (state.bucket !== 'all') {
+      if (!v.overdue) return false;
+      if (severity(v.daysLate) !== +state.bucket) return false;
+    }
+    return true;
+  });
+}
+
+function sorted(rows) {
+  const col = COLUMNS.find(c => c.key === state.sort);
+  const mul = state.dir === 'asc' ? 1 : -1;
+  return rows.slice().sort((a, b) => {
+    const x = col.sort(a), y = col.sort(b);
+    if (x < y) return -1 * mul;
+    if (x > y) return 1 * mul;
+    return a.id < b.id ? -1 : 1;               // stable tiebreak
+  });
+}
+
+const STATS = (() => {
+  const od = INVOICES.filter(v => v.overdue);
+  return {
+    outstanding: INVOICES.filter(v => !v.paid).reduce((s, v) => s + v.amount, 0),
+    openCount: INVOICES.filter(v => !v.paid).length,
+    odAmount: od.reduce((s, v) => s + v.amount, 0),
+    odCount: od.length,
+    worst: od.reduce((m, v) => Math.max(m, v.daysLate), 0),
+    crit: od.filter(v => v.daysLate > 90),
+    disputed: INVOICES.filter(v => statusOf(v).key === 'disputed').length
+  };
+})();
+
+const COUNTS = {
+  all: INVOICES.length,
+  overdue: STATS.odCount,
+  open: INVOICES.filter(v => statusOf(v).key === 'open').length,
+  paid: INVOICES.filter(v => v.paid).length,
+  disputed: STATS.disputed
+};
+
+/* ============================================================
+   Render
+   ============================================================ */
+const $ = id => document.getElementById(id);
+
+function renderSummary() {
+  const critAmt = STATS.crit.reduce((s, v) => s + v.amount, 0);
+  $('summary').innerHTML = `
+    <div class="stat">
+      <div class="k">Outstanding</div>
+      <div class="v">${compact(STATS.outstanding)}</div>
+      <div class="sub">${STATS.openCount} unpaid invoices</div>
+    </div>
+    <button class="stat danger" data-jump="overdue" aria-pressed="${state.status === 'overdue' && state.bucket === 'all'}">
+      <div class="k">Overdue</div>
+      <div class="v">${compact(STATS.odAmount)}</div>
+      <div class="sub">${STATS.odCount} invoices &middot; show these</div>
+    </button>
+    <button class="stat" data-jump="crit" aria-pressed="${state.bucket === '4'}">
+      <div class="k">90+ days late</div>
+      <div class="v">${compact(critAmt)}</div>
+      <div class="sub">${STATS.crit.length} invoices &middot; escalate</div>
+    </button>
+    <div class="stat">
+      <div class="k">Oldest debt</div>
+      <div class="v">${STATS.worst}<span style="font-size:13px;font-weight:500;color:var(--ink-soft)"> days</span></div>
+      <div class="sub">${STATS.disputed} in dispute</div>
+    </div>`;
+}
+
+function renderHead() {
+  $('head').innerHTML = COLUMNS.map(c => {
+    const active = state.sort === c.key;
+    const dir = state.dir === 'asc' ? 'ascending' : 'descending';
+    return `<th class="${c.num ? 'num' : ''} ${c.sm ? 'hide-sm' : ''}" ${active ? `aria-sort="${dir}"` : ''}>
+      <button data-sort="${c.key}" title="Sort by ${c.label}">
+        <span>${c.label}</span>
+        <span class="arrow">${active ? (state.dir === 'asc' ? '▲' : '▼') : '▼'}</span>
+      </button></th>`;
+  }).join('');
+}
+
+function renderChips() {
+  const defs = [
+    ['all', 'All'], ['overdue', 'Overdue'], ['open', 'Open'], ['disputed', 'Disputed'], ['paid', 'Paid']
+  ];
+  $('chips').innerHTML = defs.map(([k, label]) =>
+    `<button class="chip ${k === 'overdue' ? 'hot' : ''}" data-status="${k}" aria-pressed="${state.status === k}">
+      ${label}<span class="n">${COUNTS[k]}</span></button>`).join('');
+}
+
+function renderRows() {
+  const rows = sorted(filtered());
+  const total = rows.length;
+  const pages = Math.max(1, Math.ceil(total / state.per));
+  if (state.page > pages) state.page = pages;
+  const start = (state.page - 1) * state.per;
+  const slice = rows.slice(start, start + state.per);
+
+  if (!total) {
+    $('rows').innerHTML = `<tr><td colspan="${COLUMNS.length}"><div class="empty">
+      <strong>Nothing matches</strong>Try widening the filters or clearing the search.</div></td></tr>`;
+  } else {
+    $('rows').innerHTML = slice.map(v => {
+      const st = statusOf(v);
+      const sev = v.overdue ? severity(v.daysLate) : 0;
+      const ageCell = v.paid
+        ? `<span class="age-soft">&mdash;</span>`
+        : v.overdue
+          ? `<span class="age a${sev}">${v.daysLate}d late</span>`
+          : `<span class="age-soft">in ${Math.abs(v.daysLate)}d</span>`;
+      return `<tr class="${v.overdue ? 'od' : ''}" ${v.overdue ? `style="--sev:${SEV_COLOR[sev]}"` : ''}>
+        <td class="inv">${v.id}</td>
+        <td class="cust">${v.customer}</td>
+        <td class="date hide-sm">${fmtDate(v.issued)}</td>
+        <td class="date">${fmtDate(v.due)}</td>
+        <td><span class="badge ${st.cls}">${st.label}</span></td>
+        <td>${ageCell}</td>
+        <td class="num amount">${money(v.amount)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const shown = total ? `<b>${start + 1}&ndash;${Math.min(start + state.per, total)}</b> of <b>${total}</b>` : '<b>0</b>';
+  const odHere = rows.filter(v => v.overdue).length;
+  $('count').innerHTML = shown + ' invoices'
+    + (odHere && state.status !== 'overdue' ? ` &middot; <span style="color:var(--hot)">${odHere} overdue in this view</span>` : '');
+
+  renderPager(pages);
+}
+
+function renderPager(pages) {
+  if (pages <= 1) { $('pager').innerHTML = ''; return; }
+  const p = state.page;
+  const nums = new Set([1, pages, p, p - 1, p + 1]);
+  if (p <= 3) { nums.add(2); nums.add(3); }
+  if (p >= pages - 2) { nums.add(pages - 1); nums.add(pages - 2); }
+  const list = [...nums].filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
+
+  let html = `<button class="pg" data-page="${p - 1}" ${p === 1 ? 'disabled' : ''} aria-label="Previous page">&lsaquo;</button>`;
+  let prev = 0;
+  for (const n of list) {
+    if (n - prev > 1) html += `<span class="gap">&hellip;</span>`;
+    html += `<button class="pg" data-page="${n}" ${n === p ? 'aria-current="page"' : ''}>${n}</button>`;
+    prev = n;
+  }
+  html += `<button class="pg" data-page="${p + 1}" ${p === pages ? 'disabled' : ''} aria-label="Next page">&rsaquo;</button>`;
+  $('pager').innerHTML = html;
+}
+
+function render() {
+  const dirty = state.q !== DEFAULTS.q || state.status !== DEFAULTS.status
+             || state.bucket !== DEFAULTS.bucket || state.sort !== DEFAULTS.sort || state.dir !== DEFAULTS.dir;
+  $('reset').hidden = !dirty;
+  $('qclear').hidden = !state.q;
+  renderSummary(); renderHead(); renderChips(); renderRows();
+}
+
+/* ============================================================
+   Events (delegated — survives re-render)
+   ============================================================ */
+document.addEventListener('click', e => {
+  const sortBtn = e.target.closest('[data-sort]');
+  if (sortBtn) {
+    const k = sortBtn.dataset.sort;
+    if (state.sort === k) state.dir = state.dir === 'asc' ? 'desc' : 'asc';
+    else { state.sort = k; state.dir = (k === 'amount' || k === 'age') ? 'desc' : 'asc'; }
+    state.page = 1; render(); return;
+  }
+  const chip = e.target.closest('[data-status]');
+  if (chip) { state.status = chip.dataset.status; state.page = 1; render(); return; }
+
+  const jump = e.target.closest('[data-jump]');
+  if (jump) {
+    if (jump.dataset.jump === 'overdue') { state.status = 'overdue'; state.bucket = 'all'; }
+    else { state.status = 'overdue'; state.bucket = '4'; }
+    state.sort = 'age'; state.dir = 'desc'; state.page = 1;
+    $('bucket').value = state.bucket; render(); return;
+  }
+  const pg = e.target.closest('[data-page]');
+  if (pg && !pg.disabled) {
+    state.page = +pg.dataset.page; renderRows();
+    document.querySelector('.panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+});
+
+$('q').addEventListener('input', e => { state.q = e.target.value; state.page = 1; render(); });
+$('qclear').addEventListener('click', () => { state.q = ''; $('q').value = ''; state.page = 1; render(); $('q').focus(); });
+$('bucket').addEventListener('change', e => { state.bucket = e.target.value; state.page = 1; render(); });
+$('per').addEventListener('change', e => { state.per = +e.target.value; state.page = 1; renderRows(); });
+$('reset').addEventListener('click', () => {
+  Object.assign(state, DEFAULTS, { per: state.per });
+  $('q').value = ''; $('bucket').value = 'all'; render();
+});
+
+render();
+</script>
+</body>
+</html>
