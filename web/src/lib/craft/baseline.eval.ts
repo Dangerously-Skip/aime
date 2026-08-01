@@ -120,6 +120,17 @@ const MAX_TURNS = Number(process.env.AIME_EVAL_MAX_TURNS ?? 30);
 /** Refuse to start a run that could plausibly cost more than this. */
 const COST_CEILING_USD = Number(process.env.AIME_EVAL_COST_CEILING ?? 15);
 
+/**
+ * Per-sample USD ceiling, enforced by the SDK mid-run.
+ *
+ * The run-level accumulator above can only check BETWEEN samples, so it cannot
+ * stop the one that is currently burning — which is exactly how a single sample
+ * reached $6.58 while the total was still under its limit. Set from the observed
+ * median (~$0.45) with headroom, per the practice of capping at 2-3x median
+ * rather than at the worst case.
+ */
+const MAX_BUDGET_USD = Number(process.env.AIME_EVAL_MAX_BUDGET_USD ?? 1.5);
+
 /** Files an artifact could plausibly be. */
 const ARTIFACT_EXT = /\.(html?|tsx?|jsx?|css|svelte|vue)$/i;
 
@@ -241,6 +252,7 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
               cwd: workspace,
               model: MODEL,
               maxTurns: MAX_TURNS,
+              maxBudgetUsd: MAX_BUDGET_USD,
               ...(PROVIDER_BASE_URL
                 ? {
                     providerConfig: {

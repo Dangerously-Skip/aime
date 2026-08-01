@@ -102,6 +102,18 @@ export interface QueryParams {
    */
   securitySettings?: Partial<import('../security/settings').SecuritySettings>;
   maxTurns?: number;
+  /**
+   * Hard USD ceiling for the turn, enforced by the SDK — it stops mid-run and
+   * yields `error_max_budget_usd`, and subagent spend counts toward it.
+   *
+   * A harness-level accumulator cannot do this: it can only check BETWEEN runs,
+   * so it never stops the sample that is currently burning. One eval sample cost
+   * $6.58 on its own inside a budget that was only inspected after it finished.
+   *
+   * Note the SDK's figure is a client-side estimate from a bundled price table.
+   * Good enough to bound a runaway; not good enough to bill anyone.
+   */
+  maxBudgetUsd?: number;
   systemPrompt?: string | { type: string; preset: string; append?: string };
   model?: string;
   attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string; extractedPath?: string }>;
