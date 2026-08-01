@@ -1,0 +1,8 @@
+{
+  "id": "slide-deck",
+  "shape": "document",
+  "prompt": "Build a 5-slide deck introducing a quarterly engineering roadmap to non-engineers. 1920x1080.",
+  "probes": "A deck is not a web page. Tests whether the output respects the medium — type scale for a projected slide, one idea per slide.",
+  "model": "anthropic/claude-opus-5",
+  "error": "Claude Code returned an error result: API Error: 402 {\"error\":{\"message\":\"Insufficient credits. Add more using https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://openrouter.ai/settings/credits, or lower max_tokens / prompt size to fit your remaining balance.\"}}}"
+}

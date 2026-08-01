@@ -1,0 +1,713 @@
+/*
+  Styling for a table whose job is scanning.
+  Three ideas drive most of the decisions below:
+
+  1. Density. Scanning 25 rows means fitting them on one screen, so rows are
+     tight and the type is small but high-contrast.
+  2. Alignment. Numbers use tabular figures and money is right-aligned, so the
+     eye can compare magnitudes down a column without reading each value.
+  3. Restraint in colour. Only overdue rows get colour. If everything is
+     coloured, nothing is emphasised.
+*/
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #e3e6ea;
+  --border-strong: #cdd2d9;
+
+  --text: #14181d;
+  --text-muted: #5c6570;
+  --text-subtle: #858e99;
+
+  --accent: #1d4ed8;
+  --accent-soft: #eef2ff;
+
+  /*
+    Severity ramp for the aging buckets. The hue shifts amber -> red as well as
+    darkening, so the steps stay distinguishable under the common forms of
+    colour vision deficiency instead of collapsing into one band.
+  */
+  --sev-1-bg: #fef6e0;
+  --sev-1-fg: #7a5202;
+  --sev-2-bg: #fdeacf;
+  --sev-2-fg: #8a3f04;
+  --sev-3-bg: #fbdcd2;
+  --sev-3-fg: #932105;
+  --sev-4-bg: #f8d0d0;
+  --sev-4-fg: #8c1111;
+
+  --ok-bg: #e6f4ea;
+  --ok-fg: #14612f;
+  --info-bg: #e8effb;
+  --info-fg: #1c458f;
+  --neutral-bg: #eef0f3;
+  --neutral-fg: #4b545f;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow: 0 1px 2px rgb(20 24 29 / 6%), 0 1px 3px rgb(20 24 29 / 4%);
+
+  --focus: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every number in the UI aligns digit-for-digit. */
+input,
+select,
+button,
+table,
+.summary__value {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+  border-radius: var(--radius-sm);
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.page__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.page__title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.page__subtitle {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.notice {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+}
+
+.notice--error {
+  background: var(--sev-4-bg);
+  border-color: #eba9a9;
+  color: var(--sev-4-fg);
+}
+
+/* --------------------------------------------------------------- summary */
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.summary__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-align: left;
+}
+
+.summary__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.summary__value {
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.summary__meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.summary__hint {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/*
+  The overdue tile is the primary call to action, so it is a real button with
+  hover and pressed states, tinted by the worst severity currently present.
+*/
+.summary__tile--action {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.summary__tile--action:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.summary__tile--action[data-severity='1'] { background: var(--sev-1-bg); border-color: #f0dcae; }
+.summary__tile--action[data-severity='2'] { background: var(--sev-2-bg); border-color: #eec59b; }
+.summary__tile--action[data-severity='3'] { background: var(--sev-3-bg); border-color: #eeb3a2; }
+.summary__tile--action[data-severity='4'] { background: var(--sev-4-bg); border-color: #e9a5a5; }
+
+.summary__tile--action[data-severity='1'] .summary__value,
+.summary__tile--action[data-severity='1'] .summary__meta { color: var(--sev-1-fg); }
+.summary__tile--action[data-severity='2'] .summary__value,
+.summary__tile--action[data-severity='2'] .summary__meta { color: var(--sev-2-fg); }
+.summary__tile--action[data-severity='3'] .summary__value,
+.summary__tile--action[data-severity='3'] .summary__meta { color: var(--sev-3-fg); }
+.summary__tile--action[data-severity='4'] .summary__value,
+.summary__tile--action[data-severity='4'] .summary__meta { color: var(--sev-4-fg); }
+
+.summary__tile--action[data-active='true'] {
+  border-color: var(--accent);
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--accent);
+}
+
+/* --------------------------------------------------------------- toolbar */
+
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.chip__count {
+  padding: 0 5px;
+  min-width: 20px;
+  text-align: center;
+  background: var(--neutral-bg);
+  border-radius: 999px;
+  color: var(--neutral-fg);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.chip[data-active='true'] {
+  background: var(--text);
+  border-color: var(--text);
+  color: #fff;
+}
+
+.chip[data-active='true'] .chip__count {
+  background: rgb(255 255 255 / 22%);
+  color: #fff;
+}
+
+/* The overdue chip keeps its warning colour even when inactive. */
+.chip[data-view='overdue'] {
+  color: var(--sev-4-fg);
+  border-color: #eec2c2;
+}
+
+.chip[data-view='overdue'] .chip__count {
+  background: var(--sev-4-bg);
+  color: var(--sev-4-fg);
+}
+
+.chip[data-view='overdue'][data-active='true'] {
+  background: var(--sev-4-fg);
+  border-color: var(--sev-4-fg);
+  color: #fff;
+}
+
+.chip[data-view='overdue'][data-active='true'] .chip__count {
+  background: rgb(255 255 255 / 22%);
+  color: #fff;
+}
+
+.toolbar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field--search {
+  flex: 1 1 260px;
+  min-width: 200px;
+}
+
+.field__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.input {
+  padding: 7px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.input--compact {
+  padding: 5px 8px;
+}
+
+.input:hover {
+  border-color: #b6bdc6;
+}
+
+.buckets {
+  display: flex;
+  gap: 4px;
+}
+
+.bucket {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 9px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bucket:hover:not(:disabled) {
+  border-color: #b6bdc6;
+  color: var(--text);
+}
+
+.bucket:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.bucket__count {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-subtle);
+}
+
+.bucket[data-active='true'] {
+  background: var(--text);
+  border-color: var(--text);
+  color: #fff;
+}
+
+.bucket[data-active='true'] .bucket__count {
+  color: rgb(255 255 255 / 75%);
+}
+
+.button {
+  padding: 7px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.button:hover {
+  border-color: #b6bdc6;
+}
+
+.button--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.button--ghost:hover {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+/* ----------------------------------------------------------------- table */
+
+.table-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: #fbfcfd;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.th-sort:hover {
+  color: var(--text);
+  background: #f2f4f7;
+}
+
+.th-sort[data-active='true'] {
+  color: var(--text);
+}
+
+.table th[data-numeric='true'] .th-sort {
+  justify-content: flex-end;
+}
+
+.sort-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* Idle arrows stay invisible until hover, so seven of them do not shout. */
+.sort-icon--idle {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.th-sort:hover .sort-icon--idle {
+  opacity: 0.5;
+}
+
+.table tbody th,
+.table tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #f0f2f4;
+  font-weight: 400;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table tbody tr:hover th,
+.table tbody tr:hover td {
+  background: #f8fafc;
+}
+
+.cell-number {
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.cell-customer {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-date {
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.cell-empty {
+  color: var(--text-subtle);
+}
+
+/*
+  A 3px severity stripe on the leading edge. It reads as texture when you scan
+  the column, letting you find the worst rows without reading a single number,
+  and it costs no horizontal space.
+*/
+.table tbody tr[data-severity='1'] th:first-child { box-shadow: inset 3px 0 0 #e0a800; }
+.table tbody tr[data-severity='2'] th:first-child { box-shadow: inset 3px 0 0 #d97316; }
+.table tbody tr[data-severity='3'] th:first-child { box-shadow: inset 3px 0 0 #d2451e; }
+.table tbody tr[data-severity='4'] th:first-child { box-shadow: inset 3px 0 0 #b91c1c; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--neutral-bg);
+  color: var(--neutral-fg);
+}
+
+.badge[data-state='overdue'] { background: var(--sev-4-bg); color: var(--sev-4-fg); }
+.badge[data-state='dueSoon'] { background: var(--sev-1-bg); color: var(--sev-1-fg); }
+.badge[data-state='open'] { background: var(--info-bg); color: var(--info-fg); }
+.badge[data-state='paid'] { background: var(--ok-bg); color: var(--ok-fg); }
+
+.days-late {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.days-late[data-severity='1'] { background: var(--sev-1-bg); color: var(--sev-1-fg); }
+.days-late[data-severity='2'] { background: var(--sev-2-bg); color: var(--sev-2-fg); }
+.days-late[data-severity='3'] { background: var(--sev-3-bg); color: var(--sev-3-fg); }
+.days-late[data-severity='4'] { background: var(--sev-4-bg); color: var(--sev-4-fg); }
+
+/* ----------------------------------------------------------------- empty */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 56px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.empty__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.empty__body {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  max-width: 44ch;
+}
+
+/* ------------------------------------------------------------ pagination */
+
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pagination__size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination__status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pagination__nav {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.page-button {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.page-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.page-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-button[data-active='true'] {
+  background: var(--text);
+  border-color: var(--text);
+  color: #fff;
+  font-weight: 650;
+}
+
+.page-gap {
+  padding: 0 3px;
+  color: var(--text-subtle);
+}
+
+/* ----------------------------------------------------------- adaptations */
+
+@media (max-width: 640px) {
+  .page {
+    padding: 20px 14px 48px;
+  }
+
+  .summary__value {
+    font-size: 22px;
+  }
+
+  .pagination {
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/*
+  Forced-colours mode replaces the palette wholesale, so severity has to be
+  re-expressed with a border the OS will keep rendering.
+*/
+@media (forced-colors: active) {
+  .days-late,
+  .badge {
+    border: 1px solid currentColor;
+  }
+}

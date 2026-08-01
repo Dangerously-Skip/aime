@@ -1,0 +1,8 @@
+{
+  "id": "data-table",
+  "shape": "data",
+  "prompt": "Build a table view of 200 customer invoices with sorting, filtering and pagination. Users scan it looking for overdue ones.",
+  "probes": "State coverage — empty, loading, error — and whether numeric columns get tabular figures and right alignment. \"Looking for overdue ones\" is a hierarchy test.",
+  "model": "anthropic/claude-opus-5",
+  "error": "Query timed out after 600 seconds. Try a simpler request or break it into steps."
+}

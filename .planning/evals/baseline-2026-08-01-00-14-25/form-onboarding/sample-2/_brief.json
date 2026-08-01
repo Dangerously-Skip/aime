@@ -1,0 +1,8 @@
+{
+  "id": "form-onboarding",
+  "shape": "app",
+  "prompt": "Build a three-step account setup form: company details, team invites, billing. Show progress between steps and handle validation errors.",
+  "probes": "Error states are named in the brief, so omitting them is unambiguous. Also tests whether required/optional and inline validation are handled or just decorated.",
+  "model": "anthropic/claude-opus-5",
+  "error": "Query timed out after 600 seconds. Try a simpler request or break it into steps."
+}

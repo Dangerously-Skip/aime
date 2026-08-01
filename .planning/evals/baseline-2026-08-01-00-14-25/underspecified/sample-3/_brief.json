@@ -1,0 +1,8 @@
+{
+  "id": "underspecified",
+  "shape": "marketing",
+  "prompt": "Make me a landing page.",
+  "probes": "The control, and the most informative brief here. With no direction, whatever appears IS the default house style. DR-16 records the underspecified brief as the main cause of generic output; P7.5 proposes a turn-1 question form as the fix, and this is the only thing that could show it worked.",
+  "model": "anthropic/claude-opus-5",
+  "error": "Claude Code returned an error result: API Error: 402 {\"error\":{\"message\":\"Insufficient credits. Add more using https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://openrouter.ai/settings/credits, or lower max_tokens / prompt size to fit your remaining balance.\"}}}"
+}

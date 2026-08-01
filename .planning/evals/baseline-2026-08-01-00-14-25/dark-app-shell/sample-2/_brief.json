@@ -1,0 +1,8 @@
+{
+  "id": "dark-app-shell",
+  "shape": "app",
+  "prompt": "Build a dark-mode application shell for a code review tool: sidebar of pull requests, main diff area, top bar with search.",
+  "probes": "Dark mode is where pure #000 and low-contrast greys show up. Also whether the dark palette is designed or is the light one inverted.",
+  "model": "anthropic/claude-opus-5",
+  "error": "Claude Code returned an error result: API Error: 402 {\"error\":{\"message\":\"Insufficient credits. Add more using https://openrouter.ai/settings/credits\",\"code\":402,\"metadata\":{\"limit_source\":\"openrouter_credits\",\"remedy_hint\":\"Add credits at https://openrouter.ai/settings/credits, or lower max_tokens / prompt size to fit your remaining balance.\"}}}"
+}

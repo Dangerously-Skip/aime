@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account setup</title>
+<style>
+  :root {
+    --bg: #F6F7FB;
+    --card: #FFFFFF;
+    --ink: #1E293B;
+    --muted: #64748B;
+    --line: #E2E8F0;
+    --accent: #8B5CF6;
+    --accent-dark: #7C3AED;
+    --accent-soft: #F5F3FF;
+    --danger: #DC2626;
+    --danger-soft: #FEF2F2;
+    --ok: #059669;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px 64px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .shell { max-width: 620px; margin: 0 auto; }
+
+  .masthead { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 28px; }
+  .masthead h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .masthead p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  .restart {
+    background: none; border: none; padding: 13px 10px; margin: -13px -10px 0 0;
+    color: var(--muted); font: inherit; font-size: 13px; cursor: pointer;
+    border-radius: 6px; text-decoration: underline; text-underline-offset: 2px;
+    white-space: nowrap; transition: color 150ms ease, background 150ms ease;
+  }
+  .restart:hover { color: var(--ink); background: #EEF0F6; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+
+  /* ---- progress ---- */
+  .progress { position: relative; display: flex; margin-bottom: 30px; }
+  .track { position: absolute; top: 15px; left: 16.67%; right: 16.67%; height: 2px; background: var(--line); border-radius: 2px; }
+  .fill { height: 100%; background: var(--accent); border-radius: 2px; width: 0; transition: width 320ms cubic-bezier(.4,0,.2,1); }
+  .pstep {
+    position: relative; z-index: 1; flex: 1 1 33.333%;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    background: none; border: none; padding: 0 2px; font: inherit; color: var(--muted);
+    cursor: default;
+  }
+  .pstep[data-clickable="1"] { cursor: pointer; }
+  .dot {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--card); border: 2px solid var(--line);
+    font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    transition: background 200ms ease, border-color 200ms ease, color 200ms ease;
+  }
+  .pstep[data-state="current"] .dot { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .pstep[data-state="done"] .dot { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .pstep .plabel { font-size: 12px; font-weight: 500; text-align: center; line-height: 1.3; }
+  .pstep[data-state="current"] .plabel { color: var(--ink); font-weight: 600; }
+  .pstep[data-state="done"] .plabel { color: var(--ink); }
+  .pstep[data-clickable="1"]:hover .dot { border-color: var(--accent-dark); }
+  .pstep:focus-visible { outline: none; }
+  .pstep:focus-visible .dot { box-shadow: 0 0 0 3px rgba(139,92,246,.35); }
+
+  /* ---- steps ---- */
+  .step-title { font-size: 18px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .step-title:focus { outline: none; }
+  .step-sub { margin: 0 0 22px; color: var(--muted); font-size: 13.5px; }
+
+  .field { margin-bottom: 18px; }
+  .row { display: flex; gap: 12px; }
+  .row > .field { flex: 1; min-width: 0; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .req { color: var(--accent); font-weight: 400; }
+  .opt { color: var(--muted); font-weight: 400; }
+  input, select {
+    width: 100%; padding: 10px 12px; min-height: 44px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--card); color: var(--ink); font: inherit;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+  select { appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path d='M1 1l5 5 5-5' fill='none' stroke='%2364748B' stroke-width='1.6' stroke-linecap='round'/></svg>"); background-repeat: no-repeat; background-position: right 13px center; padding-right: 34px; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(139,92,246,.18); }
+  /* background-color, not background — the shorthand would wipe the select chevron image */
+  input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--danger); background-color: var(--danger-soft); }
+  input[aria-invalid="true"]:focus, select[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px rgba(220,38,38,.16); }
+  input::placeholder { color: #94A3B8; }
+  .hint { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+  .err { margin: 6px 0 0; font-size: 12.5px; color: var(--danger); font-weight: 500; display: none; }
+  .err.on { display: flex; gap: 5px; align-items: flex-start; }
+  .err.on::before { content: "!"; flex: none; width: 14px; height: 14px; margin-top: 1px; border-radius: 50%; background: var(--danger); color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; }
+
+  .summary-err {
+    display: none; margin: 0 0 20px; padding: 11px 14px;
+    background: var(--danger-soft); border: 1px solid #FECACA; border-left: 3px solid var(--danger);
+    border-radius: 8px; font-size: 13px; color: #991B1B; font-weight: 500;
+  }
+  .summary-err.on { display: block; }
+
+  /* ---- invites ---- */
+  .invite-row { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; }
+  .invite-row .grow { flex: 1 1 auto; min-width: 0; }
+  .invite-row .role { flex: 0 0 122px; }
+  .kill {
+    flex: none; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--card); color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer;
+    transition: all 150ms ease;
+  }
+  .kill:hover:not(:disabled) { border-color: #FECACA; background: var(--danger-soft); color: var(--danger); }
+  .kill:disabled { opacity: .35; cursor: not-allowed; }
+  .kill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .add {
+    background: none; border: 1px dashed var(--line); border-radius: var(--radius);
+    padding: 10px 14px; min-height: 44px; width: 100%;
+    color: var(--accent); font: inherit; font-weight: 600; font-size: 13.5px; cursor: pointer;
+    transition: all 150ms ease;
+  }
+  .add:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .add:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .col-head { display: flex; gap: 10px; margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+  .col-head .grow { flex: 1 1 auto; }
+  .col-head .role { flex: 0 0 122px; }
+  .col-head .spacer { flex: none; width: 44px; }
+
+  /* ---- plans ---- */
+  fieldset { border: none; margin: 0 0 22px; padding: 0; }
+  legend { font-size: 13px; font-weight: 600; margin-bottom: 8px; padding: 0; }
+  .plan {
+    display: flex; align-items: center; gap: 12px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 13px 15px; margin-bottom: 9px; cursor: pointer;
+    transition: border-color 150ms ease, background 150ms ease;
+  }
+  .plan:hover { border-color: #CBD5E1; }
+  .plan input { width: 18px; height: 18px; min-height: 0; flex: none; accent-color: var(--accent); margin: 0; }
+  .plan:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .plan:has(input:focus-visible) { box-shadow: 0 0 0 3px rgba(139,92,246,.2); }
+  .plan .pname { display: block; font-weight: 600; font-size: 14px; }
+  .plan .pdesc { display: block; font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+  .plan .price { margin-left: auto; text-align: right; font-size: 14px; font-weight: 600; white-space: nowrap; }
+  .plan .price small { display: block; font-size: 11.5px; font-weight: 400; color: var(--muted); }
+
+  .totals { background: #F8FAFC; border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 15px; margin-bottom: 20px; font-size: 13.5px; }
+  .totals div { display: flex; justify-content: space-between; }
+  .totals div + div { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); font-weight: 700; font-size: 14.5px; }
+  .totals .muted { color: var(--muted); font-weight: 400; }
+
+  .brand-badge { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); pointer-events: none; }
+  .with-badge { position: relative; }
+  .with-badge input { padding-right: 72px; }
+
+  /* ---- footer ---- */
+  .actions { display: flex; gap: 12px; align-items: center; margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
+  button.primary, button.ghost {
+    min-height: 44px; padding: 11px 22px; border-radius: var(--radius);
+    font: inherit; font-weight: 600; font-size: 14px; cursor: pointer;
+    transition: background 150ms ease, border-color 150ms ease, transform 80ms ease;
+  }
+  button.primary { background: var(--accent); border: 1px solid var(--accent); color: #fff; margin-left: auto; }
+  button.primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+  button.primary:active { transform: translateY(1px); }
+  button.ghost { background: var(--card); border: 1px solid var(--line); color: var(--ink); }
+  button.ghost:hover { border-color: #CBD5E1; background: #F8FAFC; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- done ---- */
+  .done { text-align: center; padding: 12px 0 4px; }
+  .done .tick { width: 52px; height: 52px; margin: 0 auto 16px; border-radius: 50%; background: #ECFDF5; color: var(--ok); display: grid; place-items: center; font-size: 26px; }
+  /* focused programmatically so screen readers announce it; no ring on a heading */
+  .done h2 { margin: 0 0 6px; font-size: 19px; }
+  .done h2:focus { outline: none; }
+  .done > p { margin: 0 0 22px; color: var(--muted); font-size: 13.5px; }
+  .recap { text-align: left; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 22px; }
+  .recap dl { margin: 0; }
+  .recap .line { display: flex; justify-content: space-between; gap: 16px; padding: 11px 15px; font-size: 13.5px; }
+  .recap .line:nth-child(odd) { background: #F8FAFC; }
+  .recap dt { color: var(--muted); margin: 0; }
+  .recap dd { margin: 0; font-weight: 600; text-align: right; word-break: break-word; }
+
+  .sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+  @media (max-width: 480px) {
+    .card { padding: 20px 17px; }
+    .pstep .plabel { font-size: 11px; }
+    .row { flex-direction: column; gap: 0; }
+    .invite-row { flex-wrap: wrap; }
+    .invite-row .grow { flex: 1 1 100%; }
+    .invite-row .role { flex: 1 1 auto; }
+    .col-head { display: none; }
+    .plan { flex-wrap: wrap; }
+    .plan .price { margin-left: 30px; text-align: left; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="masthead">
+    <div>
+      <h1>Set up your account</h1>
+      <p id="stepCount">Step 1 of 3</p>
+    </div>
+    <button type="button" class="restart" id="restart">Start over</button>
+  </div>
+
+  <div class="card">
+    <nav class="progress" id="progress" aria-label="Setup progress">
+      <div class="track"><div class="fill" id="fill"></div></div>
+    </nav>
+
+    <p class="summary-err" id="summaryErr" role="alert"></p>
+
+    <form id="form" novalidate autocomplete="on">
+      <div id="stepBody"></div>
+      <div class="actions" id="actions">
+        <button type="button" class="ghost" id="back">Back</button>
+        <button type="submit" class="primary" id="next">Continue</button>
+      </div>
+    </form>
+
+    <div id="doneBody" hidden></div>
+  </div>
+  <p class="sr" id="live" aria-live="polite"></p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ============================== config ============================== */
+
+  const STEPS = [
+    { key: "company", label: "Company details" },
+    { key: "team",    label: "Team invites" },
+    { key: "billing", label: "Billing" }
+  ];
+
+  const PLANS = {
+    starter:  { name: "Starter",  price: 0,  desc: "Up to 3 seats, core features" },
+    team:     { name: "Team",     price: 12, desc: "Unlimited seats, roles & audit log" },
+    business: { name: "Business", price: 28, desc: "SSO, SLA, dedicated support" }
+  };
+
+  const SIZES = ["1–10", "11–50", "51–200", "201–1000", "1000+"];
+  const COUNTRIES = ["United Kingdom", "United States", "Canada", "Ireland", "Germany",
+                     "France", "Netherlands", "Spain", "Australia", "Singapore", "Other"];
+  const ROLES = ["Admin", "Member", "Viewer", "Billing"];
+
+  /* ============================== state ============================== */
+
+  const blank = () => ({
+    step: 0,
+    furthest: 0,          // highest step index reached
+    done: false,
+    touched: {},          // field -> true once blurred or once Continue pressed
+    errors: {},           // field -> message
+    data: {
+      companyName: "", website: "", companySize: "", country: "",
+      invites: [ { email: "", role: "Member" }, { email: "", role: "Member" } ],
+      plan: "team", cardName: "", cardNumber: "", expiry: "", cvc: ""
+    }
+  });
+
+  let s = blank();
+
+  /* ============================== validation ============================== */
+
+  const EMAIL = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
+  const DOMAINISH = /^(https?:\/\/)?([\w-]+\.)+[A-Za-z]{2,}(\/[^\s]*)?$/;
+
+  function luhnOK(raw) {
+    const d = raw.replace(/\D/g, "");
+    if (d.length < 13 || d.length > 19) return false;
+    let sum = 0, dbl = false;
+    for (let i = d.length - 1; i >= 0; i--) {
+      let n = +d[i];
+      if (dbl) { n *= 2; if (n > 9) n -= 9; }
+      sum += n; dbl = !dbl;
+    }
+    return sum % 10 === 0;
+  }
+
+  function cardBrand(raw) {
+    const d = raw.replace(/\D/g, "");
+    if (/^4/.test(d)) return "Visa";
+    if (/^(5[1-5]|2[2-7])/.test(d)) return "Mastercard";
+    if (/^3[47]/.test(d)) return "Amex";
+    if (/^(6011|65|64[4-9])/.test(d)) return "Discover";
+    return "";
+  }
+
+  function cvcLength() { return cardBrand(s.data.cardNumber) === "Amex" ? 4 : 3; }
+
+  // Each validator returns "" when the value is acceptable.
+  const RULES = {
+    companyName(v) {
+      if (!v.trim()) return "Enter your company name.";
+      if (v.trim().length < 2) return "That looks too short to be a company name.";
+      return "";
+    },
+    website(v) {
+      if (!v.trim()) return "";                       // optional
+      if (!DOMAINISH.test(v.trim())) return "Enter a valid address, like acme.com.";
+      return "";
+    },
+    companySize(v) { return v ? "" : "Choose a company size."; },
+    country(v) { return v ? "" : "Choose a country."; },
+    cardName(v) {
+      if (!v.trim()) return "Enter the name printed on the card.";
+      if (!/[A-Za-z]{2}/.test(v)) return "Enter the cardholder's full name.";
+      return "";
+    },
+    cardNumber(v) {
+      const d = v.replace(/\D/g, "");
+      if (!d) return "Enter your card number.";
+      if (d.length < 13) return "That card number is too short.";
+      if (!luhnOK(d)) return "That card number isn't valid — check for a typo.";
+      return "";
+    },
+    expiry(v) {
+      const m = v.trim().match(/^(\d{2})\s*\/\s*(\d{2})$/);
+      if (!v.trim()) return "Enter the expiry date.";
+      if (!m) return "Use MM/YY format.";
+      const mm = +m[1], yy = 2000 + +m[2];
+      if (mm < 1 || mm > 12) return "Month must be between 01 and 12.";
+      const now = new Date();
+      if (yy < now.getFullYear() || (yy === now.getFullYear() && mm < now.getMonth() + 1))
+        return "That card has expired.";
+      if (yy > now.getFullYear() + 20) return "Check the expiry year.";
+      return "";
+    },
+    cvc(v) {
+      const need = cvcLength();
+      if (!v.trim()) return "Enter the security code.";
+      if (!new RegExp("^\\d{" + need + "}$").test(v.trim()))
+        return need === 4 ? "Amex codes are 4 digits." : "The code is 3 digits.";
+      return "";
+    }
+  };
+
+  const STEP_FIELDS = [
+    ["companyName", "website", "companySize", "country"],
+    [],                                     // invites are validated dynamically
+    ["cardName", "cardNumber", "expiry", "cvc"]
+  ];
+
+  // Invites are optional, but anything half-filled or duplicated is an error.
+  function validateInvites() {
+    const out = {};
+    const seen = new Map();
+    s.data.invites.forEach((inv, i) => {
+      const e = inv.email.trim().toLowerCase();
+      if (!e) return;                                   // empty row = ignored
+      if (!EMAIL.test(e)) { out["invite-" + i] = "Enter a valid email address."; return; }
+      if (seen.has(e)) { out["invite-" + i] = "You've already invited this address."; return; }
+      seen.set(e, i);
+    });
+    return out;
+  }
+
+  function validateStep(step) {
+    const errs = {};
+    STEP_FIELDS[step].forEach(f => {
+      const msg = RULES[f](s.data[f] || "");
+      if (msg) errs[f] = msg;
+    });
+    if (step === 1) Object.assign(errs, validateInvites());
+    return errs;
+  }
+
+  /* ============================== error display ============================== */
+
+  function paintField(name) {
+    const err = document.getElementById("err-" + name);
+    const input = document.querySelector('[data-field="' + name + '"]');
+    if (!err || !input) return;
+    const msg = s.touched[name] ? (s.errors[name] || "") : "";
+    err.textContent = msg;
+    err.classList.toggle("on", !!msg);
+    if (msg) input.setAttribute("aria-invalid", "true");
+    else input.removeAttribute("aria-invalid");
+  }
+
+  function paintAll() {
+    document.querySelectorAll("[data-field]").forEach(el => paintField(el.dataset.field));
+  }
+
+  function showSummary(n) {
+    const box = document.getElementById("summaryErr");
+    if (!n) { box.classList.remove("on"); box.textContent = ""; return; }
+    box.textContent = n === 1
+      ? "There's 1 problem below. Fix it to continue."
+      : "There are " + n + " problems below. Fix them to continue.";
+    box.classList.add("on");
+  }
+
+  /* ============================== live re-validation ============================== */
+
+  // Re-check a single field and repaint. Called on blur, and on input once touched
+  // so an error clears the moment the user fixes it.
+  function recheck(name, opts) {
+    opts = opts || {};
+    if (opts.touch) s.touched[name] = true;
+    if (name.startsWith("invite-")) {
+      const inviteErrs = validateInvites();
+      // Refresh every invite row: fixing a duplicate clears its partner's error too.
+      s.data.invites.forEach((_, i) => {
+        const k = "invite-" + i;
+        if (inviteErrs[k]) s.errors[k] = inviteErrs[k]; else delete s.errors[k];
+        paintField(k);
+      });
+    } else {
+      const msg = RULES[name] ? RULES[name](s.data[name] || "") : "";
+      if (msg) s.errors[name] = msg; else delete s.errors[name];
+      paintField(name);
+    }
+    if (!document.getElementById("summaryErr").classList.contains("on")) return;
+    const remaining = Object.keys(validateStep(s.step)).length;
+    showSummary(remaining);
+  }
+
+  /* ============================== input formatting ============================== */
+
+  // Reformat while keeping the caret in the right place relative to the digits.
+  function formatKeepingCaret(input, fmt) {
+    const pos = input.selectionStart;
+    const digitsBefore = input.value.slice(0, pos).replace(/\D/g, "").length;
+    const next = fmt(input.value);
+    if (next === input.value) return;
+    input.value = next;
+    let at = next.length, seen = 0;
+    for (let i = 0; i < next.length; i++) {
+      if (/\d/.test(next[i])) { seen++; if (seen === digitsBefore) { at = i + 1; break; } }
+    }
+    if (digitsBefore === 0) at = 0;
+    try { input.setSelectionRange(at, at); } catch (e) {}
+  }
+
+  const fmtCard = v => {
+    const d = v.replace(/\D/g, "").slice(0, 19);
+    return (cardBrand(d) === "Amex"
+      ? [d.slice(0, 4), d.slice(4, 10), d.slice(10, 15)]
+      : d.match(/.{1,4}/g) || []).filter(Boolean).join(" ");
+  };
+
+  const fmtExpiry = v => {
+    const d = v.replace(/\D/g, "").slice(0, 4);
+    if (d.length <= 2) return d;
+    return d.slice(0, 2) + "/" + d.slice(2);
+  };
+
+  /* ============================== markup helpers ============================== */
+
+  const esc = v => String(v).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function textField(name, label, o) {
+    o = o || {};
+    return '<div class="field">' +
+      '<label for="' + name + '">' + label +
+        (o.optional ? ' <span class="opt">(optional)</span>' : ' <span class="req">*</span>') +
+      '</label>' +
+      (o.badge ? '<div class="with-badge">' : '') +
+      '<input id="' + name + '" data-field="' + name + '" type="' + (o.type || "text") + '"' +
+        ' value="' + esc(s.data[name] || "") + '"' +
+        (o.placeholder ? ' placeholder="' + esc(o.placeholder) + '"' : "") +
+        (o.autocomplete ? ' autocomplete="' + o.autocomplete + '"' : "") +
+        (o.inputmode ? ' inputmode="' + o.inputmode + '"' : "") +
+        (o.maxlength ? ' maxlength="' + o.maxlength + '"' : "") +
+        ' aria-describedby="err-' + name + (o.hint ? " hint-" + name : "") + '">' +
+      (o.badge ? '<span class="brand-badge" id="badge-' + name + '"></span></div>' : '') +
+      (o.hint ? '<p class="hint" id="hint-' + name + '">' + o.hint + '</p>' : '') +
+      '<p class="err" id="err-' + name + '" role="alert"></p>' +
+    '</div>';
+  }
+
+  function selectField(name, label, options, placeholder) {
+    return '<div class="field"><label for="' + name + '">' + label + ' <span class="req">*</span></label>' +
+      '<select id="' + name + '" data-field="' + name + '" aria-describedby="err-' + name + '">' +
+      '<option value="">' + placeholder + '</option>' +
+      options.map(o => '<option value="' + esc(o) + '"' +
+        (s.data[name] === o ? " selected" : "") + '>' + esc(o) + '</option>').join("") +
+      '</select><p class="err" id="err-' + name + '" role="alert"></p></div>';
+  }
+
+  /* ============================== step rendering ============================== */
+
+  function stepCompany() {
+    return '<h2 class="step-title" id="stepTitle" tabindex="-1">Company details</h2>' +
+      '<p class="step-sub">This appears on your invoices and on the invitations your team receives.</p>' +
+      textField("companyName", "Company name", { placeholder: "Acme Industries", autocomplete: "organization" }) +
+      textField("website", "Website", { placeholder: "acme.com", optional: true, autocomplete: "url" }) +
+      '<div class="row">' +
+        selectField("companySize", "Company size", SIZES, "Select…") +
+        selectField("country", "Country", COUNTRIES, "Select…") +
+      '</div>';
+  }
+
+  function inviteRows() {
+    return s.data.invites.map((inv, i) =>
+      '<div class="invite-row">' +
+        '<div class="grow">' +
+          '<label class="sr" for="invite-' + i + '">Email address for invite ' + (i + 1) + '</label>' +
+          '<input id="invite-' + i + '" data-field="invite-' + i + '" data-idx="' + i + '" data-kind="email"' +
+            ' type="email" inputmode="email" autocomplete="off" placeholder="name@acme.com"' +
+            ' value="' + esc(inv.email) + '" aria-describedby="err-invite-' + i + '">' +
+          '<p class="err" id="err-invite-' + i + '" role="alert"></p>' +
+        '</div>' +
+        '<div class="role">' +
+          '<label class="sr" for="role-' + i + '">Role for invite ' + (i + 1) + '</label>' +
+          '<select id="role-' + i + '" data-idx="' + i + '" data-kind="role">' +
+            ROLES.map(r => '<option' + (inv.role === r ? " selected" : "") + '>' + r + '</option>').join("") +
+          '</select>' +
+        '</div>' +
+        '<button type="button" class="kill" data-remove="' + i + '"' +
+          (s.data.invites.length === 1 ? " disabled" : "") +
+          ' aria-label="Remove invite ' + (i + 1) + '">&times;</button>' +
+      '</div>'
+    ).join("");
+  }
+
+  function stepTeam() {
+    return '<h2 class="step-title" id="stepTitle" tabindex="-1">Invite your team</h2>' +
+      '<p class="step-sub">Optional — you can skip this and invite people once you\'re set up. ' +
+      'Leave a row blank to ignore it.</p>' +
+      '<div class="col-head"><span class="grow">Email address</span>' +
+        '<span class="role">Role</span><span class="spacer"></span></div>' +
+      '<div id="inviteList">' + inviteRows() + '</div>' +
+      '<button type="button" class="add" id="addInvite">+ Add another person</button>';
+  }
+
+  function seatCount() {
+    return 1 + s.data.invites.filter(i => EMAIL.test(i.email.trim())).length;
+  }
+
+  function stepBilling() {
+    const seats = seatCount();
+    const plan = PLANS[s.data.plan];
+    const total = plan.price * seats;
+    return '<h2 class="step-title" id="stepTitle" tabindex="-1">Billing</h2>' +
+      '<p class="step-sub">Nothing is charged today. This is a demo — no card details leave this page.</p>' +
+      '<fieldset><legend>Choose a plan</legend>' +
+        Object.keys(PLANS).map(k => {
+          const p = PLANS[k];
+          return '<label class="plan"><input type="radio" name="plan" value="' + k + '"' +
+            (s.data.plan === k ? " checked" : "") + '>' +
+            '<span><span class="pname">' + p.name + '</span>' +
+            '<span class="pdesc">' + p.desc + '</span></span>' +
+            '<span class="price">' + (p.price ? "$" + p.price : "Free") +
+            (p.price ? "<small>per seat / month</small>" : "<small>forever</small>") + '</span></label>';
+        }).join("") +
+      '</fieldset>' +
+      '<div class="totals" id="totals">' +
+        '<div><span class="muted">' + plan.name + ' · ' + seats + ' seat' + (seats === 1 ? "" : "s") +
+          ' <span class="muted">(you' + (seats > 1 ? " + " + (seats - 1) + " invited" : "") + ')</span></span>' +
+          '<span class="muted">' + (total ? "$" + total + ".00" : "$0.00") + '</span></div>' +
+        '<div><span>Due monthly</span><span>' + (total ? "$" + total + ".00" : "$0.00") + '</span></div>' +
+      '</div>' +
+      textField("cardName", "Name on card", { placeholder: "Ada Lovelace", autocomplete: "cc-name" }) +
+      textField("cardNumber", "Card number", { placeholder: "4242 4242 4242 4242",
+        inputmode: "numeric", autocomplete: "cc-number", badge: true }) +
+      '<div class="row">' +
+        textField("expiry", "Expiry", { placeholder: "MM/YY", inputmode: "numeric",
+          autocomplete: "cc-exp", maxlength: 5 }) +
+        textField("cvc", "Security code", { placeholder: "123", inputmode: "numeric",
+          autocomplete: "cc-csc", maxlength: 4 }) +
+      '</div>';
+  }
+
+  const RENDERERS = [stepCompany, stepTeam, stepBilling];
+
+  /* ============================== chrome ============================== */
+
+  function renderProgress() {
+    const nav = document.getElementById("progress");
+    nav.querySelectorAll(".pstep").forEach(n => n.remove());
+    STEPS.forEach((st, i) => {
+      const state = s.done || i < s.step ? "done" : i === s.step ? "current" : "todo";
+      const clickable = !s.done && i < s.step;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "pstep";
+      b.dataset.state = state;
+      b.dataset.clickable = clickable ? "1" : "0";
+      b.disabled = !clickable;
+      b.setAttribute("aria-current", i === s.step && !s.done ? "step" : "false");
+      b.innerHTML = '<span class="dot" aria-hidden="true">' +
+        (state === "done" ? "&#10003;" : i + 1) + '</span>' +
+        '<span class="plabel">' + st.label + '</span>';
+      b.title = clickable ? "Back to " + st.label : st.label;
+      b.addEventListener("click", () => goTo(i));
+      nav.appendChild(b);
+    });
+    const pct = s.done ? 100 : (s.step / (STEPS.length - 1)) * 100;
+    document.getElementById("fill").style.width = pct + "%";
+    document.getElementById("stepCount").textContent = s.done
+      ? "All done" : "Step " + (s.step + 1) + " of " + STEPS.length;
+  }
+
+  function renderStep(focusTitle) {
+    document.getElementById("stepBody").innerHTML = RENDERERS[s.step]();
+    document.getElementById("back").style.visibility = s.step === 0 ? "hidden" : "visible";
+    document.getElementById("next").textContent =
+      s.step === STEPS.length - 1 ? "Complete setup" : "Continue";
+    renderProgress();
+    paintAll();
+    updateBadge();
+    if (focusTitle) {
+      const t = document.getElementById("stepTitle");
+      if (t) t.focus();
+    }
+  }
+
+  function updateBadge() {
+    const badge = document.getElementById("badge-cardNumber");
+    if (badge) badge.textContent = cardBrand(s.data.cardNumber);
+  }
+
+  function updateTotals() {
+    if (s.step !== 2) return;
+    const seats = seatCount(), plan = PLANS[s.data.plan], total = plan.price * seats;
+    const t = document.getElementById("totals");
+    if (!t) return;
+    const amount = total ? "$" + total + ".00" : "$0.00";
+    t.children[0].children[0].innerHTML = '<span class="muted">' + plan.name + ' · ' + seats +
+      ' seat' + (seats === 1 ? "" : "s") + ' (you' + (seats > 1 ? " + " + (seats - 1) + " invited" : "") + ')</span>';
+    t.children[0].children[1].textContent = amount;
+    t.children[1].children[1].textContent = amount;
+  }
+
+  /* ============================== navigation ============================== */
+
+  function goTo(i) {
+    if (i === s.step) return;
+    s.step = i;
+    s.furthest = Math.max(s.furthest, i);
+    showSummary(0);
+    renderStep(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function attemptAdvance() {
+    const errs = validateStep(s.step);
+    // Pressing Continue reveals every problem on this step at once.
+    Object.keys(errs).forEach(k => { s.touched[k] = true; });
+    STEP_FIELDS[s.step].forEach(k => { s.touched[k] = true; });
+    s.data.invites.forEach((_, i) => { s.touched["invite-" + i] = true; });
+    s.errors = errs;
+    paintAll();
+
+    const keys = Object.keys(errs);
+    if (keys.length) {
+      showSummary(keys.length);
+      const first = document.querySelector('[data-field="' + keys[0] + '"]');
+      if (first) { first.focus(); first.scrollIntoView({ block: "center", behavior: "smooth" }); }
+      say(keys.length + (keys.length === 1 ? " problem" : " problems") + " to fix before continuing.");
+      return;
+    }
+
+    showSummary(0);
+    if (s.step < STEPS.length - 1) {
+      s.step++;
+      s.furthest = Math.max(s.furthest, s.step);
+      renderStep(true);
+      say(STEPS[s.step].label + ". Step " + (s.step + 1) + " of " + STEPS.length + ".");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } else {
+      finish();
+    }
+  }
+
+  function say(msg) { document.getElementById("live").textContent = msg; }
+
+  /* ============================== completion ============================== */
+
+  function finish() {
+    s.done = true;
+    const d = s.data, seats = seatCount(), plan = PLANS[d.plan];
+    const total = plan.price * seats;
+    const invited = d.invites.filter(i => EMAIL.test(i.email.trim()));
+    const last4 = d.cardNumber.replace(/\D/g, "").slice(-4);
+
+    const rows = [
+      ["Company", d.companyName],
+      d.website ? ["Website", d.website] : null,
+      ["Size", d.companySize + " people"],
+      ["Country", d.country],
+      ["Invites sent", invited.length
+        ? invited.length + " (" + invited.map(i => i.role).join(", ") + ")"
+        : "None yet"],
+      ["Plan", plan.name + " · " + seats + " seat" + (seats === 1 ? "" : "s")],
+      ["Card", (cardBrand(d.cardNumber) || "Card") + " ending " + last4],
+      ["Due monthly", total ? "$" + total + ".00" : "$0.00"]
+    ].filter(Boolean);
+
+    document.getElementById("form").hidden = true;
+    const done = document.getElementById("doneBody");
+    done.hidden = false;
+    done.innerHTML = '<div class="done">' +
+      '<div class="tick" aria-hidden="true">&#10003;</div>' +
+      '<h2 tabindex="-1" id="doneTitle">' + esc(d.companyName) + ' is ready</h2>' +
+      '<p>' + (invited.length
+        ? "We've emailed " + invited.length + " invitation" + (invited.length === 1 ? "" : "s") + "."
+        : "You can invite your team any time from Settings.") + '</p>' +
+      '<div class="recap"><dl>' + rows.map(r =>
+        '<div class="line"><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>').join("") +
+      '</dl></div>' +
+      '<button type="button" class="ghost" id="againBtn">Run through it again</button></div>';
+    document.getElementById("againBtn").addEventListener("click", reset);
+    renderProgress();
+    document.getElementById("doneTitle").focus();
+    say("Setup complete.");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function reset() {
+    s = blank();
+    document.getElementById("doneBody").hidden = true;
+    document.getElementById("doneBody").innerHTML = "";
+    document.getElementById("form").hidden = false;
+    showSummary(0);
+    renderStep(true);
+    say("Form reset. Step 1 of 3.");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /* ============================== wiring ============================== */
+
+  const body = document.getElementById("stepBody");
+
+  body.addEventListener("input", e => {
+    const el = e.target;
+
+    if (el.dataset.kind === "email") {
+      s.data.invites[+el.dataset.idx].email = el.value;
+      if (s.touched[el.dataset.field]) recheck(el.dataset.field);
+      updateTotals();
+      return;
+    }
+    if (!el.dataset.field) return;
+
+    const name = el.dataset.field;
+    if (name === "cardNumber") {
+      formatKeepingCaret(el, fmtCard);
+      s.data.cardNumber = el.value;
+      updateBadge();
+      // Switching to/from Amex changes the expected CVC length.
+      if (s.touched.cvc) recheck("cvc");
+    } else if (name === "expiry") {
+      formatKeepingCaret(el, fmtExpiry);
+      s.data.expiry = el.value;
+    } else if (name === "cvc") {
+      el.value = el.value.replace(/\D/g, "").slice(0, 4);
+      s.data.cvc = el.value;
+    } else {
+      s.data[name] = el.value;
+    }
+    if (s.touched[name]) recheck(name);   // clear the error as soon as it's fixed
+  });
+
+  // Selects fire change, not input, in some browsers — and validate immediately.
+  body.addEventListener("change", e => {
+    const el = e.target;
+    if (el.dataset.kind === "role") {
+      s.data.invites[+el.dataset.idx].role = el.value;
+      return;
+    }
+    if (el.name === "plan") {
+      s.data.plan = el.value;
+      updateTotals();
+      return;
+    }
+    if (el.tagName === "SELECT" && el.dataset.field) {
+      s.data[el.dataset.field] = el.value;
+      recheck(el.dataset.field, { touch: true });
+    }
+  });
+
+  // Validate on blur: the moment a user leaves a field, tell them if it's wrong.
+  body.addEventListener("focusout", e => {
+    const name = e.target.dataset && e.target.dataset.field;
+    if (!name) return;
+    recheck(name, { touch: true });
+  });
+
+  body.addEventListener("click", e => {
+    const add = e.target.closest("#addInvite");
+    if (add) {
+      s.data.invites.push({ email: "", role: "Member" });
+      document.getElementById("inviteList").innerHTML = inviteRows();
+      paintAll();
+      const rows = document.querySelectorAll('[data-kind="email"]');
+      rows[rows.length - 1].focus();
+      say("Invite row added. " + s.data.invites.length + " rows.");
+      return;
+    }
+    const kill = e.target.closest("[data-remove]");
+    if (kill) {
+      const i = +kill.dataset.remove;
+      s.data.invites.splice(i, 1);
+      // Error keys are positional, so drop them and re-derive.
+      Object.keys(s.errors).forEach(k => { if (k.startsWith("invite-")) delete s.errors[k]; });
+      Object.keys(s.touched).forEach(k => { if (k.startsWith("invite-")) delete s.touched[k]; });
+      document.getElementById("inviteList").innerHTML = inviteRows();
+      const errs = validateInvites();
+      Object.keys(errs).forEach(k => { s.errors[k] = errs[k]; s.touched[k] = true; });
+      paintAll();
+      updateTotals();
+      say("Invite removed. " + s.data.invites.length + " rows.");
+      const focusTarget = document.querySelector('[data-remove="' + Math.max(0, i - 1) + '"]');
+      if (focusTarget) focusTarget.focus();
+    }
+  });
+
+  document.getElementById("form").addEventListener("submit", e => {
+    e.preventDefault();
+    attemptAdvance();
+  });
+
+  document.getElementById("back").addEventListener("click", () => {
+    if (s.step > 0) goTo(s.step - 1);
+  });
+
+  document.getElementById("restart").addEventListener("click", reset);
+
+  renderStep(false);
+})();
+</script>
+</body>
+</html>

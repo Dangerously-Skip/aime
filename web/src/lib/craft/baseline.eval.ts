@@ -97,7 +97,28 @@ const SAMPLES = Number(process.env.AIME_EVAL_SAMPLES ?? 3);
  * for the underspecified brief: the surface already implements the turn-1
  * question gate that P7.5 proposed to add.
  */
-const AUTO_ANSWER = 'Use your best judgement and proceed. Do not ask again.';
+const AUTO_ANSWER =
+  'Produce ONE self-contained file that answers the brief as stated. Do not ' +
+  'expand the scope, do not add features beyond it, and do not ask again.';
+
+/**
+ * Hard ceiling on tool calls per sample, clamped by the route (a caller may
+ * lower the surface's limit, never raise it).
+ *
+ * The code surface allows 200 turns, which is right for a person working
+ * interactively and catastrophic for an unattended eval: one sample ran 124 tool
+ * calls over 66 minutes and cost $6.58 on its own — 10.1M input tokens — because
+ * the auto-answer said "use your best judgement" and nothing bounded what
+ * followed. That answer traded a bounded 300-second stall for an unbounded run.
+ *
+ * A baseline sample is one focused attempt. If a brief cannot be answered in
+ * this many turns, that IS the result and should be recorded as such rather than
+ * bought at any price.
+ */
+const MAX_TURNS = Number(process.env.AIME_EVAL_MAX_TURNS ?? 30);
+
+/** Refuse to start a run that could plausibly cost more than this. */
+const COST_CEILING_USD = Number(process.env.AIME_EVAL_COST_CEILING ?? 15);
 
 /** Files an artifact could plausibly be. */
 const ARTIFACT_EXT = /\.(html?|tsx?|jsx?|css|svelte|vue)$/i;
@@ -134,6 +155,8 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
   let runDir: string;
   const results: BriefResult[] = [];
   const prompts = new Map<string, string>();
+  /** Running spend, so the ceiling can stop the run rather than explain it after. */
+  let spentUsd = 0;
 
   beforeAll(() => {
     // A timestamped directory, so a re-run never silently overwrites the
@@ -163,6 +186,18 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
     '%s',
     async (_label, brief, sample) => {
       const id = brief.id;
+      /**
+       * Check BEFORE starting, not after. The previous run discovered it had
+       * spent $13.76 only once every sample had finished — by which point the
+       * money was gone and four briefs had failed on an exhausted balance.
+       */
+      if (spentUsd >= COST_CEILING_USD) {
+        throw new Error(
+          `Cost ceiling reached: $${spentUsd.toFixed(2)} of $${COST_CEILING_USD}. ` +
+            `Remaining samples skipped. Raise AIME_EVAL_COST_CEILING to continue.`,
+        );
+      }
+
       const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `aime-eval-${id}-${sample}-`));
       const started = Date.now();
       let error: string | undefined;
@@ -205,6 +240,7 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
               chatId: `eval-${id}-${sample}`,
               cwd: workspace,
               model: MODEL,
+              maxTurns: MAX_TURNS,
               ...(PROVIDER_BASE_URL
                 ? {
                     providerConfig: {
@@ -367,6 +403,8 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
         path.join(briefDir, '_brief.json'),
         JSON.stringify({ ...brief, model: MODEL, error }, null, 2),
       );
+
+      if (typeof usage?.cost === 'number') spentUsd += usage.cost;
 
       results.push({
         id,
