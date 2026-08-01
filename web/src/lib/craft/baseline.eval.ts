@@ -131,6 +131,32 @@ const COST_CEILING_USD = Number(process.env.AIME_EVAL_COST_CEILING ?? 15);
  */
 const MAX_BUDGET_USD = Number(process.env.AIME_EVAL_MAX_BUDGET_USD ?? 1.5);
 
+/**
+ * Which arm of the craft A/B this run is.
+ *
+ * `craft` is the surface as shipped. `control` denies the `Skill` tool, so the
+ * craft skills cannot load however well their descriptions match.
+ *
+ * Denying is the only honest way to build the control. Trimming `allowedTools`
+ * would look equivalent and withhold nothing — it is the SDK's auto-approve
+ * list, and this surface's `permissionMode` means an un-approved tool still
+ * runs. That exact mistake shipped here once already, in four security toggles
+ * that all had passing tests. `deniedTools` is enforced twice: handed to the SDK
+ * as `disallowedTools` so the tool leaves the model's context, and refused again
+ * in `canUseTool`, which runs whatever `permissionMode` says.
+ *
+ * The arm is recorded in every artifact and in the run directory name, because
+ * a control run that is silently identical to the treatment run is the one
+ * failure that would make every downstream number meaningless.
+ */
+const ARM: 'craft' | 'control' = process.env.AIME_EVAL_ARM === 'control' ? 'control' : 'craft';
+
+/**
+ * What the control arm withholds. `Skill` is the loader; the individual craft
+ * skills are not tools and cannot be denied by name.
+ */
+const CONTROL_DENIED_TOOLS = ['Skill'];
+
 /** Files an artifact could plausibly be. */
 const ARTIFACT_EXT = /\.(html?|tsx?|jsx?|css|svelte|vue)$/i;
 
@@ -144,6 +170,15 @@ interface BriefResult {
   /** Length of the inline reply — an artifact pasted into chat still counts. */
   replyChars: number;
   toolCalls: number;
+  /**
+   * The `Skill` tool was invoked at least once.
+   *
+   * The single most important field in a mechanical run: it separates "the
+   * craft guidance made no difference" from "the craft guidance never loaded",
+   * which look identical in every other number here and have opposite fixes.
+   * On the control arm this MUST be false, and the run asserts it.
+   */
+  usedSkillTool: boolean;
   /** From the `done` event. Real when the provider reported it. */
   costUsd?: number;
   estimatedCost: boolean;
@@ -173,7 +208,10 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
     // A timestamped directory, so a re-run never silently overwrites the
     // baseline it is supposed to be compared against.
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    runDir = path.join(OUT_ROOT, `baseline-${stamp}`);
+    // The arm is in the NAME, not just the metadata: two runs of an A/B whose
+    // directories differ only by timestamp are one mislabelled `AIME_EVAL_ARM`
+    // away from being compared against themselves.
+    runDir = path.join(OUT_ROOT, `${ARM}-${stamp}`);
     fs.mkdirSync(runDir, { recursive: true });
   });
 
@@ -253,6 +291,7 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
               model: MODEL,
               maxTurns: MAX_TURNS,
               maxBudgetUsd: MAX_BUDGET_USD,
+              ...(ARM === 'control' ? { denyTools: CONTROL_DENIED_TOOLS } : {}),
               ...(PROVIDER_BASE_URL
                 ? {
                     providerConfig: {
@@ -392,7 +431,11 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
       fs.writeFileSync(path.join(briefDir, '_stream.sse'), sse);
       fs.writeFileSync(
         path.join(briefDir, '_usage.json'),
-        JSON.stringify({ usage, toolCalls: toolNames, durationMs: Date.now() - started }, null, 2),
+        JSON.stringify(
+          { arm: ARM, usage, toolCalls: toolNames, durationMs: Date.now() - started },
+          null,
+          2,
+        ),
       );
 
       const findings: Finding[] = [];
@@ -413,8 +456,24 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
       if (prompt) fs.writeFileSync(path.join(briefDir, '_system-prompt.txt'), prompt);
       fs.writeFileSync(
         path.join(briefDir, '_brief.json'),
-        JSON.stringify({ ...brief, model: MODEL, error }, null, 2),
+        JSON.stringify({ ...brief, model: MODEL, arm: ARM, error }, null, 2),
       );
+
+      const usedSkillTool = toolNames.some((t) => t === 'Skill' || t.startsWith('Skill'));
+
+      /**
+       * The control arm's whole purpose is that this cannot happen. If it does,
+       * the two arms received the same guidance and every comparison built on
+       * this run is worthless — so fail here rather than let the run finish and
+       * be read as a real result.
+       */
+      if (ARM === 'control') {
+        expect(
+          usedSkillTool,
+          `control arm invoked Skill on ${id} #${sample} — the denial did not hold, ` +
+            `so this run is not a control`,
+        ).toBe(false);
+      }
 
       if (typeof usage?.cost === 'number') spentUsd += usage.cost;
 
@@ -426,6 +485,7 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
         files,
         replyChars: replyText.length,
         toolCalls: toolNames.length,
+        usedSkillTool,
         costUsd: typeof usage?.cost === 'number' ? usage.cost : undefined,
         estimatedCost: usage?.estimated === true,
         findings,
@@ -452,22 +512,45 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
   );
 
   it('writes the summary', () => {
+    const withOutput = results.filter((r) => r.files.length || r.replyChars);
+    const skillRuns = withOutput.filter((r) => r.usedSkillTool).length;
+    const totalTells = withOutput.reduce((n, r) => n + r.findings.length, 0);
+    const p0Tells = withOutput.reduce(
+      (n, r) => n + r.findings.filter((f) => f.severity === 'p0').length,
+      0,
+    );
+
     const lines = [
-      '# P7.0 craft baseline',
+      `# P7 craft eval — \`${ARM}\` arm`,
       '',
       `Model: \`${MODEL}\` (pinned — see baseline.eval.ts).`,
-      ONLY?.length ? `Partial run: ${ONLY.join(', ')}. Not a full baseline.` : 'Full brief set.',
+      ARM === 'control'
+        ? 'CONTROL: the `Skill` tool was denied, so no craft skill could load.'
+        : 'TREATMENT: the surface as shipped, craft skills available.',
+      ONLY?.length ? `Partial run: ${ONLY.join(', ')}. Not a full brief set.` : 'Full brief set.',
       `Captured: ${new Date().toISOString()}`,
       '',
-      'The BEFORE for every P7 change. Measured with `slop-tells.ts`; the same',
-      'instrument must be used for the after, or the comparison means nothing.',
+      'Measured with `slop-tells.ts`; the same instrument must be used for both',
+      'arms, or the comparison means nothing.',
+      '',
+      '## The two numbers this run exists for',
+      '',
+      `- **Skill invoked:** ${skillRuns}/${withOutput.length} samples that produced output.`,
+      `- **Tells:** ${totalTells} total (${p0Tells} P0) across ${withOutput.length} samples` +
+        (withOutput.length
+          ? ` — ${(totalTells / withOutput.length).toFixed(2)} per sample.`
+          : '.'),
+      '',
+      'Read them in that order. A tell count that did not move between arms means',
+      'nothing until the skill-invocation count says the guidance actually loaded —',
+      'those two failures need opposite fixes and look identical from the output.',
       '',
       `Samples per brief: ${SAMPLES}. The tells column shows every sample, because`,
       'the spread IS the result — one number would hide whether a later change beat',
       'the variance or got lucky.',
       '',
-      '| brief | shape | tells per sample | asked? | cost | median duration |',
-      '|---|---|---|---|---|---|',
+      '| brief | shape | tells per sample | skill? | asked? | cost | median duration |',
+      '|---|---|---|---|---|---|---|',
       ...briefs.map((b) => {
         const rs = results.filter((r) => r.id === b.id).sort((x, y) => x.sample - y.sample);
         const tells = rs
@@ -477,7 +560,8 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
         const durations = rs.map((r) => r.durationMs).sort((x, y) => x - y);
         const median = durations[Math.floor(durations.length / 2)] ?? 0;
         const asked = rs.filter((r) => r.askedQuestion).length;
-        return `| ${b.id} | ${b.shape} | ${tells} | ${asked}/${rs.length} | $${cost.toFixed(3)} | ${(median / 1000).toFixed(0)}s |`;
+        const skilled = rs.filter((r) => r.usedSkillTool).length;
+        return `| ${b.id} | ${b.shape} | ${tells} | ${skilled}/${rs.length} | ${asked}/${rs.length} | $${cost.toFixed(3)} | ${(median / 1000).toFixed(0)}s |`;
       }),
       '',
       `**Total cost: $${results.reduce((n, r) => n + (r.costUsd ?? 0), 0).toFixed(2)}**`,

@@ -184,6 +184,7 @@ export async function POST(
     toolProfile = 'full',
     maxTurns: requestedMaxTurns = null,
     maxBudgetUsd: requestedBudgetUsd = null,
+    denyTools: requestedDenyTools = null,
     onboardingComplete = true,
     capability = null,
     tier = null,
@@ -225,6 +226,19 @@ export async function POST(
      * default to clamp against — absent means the SDK's own default (no cap).
      */
     maxBudgetUsd?: number | null;
+    /**
+     * Extra tools to withhold from this run, ADDED to whatever the surface and
+     * the security toggles already withhold. One-way on purpose: a caller can
+     * take a capability away, never grant one back — same direction as the
+     * `maxTurns` clamp, and for the same reason.
+     *
+     * The A/B control arm of the craft eval is what this exists for: measuring
+     * whether the craft skills change the output needs a run where they
+     * demonstrably cannot load. Doing that by trimming `allowedTools` would
+     * withhold nothing at all — that list is an auto-approve list, and the
+     * surface runs `permissionMode` high enough that the tool stays usable.
+     */
+    denyTools?: string[] | null;
     toolProfile?: string;
     onboardingComplete?: boolean;
     capability?: import('@/lib/models/types').Capability | null;
@@ -399,6 +413,18 @@ export async function POST(
        * treating "absent" as "denied" would break tools nobody asked to remove.
        */
       const deniedTools = new Set<string>();
+
+      /**
+       * Caller-requested denials, seeded before any surface narrowing so they
+       * survive it. Additive and one-way — nothing downstream removes from this
+       * set, so a caller cannot use it to grant itself a tool.
+       */
+      if (Array.isArray(requestedDenyTools)) {
+        for (const t of requestedDenyTools) {
+          if (typeof t === 'string' && t.trim()) deniedTools.add(t.trim());
+        }
+      }
+
       /** Narrow `allowedTools`, remembering the difference as a real denial. */
       const withhold = (keep: (t: string) => boolean) => {
         if (!surfaceConfig.allowedTools) return;

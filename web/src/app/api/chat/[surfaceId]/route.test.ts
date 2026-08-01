@@ -236,6 +236,61 @@ describe('withheld tools are actually withheld', () => {
     expect(providerParams().deniedTools).toEqual([]);
   });
 
+  /**
+   * `denyTools` is caller-supplied tool policy, which makes its DIRECTION the
+   * whole safety property: a request may take a capability away and must never
+   * be able to hand one back. Same shape as the `maxTurns` clamp.
+   *
+   * It exists for the craft eval's control arm, which has to produce a run where
+   * the craft skills provably cannot load. Building that control by trimming
+   * `allowedTools` would withhold nothing at all — the failure this whole
+   * describe block was written about.
+   */
+  describe('caller-requested denials', () => {
+    it('withholds a tool the surface would otherwise allow', async () => {
+      await post('code', { message: 'hi', chatId: 'c1', denyTools: ['Skill'] });
+      expect(providerParams().deniedTools).toContain('Skill');
+    });
+
+    it('adds to the surface’s own denials rather than replacing them', async () => {
+      await post('cowork', {
+        message: 'hi',
+        chatId: 'c1',
+        toolProfile: 'minimal',
+        denyTools: ['Skill'],
+      });
+      const denied = providerParams().deniedTools!;
+      expect(denied).toContain('Skill');
+      // The profile's denials survive — a caller narrowing one tool must not
+      // quietly widen everything else.
+      expect(denied).toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']));
+    });
+
+    it('cannot be used to GRANT a tool the profile took away', async () => {
+      await post('cowork', {
+        message: 'hi',
+        chatId: 'c1',
+        toolProfile: 'minimal',
+        denyTools: [],
+      });
+      expect(providerParams().deniedTools).toEqual(expect.arrayContaining(['Bash']));
+    });
+
+    it('ignores junk instead of denying a garbage tool name', async () => {
+      await post('cowork', {
+        message: 'hi',
+        chatId: 'c1',
+        denyTools: ['', '   ', null, 42, 'Skill'],
+      });
+      expect(providerParams().deniedTools).toEqual(['Skill']);
+    });
+
+    it('is absent by default, so an ordinary request is unaffected', async () => {
+      await post('code', { message: 'hi', chatId: 'c1' });
+      expect(providerParams().deniedTools).not.toContain('Skill');
+    });
+  });
+
   it('denies what an agent scopes away, plumbing aside', async () => {
     mocks.loadAgentsMock.mockReturnValue([
       { name: 'reader', triggers: [], allowedTools: ['Read', 'Grep'] },
