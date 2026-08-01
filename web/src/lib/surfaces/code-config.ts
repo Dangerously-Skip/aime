@@ -7,6 +7,12 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
     allowedTools: [
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
       'WebFetch', 'Agent', 'NotebookEdit',
+      // Craft lives in skills (`craft-web`, `craft-deck`, `craft-doc`), installed
+      // globally to ~/.claude/plugins/aime-skills. They were reachable from chat
+      // and cowork and NOT from here — which is backwards, since this is the
+      // surface that actually builds UI. Under `acceptEdits` a tool absent from
+      // this list is not auto-approved, so the skill silently never loaded.
+      'Skill',
       'TodoWrite', 'AskUserQuestion', 'EnterWorktree',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
       'mcp__web-search__web_search',

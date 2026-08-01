@@ -1,6 +1,6 @@
 ---
 name: craft-web
-description: Craft rules for generated web UI — colour ration, type scale, state coverage, and the specific defaults that make output look machine-made. Use when building or restyling a web page, app screen, dashboard, form or component. Not for prose, data analysis, backend code, or a deck (use craft-deck).
+description: Craft rules for generated web UI — colour ration, type scale, state coverage, and the specific defaults that make output look machine-made. Use when building or restyling a web page, app screen, dashboard, form or component. Not for prose, data analysis, backend code, a deck (use craft-deck), or anything that will be printed or exported to PDF (use craft-doc).
 ---
 
 # Craft — web UI

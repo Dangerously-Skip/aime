@@ -22,7 +22,8 @@
     "test:e2e": "playwright test",
     "test:mutation": "stryker run",
     "lint:strict": "eslint --max-warnings 30",
-    "eval:baseline": "vitest run --config vitest.eval.config.ts"
+    "eval:baseline": "vitest run --config vitest.eval.config.ts src/lib/craft/baseline.eval.ts",
+    "eval:compare": "vitest run --config vitest.eval.config.ts src/lib/craft/compare.eval.ts"
   },
   "build": {
     "appId": "com.aime.app",
