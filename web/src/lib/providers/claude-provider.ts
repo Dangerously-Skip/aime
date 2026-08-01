@@ -131,6 +131,7 @@ export class ClaudeProvider extends BaseProvider {
       deniedTools,
       securitySettings,
       maxTurns: explicitMaxTurns,
+      maxBudgetUsd,
       systemPrompt: explicitSystemPrompt,
       model: explicitModel,
       attachments,
@@ -774,6 +775,10 @@ export class ClaudeProvider extends BaseProvider {
       // one and never has to be refused mid-turn.
       disallowedTools: [...denied],
       maxTurns,
+      // Enforced by the SDK mid-run, unlike any ceiling this app can apply
+      // between turns. Omitted entirely when unset so the default (no cap)
+      // is the SDK's, not a number invented here.
+      ...(typeof maxBudgetUsd === 'number' && maxBudgetUsd > 0 ? { maxBudgetUsd } : {}),
       mcpServers: {
         ...mcpServers,
         aime: aimeMcpServer,

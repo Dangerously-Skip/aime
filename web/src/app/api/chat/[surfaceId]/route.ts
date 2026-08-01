@@ -183,6 +183,7 @@ export async function POST(
     sessionControls = null,
     toolProfile = 'full',
     maxTurns: requestedMaxTurns = null,
+    maxBudgetUsd: requestedBudgetUsd = null,
     onboardingComplete = true,
     capability = null,
     tier = null,
@@ -219,6 +220,11 @@ export async function POST(
      * `Math.min` — a caller can bound a run, never exceed the surface's policy.
      */
     maxTurns?: number | null;
+    /**
+     * Hard USD ceiling for the turn, enforced by the SDK mid-run. No surface
+     * default to clamp against — absent means the SDK's own default (no cap).
+     */
+    maxBudgetUsd?: number | null;
     toolProfile?: string;
     onboardingComplete?: boolean;
     capability?: import('@/lib/models/types').Capability | null;
@@ -951,6 +957,9 @@ export async function POST(
             typeof requestedMaxTurns === 'number' && requestedMaxTurns > 0
               ? Math.min(requestedMaxTurns, surfaceConfig.maxTurns ?? requestedMaxTurns)
               : surfaceConfig.maxTurns,
+          ...(typeof requestedBudgetUsd === 'number' && requestedBudgetUsd > 0
+            ? { maxBudgetUsd: requestedBudgetUsd }
+            : {}),
           systemPrompt,
           attachments: attachments || undefined,
           webSearch: webSearch || undefined,
