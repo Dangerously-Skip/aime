@@ -1,0 +1,7 @@
+{
+  "id": "mobile-screen",
+  "shape": "app",
+  "prompt": "Build the main screen of a mobile app for tracking daily water intake. Single screen, no navigation.",
+  "probes": "Touch targets and whether the layout is designed for small screens rather than a squeezed desktop one.",
+  "model": "anthropic/claude-opus-5"
+}

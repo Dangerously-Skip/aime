@@ -5,7 +5,7 @@ description: Build rich, interactive HTML artifacts — multi-page web apps, das
 
 # Web Artifacts Builder
 
-Produce self-contained interactive HTML artifacts that run in Quarry's canvas panel (iframe sandbox, scripts allowed).
+Produce self-contained interactive HTML artifacts that run in AIME's canvas panel (iframe sandbox, scripts allowed).
 
 ## What makes this different from canvas-design
 

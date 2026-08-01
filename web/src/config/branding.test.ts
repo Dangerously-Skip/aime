@@ -95,11 +95,21 @@ function shippedFiles(dir: string): string[] {
 
 describe('nothing this repo ships carries the previous brand', () => {
   const ROOT = path.resolve(__dirname, '../..');
-  const files = shippedFiles(path.join(ROOT, 'src')).concat(
-    fs.existsSync(path.join(ROOT, '..', '.claude', 'skills'))
-      ? shippedFiles(path.join(ROOT, '..', '.claude', 'skills'))
-      : [],
-  );
+  /**
+   * `resources/` is the one that mattered and was missed first time round.
+   *
+   * The leak was found in `~/.claude/plugins/…` and fixed there — but those are
+   * INSTALLED COPIES. The source ships from `web/resources/`, gets copied out on
+   * install, and would have overwritten the fix on the next launch while
+   * continuing to ship the brand to every user. Guarding only what a developer
+   * happens to be looking at is how it survived the de-nib checklist.
+   */
+  const roots = [
+    path.join(ROOT, 'src'),
+    path.join(ROOT, 'resources'),
+    path.join(ROOT, '..', '.claude', 'skills'),
+  ].filter((d) => fs.existsSync(d));
+  const files = roots.flatMap(shippedFiles);
 
   it('scans a non-trivial number of files', () => {
     // Otherwise a broken path would make every assertion below vacuous.

@@ -1,6 +1,6 @@
 ---
 name: powerpoint-control
-description: Control Microsoft PowerPoint via AppleScript on macOS — open existing presentations, add/edit slides, change content on slides, apply templates, save as PPTX or PDF. Use this skill whenever the user wants to edit an existing PowerPoint file, automate PowerPoint tasks, or interact with an open PowerPoint on macOS. For *generating* new presentations from markdown, prefer the `nib-ppt` plugin's `generate-ppt` skill which produces branded decks.
+description: Control Microsoft PowerPoint via AppleScript on macOS — open existing presentations, add/edit slides, change content on slides, apply templates, save as PPTX or PDF. Use this skill whenever the user wants to edit an existing PowerPoint file, automate PowerPoint tasks, or interact with an open PowerPoint on macOS. For *generating* new presentations from markdown, prefer the `a branded-ppt` plugin's `generate-ppt` skill which produces branded decks.
 ---
 
 # PowerPoint Control (macOS AppleScript)
@@ -13,9 +13,9 @@ Automate Microsoft PowerPoint on macOS using AppleScript via `osascript`. Use th
 - Microsoft PowerPoint installed (`/Applications/Microsoft PowerPoint.app`)
 - Automation permission granted to the calling process
 
-## When to use this vs nib-ppt
+## When to use this vs the deck generator
 
-- **nib-ppt `generate-ppt` skill**: generating a brand-new PowerPoint from a markdown document using the nib template. This is the default for "make me a presentation".
+- **the `ppt` plugin's deck generator**: generating a brand-new PowerPoint from a markdown document using a configured brand template. This is the default for "make me a presentation".
 - **This skill**: modifying an existing PowerPoint, reading slide content, quick tweaks to an open deck, automating a batch of edits across many decks.
 
 ## Common operations
@@ -109,7 +109,7 @@ EOF
 osascript <<'EOF'
 tell application "Microsoft PowerPoint"
   tell active presentation
-    apply template "/Users/USERNAME/Templates/nib-template.potx"
+    apply template "/Users/USERNAME/Templates/your-template.potx"
   end tell
 end tell
 EOF
@@ -147,7 +147,7 @@ EOF
 - **Absolute paths** — no `~` shortcuts
 - **Wrap fragile operations in `try` blocks** — not every shape has a text frame
 - **Save explicitly** — PowerPoint doesn't auto-save AppleScript changes
-- **Permission check** — macOS needs Automation permission for the calling app (Terminal, Quarry, etc.) to control PowerPoint. First run will show a permission dialog.
+- **Permission check** — macOS needs Automation permission for the calling app (Terminal, AIME, etc.) to control PowerPoint. First run will show a permission dialog.
 
 ## Layouts reference
 
@@ -161,6 +161,6 @@ Common values for `layout:` when making slides:
 
 ## When this skill doesn't fit
 
-- Brand-new deck from scratch → use `nib-ppt:generate-ppt` skill instead
+- Brand-new deck from scratch → use the `ppt` plugin's deck generator instead
 - Non-macOS → this skill won't work; fall back to `python-pptx` library via Bash
 - Complex animations / transitions → AppleScript can't reach those; do them in the UI

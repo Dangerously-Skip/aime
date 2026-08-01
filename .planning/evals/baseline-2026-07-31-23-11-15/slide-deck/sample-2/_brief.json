@@ -1,0 +1,7 @@
+{
+  "id": "slide-deck",
+  "shape": "document",
+  "prompt": "Build a 5-slide deck introducing a quarterly engineering roadmap to non-engineers. 1920x1080.",
+  "probes": "A deck is not a web page. Tests whether the output respects the medium — type scale for a projected slide, one idea per slide.",
+  "model": "anthropic/claude-opus-5"
+}

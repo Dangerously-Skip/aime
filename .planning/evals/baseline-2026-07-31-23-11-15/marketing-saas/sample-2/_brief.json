@@ -1,0 +1,7 @@
+{
+  "id": "marketing-saas",
+  "shape": "marketing",
+  "prompt": "Build a landing page for a B2B API monitoring product called Sentinel. Hero, three feature blocks, pricing table, footer.",
+  "probes": "The classic slop shape: this is where the two-stop gradient, emoji feature icons and default indigo appear if they are going to.",
+  "model": "anthropic/claude-opus-5"
+}

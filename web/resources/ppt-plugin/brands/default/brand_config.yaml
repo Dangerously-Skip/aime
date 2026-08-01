@@ -1,5 +1,5 @@
-# nib Mesh Design System Brand Configuration
-# Source: https://www.meshdesignsystem.com/
+# Default Design System Brand Configuration
+# Neutral defaults. Replace with your own brand and keep the structure.
 # Last Updated: 2025-12-22
 # NOTE: This is for HTML visualizations, NOT PowerPoint template
 # For PowerPoint layout mappings, see pptx_config.yaml
@@ -7,10 +7,10 @@
 colors:
   # Primary Brand Colors
   primary:
-    brand_green: "#144a38"
-    bright_green: "#82e578"
-    dark_green_1: "#13362a"
-    dark_green_2: "#122a21"
+    brand_primary: "#1F2933"
+    brand_accent: "#3B7EA1"
+    brand_dark_1: "#111827"
+    brand_dark_2: "#0B1220"
 
   # Neutrals (Grayscale)
   neutrals:
@@ -32,7 +32,7 @@ colors:
     error: "#75160f"
     warning: "#eaaf18"
     info: "#003b77"
-    success: "#82e578"  # Uses bright green
+    success: "#3B7EA1"  # Uses bright green
 
   # Theme Variants
   themes:
@@ -84,7 +84,7 @@ spacing:
 components:
   # Slide-specific styling
   tables:
-    header_bg_color: "#144a38"  # Brand green
+    header_bg_color: "#1F2933"  # Brand green
     header_text_color: "#ffffff"
     header_font_size: 14
     header_bold: true
@@ -93,13 +93,13 @@ components:
     cell_padding: 8
 
   metrics:
-    value_color: "#144a38"  # Brand green for large numbers
+    value_color: "#1F2933"  # Brand green for large numbers
     label_color: "#4d4d4d"  # Gray 700
     value_font_size: 48
     label_font_size: 16
 
   bullets:
-    color: "#144a38"  # Brand green
+    color: "#1F2933"  # Brand green
     text_color: "#1a1a1a"  # Gray 900
 
   borders:
@@ -112,8 +112,8 @@ components:
 powerpoint_mapping:
   # RGB values for PowerPoint (converted from hex)
   rgb_colors:
-    brand_green: [20, 74, 56]      # #144a38
-    bright_green: [130, 229, 120]  # #82e578
+    brand_primary: [20, 74, 56]      # #1F2933
+    brand_accent: [130, 229, 120]  # #3B7EA1
     white: [255, 255, 255]
     gray_900: [26, 26, 26]
     gray_700: [77, 77, 77]

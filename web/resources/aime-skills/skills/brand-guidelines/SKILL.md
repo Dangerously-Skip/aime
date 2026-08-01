@@ -1,121 +1,85 @@
 ---
 name: brand-guidelines
-description: Apply nib Group's brand colors, typography, and visual style to any document, slide, HTML artifact, chart, or visual output. Use this skill whenever the user asks for something to match nib branding, look on-brand, use nib colors, or whenever you're producing a visual artifact (slides, landing page, dashboard, chart) and brand consistency matters. Also applies when the user mentions "corporate style", "our brand", "internal doc styling".
+description: Apply THIS USER'S configured brand — colors, typography, spacing — to a document, slide, HTML artifact or chart. Use only when the user explicitly asks for their brand, names it, or says "on-brand", "our colors", "corporate style". If the Tokens section below is still the unfilled template, this skill has nothing to apply — say so and use theme-factory instead. Do NOT invoke this merely because the output happens to be visual.
 ---
 
-# nib Brand Guidelines
+# Brand Guidelines — template
 
-Apply nib Group's visual identity consistently across all Quarry-produced artifacts.
+One place to define a brand so every artifact uses it. **Unfilled by default, and
+unfilled means "there is no brand", not "pick one".**
 
-## Colors
+## Why the description above is narrow
 
-**Primary palette:**
-- **nib Coral** `#FF6B6B` — primary brand color, use for main CTAs, key highlights, brand emphasis
-- **Deep Navy** `#1A2B4A` — primary dark, headings, high-contrast text on light backgrounds
-- **Cloud White** `#FAFAFA` — primary light, page backgrounds
+This skill previously advertised itself for *"whenever you're producing a visual
+artifact (slides, landing page, dashboard, chart) and brand consistency
+matters"*, and shipped one specific company's palette. The result: asking for a
+generic landing page surfaced a corporate brand nobody had requested, and the
+agent offered it as an available capability.
 
-**Secondary palette:**
-- **Teal** `#2EC4B6` — positive metrics, success states, health indicators
-- **Amber** `#FFB627` — warnings, attention states
-- **Deep Plum** `#6B2C91` — data visualizations, secondary charts
-- **Slate** `#475569` — body text on light backgrounds
+A brand is something a user opts into by name. A skill that applies one on
+inference will eventually apply the wrong one, and the user will not know why
+their output looks like that.
 
-**Neutrals:**
-- `#F4F6F8` — subtle section backgrounds
-- `#E5E7EB` — borders, dividers
-- `#94A3B8` — muted text, icons
-- `#1E293B` — dark mode backgrounds
+## Tokens
 
-## Typography
+Replace the placeholders. Delete a line rather than guessing — a missing token is
+recoverable, an invented one silently becomes "the brand".
 
-**Font stack:** `"Inter", "SF Pro Display", system-ui, -apple-system, sans-serif`
+```css
+:root {
+  /* Core surfaces. Avoid pure #000 / #fff; near-black and near-white read as
+     considered, pure values read as untouched defaults. */
+  --bg:        /* e.g. #FAFAFA */;
+  --surface:   /* raised panels, cards */;
+  --fg:        /* body text, e.g. #111111 */;
+  --muted:     /* secondary text */;
+  --border:    /* dividers */;
 
-**Scale:**
-- Display XL: `72px / 1.05 / -0.02em` (weight 700)
-- Display: `56px / 1.1 / -0.02em` (weight 700)
-- Heading 1: `36px / 1.2 / -0.01em` (weight 600)
-- Heading 2: `28px / 1.3` (weight 600)
-- Heading 3: `20px / 1.4` (weight 600)
-- Body: `16px / 1.6` (weight 400)
-- Small: `14px / 1.5` (weight 400)
-- Micro: `12px / 1.4 / 0.02em` (weight 500, uppercase for labels)
+  /* ONE accent. A second is almost always a mistake — see the ration below. */
+  --accent:    /* primary CTA, key emphasis */;
 
-Numbers should use tabular nums: `font-variant-numeric: tabular-nums`.
+  /* Semantic, only if the brand defines them. */
+  --success:   ;
+  --warn:      ;
+  --danger:    ;
 
-## Spacing
-
-Consistent 8px grid. Common values: `8, 16, 24, 32, 48, 64, 96, 128`.
-
-## Corners & elevation
-
-- Small radius: `8px` — inputs, small buttons
-- Medium radius: `12px` — cards, panels
-- Large radius: `16px` — hero sections, dialogs
-- Full pill: `9999px` — tags, badges
-
-Shadows (use sparingly):
-- Soft card: `0 1px 3px rgba(26, 43, 74, 0.08)`
-- Elevated: `0 4px 12px rgba(26, 43, 74, 0.1)`
-
-## Voice
-
-- **Direct and warm** — no jargon, no filler. "We've got you covered" not "We offer comprehensive coverage".
-- **Clear numbers and outcomes** — "Pay 15% less" not "Save on premiums".
-- **Active voice** — "Choose your cover" not "Cover can be chosen".
-- **Short sentences** — Average 12 words. Long sentences are OK occasionally for rhythm.
-
-## Usage rules
-
-**DO:**
-- Lead with nib Coral on one focal element per layout (CTA, headline accent, key metric)
-- Pair coral with deep navy — this is the signature combination
-- Use plenty of whitespace (64px+ between sections on web/slides)
-- Left-align text blocks (never center long paragraphs)
-
-**DON'T:**
-- Use more than 3 colors in a single artifact
-- Use coral on coral (low contrast)
-- Center-align paragraphs of body text
-- Use drop shadows that are more than 8px blur
-
-## Template: minimal HTML with brand applied
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-<style>
-  :root {
-    --coral: #FF6B6B;
-    --navy: #1A2B4A;
-    --white: #FAFAFA;
-    --slate: #475569;
-    --border: #E5E7EB;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 48px;
-    font-family: "Inter", system-ui, sans-serif;
-    color: var(--navy); background: var(--white);
-    line-height: 1.6;
-  }
-  h1 { font-size: 56px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 24px; }
-  h1 .accent { color: var(--coral); }
-  p { font-size: 16px; color: var(--slate); max-width: 640px; }
-  .cta {
-    display: inline-block; padding: 14px 28px;
-    background: var(--coral); color: white;
-    border-radius: 8px; font-weight: 600;
-    text-decoration: none;
-  }
-</style>
-</head>
-<body>
-  <h1>Clear, <span class="accent">on-brand</span> content.</h1>
-  <p>Supporting body copy using brand fonts, spacing, and color.</p>
-  <a class="cta" href="#">Primary action</a>
-</body>
-</html>
+  /* Type. The display face SHOULD differ from the body face; a single family is
+     right only for utilitarian, data-dense work. Avoid Inter/Roboto/Arial as a
+     DISPLAY face — they are fine for body. */
+  --font-display: ;
+  --font-body:    ;
+  --font-mono:    ;
+}
 ```
 
-Apply this skill automatically when producing slides, landing pages, dashboards, HTML artifacts, or anything visual. Do not ask permission — just match the brand.
+## Rules that hold regardless of the values
+
+Craft rather than brand, so these apply even while the tokens are unfilled.
+
+**Colour ration.** Neutrals carry 70–90% of the pixels. The accent appears at
+most twice per screen — links, hover and focus rings all count against that
+budget. Semantic colours stay under 5%.
+
+**Type.** ALL CAPS needs `letter-spacing: 0.06em`–`0.1em` or it reads cramped;
+display sizes (32px+) want slightly negative tracking. Body copy sits at 400–450,
+UI labels 510–550, headings 590–600 — weight 700+ is rarely needed. Numbers in
+tables use `font-variant-numeric: tabular-nums`.
+
+**Spacing.** One grid, applied everywhere. An 8px grid (8, 16, 24, 32, 48, 64,
+96) is a safe default when the brand does not specify one.
+
+**Elevation.** Depth from a ring or a background shift before a drop shadow.
+Heavy shadows date an interface faster than anything else here.
+
+**Layout.** Left-align blocks of text; centred paragraphs are hard to read past a
+couple of lines. Give sections room — cramped spacing reads as unfinished.
+
+**States.** Every interactive element needs hover, focus-visible and disabled.
+Every data view needs empty, loading and error — shipping only the populated
+state is the most common failure in generated UI, and the easiest to notice.
+
+## When there is no brand
+
+Say so, and use the `theme-factory` skill: it generates a coherent palette and
+type stack from a reference, an adjective or a mood board. Something coherent is
+the goal; something pretending to be a brand it is not is worse than either.

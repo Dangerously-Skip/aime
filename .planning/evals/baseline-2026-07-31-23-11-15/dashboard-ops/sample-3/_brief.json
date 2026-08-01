@@ -1,0 +1,7 @@
+{
+  "id": "dashboard-ops",
+  "shape": "app",
+  "prompt": "Build a single-page operations dashboard for a delivery company: fleet status, today’s deliveries, exceptions needing attention, and a chart of on-time rate over the last 30 days. Dense, for someone watching it all day.",
+  "probes": "Data density and restraint. The warm-editorial default house style is wrong here, and \"watching it all day\" should push toward calm surfaces rather than decoration.",
+  "model": "anthropic/claude-opus-5"
+}

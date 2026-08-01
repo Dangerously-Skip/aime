@@ -53,8 +53,12 @@ const OUT_ROOT = path.resolve(__dirname, '../../../../.planning/evals');
  */
 const MODEL = process.env.AIME_EVAL_MODEL || 'claude-opus-5';
 
-/** Run a single brief by id — proves the harness before paying for all eight. */
-const ONLY = process.env.AIME_EVAL_BRIEF;
+/**
+ * Run a subset by id, comma-separated. Proves the harness before paying for the
+ * full set, and re-runs the ones a provider outage killed without re-paying for
+ * the ones that already succeeded.
+ */
+const ONLY = process.env.AIME_EVAL_BRIEF?.split(',').map((s) => s.trim()).filter(Boolean);
 
 /**
  * A BYOK provider to run through, as `providerConfig` on the request rather than
@@ -73,11 +77,36 @@ const ONLY = process.env.AIME_EVAL_BRIEF;
 const PROVIDER_BASE_URL = process.env.AIME_EVAL_PROVIDER_BASE_URL;
 const ENABLED = process.env.AIME_EVAL === '1';
 
+/**
+ * Samples per brief. One is not a measurement: the same brief has produced a
+ * 12-second reply and a 321-second tool-using turn on identical input, so a
+ * single run cannot tell a prompt effect from ordinary variance. Three gives a
+ * spread to read a later comparison against.
+ */
+const SAMPLES = Number(process.env.AIME_EVAL_SAMPLES ?? 3);
+
+/**
+ * What to say when the agent asks a clarifying question.
+ *
+ * The code surface asks via the real AskUserQuestion tool, which BLOCKS on a
+ * rendezvous. With nobody answering it waits out its ~300s timeout and the brief
+ * produces nothing — so the baseline would measure "the agent asked" and never
+ * see any generated UI at all. Answering is also what a user does.
+ *
+ * That the question was asked is recorded separately, because it IS the finding
+ * for the underspecified brief: the surface already implements the turn-1
+ * question gate that P7.5 proposed to add.
+ */
+const AUTO_ANSWER = 'Use your best judgement and proceed. Do not ask again.';
+
 /** Files an artifact could plausibly be. */
 const ARTIFACT_EXT = /\.(html?|tsx?|jsx?|css|svelte|vue)$/i;
 
 interface BriefResult {
   id: string;
+  sample: number;
+  /** The agent asked a clarifying question; the harness answered it. */
+  askedQuestion: boolean;
   shape: string;
   files: string[];
   /** Length of the inline reply — an artifact pasted into chat still counts. */
@@ -114,20 +143,31 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
     fs.mkdirSync(runDir, { recursive: true });
   });
 
-  const briefs = ONLY ? EVAL_BRIEFS.filter((b) => b.id === ONLY) : EVAL_BRIEFS;
+  const briefs = ONLY?.length ? EVAL_BRIEFS.filter((b) => ONLY.includes(b.id)) : EVAL_BRIEFS;
 
   it('resolves the requested briefs', () => {
     // A typo'd id would otherwise run nothing and report success.
-    expect(briefs.length, `no brief matches AIME_EVAL_BRIEF=${ONLY}`).toBeGreaterThan(0);
+    expect(briefs.length, `no brief matches AIME_EVAL_BRIEF=${ONLY?.join(',')}`).toBeGreaterThan(0);
   });
 
-  it.each(briefs.map((b) => [b.id, b] as const))(
+  /**
+   * Each brief N times. The pairs are flattened rather than looped inside one
+   * test so a single sample failing does not lose the other two — and so the
+   * spread is visible in the runner output as it goes.
+   */
+  const runs = briefs.flatMap((b) =>
+    Array.from({ length: SAMPLES }, (_, i) => [`${b.id} #${i + 1}`, b, i + 1] as const),
+  );
+
+  it.each(runs)(
     '%s',
-    async (id, brief) => {
-      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `aime-eval-${id}-`));
+    async (_label, brief, sample) => {
+      const id = brief.id;
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `aime-eval-${id}-${sample}-`));
       const started = Date.now();
       let error: string | undefined;
       let sse = '';
+      let askedQuestion = false;
 
       /**
        * Observe the assembled prompt without replacing the provider.
@@ -159,7 +199,10 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               message: brief.prompt,
-              chatId: `eval-${id}`,
+              // Distinct per sample: a shared chatId resumes the previous
+              // session, so samples 2 and 3 would answer with the first one's
+              // context and stop being independent observations.
+              chatId: `eval-${id}-${sample}`,
               cwd: workspace,
               model: MODEL,
               ...(PROVIDER_BASE_URL
@@ -176,13 +219,56 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
           }),
           { params: Promise.resolve({ surfaceId: 'code' }) },
         );
-        // KEEP the stream. Draining it with `await res.text()` and discarding
-        // the result threw away two things that turned out to matter: the
-        // assistant's reply — which IS the artifact when the model answers with
-        // markup inline rather than writing a file — and the `done` event
-        // carrying the turn's real cost. A five-minute Opus run produced neither
-        // a file nor an explanation of why, because both had been dropped.
-        sse = await res.text();
+        /**
+         * Read INCREMENTALLY rather than `await res.text()`.
+         *
+         * Two reasons. The stream has to be kept — draining and discarding it
+         * threw away the reply (which IS the artifact when the model answers
+         * inline) and the `done` event with the real cost. And a question has to
+         * be answered WHILE the stream is open: `text()` does not resolve until
+         * the turn ends, and the turn does not end until the question is
+         * answered. Waiting for the body is a deadlock that only breaks on the
+         * rendezvous timeout.
+         */
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let pending = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = decoder.decode(value, { stream: true });
+          sse += text;
+          pending += text;
+
+          // Answer any question as soon as it appears on the wire.
+          const lines = pending.split('\n');
+          pending = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            let evt: Record<string, unknown>;
+            try {
+              evt = JSON.parse(line.slice(5).trim());
+            } catch {
+              continue;
+            }
+            if (evt.type !== 'input_request' || !evt.toolUseId) continue;
+            askedQuestion = true;
+            const questions = (evt.questions as { key?: string; id?: string }[]) ?? [];
+            const answers: Record<string, string> = {};
+            for (const q of questions) {
+              const key = q.key ?? q.id;
+              if (key) answers[key] = AUTO_ANSWER;
+            }
+            const { POST: ANSWER } = await import('@/app/api/chat/answer/route');
+            await ANSWER(
+              new NextRequest('http://localhost/api/chat/answer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ toolUseId: evt.toolUseId, answers }),
+              }),
+            );
+          }
+        }
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
       } finally {
@@ -202,10 +288,27 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
             return [];
           }
         });
-      const replyText = events
-        .filter((e) => e.type === 'text')
-        .map((e) => (e.content as string) ?? '')
-        .join('');
+      /**
+       * An `error` event means the turn failed, whatever else came back.
+       *
+       * This is the case that slipped through: a 402 from the provider was
+       * STREAMED AS ASSISTANT TEXT, so the harness captured 1,627 characters of
+       * error message, saw a non-empty reply, and reported the brief as having
+       * produced something with zero tells found. Six briefs read as clean
+       * results when they had never run.
+       *
+       * Length cannot distinguish a reply from an error. The explicit event can,
+       * and it was on the wire the whole time.
+       */
+      const streamError = events.find((e) => e.type === 'error')?.message as string | undefined;
+      if (streamError && !error) error = streamError;
+
+      const replyText = streamError
+        ? '' // not a reply — do not scan it, do not count it as output
+        : events
+            .filter((e) => e.type === 'text')
+            .map((e) => (e.content as string) ?? '')
+            .join('');
       /**
        * TWO events carry `type: 'done'` — one from the provider as it finishes,
        * one from the route with the usage attached. `.find()` returned the
@@ -223,7 +326,7 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
         .map((e) => e.name as string);
 
       const files = collectFiles(workspace);
-      const briefDir = path.join(runDir, id);
+      const briefDir = path.join(runDir, id, `sample-${sample}`);
       fs.mkdirSync(briefDir, { recursive: true });
 
       // The reply is an artifact in its own right: an "artifact" the model
@@ -231,6 +334,9 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
       // files would score it as producing nothing.
       if (replyText.trim()) {
         fs.writeFileSync(path.join(briefDir, '_reply.md'), replyText);
+      }
+      if (streamError) {
+        fs.writeFileSync(path.join(briefDir, '_ERROR.txt'), streamError);
       }
       // The raw stream, always. The first attempt at cost capture failed and
       // there was nothing left to diagnose it from — the same mistake as
@@ -264,6 +370,8 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
 
       results.push({
         id,
+        sample,
+        askedQuestion,
         shape: brief.shape,
         files,
         replyChars: replyText.length,
@@ -298,25 +406,36 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
       '# P7.0 craft baseline',
       '',
       `Model: \`${MODEL}\` (pinned — see baseline.eval.ts).`,
-      ONLY ? `Partial run: only \`${ONLY}\`. Not a full baseline.` : 'Full brief set.',
+      ONLY?.length ? `Partial run: ${ONLY.join(', ')}. Not a full baseline.` : 'Full brief set.',
       `Captured: ${new Date().toISOString()}`,
       '',
       'The BEFORE for every P7 change. Measured with `slop-tells.ts`; the same',
       'instrument must be used for the after, or the comparison means nothing.',
       '',
-      '| brief | shape | files | reply | tools | tells | cost | duration |',
-      '|---|---|---|---|---|---|---|---|',
-      ...results.map((r) => {
-        const produced = r.files.length > 0 || r.replyChars > 0;
-        const cost =
-          r.costUsd === undefined ? '?' : `$${r.costUsd.toFixed(4)}${r.estimatedCost ? ' (est)' : ''}`;
-        return `| ${r.id} | ${r.shape} | ${r.files.length} | ${r.replyChars ? `${r.replyChars}c` : '—'} | ${r.toolCalls} | ${produced ? summariseTells(r.findings) : 'FAILED'} | ${cost} | ${(r.durationMs / 1000).toFixed(0)}s |`;
+      `Samples per brief: ${SAMPLES}. The tells column shows every sample, because`,
+      'the spread IS the result — one number would hide whether a later change beat',
+      'the variance or got lucky.',
+      '',
+      '| brief | shape | tells per sample | asked? | cost | median duration |',
+      '|---|---|---|---|---|---|',
+      ...briefs.map((b) => {
+        const rs = results.filter((r) => r.id === b.id).sort((x, y) => x.sample - y.sample);
+        const tells = rs
+          .map((r) => (r.files.length || r.replyChars ? String(r.findings.length) : 'FAIL'))
+          .join(' / ');
+        const cost = rs.reduce((n, r) => n + (r.costUsd ?? 0), 0);
+        const durations = rs.map((r) => r.durationMs).sort((x, y) => x - y);
+        const median = durations[Math.floor(durations.length / 2)] ?? 0;
+        const asked = rs.filter((r) => r.askedQuestion).length;
+        return `| ${b.id} | ${b.shape} | ${tells} | ${asked}/${rs.length} | $${cost.toFixed(3)} | ${(median / 1000).toFixed(0)}s |`;
       }),
+      '',
+      `**Total cost: $${results.reduce((n, r) => n + (r.costUsd ?? 0), 0).toFixed(2)}**`,
       '',
       '## Findings',
       '',
       ...results.flatMap((r) => [
-        `### ${r.id}`,
+        `### ${r.id} — sample ${r.sample}${r.askedQuestion ? ' (asked a question; auto-answered)' : ''}`,
         '',
         // "no artifact" and "no tells" must not render the same. A failed brief
         // showing "none" reads as a clean result, which is the worst possible
@@ -335,7 +454,7 @@ describe.skipIf(!ENABLED)('P7.0 baseline — today’s code surface, unmodified'
       'number for those would be false confidence.',
     ];
     fs.writeFileSync(path.join(runDir, 'README.md'), lines.join('\n'));
-    expect(results.length).toBe(briefs.length);
+    expect(results.length).toBe(briefs.length * SAMPLES);
   });
 });
 

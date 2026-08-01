@@ -1,0 +1,16 @@
+{
+  "usage": {
+    "inputTokens": 82752,
+    "outputTokens": 23651,
+    "cost": 0.5262,
+    "model": "anthropic/claude-opus-5",
+    "durationMs": 264337,
+    "toolCallCount": 1,
+    "estimated": false,
+    "cacheReadInputTokens": 40391
+  },
+  "toolCalls": [
+    "Skill"
+  ],
+  "durationMs": 264668
+}

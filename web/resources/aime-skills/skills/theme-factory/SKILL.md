@@ -93,8 +93,10 @@ Use for: luxury brands, fintech, high-trust products.
 ```
 Use for: experimental, statement pages, art.
 
-### nib (brand default)
-See `brand-guidelines` skill.
+### Your brand (if configured)
+See the `brand-guidelines` skill. It is a TEMPLATE — fill it with your own
+palette and type, and it becomes the default here. Unconfigured, there is no
+brand default and the presets above are the whole list.
 
 ## Generating from a reference
 

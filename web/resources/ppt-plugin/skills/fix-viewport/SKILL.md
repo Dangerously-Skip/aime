@@ -14,7 +14,7 @@ Diagnoses and fixes viewport/cropping issues when HTML visuals are converted to 
 ## Diagnostic Steps
 
 1. Check HTML container width: `grep -A5 "container" visuals/my-chart.html | grep width`
-2. Check viewport width: `grep "viewport.*width" ~/.claude/plugins/nib-ppt/html_to_image.py`
+2. Check viewport width: `grep "viewport.*width" ~/.claude/plugins/ppt/html_to_image.py`
 3. Open HTML in browser: `open -a "Google Chrome" visuals/my-chart.html`
 
 ## The Fix

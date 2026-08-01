@@ -1,8 +1,8 @@
 {
-  "name": "quarry-skills",
-  "description": "Quarry's built-in skill library — visual design, brand guidelines, internal comms, and Office automation",
+  "name": "aime-skills",
+  "description": "AIME's built-in skill library \u2014 visual design, theming, and Office automation",
   "author": {
-    "name": "Quarry"
+    "name": "AIME"
   },
   "skills": "./skills/"
 }
