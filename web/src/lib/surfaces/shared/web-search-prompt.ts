@@ -25,6 +25,27 @@
  *
  * Read at request time, in the same process that decides the mounting, so the
  * two cannot disagree.
+ *
+ * ## The second failure, which the first fix caused
+ *
+ * The no-search branch originally licensed the model to use WebFetch on a URL it
+ * "can construct and is confident about (… a well-known page)", while two lines
+ * later forbidding it to guess. Asked to research the best pizza in Sydney, the
+ * model resolved that contradiction the only way it could: timeout.com and
+ * broadsheet.com.au ARE well-known pages, so it recalled three article URLs from
+ * training, fetched them, got 404s, and announced "those direct URLs didn't work
+ * — let me try a few alternatives".
+ *
+ * Two things were wrong. "Confident about" is unfalsifiable from the inside —
+ * the model has no way to tell a remembered slug from an invented one. And
+ * nothing told it to stop, so each retry rendered as a tool call with a tick and
+ * a duration, and a failing loop looked like research making progress.
+ *
+ * So the permission is now split by whether the URL FOLLOWS FROM A RULE
+ * (`owner/repo`, a docs root, a documented endpoint — wrong means the rule was
+ * wrong) or is RECALLED (an article slug encoding a title or a date — wrong
+ * means a fact was invented), and a failed derivation ends the attempt instead
+ * of starting a search by other means.
  */
 
 /** Is the searxng-backed `web-search` MCP server mounted for this run? */
@@ -51,8 +72,11 @@ You have web search available via the web-search MCP server (tool: web_search). 
 
   return `## Web access
 There is NO search engine available in this environment — no search server is mounted and the built-in WebSearch is disabled. Do not claim to have searched.
-- **WebFetch is your web tool.** It works, and it is the correct way to read any page. Use it whenever you have a URL, or can construct one you are confident about (a documentation site, a repository, an API endpoint, a well-known page).
+- **WebFetch is your web tool.** It works, and it is the correct way to read any page. Use it whenever the user gives you a URL.
+- You may also DERIVE a URL, but only when the address follows from a name by a rule you can state: a package on a registry, a repository from \`owner/repo\`, an official documentation root, a documented API endpoint. These are stable, and if you are wrong you are wrong about a rule rather than about a fact.
+- Do NOT RECALL a URL from memory — anything whose path encodes an article title, a ranking, a date or an edition ("best X in Y", a news story, a blog post, a listicle). You cannot tell a remembered slug from an invented one, and neither can the user reading your answer. A recalled URL that happens to resolve is worse than one that 404s, because nothing marks it as a guess.
+- **If a URL you derived fails, stop.** Do not try variations. One failure means the rule did not hold; a second attempt is guessing, and a run of them reads as research when it is not. Say which URL you tried, that it failed, and what you would need.
 - Do NOT use Bash with curl or wget to fetch pages. WebFetch handles redirects, encoding and content extraction; curl gives you raw markup and search engines block it outright.
 - Do NOT try to scrape Google, DuckDuckGo or Bing by any means. It does not work and the results are worthless.
-- If you genuinely need a search and have no usable URL, say so plainly and ask the user for a link, rather than guessing or scraping. Answer from what you know and be explicit about what you could not check.`;
+- For anything that needs current information you cannot reach — rankings, prices, recent events, "the best" of anything — say so plainly and ask the user for a link. Answer from what you know, mark it as unverified, and be explicit about what you could not check. That is a complete answer to the question that was asked; a page of dead URLs is not.`;
 }

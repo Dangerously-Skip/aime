@@ -43,7 +43,7 @@ describe('webSearchPrompt with no search MCP mounted', () => {
 
   it('points at WebFetch as the way to read a page', () => {
     expect(prompt).toMatch(/WebFetch is your web tool/);
-    expect(prompt).toMatch(/whenever you have a URL/);
+    expect(prompt).toMatch(/whenever the user gives you a URL/);
   });
 
   it('still forbids curl scraping — that part was never the problem', () => {
@@ -54,6 +54,45 @@ describe('webSearchPrompt with no search MCP mounted', () => {
   it('gives an honest way out instead of leaving the model to guess', () => {
     expect(prompt).toMatch(/ask the user for a link/);
     expect(prompt).toMatch(/Do not claim to have searched/);
+  });
+
+  /**
+   * The second bug, and the more expensive one. The branch used to permit a URL
+   * the model "can construct and is confident about (… a well-known page)",
+   * which for "research the best pizza in Sydney" reads as permission to recall
+   * timeout.com and broadsheet.com.au article slugs from training. It did, they
+   * 404'd, and it moved on to "let me try a few alternatives" — a guessing loop
+   * that renders as ticked-off tool calls and looks like progress.
+   */
+  describe('does not license recalled URLs', () => {
+    it('no longer offers the unfalsifiable "confident about" permission', () => {
+      expect(prompt).not.toMatch(/confident about/i);
+      expect(prompt).not.toMatch(/well-known page/i);
+    });
+
+    it('permits DERIVING a url from a stateable rule', () => {
+      expect(prompt).toMatch(/DERIVE a URL/);
+      expect(prompt).toMatch(/owner\/repo|documentation root|documented API endpoint/);
+    });
+
+    it('forbids RECALLING one, naming the shape that goes wrong', () => {
+      expect(prompt).toMatch(/Do NOT RECALL a URL from memory/);
+      expect(prompt).toMatch(/article title|listicle|best X in Y/);
+    });
+
+    /**
+     * The stop rule is the half that would have ended the observed run. Without
+     * it the split above just makes the first guess better-argued.
+     */
+    it('stops after ONE failed derivation rather than trying variations', () => {
+      expect(prompt).toMatch(/If a URL you derived fails, stop/);
+      expect(prompt).toMatch(/Do not try variations/);
+    });
+
+    it('names the case that triggered it as one to hand back to the user', () => {
+      expect(prompt).toMatch(/rankings, prices, recent events/);
+      expect(prompt).toMatch(/mark it as unverified/);
+    });
   });
 });
 
