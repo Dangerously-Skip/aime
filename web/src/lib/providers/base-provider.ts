@@ -101,6 +101,12 @@ export interface QueryParams {
    * the user's stored preference (tests do).
    */
   securitySettings?: Partial<import('../security/settings').SecuritySettings>;
+  /**
+   * The user's chosen search provider, from Settings. Absent ⇒ the provider
+   * falls back to the legacy `SEARXNG_INSTANCES` env path via
+   * `resolveSearchRoute`. Never read directly — see search-route-coverage.
+   */
+  searchSettings?: Partial<import('../search/resolve').SearchSettings>;
   maxTurns?: number;
   /**
    * Hard USD ceiling for the turn, enforced by the SDK — it stops mid-run and

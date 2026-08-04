@@ -15,7 +15,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       'Skill',
       'TodoWrite', 'AskUserQuestion', 'EnterWorktree',
       'ExcelRead', 'ExcelWrite', 'ExcelEdit',
-      'mcp__web-search__web_search',
+      'mcp__aime__SearchWeb', 'mcp__web-search__web_search',
     ],
     permissionMode: 'acceptEdits',
     systemPrompt: {

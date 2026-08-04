@@ -47,10 +47,22 @@
  * means a fact was invented), and a failed derivation ends the attempt instead
  * of starting a search by other means.
  */
+import { hasSearch } from '@/lib/search/resolve';
 
-/** Is the searxng-backed `web-search` MCP server mounted for this run? */
+/**
+ * Is a search provider available for this run?
+ *
+ * Delegates to `resolveSearchRoute` rather than reading env, because this used
+ * to be its own reader of `SEARXNG_INSTANCES` and one of three that could
+ * disagree. The prompt's whole job is to describe the tools that actually
+ * exist, so it must ask the same function the mounting asks.
+ *
+ * Server-side settings are not reachable from here, so this sees the env path
+ * only; the request layer passes an explicit flag when it knows better — which
+ * is what the `available` parameter below is for.
+ */
 export function hasWebSearchMcp(): boolean {
-  return !!process.env.SEARXNG_INSTANCES;
+  return hasSearch(null, process.env);
 }
 
 /**

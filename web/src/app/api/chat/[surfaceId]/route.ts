@@ -15,10 +15,15 @@ const TOOL_PROFILES: Record<string, string[]> = {
   // by the provider. Omitting it was harmless while the filter was a no-op; now
   // that a profile produces real denials, leaving it out took away the only
   // working search from a profile whose own label promises search.
-  minimal: ['WebSearch', 'WebFetch', 'mcp__web-search__web_search'],
+  //
+  // `mcp__aime__SearchWeb` is the same tool for the API-key search providers
+  // (Brave/Tavily/OpenRouter); only searxng uses the external MCP above. Both
+  // names must appear in every profile that promises search, or which provider
+  // the user picked would silently decide whether search survives a profile.
+  minimal: ['WebSearch', 'WebFetch', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb'],
   coding: [
     'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep', 'Bash',
-    'WebSearch', 'WebFetch', 'mcp__web-search__web_search',
+    'WebSearch', 'WebFetch', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb',
     // A coding profile that cannot produce a document or a spreadsheet is not
     // what the label ("Read/Write/Edit/Glob/Grep/Bash + Web tools") promises;
     // these were never enumerated because the list predates them mattering.
@@ -180,6 +185,7 @@ export async function POST(
     contextBusEvents = null,
     autoExtractMemories = true,
     securitySettings = null,
+    searchSettings = null,
     sessionControls = null,
     toolProfile = 'full',
     maxTurns: requestedMaxTurns = null,
@@ -216,6 +222,8 @@ export async function POST(
       disableBashTool?: boolean;
     } | null;
     sessionControls?: SessionControls | null;
+    /** The user's chosen search provider; resolved by `resolveSearchRoute`. */
+    searchSettings?: Partial<import('@/lib/search/resolve').SearchSettings> | null;
     /**
      * Optional LOWER bound on the surface's turn ceiling. Clamped with
      * `Math.min` — a caller can bound a run, never exceed the surface's policy.
@@ -962,6 +970,7 @@ export async function POST(
           surfaceId,
           allowedTools: surfaceConfig.allowedTools,
           deniedTools: [...deniedTools],
+          searchSettings: searchSettings ?? undefined,
           // Deliberately NOT forwarded from the request body: the provider loads
           // the user's toggles itself, so every caller is covered rather than
           // just the two surfaces that remembered to send them — and so omitting

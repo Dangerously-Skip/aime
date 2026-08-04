@@ -1,4 +1,6 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
+import { resolveSearchRoute } from '../search/resolve';
+import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { getSurfaceConfig } from '../surfaces';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
@@ -130,6 +132,7 @@ export class ClaudeProvider extends BaseProvider {
       allowedTools: explicitAllowedTools,
       deniedTools,
       securitySettings,
+      searchSettings,
       maxTurns: explicitMaxTurns,
       maxBudgetUsd,
       systemPrompt: explicitSystemPrompt,
@@ -180,6 +183,12 @@ export class ClaudeProvider extends BaseProvider {
      * paths written later. See lib/security/settings.ts.
      */
     const security = { ...(await loadSecuritySettings()), ...(securitySettings ?? {}) };
+    /**
+     * Resolved once, here, and used by BOTH the MCP mounting below and the
+     * in-process SearchWeb tool. One resolution means the two cannot disagree
+     * about whether search exists — which is exactly how the original bug got in.
+     */
+    const searchRoute = resolveSearchRoute(searchSettings ?? null, process.env);
 
     const denied = new Set<string>([
       'WebSearch',
@@ -351,10 +360,57 @@ export class ClaudeProvider extends BaseProvider {
     // In-process MCP server exposing CronCreate so the model can schedule reminders
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const z = (await import('zod/v3') as any).z ?? (await import('zod/v3') as any).default ?? await import('zod/v3');
+    /**
+     * Search as an in-process tool, for every provider except searxng.
+     *
+     * searxng keeps its existing external MCP subprocess (it has a server
+     * already). Brave/Tavily/OpenRouter are plain HTTP, so spawning `npx` to
+     * reach them would download a package to make a fetch call this process can
+     * make itself — and would need a second copy of the credential plumbing.
+     *
+     * Named `SearchWeb`, not `WebSearch`: the built-in `WebSearch` is in
+     * `deniedTools` unconditionally, and two tools whose names differ only by
+     * word order is a trap for whoever reads the deny list next.
+     */
+    const searchTools = searchRoute && searchRoute.providerId !== 'searxng'
+      ? [
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (tool as any)(
+            'SearchWeb',
+            'Search the web and get back a list of real, current results (title, URL, snippet). Use this whenever you need information you do not have, especially anything time-sensitive: rankings, prices, recent events, current documentation. Do NOT guess URLs — search first, then WebFetch a result if you need the full page.',
+            { query: z.string().describe('The search query.') },
+            async ({ query: q }: { query: string }) => {
+              try {
+                const results = await runSearch(searchRoute, q, { maxResults: 10 });
+                if (results.length === 0) {
+                  return { content: [{ type: 'text' as const, text: `No results for "${q}". This is a real empty result set, not an error — try a different query.` }] };
+                }
+                return {
+                  content: [{
+                    type: 'text' as const,
+                    text: results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join('\n\n'),
+                  }],
+                };
+              } catch (e) {
+                // Say WHY it failed. "Search is broken" and "search found
+                // nothing" must never look the same to the model — conflating
+                // them is what taught it to fall back to reciting URLs.
+                const code = e instanceof SearchError ? e.code : 'upstream';
+                return {
+                  content: [{ type: 'text' as const, text: `Search FAILED (${code}). Results are unavailable — do not substitute remembered URLs. Tell the user search is not working and answer from what you know, marked as unverified.` }],
+                  isError: true,
+                };
+              }
+            }
+          ),
+        ]
+      : [];
+
     const aimeMcpServer = createSdkMcpServer({
       name: 'aime',
       version: '1.0.0',
       tools: [
+        ...searchTools,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (tool as any)(
           'CronCreate',
@@ -782,15 +838,25 @@ export class ClaudeProvider extends BaseProvider {
       mcpServers: {
         ...mcpServers,
         aime: aimeMcpServer,
-        // Web search is opt-in: requires a SearXNG instance (SEARXNG_INSTANCES env var)
-        ...(process.env.SEARXNG_INSTANCES
+        /**
+         * Web search is opt-in and resolved through `resolveSearchRoute`, never
+         * by reading env here. This module used to be one of three independent
+         * readers of `SEARXNG_INSTANCES`, and the one that disagreed made the
+         * prompt describe a tool that was not mounted.
+         *
+         * Only the searxng provider gets an external MCP subprocess — it is the
+         * one with an existing server. The API-key providers are served by the
+         * in-process `SearchWeb` tool on the `aime` server above, which needs no
+         * subprocess and no npx download.
+         */
+        ...(searchRoute?.providerId === 'searxng' && searchRoute.instanceUrl
           ? {
               'web-search': {
                 type: 'stdio',
                 command: 'npx',
                 args: ['-y', '@jharding_npm/mcp-server-searxng'],
                 env: {
-                  SEARXNG_INSTANCES: process.env.SEARXNG_INSTANCES,
+                  SEARXNG_INSTANCES: searchRoute.instanceUrl,
                   MCP_SEARXNG_DEBUG: process.env.MCP_SEARXNG_DEBUG || 'false',
                 },
               },
