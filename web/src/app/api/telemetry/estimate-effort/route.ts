@@ -3,7 +3,22 @@ import Anthropic from '@anthropic-ai/sdk';
 
 export const runtime = 'nodejs';
 
-const NIB_GATEWAY_BASE_URL = 'https://ai-studio.internal.invalid';
+/**
+ * This route used to send the caller's API key to a hardcoded internal
+ * corporate gateway, chosen by:
+ *
+ *   const useGateway = !!apiKey && apiKey.startsWith('sk-');
+ *
+ * Every Anthropic key starts with `sk-ant-`, so that predicate is true for a
+ * NORMAL key. The intent was presumably to detect a gateway-issued key; what it
+ * actually did was route every ordinary user's credential to a private host
+ * that resolves on one company's network — with model id `'fast'`, which is not
+ * an Anthropic model. Off that network it fails DNS and falls back to the
+ * heuristic, so the only visible symptom was "effort estimates seem crude".
+ *
+ * There is no gateway here any more, so there is nothing to detect. The client
+ * is the standard one, and the model is a real model id.
+ */
 
 /**
  * Heuristic effort estimation when no LLM is available.
@@ -70,8 +85,7 @@ export async function POST(req: NextRequest) {
     apiKey?: string | null;
   };
 
-  // Determine which backend to use: gateway > direct API > local heuristic
-  const useGateway = !!apiKey && apiKey.startsWith('sk-');
+  // Determine which backend to use: direct API > local heuristic
   const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
 
   // No LLM available — use local heuristic
@@ -81,12 +95,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const client = useGateway
-      ? new Anthropic({ apiKey: effectiveKey, baseURL: NIB_GATEWAY_BASE_URL })
-      : new Anthropic({ apiKey: effectiveKey });
-
-    // Gateway uses 'fast' alias for Haiku; direct API uses full model ID
-    const haikuModel = useGateway ? 'fast' : 'claude-haiku-4-5-20251001';
+    const client = new Anthropic({ apiKey: effectiveKey });
+    const haikuModel = 'claude-haiku-4-5';
 
     const toolSummary = (toolCalls as Array<{ name: string; count: number }>).map(t => `${t.name}: ${t.count}`).join(', ') || 'none';
     const durationMin = Math.round(durationMs / 60000);
