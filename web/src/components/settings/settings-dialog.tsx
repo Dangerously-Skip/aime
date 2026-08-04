@@ -14,6 +14,7 @@ import { CodeSection } from "./sections/code-section"
 import { DataSection } from "./sections/data-section"
 import { MemorySection } from "./sections/memory-section"
 import { SecuritySection } from "./sections/security-section"
+import { SearchSection } from "./sections/search-section"
 import { IdentitySection } from "./sections/identity-section"
 import { RoiSection } from "./sections/roi-section"
 
@@ -26,6 +27,7 @@ const sectionComponents: Record<string, React.ComponentType> = {
   cowork: CoworkSection,
   code: CodeSection,
   security: SecuritySection,
+  search: SearchSection,
   memory: MemorySection,
   data: DataSection,
   roi: RoiSection,

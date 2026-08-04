@@ -1,66 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { APP_NAME } from '@/config/branding';
+import { resolveSearchRoute, type SearchSettings } from '@/lib/search/resolve';
+import { runSearch, SearchError } from '@/lib/search/execute';
 
 /**
- * No default instance, deliberately.
+ * Search, for callers outside the agent loop (the browser surface, widgets).
  *
- * This used to fall back to a hardcoded internal corporate SearXNG host — a
- * leftover from before the open-source rename. Two things were wrong with it: it
- * shipped a private hostname in a public repo, and it made this route disagree
- * with the rest of the app. `claude-provider` mounts the `web-search` MCP only
- * when `SEARXNG_INSTANCES` is set, and `hasWebSearchMcp()` reports search as
- * unavailable on that same basis — while this route claimed to have one, then
- * failed DNS for everyone outside that network and returned `{results: []}`,
- * which is indistinguishable from "the web knows nothing about your query".
+ * This route used to be its own search implementation: SearXNG-only, with a
+ * hardcoded internal corporate host as the default. That made it the third
+ * independent reader of `SEARXNG_INSTANCES` and the one that disagreed — it
+ * claimed a search engine while the prompt layer told the model none existed,
+ * then failed DNS off that network and returned `{results: []}`, which reads as
+ * "the web contains nothing about your query".
  *
- * Unset now means unset: the route reports it rather than pretending.
+ * It now resolves through the same chokepoint as everything else and reports
+ * failures as failures. The three states a caller must be able to tell apart:
+ *
+ *   501 no_search_configured — no provider set up
+ *   502 / 401                — a provider is set up and did not answer
+ *   200 { results: [] }      — search ran and genuinely found nothing
+ *
+ * Collapsing those into an empty array is what taught the agent to guess URLs.
  */
-const SEARXNG_URL = process.env.SEARXNG_INSTANCES ?? '';
-
 export async function POST(req: NextRequest) {
+  let body: { query?: string; max_results?: number; settings?: Partial<SearchSettings> };
   try {
-    const { query, max_results = 10 } = await req.json();
-    if (!query) return NextResponse.json({ results: [] });
-
-    const instance = SEARXNG_URL.split(',')[0].trim();
-    // Distinguishable from a real empty result set, so a caller can tell "no
-    // search configured" from "search found nothing" — the whole point of the
-    // change above.
-    if (!instance) {
-      return NextResponse.json(
-        { results: [], error: 'no_search_configured' },
-        { status: 501 },
-      );
-    }
-    const resp = await fetch(new URL('/search', instance).toString(), {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': `${APP_NAME}/1.0`,
-      },
-      body: new URLSearchParams({
-        q: query,
-        format: 'json',
-        pageno: '1',
-        language: 'all',
-        safesearch: '0',
-      }).toString(),
-      // @ts-expect-error Node fetch supports rejectUnauthorized via agent
-      agent: undefined,
-    });
-
-    if (!resp.ok) return NextResponse.json({ results: [] });
-
-    const data = await resp.json();
-    const results = (data.results || []).slice(0, max_results).map((r: Record<string, unknown>) => ({
-      title: String(r.title || ''),
-      url: String(r.url || ''),
-      snippet: String(r.content || r.snippet || '').slice(0, 200),
-    })).filter((r: { title: string; url: string }) => r.title && r.url);
-
-    return NextResponse.json({ results });
+    body = await req.json();
   } catch {
-    return NextResponse.json({ results: [] });
+    return NextResponse.json({ results: [], error: 'bad_request' }, { status: 400 });
+  }
+
+  const query = body.query?.trim();
+  if (!query) return NextResponse.json({ results: [] });
+
+  // Settings come from the caller (the renderer holds them); env is the legacy
+  // fallback so existing SEARXNG_INSTANCES installs keep working.
+  const route = resolveSearchRoute(body.settings ?? null, process.env);
+  if (!route) {
+    return NextResponse.json({ results: [], error: 'no_search_configured' }, { status: 501 });
+  }
+
+  try {
+    const results = await runSearch(route, query, { maxResults: body.max_results ?? 10 });
+    return NextResponse.json({ results, provider: route.providerId });
+  } catch (e) {
+    const code = e instanceof SearchError ? e.code : 'upstream';
+    return NextResponse.json(
+      { results: [], error: code, provider: route.providerId },
+      { status: code === 'auth' ? 401 : 502 },
+    );
   }
 }

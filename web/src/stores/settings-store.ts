@@ -5,6 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import { DEFAULT_PUSH_TO_TALK, validateAccelerator } from '@/lib/voice/accelerator';
 import type { Tier } from '@/lib/models/types';
+import type { SearchProviderId } from '@/lib/search/providers';
 
 export type ChatFont = 'default' | 'sans' | 'mono' | 'system';
 export type ToolAccessMode = 'onDemand' | 'alwaysLoaded';
@@ -81,6 +82,15 @@ interface SettingsState {
   // API access
   anthropicApiKey: string | null;
 
+  /**
+   * Web search. Opt-in and null by default: search is a second account or a
+   * per-query cost, so it is never turned on for someone who did not ask.
+   * `resolveSearchRoute` is the only thing that reads these.
+   */
+  searchProvider: SearchProviderId | null;
+  searchApiKey: string | null;
+  searchInstanceUrl: string | null;
+
   // Memory
   autoExtractMemories: boolean;
 
@@ -138,6 +148,9 @@ interface SettingsActions {
   setGithubUser: (user: string | null) => void;
   clearGithubAuth: () => void;
   setAnthropicApiKey: (key: string | null) => void;
+  setSearchProvider: (id: SearchProviderId | null) => void;
+  setSearchApiKey: (key: string | null) => void;
+  setSearchInstanceUrl: (url: string | null) => void;
   setAutoExtractMemories: (enabled: boolean) => void;
   setBlockDangerousCommands: (enabled: boolean) => void;
   setBlockNetworkCommands: (enabled: boolean) => void;
@@ -175,6 +188,9 @@ export const INITIAL_SETTINGS: SettingsState = {
   githubToken: null,
   githubUser: null,
   anthropicApiKey: null,
+  searchProvider: null,
+  searchApiKey: null,
+  searchInstanceUrl: null,
   autoExtractMemories: true,
   blockDangerousCommands: true,
   blockNetworkCommands: false,
@@ -226,6 +242,9 @@ export const PERSISTED_SETTINGS_KEYS = [
   'githubToken',
   'githubUser',
   'anthropicApiKey',
+  'searchProvider',
+  'searchApiKey',
+  'searchInstanceUrl',
   'autoExtractMemories',
   'blockDangerousCommands',
   'blockNetworkCommands',
@@ -308,6 +327,9 @@ export const useSettingsStore = create<SettingsStore>()(
       clearGithubAuth: () => set({ githubToken: null, githubUser: null }),
 
       setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
+      setSearchProvider: (searchProvider) => set({ searchProvider }),
+      setSearchApiKey: (searchApiKey) => set({ searchApiKey }),
+      setSearchInstanceUrl: (searchInstanceUrl) => set({ searchInstanceUrl }),
 
       setAutoExtractMemories: (autoExtractMemories) => set({ autoExtractMemories }),
 
@@ -342,9 +364,19 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 11,
+      version: 12,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
+        // v12: search became a configurable provider instead of one env var.
+        // Backfilled up front, not in a per-version branch, because the
+        // branches below return early — same rationale as v8/v9. null is the
+        // correct default: any existing SEARXNG_INSTANCES install keeps working
+        // through the legacy path in `resolveSearchRoute`.
+        if (version < 12) {
+          if (state.searchProvider === undefined) state.searchProvider = null;
+          if (state.searchApiKey === undefined) state.searchApiKey = null;
+          if (state.searchInstanceUrl === undefined) state.searchInstanceUrl = null;
+        }
         // v11: the org "select your team" concept moved to a separate product.
         // DROP the key rather than leaving it: zustand's default merge splices
         // every persisted field into state, so an orphan `teamId` would sit in

@@ -174,10 +174,14 @@ describe('provider parameter assembly', () => {
     // asking, delegating, todos, canvas and the connector card render or ask —
     // none of them acts on the world, and TOOL_PROFILES never enumerated them.
     const permitted = new Set([
-      // the profile's own set — including the MCP search tool, which IS the web
-      // search (the built-in WebSearch is unconditionally disallowed), and whose
-      // omission took search away from a profile that promises it
-      'WebSearch', 'WebFetch', 'mcp__web-search__web_search',
+      // the profile's own set — including BOTH MCP search tools, which are the
+      // web search (the built-in WebSearch is unconditionally disallowed), and
+      // whose omission took search away from a profile that promises it.
+      // `mcp__web-search__web_search` serves searxng via an external MCP;
+      // `mcp__aime__SearchWeb` serves the API-key providers in-process. Listing
+      // only one would make the user's provider choice decide whether search
+      // survives a profile — the same bug, one provider later.
+      'WebSearch', 'WebFetch', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb',
       // plus the in-app plumbing PLUMBING_TOOLS exempts: asking, delegating,
       // todos, canvas and the connector card. None acts on the world, and
       // TOOL_PROFILES never enumerated them.

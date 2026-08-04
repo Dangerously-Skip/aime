@@ -7,6 +7,7 @@ import { widgetSystemPrompt, extractWidgetJson } from './prompt';
 import { parseWidget, type WidgetNode } from './catalog';
 import { isGrounded, WIDGET_REFRESH_TIMEOUT_MS, widgetToGoal, type Widget } from './widget';
 import { startRun, finishRun } from '@/lib/runs/runs';
+import { hasSearch } from '@/lib/search/resolve';
 import { appendRun } from '@/lib/runs/run-log';
 import type { Run, RunTrigger } from '@/lib/runs/types';
 
@@ -64,7 +65,7 @@ export async function refreshWidget(
   const grounded = isGrounded(widget);
   const system = widgetSystemPrompt({
     grounded,
-    webUnconfigured: !process.env.SEARXNG_INSTANCES,
+    webUnconfigured: !hasSearch(null, process.env),
   });
 
   try {
