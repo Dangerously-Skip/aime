@@ -22,12 +22,21 @@ export interface SearchSettings {
   searchProvider: SearchProviderId | null;
   searchApiKey: string | null;
   searchInstanceUrl: string | null;
+  /**
+   * Borrow the API key stored for this MODEL provider instead of asking for a
+   * second copy. Holds an id, never a secret — the secret stays in the
+   * server-side credential store and is resolved at the point of use by
+   * `withStoredCredential`.
+   */
+  searchCredentialProviderId?: string | null;
 }
 
 export interface SearchRoute {
   providerId: SearchProviderId;
   apiKey?: string;
   instanceUrl?: string;
+  /** Resolve the key from this stored provider id — server-side only. */
+  credentialProviderId?: string;
 }
 
 /**
@@ -53,15 +62,18 @@ export function resolveSearchRoute(
 
     const apiKey = settings?.searchApiKey?.trim() || undefined;
     const instanceUrl = settings?.searchInstanceUrl?.trim() || undefined;
+    const credentialProviderId = settings?.searchCredentialProviderId?.trim() || undefined;
 
     // A provider missing a required credential is NOT configured. Returning it
     // anyway would put us back to claiming a search tool that cannot run — the
     // exact shape of the original bug, one layer down.
     for (const field of preset.requires) {
-      if (field === 'apiKey' && !apiKey) return null;
+      // A borrowed credential satisfies the apiKey requirement: the secret is
+      // not here because it must not be here, not because it is missing.
+      if (field === 'apiKey' && !apiKey && !credentialProviderId) return null;
       if (field === 'instanceUrl' && !instanceUrl) return null;
     }
-    return { providerId: chosen, apiKey, instanceUrl };
+    return { providerId: chosen, apiKey, instanceUrl, credentialProviderId };
   }
 
   /**

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useSettingsStore } from '@/stores/settings-store'
+import { useProviderStore } from '@/stores/provider-store'
 import { SEARCH_PROVIDERS, searchProviderPreset, type SearchProviderId } from '@/lib/search/providers'
 import { resolveSearchRoute } from '@/lib/search/resolve'
 import { Check, Globe, Loader2, AlertCircle } from 'lucide-react'
@@ -27,19 +28,40 @@ export function SearchSection() {
     searchProvider,
     searchApiKey,
     searchInstanceUrl,
+    searchCredentialProviderId,
     setSearchProvider,
     setSearchApiKey,
     setSearchInstanceUrl,
+    setSearchCredentialProviderId,
   } = useSettingsStore()
+
+  /**
+   * A configured model provider whose key search can borrow.
+   *
+   * OpenRouter serves both inference and search, so anyone using it for models
+   * has already supplied the credential. Asking for a second copy is what made
+   * people skip setting search up at all — and an agent with no search is the
+   * one that starts guessing URLs.
+   */
+  const borrowable = useProviderStore((s) =>
+    s.providers.find((p) => p.enabled && p.presetId === 'openrouter' && p.hasCredentials),
+  )
 
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
 
   const preset = searchProvider ? searchProviderPreset(searchProvider) : undefined
-  const route = resolveSearchRoute({ searchProvider, searchApiKey, searchInstanceUrl })
+  const route = resolveSearchRoute({
+    searchProvider,
+    searchApiKey,
+    searchInstanceUrl,
+    searchCredentialProviderId,
+  })
 
   const select = (id: SearchProviderId | null) => {
     setSearchProvider(id)
+    // Default to borrowing when we can: the whole point is not asking twice.
+    setSearchCredentialProviderId(id === 'openrouter' && borrowable ? borrowable.id : null)
     setTestResult(null)
   }
 
@@ -59,7 +81,12 @@ export function SearchSection() {
         body: JSON.stringify({
           query: 'anthropic claude',
           max_results: 3,
-          settings: { searchProvider, searchApiKey, searchInstanceUrl },
+          settings: {
+            searchProvider,
+            searchApiKey,
+            searchInstanceUrl,
+            searchCredentialProviderId,
+          },
         }),
       })
       const data = await res.json()
@@ -133,7 +160,24 @@ export function SearchSection() {
 
       {preset && (
         <div className="space-y-3 rounded-lg p-3 ring-1 ring-foreground/10">
-          {preset.requires.includes('apiKey') && (
+          {preset.requires.includes('apiKey') && searchCredentialProviderId && borrowable ? (
+            <div className="flex items-start gap-2 rounded-md bg-emerald-500/5 p-2">
+              <Check className="mt-0.5 size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <div className="text-xs">
+                <div className="font-medium">Using your {borrowable.label} key</div>
+                <div className="text-muted-foreground">
+                  The same key already configured for models — no need to enter it again.{' '}
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={() => setSearchCredentialProviderId(null)}
+                  >
+                    Use a different key
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : preset.requires.includes('apiKey') ? (
             <div className="space-y-1">
               <label className="text-xs font-medium">API key</label>
               <Input
@@ -145,8 +189,17 @@ export function SearchSection() {
                   setTestResult(null)
                 }}
               />
+              {borrowable && searchProvider === 'openrouter' && (
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-foreground text-xs underline"
+                  onClick={() => setSearchCredentialProviderId(borrowable.id)}
+                >
+                  Use my {borrowable.label} key instead
+                </button>
+              )}
             </div>
-          )}
+          ) : null}
 
           {preset.requires.includes('instanceUrl') && (
             <div className="space-y-1">

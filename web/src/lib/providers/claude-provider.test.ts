@@ -451,6 +451,69 @@ describe('deniedTools', () => {
     expect(r.message).toMatch(/Do not try it again/i);
   });
 
+  /**
+   * The guessing run, driven against the real hook.
+   *
+   * Reproduction: asked for "the top pizza places in western sydney" with no
+   * search configured, the agent announced that publication URLs were
+   * "predictable patterns" and fetched six invented ones in parallel, all 404.
+   * The first fix was a system-prompt rule permitting a DERIVED url and
+   * forbidding a RECALLED one; the model decided a listicle slug was derivable
+   * and ignored the accompanying stop rule four times in one paragraph.
+   *
+   * Prose cannot refuse. `canUseTool` can, and it runs whatever permissionMode
+   * says — the same reasoning as the denied-tool check above.
+   */
+  describe('URL provenance — a fetch target must have come from somewhere', () => {
+    const INVENTED = 'https://www.broadsheet.com.au/sydney/food-and-drink/article/best-pizza-western-sydney';
+
+    it('refuses a URL the model made up', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        prompt: 'search for the top pizza places in western sydney',
+      });
+      const r = await canUseTool('WebFetch', { url: INVENTED }, { toolUseID: 'u1' });
+      expect(r.behavior).toBe('deny');
+      expect(r.message).toMatch(/did not come from anywhere/i);
+      // Closes off the follow-on behaviour the transcript shows.
+      expect(r.message).toMatch(/Do not try variants/i);
+    });
+
+    it('allows a URL the user actually pasted', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        prompt: 'summarise https://example.com/menu for me',
+      });
+      const r = await canUseTool('WebFetch', { url: 'https://example.com/menu' }, { toolUseID: 'u2' });
+      expect(r.behavior).toBe('allow');
+    });
+
+    it('allows a URL that appeared earlier in the conversation', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        prompt: 'now read that page',
+        history: [{ role: 'user' as const, content: 'check https://example.com/a' }],
+      });
+      const r = await canUseTool('WebFetch', { url: 'https://example.com/a' }, { toolUseID: 'u3' });
+      expect(r.behavior).toBe('allow');
+    });
+
+    /**
+     * The exact vector: a real host the conversation HAS seen, with a path the
+     * model invented. Host-level trust would have permitted the whole run.
+     */
+    it('refuses a guessed path on a host it has seen', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        prompt: 'start from https://www.broadsheet.com.au/sydney',
+      });
+      const r = await canUseTool('WebFetch', { url: INVENTED }, { toolUseID: 'u4' });
+      expect(r.behavior).toBe('deny');
+    });
+
+    it('leaves tools that are not URL fetches alone', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), { prompt: 'hi' });
+      const r = await canUseTool('Read', { file_path: '/tmp/x' }, { toolUseID: 'u5' });
+      expect(r.behavior).toBe('allow');
+    });
+  });
+
   it('also keeps it out of the model context, so it never asks', async () => {
     const { options } = await captureOptions(new ClaudeProvider(), {
       deniedTools: ['Bash', 'BashOutput', 'KillShell'],
