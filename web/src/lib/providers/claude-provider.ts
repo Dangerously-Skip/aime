@@ -1,5 +1,6 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { resolveSearchRoute } from '../search/resolve';
+import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { getSurfaceConfig } from '../surfaces';
@@ -188,7 +189,13 @@ export class ClaudeProvider extends BaseProvider {
      * in-process SearchWeb tool. One resolution means the two cannot disagree
      * about whether search exists — which is exactly how the original bug got in.
      */
-    const searchRoute = resolveSearchRoute(searchSettings ?? null, process.env);
+    let searchRoute = resolveSearchRoute(searchSettings ?? null, process.env);
+    if (searchRoute) {
+      // Borrowed keys are resolved here, on the server, so the secret never
+      // travels through settings or the request body.
+      const { withStoredCredential } = await import('../search/server-credentials');
+      searchRoute = await withStoredCredential(searchRoute);
+    }
 
     const denied = new Set<string>([
       'WebSearch',
@@ -239,6 +246,19 @@ export class ClaudeProvider extends BaseProvider {
      * still happens immediately before the query starts, so a failure during
      * setup cannot leave a stale entry for a later abort() to find.
      */
+    /**
+     * Which URLs this turn is allowed to fetch — see security/url-provenance.ts.
+     *
+     * Seeded from what the USER supplied (the prompt and the history) and then
+     * grown as tool results arrive, so a search result becomes fetchable and an
+     * invented address never does. Per-request: a link seen last week does not
+     * license a fetch today.
+     */
+    const urlProvenance = new UrlProvenance([
+      params.prompt,
+      ...(history ?? []).map((h) => h.content),
+    ]);
+
     const abortController = new AbortController();
     /** Every rendezvous this query opens dies with it. */
     const waitOptions = { signal: abortController.signal };
@@ -1002,6 +1022,20 @@ export class ClaudeProvider extends BaseProvider {
       // class of bug being fixed here is a control that looked enforced because
       // a name had been filtered out of a list somewhere upstream, so the check
       // that matters lives where nothing can route around it.
+      // ── URL provenance ─────────────────────────────────────────────────
+      // A fetch target must have come from the user or from an earlier tool
+      // result. Enforced here rather than in the system prompt because the
+      // prompt version of this rule was reinterpreted by the model: told it
+      // could DERIVE a URL "by a rule you can state", it decided a magazine
+      // listicle slug qualified and fetched six invented addresses in parallel.
+      if (isUrlFetchTool(toolName)) {
+        const verdict = urlProvenance.check((input as { url?: unknown }).url);
+        if (!verdict.allowed) {
+          console.warn('[SECURITY] Refused a fetch of an unsourced URL:', input.url);
+          return { behavior: 'deny' as const, message: verdict.message! };
+        }
+      }
+
       if (toolMatches(toolName, denied)) {
         console.warn('[SECURITY] Blocked a tool withheld from this run:', toolName);
         return {
@@ -1796,6 +1830,15 @@ export class ClaudeProvider extends BaseProvider {
         if (c.type === 'tool_result' || c.type === 'result') {
           const toolUseId = (c.tool_use_id || c.toolUseId || c.id) as string;
           activeTools.delete(toolUseId);
+          // Anything a tool returned is a real source, so its URLs become
+          // fetchable. This is what makes search → read work: without it the
+          // guard would refuse the very results it asked the model to go get.
+          try {
+            const payload = c.result ?? c.content ?? c;
+            urlProvenance.record(
+              typeof payload === 'string' ? payload : JSON.stringify(payload),
+            );
+          } catch { /* a payload that will not serialise carries no URLs we can use */ }
           yield {
             type: 'tool_result',
             result: (c.result || c.content || c) as unknown,

@@ -91,6 +91,8 @@ interface SettingsState {
   searchProvider: SearchProviderId | null;
   searchApiKey: string | null;
   searchInstanceUrl: string | null;
+  /** Model-provider id whose stored key search borrows. An id, never a secret. */
+  searchCredentialProviderId: string | null;
 
   // Memory
   autoExtractMemories: boolean;
@@ -152,6 +154,7 @@ interface SettingsActions {
   setSearchProvider: (id: SearchProviderId | null) => void;
   setSearchApiKey: (key: string | null) => void;
   setSearchInstanceUrl: (url: string | null) => void;
+  setSearchCredentialProviderId: (id: string | null) => void;
   setAutoExtractMemories: (enabled: boolean) => void;
   setBlockDangerousCommands: (enabled: boolean) => void;
   setBlockNetworkCommands: (enabled: boolean) => void;
@@ -192,6 +195,7 @@ export const INITIAL_SETTINGS: SettingsState = {
   searchProvider: null,
   searchApiKey: null,
   searchInstanceUrl: null,
+  searchCredentialProviderId: null,
   autoExtractMemories: true,
   blockDangerousCommands: true,
   blockNetworkCommands: false,
@@ -246,6 +250,7 @@ export const PERSISTED_SETTINGS_KEYS = [
   'searchProvider',
   'searchApiKey',
   'searchInstanceUrl',
+  'searchCredentialProviderId',
   'autoExtractMemories',
   'blockDangerousCommands',
   'blockNetworkCommands',
@@ -331,6 +336,7 @@ export const useSettingsStore = create<SettingsStore>()(
       setSearchProvider: (searchProvider) => set({ searchProvider }),
       setSearchApiKey: (searchApiKey) => set({ searchApiKey }),
       setSearchInstanceUrl: (searchInstanceUrl) => set({ searchInstanceUrl }),
+      setSearchCredentialProviderId: (searchCredentialProviderId) => set({ searchCredentialProviderId }),
 
       setAutoExtractMemories: (autoExtractMemories) => set({ autoExtractMemories }),
 
@@ -377,6 +383,7 @@ export const useSettingsStore = create<SettingsStore>()(
           if (state.searchProvider === undefined) state.searchProvider = null;
           if (state.searchApiKey === undefined) state.searchApiKey = null;
           if (state.searchInstanceUrl === undefined) state.searchInstanceUrl = null;
+          if (state.searchCredentialProviderId === undefined) state.searchCredentialProviderId = null;
         }
         // v11: the org "select your team" concept moved to a separate product.
         // DROP the key rather than leaving it: zustand's default merge splices

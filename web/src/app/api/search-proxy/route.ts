@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveSearchRoute, type SearchSettings } from '@/lib/search/resolve';
 import { runSearch, SearchError } from '@/lib/search/execute';
+import { withStoredCredential } from '@/lib/search/server-credentials';
 
 /**
  * Search, for callers outside the agent loop (the browser surface, widgets).
@@ -34,10 +35,13 @@ export async function POST(req: NextRequest) {
 
   // Settings come from the caller (the renderer holds them); env is the legacy
   // fallback so existing SEARXNG_INSTANCES installs keep working.
-  const route = resolveSearchRoute(body.settings ?? null, process.env);
-  if (!route) {
+  const resolved = resolveSearchRoute(body.settings ?? null, process.env);
+  if (!resolved) {
     return NextResponse.json({ results: [], error: 'no_search_configured' }, { status: 501 });
   }
+  // A borrowed key is an id here and a secret only on the server — same
+  // resolution the agent loop does, so Test exercises the real path.
+  const route = await withStoredCredential(resolved);
 
   try {
     const results = await runSearch(route, query, { maxResults: body.max_results ?? 10 });
