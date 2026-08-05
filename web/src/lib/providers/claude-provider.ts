@@ -256,7 +256,12 @@ export class ClaudeProvider extends BaseProvider {
      */
     const urlProvenance = new UrlProvenance([
       params.prompt,
-      ...(history ?? []).map((h) => h.content),
+      // USER turns only. Seeding from assistant turns as well let the model
+      // launder an invented URL: mention it in one reply, and the next turn
+      // sees it "in the conversation" and fetches it. That is not a corner
+      // case — it is what happened, because these conversations continue after
+      // a failed guessing run and the transcript is full of made-up addresses.
+      ...(history ?? []).filter((h) => h.role === 'user').map((h) => h.content),
     ]);
 
     const abortController = new AbortController();
