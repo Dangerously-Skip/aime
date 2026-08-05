@@ -610,6 +610,29 @@ function installBundledSkills() {
  * SKILL.md (installed separately into ~/.claude/skills/) can resolve the
  * generate_presentation.sh script reference. Mirrors installBundledSkills.
  */
+/**
+ * Copy the bundled HTML-deck assets (MIT, from nexu-io/open-design) to
+ * ~/.claude/plugins/html-deck/ so the `deck-html` skill can reference the
+ * themes and runtime by absolute path.
+ */
+function installHtmlDeck() {
+  try {
+    const srcDir = app.isPackaged
+      ? path.join(process.resourcesPath, "html-deck")
+      : path.join(__dirname, "resources", "html-deck");
+    if (!fs.existsSync(srcDir)) return;
+    const destDir = path.join(os.homedir(), ".claude", "plugins", "html-deck");
+    const { syncBundledDir } = require("./bundled-install.js");
+    const r = syncBundledDir(srcDir, destDir);
+    console.log(
+      `[AIME] Installed html-deck at: ${destDir} ` +
+        `(${r.written} bundled, ${r.preserved} user files kept)`,
+    );
+  } catch (err) {
+    console.warn("[AIME] Failed to install html-deck:", err.message);
+  }
+}
+
 function installPptPlugin() {
   try {
     const srcDir = app.isPackaged
@@ -732,6 +755,7 @@ app.whenReady().then(async () => {
   migrateMcpConfig();
   installBundledSkills();
   installPptPlugin();
+  installHtmlDeck();
   await ensureSetup();
 
   // Determine the port: dev-with-port.js sets PORT in env; for packaged builds we find one here.

@@ -71,6 +71,10 @@
         "to": "ppt-plugin"
       },
       {
+        "from": "resources/html-deck",
+        "to": "html-deck"
+      },
+      {
         "from": "mcp-servers",
         "to": "mcp-servers"
       }
