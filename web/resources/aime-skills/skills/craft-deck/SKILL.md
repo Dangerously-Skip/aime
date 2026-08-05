@@ -1,6 +1,6 @@
 ---
 name: craft-deck
-description: Craft rules for slide decks and presentations — slide-scale type, one idea per slide, projected-legibility minimums. Use when producing a deck, slides, or a presentation. Not for web pages or app UI (use craft-web), and not for documents that will be read at arm's length or printed (use craft-doc).
+description: Craft rules for slide decks and presentations — slide-scale type, one idea per slide, projected-legibility minimums. Use when producing a deck, slides, or a presentation. Not for web pages or app UI (use craft-web), and not for documents that will be read at arm's length or printed (use craft-doc). For an HTML deck with a ready-made theme, pair with deck-html — these content rules still apply.
 ---
 
 # Craft — decks
