@@ -208,8 +208,26 @@ describe('previews show the theme, not a redrawing of it', () => {
    * Scaling rather than re-sizing: a preview that shrinks the type instead of
    * the slide is not showing you the theme's type scale.
    */
-  it('scales the 1280x720 deck instead of restyling it', () => {
-    expect(panel()).toMatch(/scale\(calc\(100vw \/ 1280\)\)/);
+  /**
+   * Scaling rather than re-sizing: a preview that shrinks the type instead of
+   * the slide is not showing you the theme's type scale.
+   *
+   * And it must scale by a NUMBER. The obvious CSS-only version,
+   * `transform:scale(calc(100vw / 1280))`, is invalid — scale() takes a
+   * unitless number and calc() on a viewport unit yields a length, so the
+   * declaration is dropped silently and the deck renders unscaled. The card
+   * then shows the top-left corner of a 1280x720 slide whose content is
+   * vertically centred, i.e. blank.
+   */
+  it('scales the deck by a measured number, not a CSS length', () => {
+    const src = panel();
+    // Strip comments first: the one explaining this bug necessarily quotes it.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*/g, '');
+    expect(code, 'scale() cannot take a length').not.toMatch(/scale\(calc\([^)]*vw/);
+    expect(src, 'needs a measured factor').toMatch(/scale\(\$\{scale\}\)/);
+    expect(src, 'cards are a responsive grid, so the factor must be observed').toMatch(
+      /ResizeObserver/,
+    );
   });
 
   it('serves stylesheets through a containment-checked route', () => {
