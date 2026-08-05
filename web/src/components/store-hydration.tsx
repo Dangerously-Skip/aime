@@ -15,29 +15,70 @@ import { useConnectorStore } from "@/stores/connector-store";
 import { useCronStore } from "@/stores/cron-store";
 import { useHeartbeatStore } from "@/stores/heartbeat-store";
 import { openStorageGate } from "@/lib/gated-storage";
+import { isHydrationApplying } from "@/lib/hydration-signal";
 
-// Module-level hydration flag + listener set
+/**
+ * Two flags, not one, and the difference is the whole point.
+ *
+ * `hydrated` means "the UI may render". `rehydrated` means "the persisted data
+ * actually arrived". They diverge on the timeout path below, and conflating them
+ * caused two user-visible bugs at once:
+ *
+ *   - The onboarding wizard reappeared for a user who had completed it, because
+ *     `onboardingComplete` was still at its default when the page rendered.
+ *   - Worse, the timeout also opened the storage gate. That gate exists for the
+ *     single purpose of stopping default values from being written over saved
+ *     ones (see `lib/gated-storage.ts`), so opening it before the read finished
+ *     defeated it exactly when it was needed: the next settings change persisted
+ *     a defaults-shaped payload over the real one. API keys included.
+ *
+ * So the gate is now opened in ONE place — when rehydration genuinely resolves.
+ * A slow read can still render the app; it can no longer destroy anything.
+ */
 let hydrated = false;
+let rehydrated = false;
 const listeners = new Set<() => void>();
 
-function setHydrated() {
-  hydrated = true;
+function notify() {
   listeners.forEach((l) => l());
 }
 
-/** Returns true once all Zustand stores have been rehydrated from localStorage. */
-export function useHydrated() {
-  const [ready, setReady] = useState(hydrated);
+function setHydrated() {
+  hydrated = true;
+  notify();
+}
+
+/** Subscribe to the module-level flags. Shared by both hooks below. */
+function useHydrationFlag(read: () => boolean) {
+  const [ready, setReady] = useState(read);
   useEffect(() => {
     // Race guard: rehydration can complete between the useState read above and
     // this effect running, in which case no listener would ever fire.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- required for that race; removing it can leave the app stuck on the loading spinner
-    if (hydrated) { setReady(true); return; }
-    const cb = () => setReady(true);
+    if (read()) { setReady(true); return; }
+    const cb = () => { if (read()) setReady(true); };
     listeners.add(cb);
     return () => { listeners.delete(cb); };
-  }, []);
+  }, [read]);
   return ready;
+}
+
+/** True once the app may render — including the defaults-only timeout path. */
+export function useHydrated() {
+  return useHydrationFlag(() => hydrated);
+}
+
+/**
+ * True only when persisted state actually loaded.
+ *
+ * Anything that would be WRONG rather than merely unstyled when read from
+ * defaults must wait for this, not `useHydrated`. The onboarding wizard is the
+ * motivating case: `onboardingComplete: false` is indistinguishable from "this
+ * user is new", so rendering it early tells a returning user to introduce
+ * themselves again.
+ */
+export function useRehydrated() {
+  return useHydrationFlag(() => rehydrated);
 }
 
 function applyTheme(theme: 'light' | 'dark' | 'system' | 'emma', animate = true) {
@@ -71,6 +112,35 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
     // loading.  Previously Promise.all meant a single error would leave ALL
     // stores stuck on default values, causing settings (like API keys) to be
     // "lost" — and worse, persisted over the real saved values.
+    /**
+     * Edits the user makes before the slow read lands, so it cannot revert them.
+     *
+     * This is the half that neither gate timing could fix. If rehydration is
+     * slow and the user acts in that window, the read eventually resolves
+     * carrying its PRE-EDIT snapshot and zustand applies it — reverting what
+     * they just did. That is the "click Get started, nothing happens" report:
+     * the wizard sets `onboardingComplete`, the stale read unsets it, and every
+     * retry loses the same race.
+     *
+     * The old code hid this by opening the storage gate on timeout, so the edit
+     * was written to storage and the late read happened to find it. That worked
+     * and cost the profile: an open gate before hydration is exactly what lets
+     * default state overwrite saved state. Recording the edits here fixes the
+     * revert without needing the gate open, so the two concerns stop trading
+     * against each other.
+     */
+    const dirty: Record<string, unknown> = {};
+    const trackEdits = useSettingsStore.subscribe((state, prev) => {
+      // Ignore the rehydrate's own write. Without this the stale persisted
+      // value is recorded as a user edit and then restored over the fresh one.
+      if (rehydrated || isHydrationApplying()) return;
+      for (const [k, v] of Object.entries(state)) {
+        if (typeof v !== 'function' && v !== (prev as unknown as Record<string, unknown>)[k]) {
+          dirty[k] = v;
+        }
+      }
+    });
+
     Promise.allSettled([
       useAppStore.persist.rehydrate(),
       useConversationStore.persist.rehydrate(),
@@ -98,23 +168,48 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
       const theme = useAppStore.getState().theme;
       applyTheme(theme, false);
 
-      // Open the storage gate so stores can now safely persist changes.
-      // Until this point, all setItem calls to localStorage were blocked to
-      // prevent default values from overwriting previously saved data.
-      openStorageGate();
+      // The ONLY place the gate opens. Reaching here means the reads finished,
+      // so what gets persisted from now on is real state rather than defaults.
+      rehydrated = true;
+      trackEdits();
 
+      // Re-apply anything the user changed while the read was in flight. The
+      // persisted snapshot predates those edits, so without this the newer
+      // value loses to the older one.
+      if (Object.keys(dirty).length > 0) {
+        useSettingsStore.setState(dirty as Partial<ReturnType<typeof useSettingsStore.getState>>);
+      }
+
+      openStorageGate();
       setHydrated();
     });
 
-    // Timeout fallback: hydrate with defaults if localStorage read takes too long.
-    // Still open the storage gate so the app remains functional.
-    setTimeout(() => {
+    /**
+     * Render-anyway fallback, so a slow disk cannot leave the user on a spinner
+     * forever.
+     *
+     * It deliberately does NOT open the storage gate. Rendering from defaults is
+     * recoverable — the real values land a moment later and the UI updates.
+     * WRITING from defaults is not: it overwrites the saved payload, and the
+     * saved payload is where the API keys and the whole conversation list live.
+     * Given the choice between a stale-looking screen and a destroyed profile,
+     * this takes the stale screen.
+     *
+     * 3s was too tight to be a "something is wrong" signal and fired routinely
+     * on a cold start — a dev-mode first compile with thirteen stores reading a
+     * 300KB store is comfortably past it, which is why this reproduced as "why
+     * am I in onboarding again". 15s is long enough that firing means a real
+     * fault.
+     */
+    const timer = setTimeout(() => {
       if (!hydrated) {
-        console.warn('[StoreHydration] Timed out waiting for localStorage, using defaults');
-        openStorageGate();
+        console.warn(
+          '[StoreHydration] localStorage read exceeded 15s — rendering from defaults. ' +
+            'Writes stay blocked until the real state arrives, so nothing will be overwritten.',
+        );
         setHydrated();
       }
-    }, 3000);
+    }, 15_000);
 
     // Listen for theme changes (user toggling theme in settings)
     const unsub = useAppStore.subscribe((state, prev) => {
@@ -133,6 +228,8 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
     mq.addEventListener('change', handleChange);
 
     return () => {
+      clearTimeout(timer);
+      trackEdits();
       unsub();
       mq.removeEventListener('change', handleChange);
     };

@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { beginHydrationApply, endHydrationApply } from '@/lib/hydration-signal';
 import { DEFAULT_PUSH_TO_TALK, validateAccelerator } from '@/lib/voice/accelerator';
 import type { Tier } from '@/lib/models/types';
 import type { SearchProviderId } from '@/lib/search/providers';
@@ -449,6 +450,15 @@ export const useSettingsStore = create<SettingsStore>()(
           } as unknown as SettingsState & SettingsActions;
         }
         return state as unknown as SettingsState & SettingsActions;
+      },
+      /**
+       * Brackets the persisted merge so a `subscribe` listener can tell it apart
+       * from a user edit — see `lib/hydration-signal.ts`. The outer call fires
+       * before the merge, the returned callback after.
+       */
+      onRehydrateStorage: () => {
+        beginHydrationApply();
+        return () => endHydrationApply();
       },
       partialize: pickPersisted,
     }
