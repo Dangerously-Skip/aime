@@ -54,7 +54,11 @@ class MarkdownToPptxConverter:
 
     def __init__(self, template_path, config_path='pptx_config.yaml', brand_config_path='brand_config.yaml'):
         """Initialize converter with template and configuration."""
-        self.template_path = Path(template_path)
+        # Normalise "no template" to None BEFORE any existence check: Path('')
+        # is Path('.'), which exists, so an empty string would sail past the
+        # fallback below and then fail deep inside python-pptx trying to open a
+        # directory as a .pptx.
+        self.template_path = Path(template_path) if str(template_path or '').strip() else None
         self.config_path = Path(config_path)
         self.brand_config_path = Path(brand_config_path)
         self.markdown_dir = None  # Will be set during convert()
@@ -82,8 +86,25 @@ class MarkdownToPptxConverter:
                 config_template_path = self.config_path.parent / config_template_path
             self.template_path = config_template_path
 
-        if not self.template_path.exists():
-            raise FileNotFoundError(f"Template not found: {self.template_path}")
+        # A missing template is NOT fatal. python-pptx ships its own default
+        # template with the standard layout set, which is a perfectly good
+        # neutral chassis — and the default brand's config is mapped to those
+        # indices for exactly this reason.
+        #
+        # This used to raise. The repo ships `brands/default/pptx_config.yaml`
+        # pointing at `Presentation_Template.pptx`, and that file is not in the
+        # repo — it was a proprietary asset that did not survive the
+        # open-source transition. So on any fresh clone deck generation died
+        # here, and the agent, reading "Template not found", concluded the
+        # plugin was broken and started trying to build a template itself.
+        #
+        # Design guidance lives in the `craft-deck` skill, not in a binary. A
+        # missing brand template should cost you the brand, not the feature.
+        if self.template_path is None or not self.template_path.exists():
+            if self.template_path is not None:
+                print(f"Note: no brand template at {self.template_path} — "
+                      f"using the built-in default layouts.")
+            self.template_path = None
 
     def parse_metadata_comment(self, line):
         """Parse metadata from HTML comment."""
@@ -1500,8 +1521,23 @@ class MarkdownToPptxConverter:
         slides = self.parse_markdown(md_path)
         print(f"Parsed {len(slides)} slides")
 
-        # Load template
-        prs = Presentation(self.template_path)
+        # Load template — or the built-in default when no brand template exists.
+        prs = Presentation(str(self.template_path)) if self.template_path else Presentation()
+
+        # Apply the configured slide size.
+        #
+        # `template.slide_width`/`slide_height` have been in the config since it
+        # was written and were never applied — the code only ever READ
+        # prs.slide_width. That was invisible while every run loaded a 16:9 brand
+        # template, which already had the right size. Falling back to the
+        # built-in default surfaced it: python-pptx's default is 4:3, so decks
+        # came out 10x7.5 while the config asked for 13.33x7.5 and `craft-deck`
+        # specifies 1920x1080.
+        tpl_cfg = self.config.get('template', {}) or {}
+        if tpl_cfg.get('slide_width'):
+            prs.slide_width = Inches(float(tpl_cfg['slide_width']))
+        if tpl_cfg.get('slide_height'):
+            prs.slide_height = Inches(float(tpl_cfg['slide_height']))
 
         # Remove any existing slides from template
         # Keep only the layouts and master slides, not content slides
@@ -1549,8 +1585,12 @@ Examples:
         except:
             pass
 
+    # No template is a supported configuration, not a usage error: the converter
+    # falls back to python-pptx's built-in layouts, which is what the default
+    # brand is mapped to. Erroring here is what made a missing brand chassis
+    # look like a broken plugin.
     if not template_path:
-        parser.error('Template must be specified via --template or in config file')
+        template_path = ''
 
     # Determine output path
     output_path = args.output
