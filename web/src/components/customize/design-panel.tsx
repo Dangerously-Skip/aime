@@ -58,6 +58,12 @@ interface DeckTheme {
  *
  * `srcDoc` rather than a src URL so there is no per-theme route, and
  * `pointer-events-none` so the card stays clickable through the frame.
+ *
+ * `is-active` on the slide is load-bearing and easy to miss: base.css ships
+ * `.slide{opacity:0}` and reveals the current one via `.slide.is-active`, a
+ * class `runtime.js` normally adds. The runtime is deliberately not loaded here
+ * (and the sandbox blocks scripts anyway), so without it every preview rendered
+ * as an empty coloured rectangle — the theme's background and nothing else.
  */
 function ThemePreview({ id }: { id: string }) {
   const css = (f: string) => `/api/themes/asset?file=${encodeURIComponent(f)}`;
@@ -77,7 +83,7 @@ function ThemePreview({ id }: { id: string }) {
   .deck{width:1280px;height:720px;transform:scale(calc(100vw / 1280));transform-origin:0 0;}
 </style>
 </head><body>
-<div class="deck"><section class="slide">
+<div class="deck"><section class="slide is-active">
   <p class="kicker">Q3 · Board update</p>
   <h1 class="h1">Revenue grew <span class="gradient-text">18%</span><br>on last quarter</h1>
   <p class="lede">Churn steady at 2.1% · NRR 114%</p>
