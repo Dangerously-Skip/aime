@@ -591,10 +591,15 @@ function installBundledSkills() {
     fs.rmSync(path.join(os.homedir(), ".claude", "plugins", "quarry-skills"), { recursive: true, force: true });
     fs.mkdirSync(path.dirname(destDir), { recursive: true });
 
-    // Remove and recopy so updates land every launch
-    fs.rmSync(destDir, { recursive: true, force: true });
-    fs.cpSync(srcDir, destDir, { recursive: true });
-    console.log("[AIME] Installed bundled skills at:", destDir);
+    // Sync rather than wipe: this directory also holds things the USER creates
+    // (a filled-in brand-guidelines, their own skills), and the old
+    // remove-and-recopy deleted them on every launch. See bundled-install.js.
+    const { syncBundledDir } = require("./bundled-install.js");
+    const r = syncBundledDir(srcDir, destDir);
+    console.log(
+      `[AIME] Installed bundled skills at: ${destDir} ` +
+        `(${r.written} bundled, ${r.removed} withdrawn, ${r.preserved} user files kept)`,
+    );
   } catch (err) {
     console.warn("[AIME] Failed to install bundled skills:", err.message);
   }
@@ -616,15 +621,21 @@ function installPptPlugin() {
     // Remove the pre-rename plugin dir so the SDK plugin scan does not load duplicates
     fs.rmSync(path.join(os.homedir(), ".claude", "plugins", "nib-ppt"), { recursive: true, force: true });
     fs.mkdirSync(path.dirname(destDir), { recursive: true });
-    fs.rmSync(destDir, { recursive: true, force: true });
-    fs.cpSync(srcDir, destDir, { recursive: true });
+    // Sync rather than wipe — `brands/` is where a user's own brand lives, and
+    // remove-and-recopy deleted it every launch. See bundled-install.js.
+    const { syncBundledDir } = require("./bundled-install.js");
+    const syncResult = syncBundledDir(srcDir, destDir);
     // Make the shell script executable on POSIX (cpSync drops the +x bit
     // on some filesystems, e.g. when the source lives inside an asar).
     if (process.platform !== "win32") {
       const script = path.join(destDir, "generate_presentation.sh");
       if (fs.existsSync(script)) fs.chmodSync(script, 0o755);
     }
-    console.log("[AIME] Installed ppt plugin at:", destDir);
+    console.log(
+      `[AIME] Installed ppt plugin at: ${destDir} ` +
+        `(${syncResult.written} bundled, ${syncResult.removed} withdrawn, ` +
+        `${syncResult.preserved} user files kept)`,
+    );
   } catch (err) {
     console.warn("[AIME] Failed to install ppt plugin:", err.message);
   }
