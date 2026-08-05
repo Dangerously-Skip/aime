@@ -171,3 +171,54 @@ describe('the panel can be scrolled', () => {
     expect(scroller![1], 'needs min-h-0 or overflow never engages').toMatch(/min-h-0/);
   });
 });
+
+describe('previews show the theme, not a redrawing of it', () => {
+  /**
+   * The first preview reimplemented a slide in React from parsed tokens and
+   * used bg/text/border/accent/radius only — discarding `--grad` and
+   * `--shadow`, which is where the character lives. `neo-brutalism` is a
+   * `6px 6px 0 #000` offset shadow, `cyberpunk-neon` is a triple neon glow.
+   * None of it survived, so 36 designs rendered as one layout in different
+   * colours and were reported, correctly, as boring and samey.
+   *
+   * The fix is to stop redrawing: render the real base.css and the real theme
+   * file. These assert that, because "looks varied" is not something a unit
+   * test can see but "uses the actual stylesheet" is.
+   */
+  const panel = () =>
+    readFileSync(
+      resolvePath(process.cwd(), 'src/components/customize/design-panel.tsx'),
+      'utf-8',
+    );
+
+  it('loads the real base and theme stylesheets', () => {
+    const src = panel();
+    expect(src).toMatch(/base\.css/);
+    expect(src).toMatch(/themes\/\$\{id\}\.css/);
+  });
+
+  it('uses the deck’s own class names rather than bespoke markup', () => {
+    const src = panel();
+    for (const cls of ['deck', 'slide', 'kicker', 'h1', 'lede', 'card']) {
+      expect(src, `preview does not use .${cls}`).toMatch(new RegExp(`class="[^"]*\\b${cls}\\b`));
+    }
+  });
+
+  /**
+   * Scaling rather than re-sizing: a preview that shrinks the type instead of
+   * the slide is not showing you the theme's type scale.
+   */
+  it('scales the 1280x720 deck instead of restyling it', () => {
+    expect(panel()).toMatch(/scale\(calc\(100vw \/ 1280\)\)/);
+  });
+
+  it('serves stylesheets through a containment-checked route', () => {
+    const route = readFileSync(
+      resolvePath(process.cwd(), 'src/app/api/themes/asset/route.ts'),
+      'utf-8',
+    );
+    // Resolve-then-verify, not sanitise — the approach encodings keep defeating.
+    expect(route).toMatch(/startsWith\(ASSETS/);
+    expect(route).toMatch(/endsWith\('\.css'\)/);
+  });
+});

@@ -41,60 +41,68 @@ interface DeckTheme {
 }
 
 /**
- * A theme rendered as the thing it produces.
+ * A theme rendered by its OWN stylesheet, in an iframe.
  *
- * Deliberately shows the parts that differ most between themes and that a user
- * would notice on a real slide: display face, accent, surface against
- * background, border weight and corner radius. A title-and-bullets slide is the
- * commonest slide there is, so it is the honest sample.
+ * The first version reimplemented a slide in React from a handful of parsed
+ * tokens, and it made every theme look the same — because it used bg, text,
+ * border, accent and radius, and ignored `--grad` and `--shadow`, which is
+ * precisely where the character lives. `neo-brutalism` is a `6px 6px 0 #000`
+ * offset shadow; `cyberpunk-neon` is a triple neon glow; `memphis-pop` is a
+ * three-stop gradient under Archivo Black. None of that survived, so 36
+ * distinct designs rendered as one layout in different colours.
+ *
+ * So the preview now loads the real `base.css` and the real theme file and uses
+ * the real class names from `templates/deck.html`. It is not a picture of a
+ * slide; it is a slide. Anything upstream adds — new tokens, new primitives —
+ * shows up here for free rather than needing this component taught about it.
+ *
+ * `srcDoc` rather than a src URL so there is no per-theme route, and
+ * `pointer-events-none` so the card stays clickable through the frame.
  */
-function ThemePreview({ tokens }: { tokens: ThemeTokens }) {
+function ThemePreview({ id }: { id: string }) {
+  const css = (f: string) => `/api/themes/asset?file=${encodeURIComponent(f)}`;
+
+  const srcDoc = `<!doctype html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="${css('fonts.css')}">
+<link rel="stylesheet" href="${css('base.css')}">
+<link rel="stylesheet" href="${css(`themes/${id}.css`)}">
+<style>
+  /* The deck is authored at 1280x720. Scale it to the card instead of
+     re-styling it, so type scale and proportion stay honest — a preview that
+     re-sizes the type is not showing you the theme.
+     100vw inside the frame IS the card's width, so this is responsive with no
+     measuring and no resize observer. */
+  html,body{margin:0;overflow:hidden;background:var(--bg);}
+  .deck{width:1280px;height:720px;transform:scale(calc(100vw / 1280));transform-origin:0 0;}
+</style>
+</head><body>
+<div class="deck"><section class="slide">
+  <p class="kicker">Q3 · Board update</p>
+  <h1 class="h1">Revenue grew <span class="gradient-text">18%</span><br>on last quarter</h1>
+  <p class="lede">Churn steady at 2.1% · NRR 114%</p>
+  <div class="grid g3 mt-l">
+    <div class="card"><strong>18%</strong><br><span class="dim">Revenue</span></div>
+    <div class="card card-accent"><strong>2.1%</strong><br><span class="dim">Churn</span></div>
+    <div class="card card-outline"><strong>114%</strong><br><span class="dim">NRR</span></div>
+  </div>
+  <div class="deck-footer"><span class="dim2">AIME</span></div>
+</section></div>
+</body></html>`;
+
   return (
-    <div
-      className="pointer-events-none aspect-video w-full overflow-hidden"
-      style={{
-        background: tokens.bg,
-        borderRadius: tokens.radius,
-        border: `1px solid ${tokens.border}`,
-      }}
-    >
-      <div className="flex h-full flex-col justify-center gap-[6%] px-[8%]">
-        <div
-          style={{
-            color: tokens.text1,
-            fontFamily: tokens.fontDisplay,
-            fontSize: '13px',
-            fontWeight: 700,
-            lineHeight: 1.15,
-          }}
-        >
-          Quarterly review
-        </div>
-        <div style={{ height: 2, width: '22%', background: tokens.accent }} />
-        <div className="flex flex-col gap-[4px]">
-          {['Revenue up 18% on last quarter', 'Churn steady at 2.1%'].map((line) => (
-            <div
-              key={line}
-              style={{ color: tokens.text2, fontFamily: tokens.fontSans, fontSize: '7px' }}
-            >
-              {line}
-            </div>
-          ))}
-        </div>
-        <div
-          className="mt-[2%] self-start px-[6px] py-[3px]"
-          style={{
-            background: tokens.surface,
-            border: `1px solid ${tokens.border}`,
-            borderRadius: tokens.radius,
-            color: tokens.accent,
-            fontFamily: tokens.fontSans,
-            fontSize: '6px',
-          }}
-        >
-          Detail
-        </div>
-      </div>
+    <div className="pointer-events-none aspect-video w-full overflow-hidden rounded-md">
+      <iframe
+        title=""
+        aria-hidden
+        tabIndex={-1}
+        loading="lazy"
+        sandbox=""
+        srcDoc={srcDoc}
+        // Fills the card; 1280x720 is 16:9, so `aspect-video` on the wrapper
+        // means the scaled deck lands exactly with nothing cropped.
+        style={{ width: '100%', height: '100%', border: 0, pointerEvents: 'none' }}
+      />
     </div>
   );
 }
@@ -250,7 +258,7 @@ export function DesignPanel() {
                     selectedId === t.id ? 'ring-2 ring-foreground/60' : 'ring-foreground/10'
                   }`}
                 >
-                  <ThemePreview tokens={t.tokens} />
+                  <ThemePreview id={t.id} />
                   <div className="mt-2 flex items-center justify-between gap-1">
                     <span className="truncate text-xs font-medium">{t.label}</span>
                     {selectedId === t.id && <Check className="size-3 shrink-0" />}
