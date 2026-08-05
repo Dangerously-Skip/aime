@@ -18,8 +18,18 @@ import { searchProviderPreset, type SearchProviderId } from './providers';
  */
 
 export interface SearchSettings {
-  /** Null ⇒ the user has not chosen a provider. Not an error; search is opt-in. */
-  searchProvider: SearchProviderId | null;
+  /**
+   * Tri-state, and the distinction is load-bearing:
+   *
+   *   a provider id — use it
+   *   `'none'`      — the user turned search OFF and that must stick
+   *   `null`        — never chosen; eligible for the default below
+   *
+   * Collapsing the last two into `null` is the obvious simplification and it is
+   * wrong: it would re-enable search every launch for someone who deliberately
+   * turned it off, which is spending their money against an explicit choice.
+   */
+  searchProvider: SearchProviderId | 'none' | null;
   searchApiKey: string | null;
   searchInstanceUrl: string | null;
   /**
@@ -50,11 +60,28 @@ export interface SearchRoute {
  * @param settings the user's stored choice (client) or its server-side mirror
  * @param env      process env, for the legacy `SEARXNG_INSTANCES` path
  */
+export interface SearchDefaults {
+  /**
+   * A configured model provider whose key can also serve search — today that
+   * means OpenRouter, whose web plugin is a search backend in its own right.
+   *
+   * When present and the user has expressed no preference, search defaults ON
+   * using this credential. The alternative was leaving it off until someone
+   * found the Settings page, which is how the agent ended up with no search at
+   * all and started inventing URLs. Reconfigurable, and `'none'` beats it.
+   */
+  openrouterProviderId?: string | null;
+}
+
 export function resolveSearchRoute(
   settings: Partial<SearchSettings> | null | undefined,
   env: Record<string, string | undefined> = {},
+  defaults: SearchDefaults = {},
 ): SearchRoute | null {
   const chosen = settings?.searchProvider ?? null;
+
+  // An explicit "off" is final — not a gap for a default to fill.
+  if (chosen === 'none') return null;
 
   if (chosen) {
     const preset = searchProviderPreset(chosen);
@@ -85,6 +112,15 @@ export function resolveSearchRoute(
   const legacy = env.SEARXNG_INSTANCES?.split(',')[0]?.trim();
   if (legacy) return { providerId: 'searxng', instanceUrl: legacy };
 
+  /**
+   * Nothing chosen and nothing in env: fall back to the credential the user
+   * already gave for inference, if it can also search. Costs about half a cent
+   * a query and needs no setup — versus no search at all, which costs a wrong
+   * answer delivered confidently.
+   */
+  const borrow = defaults.openrouterProviderId?.trim();
+  if (borrow) return { providerId: 'openrouter', credentialProviderId: borrow };
+
   return null;
 }
 
@@ -92,6 +128,7 @@ export function resolveSearchRoute(
 export function hasSearch(
   settings: Partial<SearchSettings> | null | undefined,
   env: Record<string, string | undefined> = {},
+  defaults: SearchDefaults = {},
 ): boolean {
-  return resolveSearchRoute(settings, env) !== null;
+  return resolveSearchRoute(settings, env, defaults) !== null;
 }

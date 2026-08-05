@@ -35,7 +35,11 @@ export async function POST(req: NextRequest) {
 
   // Settings come from the caller (the renderer holds them); env is the legacy
   // fallback so existing SEARXNG_INSTANCES installs keep working.
-  const resolved = resolveSearchRoute(body.settings ?? null, process.env);
+  const resolved = resolveSearchRoute(body.settings ?? null, process.env, {
+    openrouterProviderId:
+      (body.settings as { openrouterProviderId?: string | null } | undefined)
+        ?.openrouterProviderId ?? null,
+  });
   if (!resolved) {
     return NextResponse.json({ results: [], error: 'no_search_configured' }, { status: 501 });
   }

@@ -88,7 +88,8 @@ interface SettingsState {
    * per-query cost, so it is never turned on for someone who did not ask.
    * `resolveSearchRoute` is the only thing that reads these.
    */
-  searchProvider: SearchProviderId | null;
+  /** `'none'` = explicitly off (sticks); `null` = never chosen (may default on). */
+  searchProvider: SearchProviderId | 'none' | null;
   searchApiKey: string | null;
   searchInstanceUrl: string | null;
   /** Model-provider id whose stored key search borrows. An id, never a secret. */
@@ -151,7 +152,7 @@ interface SettingsActions {
   setGithubUser: (user: string | null) => void;
   clearGithubAuth: () => void;
   setAnthropicApiKey: (key: string | null) => void;
-  setSearchProvider: (id: SearchProviderId | null) => void;
+  setSearchProvider: (id: SearchProviderId | 'none' | null) => void;
   setSearchApiKey: (key: string | null) => void;
   setSearchInstanceUrl: (url: string | null) => void;
   setSearchCredentialProviderId: (id: string | null) => void;

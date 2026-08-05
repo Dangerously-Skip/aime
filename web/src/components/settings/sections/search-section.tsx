@@ -50,7 +50,7 @@ export function SearchSection() {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
 
-  const preset = searchProvider ? searchProviderPreset(searchProvider) : undefined
+  const preset = searchProvider && searchProvider !== 'none' ? searchProviderPreset(searchProvider) : undefined
   const route = resolveSearchRoute({
     searchProvider,
     searchApiKey,
@@ -58,7 +58,7 @@ export function SearchSection() {
     searchCredentialProviderId,
   })
 
-  const select = (id: SearchProviderId | null) => {
+  const select = (id: SearchProviderId | 'none' | null) => {
     setSearchProvider(id)
     // Default to borrowing when we can: the whole point is not asking twice.
     setSearchCredentialProviderId(id === 'openrouter' && borrowable ? borrowable.id : null)
@@ -125,9 +125,9 @@ export function SearchSection() {
       <div className="space-y-2">
         <button
           type="button"
-          onClick={() => select(null)}
+          onClick={() => select('none')}
           className={`w-full text-left rounded-lg p-3 ring-1 transition ${
-            searchProvider === null ? 'ring-foreground/30 bg-foreground/5' : 'ring-foreground/10'
+            searchProvider === 'none' ? 'ring-foreground/30 bg-foreground/5' : 'ring-foreground/10'
           }`}
         >
           <div className="font-medium text-sm">No search</div>

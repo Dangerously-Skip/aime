@@ -191,7 +191,13 @@ export class ClaudeProvider extends BaseProvider {
      * in-process SearchWeb tool. One resolution means the two cannot disagree
      * about whether search exists — which is exactly how the original bug got in.
      */
-    let searchRoute = resolveSearchRoute(searchSettings ?? null, process.env);
+    let searchRoute = resolveSearchRoute(searchSettings ?? null, process.env, {
+      // Default-on: an OpenRouter key configured for models also serves search.
+      // The provider list is client state, so the id arrives on the request.
+      openrouterProviderId:
+        (searchSettings as { openrouterProviderId?: string | null } | undefined)
+          ?.openrouterProviderId ?? null,
+    });
     if (searchRoute) {
       // Borrowed keys are resolved here, on the server, so the secret never
       // travels through settings or the request body.
