@@ -92,3 +92,24 @@ There is NO search engine available in this environment — no search server is 
 - Do NOT try to scrape Google, DuckDuckGo or Bing by any means. It does not work and the results are worthless.
 - For anything that needs current information you cannot reach — rankings, prices, recent events, "the best" of anything — say so plainly and ask the user for a link. Answer from what you know, mark it as unverified, and be explicit about what you could not check. That is a complete answer to the question that was asked; a page of dead URLs is not.`;
 }
+
+/**
+ * Swap the web-access section for the one that matches reality.
+ *
+ * The surface configs are built before the provider knows what search this run
+ * actually has — availability depends on the resolved backend (the SDK's native
+ * `WebSearch` needs first-party Anthropic or Vertex) and on the user's search
+ * provider, neither of which the config factory can see. So they call
+ * `webSearchPrompt()` with an env-only guess and the provider corrects it here.
+ *
+ * The swap is EXACT, not a heuristic: both strings come from this module, so it
+ * either finds the wrong branch verbatim and replaces it, or does nothing. That
+ * matters because the failure it prevents is a prompt that contradicts the
+ * mounted tools — telling a model it has no search while handing it a search
+ * tool is the same class of bug as the reverse, and the reverse is what sent it
+ * off inventing URLs.
+ */
+export function correctWebSearchSection(prompt: string, available: boolean): string {
+  const wrong = webSearchPrompt(!available);
+  return prompt.includes(wrong) ? prompt.replace(wrong, webSearchPrompt(available)) : prompt;
+}
