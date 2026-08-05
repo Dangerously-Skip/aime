@@ -24,7 +24,8 @@ import { render, cleanup, waitFor } from '@testing-library/react';
  * where it is most visible, because the wizard gates the whole app.
  */
 
-const SLOW_MS = 5000; // longer than the 3s fallback
+/** Longer than the render-anyway fallback, which is now 15s (was 3s). */
+const SLOW_MS = 20_000;
 
 let store: Record<string, string>;
 
@@ -74,7 +75,7 @@ describe('StoreHydration — the timeout must not clobber user changes', () => {
     render(<StoreHydration><Probe /></StoreHydration>);
 
     // 2. the fallback fires with defaults
-    await vi.advanceTimersByTimeAsync(3100);
+    await vi.advanceTimersByTimeAsync(15_100);
     expect(useSettingsStore.getState().onboardingComplete).toBe(false);
 
     // 3. the user completes onboarding

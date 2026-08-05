@@ -1,7 +1,7 @@
 "use client";
 
 import { AppShell } from "@/components/layout/app-shell";
-import { useHydrated } from "@/components/store-hydration";
+import { useHydrated, useRehydrated } from "@/components/store-hydration";
 import { useSettingsStore } from "@/stores/settings-store";
 import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard";
 
@@ -18,6 +18,15 @@ function shouldShowWizard(
 
 export default function Home() {
   const hydrated = useHydrated();
+  /**
+   * The wizard waits for REAL state, not merely for permission to render.
+   *
+   * `onboardingComplete: false` is the default, and it is indistinguishable
+   * from "this user is new" — so showing the wizard before the persisted value
+   * arrives asks a returning user to introduce themselves again. That is what
+   * the 3s hydration timeout was doing on every slow start.
+   */
+  const rehydrated = useRehydrated();
   const onboardingComplete = useSettingsStore((s) => s.onboardingComplete);
   const onboardingSkippedAt = useSettingsStore((s) => s.onboardingSkippedAt);
 
@@ -29,7 +38,7 @@ export default function Home() {
     );
   }
 
-  if (shouldShowWizard(onboardingComplete, onboardingSkippedAt)) {
+  if (rehydrated && shouldShowWizard(onboardingComplete, onboardingSkippedAt)) {
     return <OnboardingWizard />;
   }
 
