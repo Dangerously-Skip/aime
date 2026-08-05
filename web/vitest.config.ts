@@ -23,7 +23,13 @@ export default defineConfig({
     // Root-level .js is included for the Electron-side modules that must sit
     // beside main-web.js to be picked up by electron-builder's `files` allowlist
     // (credential-key.js), so their tests can live next to them.
-    include: ['src/**/*.test.{ts,tsx}', '*.test.{js,ts}'],
+    //
+    // `scripts/` is included because what lives there is not incidental tooling:
+    // `dev-with-port.js` chooses the dev server's PORT, and the port is the
+    // ORIGIN, and the origin is which localStorage profile the app sees. A bug
+    // there presents as data loss. A test for it that silently never ran would
+    // be worse than none.
+    include: ['src/**/*.test.{ts,tsx}', '*.test.{js,ts}', 'scripts/**/*.test.{js,ts}'],
     environment: 'node',
     /**
      * Vitest's 5s default is a fast-laptop assumption. The suite runs in ~14s

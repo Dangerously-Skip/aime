@@ -100,16 +100,39 @@ function mintCredentialKey(webDir) {
   let port = PREFERRED_DEV_PORT;
   if (await canBind(PREFERRED_DEV_PORT)) {
     console.log(`[dev-with-port] Using port ${port}`);
-  } else {
+  } else if (process.env.AIME_ALLOW_ANY_PORT === '1') {
     port = await findFreePort();
-    // Worth shouting about: a different origin means an empty localStorage, so
-    // the app will look like a first run and any state saved this session is
-    // stranded under this port.
     console.warn(
-      `[dev-with-port] Port ${PREFERRED_DEV_PORT} is busy — using ${port} instead.\n` +
-      `[dev-with-port] localStorage is per-origin, so settings, providers and ` +
-      `conversations from previous runs will NOT be visible this session.`,
+      `[dev-with-port] Port ${PREFERRED_DEV_PORT} is busy — using ${port} because ` +
+      `AIME_ALLOW_ANY_PORT=1.\n` +
+      `[dev-with-port] localStorage is per-origin, so this session starts with an ` +
+      `EMPTY profile and anything saved in it is stranded under port ${port}.`,
     );
+  } else {
+    /**
+     * Refuse, rather than silently start on another origin.
+     *
+     * A warning was not enough. localStorage is keyed by origin, so a different
+     * port is a different profile: the app boots into onboarding with no
+     * settings, no providers and no conversations, and anything saved that
+     * session is stranded there forever. This profile accumulated ten such
+     * origins before anyone worked out why onboarding kept reappearing — the
+     * settings ended up under one port and the conversations under another,
+     * which reads as data loss and is really an addressing problem.
+     *
+     * A dev server that does not start is an obvious, one-line problem. A dev
+     * server that starts with someone's profile invisible is a confusing one
+     * that costs an afternoon, so this fails closed.
+     */
+    console.error(
+      `\n[dev-with-port] Port ${PREFERRED_DEV_PORT} is already in use, so refusing to start.\n\n` +
+      `  localStorage is per-origin: starting on a different port gives the app a\n` +
+      `  BLANK profile — no settings, no API keys, no conversations — and strands\n` +
+      `  anything you save under that port.\n\n` +
+      `  Free it:            lsof -tiTCP:${PREFERRED_DEV_PORT} -sTCP:LISTEN | xargs kill\n` +
+      `  Or accept a blank profile:  AIME_ALLOW_ANY_PORT=1 npm run electron:dev\n`,
+    );
+    process.exit(1);
   }
 
   const webDir = path.join(__dirname, '..');
