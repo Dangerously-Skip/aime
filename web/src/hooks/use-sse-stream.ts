@@ -92,6 +92,12 @@ interface UseSSEStreamReturn {
       history?: Array<{ role: 'user' | 'assistant'; content: string }>
       memories?: string
       crossSurfaceContext?: string
+      searchSettings?: {
+        searchProvider?: string | null;
+        searchApiKey?: string | null;
+        searchInstanceUrl?: string | null;
+        searchCredentialProviderId?: string | null;
+      };
       securitySettings?: {
         blockDangerousCommands?: boolean
         blockNetworkCommands?: boolean
@@ -155,7 +161,13 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         memories?: string
         crossSurfaceContext?: string
         contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
-        securitySettings?: {
+        searchSettings?: {
+        searchProvider?: string | null;
+        searchApiKey?: string | null;
+        searchInstanceUrl?: string | null;
+        searchCredentialProviderId?: string | null;
+      };
+      securitySettings?: {
           blockDangerousCommands?: boolean
           blockNetworkCommands?: boolean
           restrictToProjectFolder?: boolean
@@ -216,6 +228,10 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.crossSurfaceContext ? { crossSurfaceContext: extra.crossSurfaceContext } : {}),
             ...(extra?.contextBusEvents?.length ? { contextBusEvents: extra.contextBusEvents } : {}),
             ...(extra?.securitySettings ? { securitySettings: extra.securitySettings } : {}),
+            // Without this the whole search subsystem is inert: the server only
+            // ever saw the env fallback, so a provider configured in Settings
+            // never reached the agent loop.
+            ...(extra?.searchSettings ? { searchSettings: extra.searchSettings } : {}),
             ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
             ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
             ...(extra?.capability ? { capability: extra.capability } : {}),

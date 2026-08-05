@@ -44,6 +44,46 @@ describe('resolveSearchRoute', () => {
     ).toBeNull();
   });
 
+  describe('default on, when a credential already exists', () => {
+    const OR = { openrouterProviderId: 'prov-or-1' };
+
+    /**
+     * The decision this encodes: search on by default when the user already has
+     * a key that can serve it. Left opt-in, it stayed off, the agent had no
+     * search at all, and it filled the gap by inventing URLs.
+     */
+    it('borrows the OpenRouter credential when nothing has been chosen', () => {
+      const r = resolveSearchRoute(null, {}, OR);
+      expect(r).toEqual({ providerId: 'openrouter', credentialProviderId: 'prov-or-1' });
+    });
+
+    /**
+     * The half that makes a default acceptable: turning it off has to stick.
+     * Re-enabling it each launch would be spending someone's money against an
+     * explicit instruction, which is why `'none'` and `null` are different
+     * values rather than one nullable field.
+     */
+    it('respects an explicit "none" and does NOT re-enable', () => {
+      expect(resolveSearchRoute({ searchProvider: 'none' }, {}, OR)).toBeNull();
+      expect(hasSearch({ searchProvider: 'none' }, {}, OR)).toBe(false);
+    });
+
+    it('an explicit provider still wins over the default', () => {
+      const r = resolveSearchRoute({ searchProvider: 'tavily', searchApiKey: 'tvly' }, {}, OR);
+      expect(r?.providerId).toBe('tavily');
+    });
+
+    it('env search still wins over the default — it was configured deliberately', () => {
+      const r = resolveSearchRoute(null, { SEARXNG_INSTANCES: 'https://s.example' }, OR);
+      expect(r?.providerId).toBe('searxng');
+    });
+
+    it('does nothing without a borrowable provider', () => {
+      expect(resolveSearchRoute(null, {}, {})).toBeNull();
+      expect(resolveSearchRoute(null, {}, { openrouterProviderId: '  ' })).toBeNull();
+    });
+  });
+
   describe('the legacy env path', () => {
     it('keeps an existing SEARXNG_INSTANCES install working', () => {
       const r = resolveSearchRoute(null, { SEARXNG_INSTANCES: 'https://searx.example' });
