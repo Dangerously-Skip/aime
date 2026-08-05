@@ -186,6 +186,7 @@ export async function POST(
     autoExtractMemories = true,
     securitySettings = null,
     searchSettings = null,
+    deckTheme = null,
     sessionControls = null,
     toolProfile = 'full',
     maxTurns: requestedMaxTurns = null,
@@ -224,6 +225,8 @@ export async function POST(
     sessionControls?: SessionControls | null;
     /** The user's chosen search provider; resolved by `resolveSearchRoute`. */
     searchSettings?: Partial<import('@/lib/search/resolve').SearchSettings> | null;
+    /** Already resolved by the client — project beats global. */
+    deckTheme?: import('@/lib/themes/resolve').ResolvedTheme | null;
     /**
      * Optional LOWER bound on the surface's turn ceiling. Clamped with
      * `Math.min` — a caller can bound a run, never exceed the surface's policy.
@@ -971,6 +974,7 @@ export async function POST(
           allowedTools: surfaceConfig.allowedTools,
           deniedTools: [...deniedTools],
           searchSettings: searchSettings ?? undefined,
+          deckTheme: deckTheme ?? undefined,
           // Deliberately NOT forwarded from the request body: the provider loads
           // the user's toggles itself, so every caller is covered rather than
           // just the two surfaces that remembered to send them — and so omitting

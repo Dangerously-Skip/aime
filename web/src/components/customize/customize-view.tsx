@@ -8,7 +8,8 @@ import { BrowseConnectors } from "./browse-connectors";
 import { BrowseMarketplace } from "./browse-marketplace";
 import { AutomationSection } from "./automation-section";
 import { AgentsPanel } from "./agents-panel";
-import { Briefcase, Cable, Zap, Puzzle, ArrowRight, Timer, Bot } from "lucide-react";
+import { DesignPanel } from "./design-panel";
+import { Briefcase, Cable, Zap, Puzzle, ArrowRight, Timer, Bot, Palette } from "lucide-react";
 
 const LANDING_ROWS = [
   {
@@ -34,6 +35,12 @@ const LANDING_ROWS = [
     title: "Automation",
     description: "Schedule cron jobs, configure webhooks, and set up heartbeat check-ins",
     section: "automation" as const,
+  },
+  {
+    icon: Palette,
+    title: "Design",
+    description: "Choose how decks and documents look — for everything, or per project",
+    section: "design" as const,
   },
   {
     icon: Bot,
@@ -104,6 +111,8 @@ export function CustomizeView() {
     content = <BrowseMarketplace />;
   } else if (customizeSection === "automation") {
     content = <AutomationSection />;
+  } else if (customizeSection === "design") {
+    content = <DesignPanel />;
   } else if (customizeSection === "agents") {
     content = <AgentsPanel />;
   } else {

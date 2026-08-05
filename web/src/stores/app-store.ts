@@ -8,7 +8,7 @@ export type Surface = 'chat' | 'cowork' | 'code' | 'browser' | 'assistant';
 export type Theme = 'light' | 'dark' | 'system' | 'emma';
 
 export type SidebarMode = 'history' | 'projects' | 'customize';
-export type CustomizeSection = 'landing' | 'skills' | 'connectors' | 'browse-connectors' | 'browse-marketplace' | 'automation' | 'agents';
+export type CustomizeSection = 'landing' | 'skills' | 'connectors' | 'browse-connectors' | 'browse-marketplace' | 'automation' | 'agents' | 'design';
 
 interface AppState {
   activeSurface: Surface;

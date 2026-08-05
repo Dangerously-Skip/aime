@@ -2,6 +2,7 @@ import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { resolveSearchRoute } from '../search/resolve';
 import { supportsNativeWebSearch } from '../search/native-search';
 import { correctWebSearchSection } from '../surfaces/shared/web-search-prompt';
+import { themeInstruction } from '../themes/resolve';
 import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
@@ -136,6 +137,7 @@ export class ClaudeProvider extends BaseProvider {
       deniedTools,
       securitySettings,
       searchSettings,
+      deckTheme,
       maxTurns: explicitMaxTurns,
       maxBudgetUsd,
       systemPrompt: explicitSystemPrompt,
@@ -250,15 +252,23 @@ export class ClaudeProvider extends BaseProvider {
     const rawSystemPrompt = explicitSystemPrompt
       || surfaceConfig?.systemPrompt
       || undefined;
+    /**
+     * The chosen deck design, stated once. Silent by default was the explicit
+     * ask; traceable was the condition — the instruction also tells the model to
+     * say which design it used and where to change it, so a default nobody chose
+     * on purpose is still explicable.
+     */
+    const themeNote = themeInstruction(deckTheme ?? null);
     const systemPrompt = (() => {
       if (typeof rawSystemPrompt === 'string') {
-        return correctWebSearchSection(rawSystemPrompt, searchAvailable);
+        return correctWebSearchSection(rawSystemPrompt, searchAvailable) + themeNote;
       }
       if (rawSystemPrompt && typeof rawSystemPrompt === 'object' && 'append' in rawSystemPrompt) {
         const a = (rawSystemPrompt as { append?: string }).append;
-        return a
-          ? { ...rawSystemPrompt, append: correctWebSearchSection(a, searchAvailable) }
-          : rawSystemPrompt;
+        return {
+          ...rawSystemPrompt,
+          append: (a ? correctWebSearchSection(a, searchAvailable) : '') + themeNote,
+        };
       }
       return rawSystemPrompt;
     })();

@@ -52,6 +52,12 @@ export interface Project {
   name: string;
   description: string;
   customInstructions: string;
+  /**
+   * Deck theme for this project's decks. Beats the global default, so a project
+   * per client keeps each client's decks looking like theirs without anyone
+   * having to say so each time. Undefined = inherit the global.
+   */
+  deckTheme?: string | null;
   knowledgeFiles: KnowledgeFile[];
   surfaces: string[];
   color: string;

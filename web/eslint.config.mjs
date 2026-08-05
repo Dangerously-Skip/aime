@@ -20,6 +20,11 @@ const eslintConfig = defineConfig([
     "release/**",
     "temp/**",
     "public/**",
+    // Vendored third-party assets. `resources/html-deck` is MIT code copied
+    // from another project (see its PROVENANCE.md) — linting it produces
+    // findings nobody can act on without diverging from upstream, which would
+    // turn a re-pull into a merge.
+    "resources/html-deck/**",
     "**/*.min.js",
     "**/*.min.mjs",
   ]),

@@ -92,6 +92,7 @@ interface UseSSEStreamReturn {
       history?: Array<{ role: 'user' | 'assistant'; content: string }>
       memories?: string
       crossSurfaceContext?: string
+      deckTheme?: { id: string; source: string } | null;
       searchSettings?: {
         searchProvider?: string | null;
         searchApiKey?: string | null;
@@ -161,7 +162,8 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         memories?: string
         crossSurfaceContext?: string
         contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
-        searchSettings?: {
+        deckTheme?: { id: string; source: string } | null;
+      searchSettings?: {
         searchProvider?: string | null;
         searchApiKey?: string | null;
         searchInstanceUrl?: string | null;
@@ -232,6 +234,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             // ever saw the env fallback, so a provider configured in Settings
             // never reached the agent loop.
             ...(extra?.searchSettings ? { searchSettings: extra.searchSettings } : {}),
+            ...(extra?.deckTheme ? { deckTheme: extra.deckTheme } : {}),
             ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
             ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
             ...(extra?.capability ? { capability: extra.capability } : {}),
