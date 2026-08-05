@@ -122,3 +122,30 @@ describe('the resolved theme actually reaches the agent', () => {
     expect(read('src/lib/providers/claude-provider.ts')).toMatch(/themeInstruction\(/);
   });
 });
+
+describe('Design is reachable in the UI', () => {
+  /**
+   * Customize has TWO entry points — landing cards and a persistent left rail —
+   * and the first version of this only touched the cards. The rail is what
+   * someone uses after their first visit, so a section missing from it is a
+   * feature you can only find by going back to a page you have already left.
+   */
+  const read = (p: string) =>
+    readFileSync(resolvePath(process.cwd(), p), 'utf-8');
+
+  it('appears in the Customize left rail', () => {
+    expect(read('src/components/layout/sidebar-customize.tsx')).toMatch(
+      /setCustomizeSection\("design"\)/,
+    );
+  });
+
+  it('appears on the Customize landing page', () => {
+    expect(read('src/components/customize/customize-view.tsx')).toMatch(/section: "design"/);
+  });
+
+  it('renders the panel when selected', () => {
+    expect(read('src/components/customize/customize-view.tsx')).toMatch(
+      /customizeSection === "design"[\s\S]{0,80}DesignPanel/,
+    );
+  });
+});
