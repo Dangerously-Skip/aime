@@ -1,5 +1,7 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { resolveSearchRoute } from '../search/resolve';
+import { supportsNativeWebSearch } from '../search/native-search';
+import { correctWebSearchSection } from '../surfaces/shared/web-search-prompt';
 import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
@@ -197,8 +199,19 @@ export class ClaudeProvider extends BaseProvider {
       searchRoute = await withStoredCredential(searchRoute);
     }
 
+    /**
+     * The SDK's built-in `WebSearch` — Anthropic's server-side search.
+     *
+     * Denied unconditionally for the whole life of this app, which was right
+     * when it pointed at a gateway that could not serve it and wrong ever since:
+     * on a first-party key it works, costs nothing to configure, and needs no
+     * third-party account. We were switching it off and then telling the user to
+     * self-host SearXNG. See search/native-search.ts.
+     */
+    const nativeWebSearch = supportsNativeWebSearch({ baseUrl, providerEnv });
+
     const denied = new Set<string>([
-      'WebSearch',
+      ...(nativeWebSearch ? [] : ['WebSearch']),
       ...(deniedTools ?? []),
       // Derived from the user setting rather than left to the route, for the same
       // reason: a caller that assembles its own params cannot forget it.
@@ -221,9 +234,28 @@ export class ClaudeProvider extends BaseProvider {
     const mcpServers = explicitMcpServers
       || surfaceConfig?.mcpServers
       || {};
-    const systemPrompt = explicitSystemPrompt
+    /**
+     * Search availability is only knowable here — it depends on the resolved
+     * backend and the user's provider, and the surface config was built before
+     * either was known. Correcting it means the prompt and the mounted tools
+     * agree, which is the invariant this whole area keeps breaking.
+     */
+    const searchAvailable = nativeWebSearch || searchRoute !== null;
+    const rawSystemPrompt = explicitSystemPrompt
       || surfaceConfig?.systemPrompt
       || undefined;
+    const systemPrompt = (() => {
+      if (typeof rawSystemPrompt === 'string') {
+        return correctWebSearchSection(rawSystemPrompt, searchAvailable);
+      }
+      if (rawSystemPrompt && typeof rawSystemPrompt === 'object' && 'append' in rawSystemPrompt) {
+        const a = (rawSystemPrompt as { append?: string }).append;
+        return a
+          ? { ...rawSystemPrompt, append: correctWebSearchSection(a, searchAvailable) }
+          : rawSystemPrompt;
+      }
+      return rawSystemPrompt;
+    })();
     const model = explicitModel
       || surfaceConfig?.model
       || undefined;

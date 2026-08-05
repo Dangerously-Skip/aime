@@ -128,7 +128,8 @@ describe('option assembly', () => {
 
     expect(options.allowedTools).toContain('Read');
     expect(options.allowedTools).toContain('Bash');
-    expect(options.disallowedTools).toEqual(['WebSearch']);
+    // Nothing withheld on a plain first-party run — see the WebSearch block below.
+    expect(options.disallowedTools).toEqual([]);
     expect(options.maxTurns).toBe(20);
     expect(options.permissionMode).toBe('bypassPermissions');
     expect(options.allowDangerouslySkipPermissions).toBe(true);
@@ -555,10 +556,35 @@ describe('deniedTools', () => {
     );
   });
 
-  it('keeps denying WebSearch when the caller denies nothing', async () => {
+  /**
+   * WebSearch used to be denied on EVERY run, unconditionally, with no comment.
+   * It is a real SDK built-in and was in this app's original tool list; the deny
+   * was a corporate-gateway artifact that outlived the gateway. It is Anthropic's
+   * server-side search, so the rule is now about whether the backend serves it.
+   */
+  it('offers the SDK WebSearch on a first-party run', async () => {
     const { options } = await captureOptions(new ClaudeProvider(), {});
-    expect(options.disallowedTools).toEqual(['WebSearch']);
+    expect(options.disallowedTools).toEqual([]);
     expect((await captureOptions(new ClaudeProvider(), {})).canUseTool).toBeDefined();
+  });
+
+  it('withholds it on Bedrock, which does not serve it', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      providerEnv: { CLAUDE_CODE_USE_BEDROCK: '1' },
+    });
+    expect(options.disallowedTools).toEqual(['WebSearch']);
+  });
+
+  /**
+   * The case that prompted the question. OpenRouter proxies the Messages API
+   * but does not execute Anthropic's server-side tools — it has its own web
+   * plugin, which the `openrouter` SEARCH provider uses instead.
+   */
+  it('withholds it behind a third-party base URL', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      baseUrl: 'https://openrouter.ai/api/v1',
+    });
+    expect(options.disallowedTools).toEqual(['WebSearch']);
   });
 
   it('leaves every other tool alone', async () => {
