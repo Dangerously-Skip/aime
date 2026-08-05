@@ -16,6 +16,7 @@ import { useFileDrop } from "@/hooks/use-file-drop";
 import { useCodeStore, type PermissionMode } from "@/stores/code-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSearchSettings } from '@/hooks/use-search-settings'
+import { useDeckTheme } from '@/hooks/use-deck-theme'
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
@@ -618,6 +619,7 @@ export function CodeSurface() {
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   /** Sent with every turn; without it the server never learns search exists. */
   const searchSettings = useSearchSettings();
+  const deckTheme = useDeckTheme();
   // Built-in (Claude) reachability, which is the user's key OR the server's env
   // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
   const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
@@ -1116,6 +1118,7 @@ export function CodeSurface() {
           disableBashTool,
         },
         searchSettings,
+        deckTheme,
       });
     },
     [

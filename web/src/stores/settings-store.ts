@@ -95,6 +95,12 @@ interface SettingsState {
   /** Model-provider id whose stored key search borrows. An id, never a secret. */
   searchCredentialProviderId: string | null;
 
+  /**
+   * Default deck theme, applied silently to every deck unless a project or the
+   * request says otherwise. `null` = never chosen; the skill picks by brief.
+   */
+  deckTheme: string | null;
+
   // Memory
   autoExtractMemories: boolean;
 
@@ -156,6 +162,7 @@ interface SettingsActions {
   setSearchApiKey: (key: string | null) => void;
   setSearchInstanceUrl: (url: string | null) => void;
   setSearchCredentialProviderId: (id: string | null) => void;
+  setDeckTheme: (id: string | null) => void;
   setAutoExtractMemories: (enabled: boolean) => void;
   setBlockDangerousCommands: (enabled: boolean) => void;
   setBlockNetworkCommands: (enabled: boolean) => void;
@@ -197,6 +204,7 @@ export const INITIAL_SETTINGS: SettingsState = {
   searchApiKey: null,
   searchInstanceUrl: null,
   searchCredentialProviderId: null,
+  deckTheme: null,
   autoExtractMemories: true,
   blockDangerousCommands: true,
   blockNetworkCommands: false,
@@ -252,6 +260,7 @@ export const PERSISTED_SETTINGS_KEYS = [
   'searchApiKey',
   'searchInstanceUrl',
   'searchCredentialProviderId',
+  'deckTheme',
   'autoExtractMemories',
   'blockDangerousCommands',
   'blockNetworkCommands',
@@ -338,6 +347,7 @@ export const useSettingsStore = create<SettingsStore>()(
       setSearchApiKey: (searchApiKey) => set({ searchApiKey }),
       setSearchInstanceUrl: (searchInstanceUrl) => set({ searchInstanceUrl }),
       setSearchCredentialProviderId: (searchCredentialProviderId) => set({ searchCredentialProviderId }),
+      setDeckTheme: (deckTheme) => set({ deckTheme }),
 
       setAutoExtractMemories: (autoExtractMemories) => set({ autoExtractMemories }),
 
@@ -385,6 +395,7 @@ export const useSettingsStore = create<SettingsStore>()(
           if (state.searchApiKey === undefined) state.searchApiKey = null;
           if (state.searchInstanceUrl === undefined) state.searchInstanceUrl = null;
           if (state.searchCredentialProviderId === undefined) state.searchCredentialProviderId = null;
+          if (state.deckTheme === undefined) state.deckTheme = null;
         }
         // v11: the org "select your team" concept moved to a separate product.
         // DROP the key rather than leaving it: zustand's default merge splices

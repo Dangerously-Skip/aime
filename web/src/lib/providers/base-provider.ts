@@ -107,6 +107,12 @@ export interface QueryParams {
    * `resolveSearchRoute`. Never read directly — see search-route-coverage.
    */
   searchSettings?: Partial<import('../search/resolve').SearchSettings>;
+  /**
+   * Deck theme for this run, already resolved (project beats global). Sent
+   * resolved rather than as two fields so the precedence lives in exactly one
+   * place — see themes/resolve.ts.
+   */
+  deckTheme?: import('../themes/resolve').ResolvedTheme | null;
   maxTurns?: number;
   /**
    * Hard USD ceiling for the turn, enforced by the SDK — it stops mid-run and
