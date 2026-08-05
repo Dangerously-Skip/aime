@@ -146,7 +146,7 @@ export function DesignPanel() {
 
   if (themes === null) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex flex-1 items-center justify-center min-h-0">
         <Loader2 className="text-muted-foreground size-4 animate-spin" />
       </div>
     );
@@ -161,8 +161,18 @@ export function DesignPanel() {
     );
   }
 
+  /**
+   * `flex-1 overflow-y-auto min-h-0`, and `min-h-0` is the load-bearing part.
+   *
+   * The parent is `absolute inset-0 flex flex-col`. Without `min-h-0` a flex
+   * child's implied `min-height: auto` keeps it at its content height, so it
+   * grows past the viewport and `overflow-y-auto` never engages — the panel
+   * renders correctly and simply cannot be scrolled, which is exactly how this
+   * shipped. Every other panel here carries the same trio.
+   */
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6 p-6">
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-4xl space-y-6 p-6">
       <div>
         <h2 className="flex items-center gap-2 text-lg font-medium">
           <Palette className="size-4" /> Design
@@ -250,6 +260,7 @@ export function DesignPanel() {
             </div>
           </div>
         ))}
+        </div>
       </div>
     </div>
   );
