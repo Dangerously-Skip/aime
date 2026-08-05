@@ -222,3 +222,33 @@ describe('previews show the theme, not a redrawing of it', () => {
     expect(route).toMatch(/endsWith\('\.css'\)/);
   });
 });
+
+describe('the preview slide is actually visible', () => {
+  /**
+   * base.css ships `.slide{opacity:0}` and reveals the current slide with
+   * `.slide.is-active`, which `runtime.js` adds. The preview does not load the
+   * runtime — the iframe is sandboxed and scripts are blocked — so without the
+   * class every card rendered as an empty coloured rectangle: the theme's
+   * background and no content at all.
+   *
+   * Asserted against base.css rather than as a literal, so if upstream renames
+   * the class this fails instead of silently going blank again.
+   */
+  it('carries whatever class base.css uses to reveal a slide', () => {
+    const base = readFileSync(
+      resolvePath(process.cwd(), 'resources/html-deck/assets/base.css'),
+      'utf-8',
+    );
+    const reveal = base.match(/\.slide\.([a-z-]+)\s*\{[^}]*opacity\s*:\s*1/);
+    expect(reveal, 'base.css no longer reveals slides via a class — preview needs rechecking').toBeTruthy();
+
+    const panel = readFileSync(
+      resolvePath(process.cwd(), 'src/components/customize/design-panel.tsx'),
+      'utf-8',
+    );
+    expect(
+      panel,
+      `preview slide must carry .${reveal![1]} or it renders invisible`,
+    ).toContain(`slide ${reveal![1]}`);
+  });
+});
