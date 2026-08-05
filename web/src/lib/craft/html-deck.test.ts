@@ -28,6 +28,11 @@ const themeFiles = fs
   .filter((f) => f.endsWith('.css'))
   .map((f) => f.replace(/\.css$/, ''));
 
+const layoutNames = fs
+  .readdirSync(path.join(ASSETS, 'templates/single-page'))
+  .filter((f) => f.endsWith('.html'))
+  .map((f) => f.replace(/\.html$/, ''));
+
 const skillText = fs.readFileSync(SKILL, 'utf-8');
 
 describe('vendored provenance is intact', () => {
@@ -106,10 +111,13 @@ describe('the skill and the theme library agree', () => {
 
     // Anything shaped like a theme slug that is NOT a file, and not a known
     // non-theme term, is a name the model could pick and fail on.
+    // The skill names two vocabularies — themes and layouts — plus a few known
+    // terms. Anything slug-shaped outside all three is a dead reference the
+    // model would follow mid-task.
     const allowed = new Set(['deck-html', 'craft-deck', 'craft-web', 'craft-doc', 'theme-link']);
     for (const w of named) {
-      if (allowed.has(w) || themeFiles.includes(w)) continue;
-      expect.fail(`skill names '${w}', which is neither a theme file nor a known term`);
+      if (allowed.has(w) || themeFiles.includes(w) || layoutNames.includes(w)) continue;
+      expect.fail(`skill names '${w}', which is neither a theme, a layout, nor a known term`);
     }
   });
 
@@ -125,5 +133,45 @@ describe('the skill and the theme library agree', () => {
   it('states the editability tradeoff against pptx', () => {
     expect(skillText).toMatch(/pptx/i);
     expect(skillText).toMatch(/edit/i);
+  });
+});
+
+describe('the layout catalogue', () => {
+  const layoutDir = path.join(ASSETS, 'templates/single-page');
+  const layouts = layoutNames;
+
+  /**
+   * The vendored deck ships six slide types. Charts, tables, timelines and
+   * diagrams are not decoration — they are the layout vocabulary, and without
+   * them the model invents markup, which does not consume theme tokens and so
+   * stops matching its own theme halfway through.
+   */
+  it('covers the slide types a real deck needs', () => {
+    expect(layouts.length).toBeGreaterThanOrEqual(25);
+    for (const needed of ['cover', 'toc', 'kpi-grid', 'table', 'chart-bar', 'timeline', 'comparison']) {
+      expect(layouts, `no ${needed} layout`).toContain(needed);
+    }
+  });
+
+  it('every layout follows the same contract the skill describes', () => {
+    for (const name of layouts) {
+      const html = fs.readFileSync(path.join(layoutDir, `${name}.html`), 'utf-8');
+      expect(html, `${name} does not link base.css`).toMatch(/assets\/base\.css/);
+      // `is-active` is what makes a slide visible; `single` is what makes a
+      // standalone file render full-page. Both are load-bearing.
+      expect(html, `${name} slide would render invisible`).toMatch(/slide is-active/);
+      expect(html, `${name} is not standalone`).toMatch(/<body class="single"/);
+    }
+  });
+
+  /**
+   * Same failure as the theme list: a layout the skill names with no file is a
+   * dead reference the model follows mid-task.
+   */
+  it('names no layout that does not exist', () => {
+    const named = [...skillText.matchAll(/`([a-z][a-z0-9-]+)`/g)].map((m) => m[1]);
+    const looksLikeLayout = named.filter((w) => w.includes('-') || layouts.includes(w));
+    const claimed = looksLikeLayout.filter((w) => layouts.includes(w));
+    expect(claimed.length, 'the skill lists no real layouts').toBeGreaterThan(20);
   });
 });

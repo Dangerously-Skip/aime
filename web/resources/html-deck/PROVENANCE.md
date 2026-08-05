@@ -10,14 +10,20 @@ no Apache attribution file to propagate.
 
 ## What was taken, and what was not
 
-Taken: `assets/` (base.css, fonts.css, animations, and all 36 theme files) plus
-one reference `templates/deck.html`. That is the part with reuse value — each
-theme is a pure CSS-custom-property file, so swapping one `<link>` reskins an
-entire deck.
+Taken: `assets/` (base.css, fonts.css, animations, and all 36 theme files),
+`templates/deck.html`, and all 31 of `templates/single-page/`.
 
-Not taken: the other ~90 template folders. They are worth revisiting, but each
-is a layout opinion rather than infrastructure, and vendoring ninety of them
-before one has been used would be carrying inventory.
+The single-page layouts were left out at first, on the reasoning that they were
+"layout opinions rather than infrastructure". That was wrong, and the list is
+what shows it: chart-bar, table, timeline, kpi-grid, comparison, flow-diagram.
+Those are the layout VOCABULARY of the system, not opinions about it — and
+without them a model asked for a chart writes its own markup, which consumes no
+theme tokens and so stops matching the theme it is inside.
+
+Not taken: the other ~90 top-level template folders (landing pages, dashboards,
+reports). Those genuinely are individual designs rather than infrastructure, and
+belong to a separate decision about whether AIME produces HTML for those media
+at all.
 
 ## Modifications
 
