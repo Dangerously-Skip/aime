@@ -507,6 +507,38 @@ describe('deniedTools', () => {
       expect(r.behavior).toBe('deny');
     });
 
+    /**
+     * The hole that let the guessing survive the first fix, caught in the wild.
+     *
+     * Provenance was seeded from the whole history, assistant turns included.
+     * These conversations continue after a failed guessing run, so the
+     * transcript is already full of invented addresses — the model had only to
+     * mention one in a previous reply for the next turn to treat it as a source
+     * and fetch it. Laundering, one turn at a time.
+     *
+     * A URL is only a source if something OTHER than the model put it there.
+     */
+    it('refuses a URL the model itself mentioned in an earlier reply', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        prompt: 'try again',
+        history: [
+          { role: 'user' as const, content: 'best pizza in western sydney' },
+          { role: 'assistant' as const, content: `Let me try ${INVENTED} — a predictable pattern.` },
+        ],
+      });
+      const r = await canUseTool('WebFetch', { url: INVENTED }, { toolUseID: 'u6' });
+      expect(r.behavior).toBe('deny');
+    });
+
+    it('still trusts the same URL when the USER supplied it', async () => {
+      const { canUseTool } = await captureOptions(new ClaudeProvider(), {
+        prompt: 'try again',
+        history: [{ role: 'user' as const, content: `read ${INVENTED} please` }],
+      });
+      const r = await canUseTool('WebFetch', { url: INVENTED }, { toolUseID: 'u7' });
+      expect(r.behavior).toBe('allow');
+    });
+
     it('leaves tools that are not URL fetches alone', async () => {
       const { canUseTool } = await captureOptions(new ClaudeProvider(), { prompt: 'hi' });
       const r = await canUseTool('Read', { file_path: '/tmp/x' }, { toolUseID: 'u5' });
