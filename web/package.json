@@ -75,6 +75,10 @@
         "to": "html-deck"
       },
       {
+        "from": "resources/web-templates",
+        "to": "web-templates"
+      },
+      {
         "from": "mcp-servers",
         "to": "mcp-servers"
       }
