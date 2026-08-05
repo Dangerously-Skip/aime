@@ -1,21 +1,35 @@
-# PowerPoint Template Configuration
-# Maps markdown slide types to PowerPoint template layouts
+# PowerPoint configuration for the DEFAULT brand.
+#
+# Deliberately has no `template.path`. It used to point at
+# `Presentation_Template.pptx`, a proprietary asset that never made it into the
+# open-source repo — so every fresh clone hit "Template not found" and deck
+# generation died. A default that depends on a file the project does not ship is
+# not a default.
+#
+# With no template, markdown_to_pptx falls back to python-pptx's built-in
+# layouts, and the indices below are mapped to THOSE. Design decisions — type
+# scale, one idea per slide, projected legibility — live in the `craft-deck`
+# skill, which is guidance the model applies rather than a binary we have to
+# ship.
+#
+# A brand that wants its own chassis adds `template: {path: ...}` here, pointing
+# at a .pptx beside this file, and remaps the indices to that template's layouts.
 
 template:
-  path: "Presentation_Template.pptx"
-  slide_width: 13.33  # inches
-  slide_height: 7.5   # inches
+  slide_width: 13.33  # inches (16:9)
+  slide_height: 7.5
 
-# Layout indices from the template (April 2024 - default Core Brand)
-# Inspect the template in PowerPoint to verify layout indices
-# NOTE: Layout 4 (2_Title Slide) requires manual text box placement (dark green bg, needs white text)
+# Indices into python-pptx's built-in layout set:
+#   0 Title Slide      1 Title and Content   2 Section Header
+#   3 Two Content      4 Comparison          5 Title Only
+#   6 Blank            7 Content with Caption 8 Picture with Caption
 layouts:
-  title_slide: 4          # "2_Title Slide" (custom design, fill programmatically)
-  section_header: 3       # "Insight True Green Warm White" (branded section header)
-  title_and_content: 0    # "Single Column" (title + content)
-  two_content: 1          # "2 Column" (side-by-side)
-  blank: 0                # "Single Column" (no true blank, use content layout)
-  picture_with_caption: 0 # "Single Column" (for image slides)
+  title_slide: 0
+  section_header: 2
+  title_and_content: 1
+  two_content: 3
+  blank: 6
+  picture_with_caption: 8
 
 # Default layout for each slide type
 slide_type_defaults:
