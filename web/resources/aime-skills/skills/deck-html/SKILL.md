@@ -32,10 +32,39 @@ assets/themes/<name>.css         36 themes — pure CSS custom properties
 assets/animations/animations.css 27 named animations
 assets/runtime.js                keyboard nav, presenter mode, overview, theme cycling
 templates/deck.html              reference deck — read it before writing one
+templates/single-page/*.html     31 slide layouts, one per file
 ```
 
 **Read `templates/deck.html` first.** It is the shape to copy: the class names
 are load-bearing because `base.css` and `runtime.js` key off them.
+
+## Layouts — read one before inventing markup
+
+Every slide type you are likely to need already exists in
+`templates/single-page/`, as a standalone file using the same classes. Open the
+one you want and lift its markup:
+
+| Need | File |
+|---|---|
+| Opening / closing | `cover`, `thanks`, `cta` |
+| Structure | `toc`, `section-divider` |
+| Prose and lists | `bullets`, `two-column`, `three-column`, `big-quote` |
+| Numbers | `kpi-grid`, `stat-highlight`, `table` |
+| Charts | `chart-bar`, `chart-line`, `chart-pie`, `chart-radar` |
+| Comparison | `comparison`, `pros-cons`, `diff` |
+| Time and sequence | `timeline`, `roadmap`, `gantt`, `process-steps` |
+| Diagrams | `flow-diagram`, `arch-diagram`, `mindmap` |
+| Technical | `code`, `terminal` |
+| Images | `image-hero`, `image-grid` |
+| Working lists | `todo-checklist` |
+
+Hand-writing a bar chart or a timeline instead of lifting one is how a deck
+stops matching its own theme halfway through: the layouts consume theme tokens,
+bespoke markup does not.
+
+Each file is standalone — `<body class="single">` renders one slide full-page.
+Inside a multi-slide deck, drop the `single` class and keep the `<section
+class="slide">`.
 
 ## Building one
 
