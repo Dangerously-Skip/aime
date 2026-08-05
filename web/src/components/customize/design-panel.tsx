@@ -1,6 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+/** The deck's authored size. Previews scale this rather than restyling it. */
+const DECK_W = 1280;
+const DECK_H = 720;
 import { useSettingsStore } from '@/stores/settings-store';
 import { useProjectStore } from '@/stores/project-store';
 import { resolveDeckTheme } from '@/lib/themes/resolve';
@@ -66,6 +70,25 @@ interface DeckTheme {
  * as an empty coloured rectangle — the theme's background and nothing else.
  */
 function ThemePreview({ id }: { id: string }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0);
+
+  /**
+   * Scale is measured, not expressed in CSS, because CSS cannot express it: a
+   * unitless factor derived from the container width has no viewport-unit form
+   * that `scale()` accepts. The cards are a responsive grid, so it is observed
+   * rather than computed once.
+   */
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setScale(entry.contentRect.width / DECK_W);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const css = (f: string) => `/api/themes/asset?file=${encodeURIComponent(f)}`;
 
   const srcDoc = `<!doctype html>
@@ -74,13 +97,14 @@ function ThemePreview({ id }: { id: string }) {
 <link rel="stylesheet" href="${css('base.css')}">
 <link rel="stylesheet" href="${css(`themes/${id}.css`)}">
 <style>
-  /* The deck is authored at 1280x720. Scale it to the card instead of
-     re-styling it, so type scale and proportion stay honest — a preview that
-     re-sizes the type is not showing you the theme.
-     100vw inside the frame IS the card's width, so this is responsive with no
-     measuring and no resize observer. */
+  /* The deck renders at its true 1280x720 here and the IFRAME ELEMENT is
+     scaled from outside. The obvious in-frame version —
+     transform:scale(calc(100vw / 1280)) — is invalid CSS: scale() takes a
+     unitless number and calc() on a viewport unit yields a LENGTH, so the whole
+     declaration is dropped and the deck renders unscaled. Which is what
+     happened: the card showed the top-left corner of a 1280x720 slide whose
+     content is vertically centred at y~360, i.e. nothing. */
   html,body{margin:0;overflow:hidden;background:var(--bg);}
-  .deck{width:1280px;height:720px;transform:scale(calc(100vw / 1280));transform-origin:0 0;}
 </style>
 </head><body>
 <div class="deck"><section class="slide is-active">
@@ -97,18 +121,28 @@ function ThemePreview({ id }: { id: string }) {
 </body></html>`;
 
   return (
-    <div className="pointer-events-none aspect-video w-full overflow-hidden rounded-md">
-      <iframe
-        title=""
-        aria-hidden
-        tabIndex={-1}
-        loading="lazy"
-        sandbox=""
-        srcDoc={srcDoc}
-        // Fills the card; 1280x720 is 16:9, so `aspect-video` on the wrapper
-        // means the scaled deck lands exactly with nothing cropped.
-        style={{ width: '100%', height: '100%', border: 0, pointerEvents: 'none' }}
-      />
+    <div
+      ref={wrapRef}
+      className="pointer-events-none aspect-video w-full overflow-hidden rounded-md"
+    >
+      {scale > 0 && (
+        <iframe
+          title=""
+          aria-hidden
+          tabIndex={-1}
+          loading="lazy"
+          sandbox=""
+          srcDoc={srcDoc}
+          style={{
+            width: DECK_W,
+            height: DECK_H,
+            border: 0,
+            pointerEvents: 'none',
+            transform: `scale(${scale})`,
+            transformOrigin: '0 0',
+          }}
+        />
+      )}
     </div>
   );
 }
