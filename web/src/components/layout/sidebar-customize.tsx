@@ -16,6 +16,7 @@ import {
   Loader2,
   Globe,
   Timer,
+  Palette,
 } from "lucide-react";
 
 interface SkillItem {
@@ -142,6 +143,18 @@ export function SidebarCustomize() {
               {marketplacePlugins.length}
             </span>
           )}
+        </button>
+
+        <button
+          onClick={() => setCustomizeSection("design")}
+          className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+            customizeSection === "design"
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+          }`}
+        >
+          <Palette className="h-3.5 w-3.5" />
+          <span className="flex-1 text-left">Design</span>
         </button>
 
         <button
