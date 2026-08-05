@@ -149,3 +149,25 @@ describe('Design is reachable in the UI', () => {
     );
   });
 });
+
+describe('the panel can be scrolled', () => {
+  /**
+   * The parent is `absolute inset-0 flex flex-col`, so a panel taller than the
+   * viewport needs `flex-1 overflow-y-auto min-h-0`. `min-h-0` is the part that
+   * is easy to omit and impossible to notice in a diff: without it a flex
+   * child's implied `min-height: auto` holds it at content height, it grows past
+   * the viewport, and `overflow-y-auto` never engages. The panel renders
+   * perfectly and simply will not scroll — which is how it shipped, with 36
+   * themes and only the first six reachable.
+   */
+  it('has the full trio, not just overflow-y-auto', () => {
+    const src = readFileSync(
+      resolvePath(process.cwd(), 'src/components/customize/design-panel.tsx'),
+      'utf-8',
+    );
+    const scroller = src.match(/className="([^"]*overflow-y-auto[^"]*)"/);
+    expect(scroller, 'no scroll container at all').toBeTruthy();
+    expect(scroller![1], 'needs flex-1 to fill the column').toMatch(/flex-1/);
+    expect(scroller![1], 'needs min-h-0 or overflow never engages').toMatch(/min-h-0/);
+  });
+});
