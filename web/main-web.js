@@ -633,6 +633,29 @@ function installHtmlDeck() {
   }
 }
 
+/**
+ * Copy the bundled web templates (Apache-2.0, from nexu-io/open-design) to
+ * ~/.claude/plugins/web-templates/ for the `wireframe` and `web-prototype`
+ * skills. Kept separate from html-deck because the licences differ.
+ */
+function installWebTemplates() {
+  try {
+    const srcDir = app.isPackaged
+      ? path.join(process.resourcesPath, "web-templates")
+      : path.join(__dirname, "resources", "web-templates");
+    if (!fs.existsSync(srcDir)) return;
+    const destDir = path.join(os.homedir(), ".claude", "plugins", "web-templates");
+    const { syncBundledDir } = require("./bundled-install.js");
+    const r = syncBundledDir(srcDir, destDir);
+    console.log(
+      `[AIME] Installed web-templates at: ${destDir} ` +
+        `(${r.written} bundled, ${r.preserved} user files kept)`,
+    );
+  } catch (err) {
+    console.warn("[AIME] Failed to install web-templates:", err.message);
+  }
+}
+
 function installPptPlugin() {
   try {
     const srcDir = app.isPackaged
@@ -756,6 +779,7 @@ app.whenReady().then(async () => {
   installBundledSkills();
   installPptPlugin();
   installHtmlDeck();
+  installWebTemplates();
   await ensureSetup();
 
   // Determine the port: dev-with-port.js sets PORT in env; for packaged builds we find one here.
