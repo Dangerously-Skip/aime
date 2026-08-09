@@ -178,3 +178,67 @@ describe('StepProviders — the other presets', () => {
     expect((screen.getByPlaceholderText('sk-…') as HTMLInputElement).value).toBe('');
   });
 });
+
+/**
+ * The report that produced these: "I add my name, select OpenRouter, add my key
+ * then skip. The name is picked up but not the other options and data, so the
+ * retry makes it seem as though I haven't set up my key."
+ *
+ * It was exactly right, and the data was never lost. The profile in question had
+ * the OpenRouter provider in this store, all four tiers in `tierModels` pointing
+ * at it, and its credentials on the server — while this step opened on a blank
+ * Anthropic form. A screen asking for a key reads as "no key is set", so the key
+ * gets entered again, and every re-entry writes ANOTHER credential: that profile
+ * held 13 copies of one key.
+ */
+describe('what the user already configured', () => {
+  const openrouter = {
+    id: '7e48f16c-1d4e-4ac6-9660-cbed224150f7',
+    presetId: 'openrouter',
+    label: 'OpenRouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    enabled: true,
+    models: [],
+  };
+
+  beforeEach(() => {
+    useProviderStore.setState({ providers: [openrouter] });
+  });
+  afterEach(() => {
+    cleanup();
+    useProviderStore.setState({ providers: [] });
+  });
+
+  it('says so, instead of presenting an empty form', () => {
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    expect(
+      screen.getByText(/OpenRouter is already set up/i),
+      'nothing tells the user their key is already stored',
+    ).toBeDefined();
+  });
+
+  it('opens on the provider they use, not the catalogue default', () => {
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    const openRouterCard = screen.getByText('OpenRouter').closest('button');
+    expect(openRouterCard?.className, 'OpenRouter is not the selected card').toMatch(/border-primary/);
+  });
+
+  /**
+   * The tick is the per-row version of the same claim. Before, it appeared only
+   * for a provider configured in THIS session, so a returning user saw an
+   * unticked row for a provider they had set up weeks earlier.
+   */
+  it('ticks a provider configured in an earlier session', () => {
+    const { container } = render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    const card = screen.getByText('OpenRouter').closest('button');
+    expect(card?.querySelector('svg.text-emerald-500'), 'no tick on a configured provider').toBeTruthy();
+    expect(container).toBeTruthy();
+  });
+
+  it('still opens on the default when genuinely nothing is set up', () => {
+    useProviderStore.setState({ providers: [] });
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    expect(screen.queryByText(/already set up/i)).toBeNull();
+    expect(screen.getByText('Anthropic').closest('button')?.className).toMatch(/border-primary/);
+  });
+});

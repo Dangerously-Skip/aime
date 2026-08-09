@@ -80,9 +80,32 @@ export function otherPresetIds(): string[] {
 }
 
 export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
-  const [presetId, setPresetId] = useState<string>("anthropic");
+  /**
+   * What the user has ALREADY set up, which this step used to ignore entirely.
+   *
+   * It opened on a blank Anthropic form every time, whatever was configured. A
+   * user who had set up OpenRouter — key saved, credentials on disk, the whole
+   * tier grid pointing at it — was shown a screen that said, in effect, "no
+   * model configured", so they entered the key again. Each re-entry saved a NEW
+   * credential: one profile had accumulated 13 copies of the same key against a
+   * single provider.
+   *
+   * The data was never missing. Three separate places had it — the provider
+   * store here, `tierModels` in settings, and the credentials on the server —
+   * and the step consulted none of them.
+   */
+  const existingProviders = useProviderStore((s) => s.providers);
+  const alreadyConfigured = useMemo(
+    () => new Set(existingProviders.map((p) => p.presetId)),
+    [existingProviders],
+  );
+
+  // Open on what they already use, not on the catalogue's first entry.
+  const [presetId, setPresetId] = useState<string>(
+    () => useProviderStore.getState().providers[0]?.presetId ?? "anthropic",
+  );
   const [fields, setFields] = useState<Partial<Record<CredentialField, string>>>(() => {
-    const p = getPreset("anthropic");
+    const p = getPreset(useProviderStore.getState().providers[0]?.presetId ?? "anthropic");
     return p?.defaultBaseUrl ? { baseUrl: p.defaultBaseUrl } : {};
   });
   const [showAll, setShowAll] = useState(false);
@@ -160,6 +183,24 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
         Pick one to start — you can add more later in Settings → API Access.
       </p>
 
+      {/*
+        Stated before the form, because the form is what misled: a screen asking
+        for a key reads as "no key is set", and the honest answer here is usually
+        that one already is.
+      */}
+      {alreadyConfigured.size > 0 && (
+        <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3.5 py-2.5">
+          <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+            {existingProviders.length === 1
+              ? `${existingProviders[0].label} is already set up`
+              : `${existingProviders.length} providers are already set up`}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Nothing to re-enter — continue, or add another below.
+          </p>
+        </div>
+      )}
+
       <div className="space-y-2">
         {RECOMMENDED_PATHS.map(({ presetId: id, icon: Icon, blurb }) => (
           <button
@@ -175,7 +216,9 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2 text-sm font-medium">
                 {getPreset(id)?.label ?? id}
-                {configured === id && <Check className="h-3.5 w-3.5 text-emerald-500" />}
+                {(configured === id || alreadyConfigured.has(id)) && (
+                  <Check className="h-3.5 w-3.5 text-emerald-500" />
+                )}
               </span>
               <span className="block text-xs text-muted-foreground">{blurb}</span>
             </span>
