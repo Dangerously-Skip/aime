@@ -109,9 +109,17 @@ function line(c: ClassifiedConnector): string {
 export function buildConnectorsPrompt(
   catalog: ClassifiedConnector[],
   connectedIds: Set<string>,
-  opts: { canRequest: boolean; staleIds?: Set<string> } = { canRequest: true },
+  opts: {
+    canRequest: boolean;
+    staleIds?: Set<string>;
+    /** Not an OAuth connector, but the model still has to know it is there. */
+    icloudConnected?: boolean;
+  } = { canRequest: true },
 ): string {
-  if (catalog.length === 0) return '';
+  // "Nothing useful to say" was once equivalent to "no catalog". It is not any
+  // more: iCloud is connected outside the OAuth registry, and returning early
+  // here would drop the only line telling the model its mail tools exist.
+  if (catalog.length === 0 && !opts.icloudConnected) return '';
 
   const stale = opts.staleIds ?? new Set<string>();
   // A connection whose token has expired with no way to renew is provisioned but
@@ -131,12 +139,36 @@ export function buildConnectorsPrompt(
 
   const parts: string[] = ['## Connected services'];
 
+  /**
+   * iCloud is listed here even though it is not an OAuth connector.
+   *
+   * It reaches Apple over IMAP and DAV with an app-specific password, so it is
+   * not in `CONNECTOR_REGISTRY` and this prompt could not see it. The result was
+   * worse than silence: asked "what's my latest email about", the model was told
+   * nothing was connected, saw Microsoft 365 Mail on the offer list, and tried to
+   * connect THAT — while five working iCloud mail tools sat mounted beside it.
+   *
+   * A capability the model is not told about is a capability it does not use;
+   * the same lesson `CreateImage` taught, where the tool worked and produced
+   * nothing because it was advertised in only one place.
+   */
+  if (opts.icloudConnected) {
+    parts.push(
+      'Already connected — use their tools directly, do not ask the user to connect them again:',
+      '- iCloud (Mail, Calendar, Contacts) — use MailSearch, MailRead, MailDraft, ' +
+        'CalendarEvents and ContactsSearch. This IS the user\'s email: do not offer to ' +
+        'connect another mail service unless they ask for one specifically. MailDraft ' +
+        'writes a draft and cannot send.',
+    );
+  }
+
+
   if (connected.length > 0) {
     parts.push(
       'Already connected — use their tools directly, do not ask the user to connect them again:',
       ...connected.map(line),
     );
-  } else if (staleConnected.length === 0) {
+  } else if (staleConnected.length === 0 && !opts.icloudConnected) {
     parts.push('Nothing is connected yet.');
   }
 

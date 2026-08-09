@@ -143,3 +143,55 @@ describe('empty results are distinguishable from failures', () => {
     },
   );
 });
+
+/**
+ * Mounted is not the same as known about.
+ *
+ * Reported: "whats my latest email from First Advantage about" → the agent
+ * replied that it could not connect to Microsoft 365 Mail and that the connector
+ * was not set up. iCloud WAS connected and all five tools were mounted. The
+ * system prompt is what misled it: `buildConnectorsPrompt` lists the OAuth
+ * registry, iCloud is not in it, so the model was told nothing was connected and
+ * shown M365 on the offer list. It reached for the thing it had been told about.
+ *
+ * Exactly the `CreateImage` failure again — a working capability advertised
+ * nowhere the model reads.
+ */
+describe('the model is told iCloud is connected', () => {
+  it('says so, and names the tools', async () => {
+    const { buildConnectorsPrompt } = await import('@/lib/connectors/prompt');
+    const text = buildConnectorsPrompt([], new Set(), { canRequest: true, icloudConnected: true });
+    expect(text, 'the prompt never mentions iCloud').toMatch(/iCloud/);
+    for (const t of TOOLS) expect(text).toContain(t);
+  });
+
+  /**
+   * The active harm, not just the omission: being told nothing is connected is
+   * what sent it looking for another mail provider.
+   */
+  it('does not claim nothing is connected while iCloud is', async () => {
+    const { buildConnectorsPrompt } = await import('@/lib/connectors/prompt');
+    const text = buildConnectorsPrompt([], new Set(), { canRequest: true, icloudConnected: true });
+    expect(text).not.toMatch(/Nothing is connected yet/);
+  });
+
+  it('tells it not to go offering another mail service', async () => {
+    const { buildConnectorsPrompt } = await import('@/lib/connectors/prompt');
+    const text = buildConnectorsPrompt([], new Set(), { canRequest: true, icloudConnected: true });
+    expect(text).toMatch(/do not offer to connect another mail service/i);
+  });
+
+  it('stays silent when iCloud is not connected', async () => {
+    const { buildConnectorsPrompt } = await import('@/lib/connectors/prompt');
+    const text = buildConnectorsPrompt([], new Set(), { canRequest: true, icloudConnected: false });
+    expect(text).not.toMatch(/iCloud/);
+  });
+
+  it('is actually passed from the chat route, not merely supported', () => {
+    const route = read('src/app/api/chat/[surfaceId]/route.ts');
+    expect(route, 'the route never sets icloudConnected — the flag is dead').toMatch(
+      /icloudConnected:/,
+    );
+    expect(route).toMatch(/loadICloudCredentials\(\)/);
+  });
+});

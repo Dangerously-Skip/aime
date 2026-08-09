@@ -567,7 +567,15 @@ export async function POST(
           // recovered for an entry whose stored url is on that connector's own
           // origin. Passing keys alone leaves that unprovable and fails closed.
           connectedIdsFromServerKeys(mcpServers),
-          { canRequest, staleIds },
+          {
+            canRequest,
+            staleIds,
+            // Reads the credential store; `false` if it is unavailable, which is
+            // the same answer the tools themselves give.
+            icloudConnected: !!(await (
+              await import('@/lib/icloud/credentials')
+            ).loadICloudCredentials()),
+          },
         );
         if (connectorsPrompt) {
           surfaceConfig.systemPrompt = `${
