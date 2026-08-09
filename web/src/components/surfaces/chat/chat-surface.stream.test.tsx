@@ -125,7 +125,7 @@ describe('ChatSurface — a failing stream reports to the conversation it belong
     });
 
     expect(lastContent(CHAT)).toContain('**Error:**');
-    expect(lastContent(CHAT)).toMatch(/timed out/i);
+    expect(lastContent(CHAT)).toMatch(/the turn was stopped/i);
     // The conversation the user is actually reading is untouched.
     expect(lastContent(OTHER)).toBe('unrelated work');
   });

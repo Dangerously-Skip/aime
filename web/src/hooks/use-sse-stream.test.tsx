@@ -5,6 +5,16 @@ import { useSSEStream, stripMessagesForHistory, type SSEEvent, type StreamUsage 
 import { streamRegistry } from '@/lib/stream-registry';
 import { useChatStore, type Message } from '@/stores/chat-store';
 
+/**
+ * The sentinel for "this was reported to the user as a timeout". Not the word
+ * "timed out": the message deliberately no longer says that, because the same
+ * code path fires for a dead connection and for one slow tool being killed, and
+ * the old generic wording told a user to redo an 18-slide deck already on disk.
+ * Matching on prose that no longer exists would make the negative assertions
+ * below pass for free.
+ */
+const TIMEOUT_TEXT = /the turn was stopped/i;
+
 function sseResponse(frames: string[]): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -366,7 +376,7 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     // A user-initiated stop is not a timeout. Asserted on what the user can
     // actually see — the transcript — now that the write-only store field the
     // hook used to mirror errors into is gone.
-    expect(last.content).not.toMatch(/timed out/i);
+    expect(last.content).not.toMatch(TIMEOUT_TEXT);
     expect(useChatStore.getState().isStreaming).toBe(false);
   });
 
@@ -390,7 +400,7 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     const last = lastMessage('stop-chat');
     expect(last.isStreaming).toBe(false);
     expect(last.isLoading).toBe(false);
-    expect(last.content).not.toMatch(/timed out/i);
+    expect(last.content).not.toMatch(TIMEOUT_TEXT);
     expect(spies.onError).not.toHaveBeenCalled();
   });
 
@@ -408,7 +418,7 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     expect(last.isStreaming).toBe(false);
     expect(last.isLoading).toBe(false);
     expect(last.content).not.toContain('**Error:**');
-    expect(last.content).not.toMatch(/timed out/i);
+    expect(last.content).not.toMatch(TIMEOUT_TEXT);
     expect(spies.onError).not.toHaveBeenCalled();
   });
 
@@ -423,7 +433,9 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     await pending;
 
     expect(spies.onError).toHaveBeenCalledTimes(1);
-    expect(spies.onError.mock.calls[0][0].message).toMatch(/timed out/i);
+    expect(spies.onError.mock.calls[0][0].message).toMatch(TIMEOUT_TEXT);
+    // The half of the message that stops a user redoing work already on disk.
+    expect(spies.onError.mock.calls[0][0].message).toMatch(/Artifacts/);
     expect(spies.onDone).not.toHaveBeenCalled();
 
     const last = lastMessage('timeout-chat');
@@ -431,7 +443,7 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     expect(last.isLoading).toBe(false);
     // `onError` is the ONLY route a timeout now takes to the user, so assert it
     // arrives in the transcript rather than only that the callback fired.
-    expect(last.content).toMatch(/\*\*Error:\*\*[\s\S]*timed out/i);
+    expect(last.content).toMatch(/\*\*Error:\*\*[\s\S]*the turn was stopped/i);
     expect(useChatStore.getState().isStreaming).toBe(false);
   });
 

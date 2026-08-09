@@ -127,15 +127,6 @@ export interface CoreChunkContext {
   /** OS notification when the window is unfocused and the turn needs a human. */
   notify?: (title: string, body: string) => void;
   /**
-   * Start a stuck-tool watchdog for a tool that has just begun.
-   *
-   * Existed on cowork ONLY, written when a large PDF read hung there — and chat
-   * and code have the identical failure mode with no watchdog at all. Optional
-   * because it needs the surface's own store to observe tool status, but every
-   * conversation surface should pass it.
-   */
-  watchTool?: (toolId: string, name: string) => void;
-  /**
    * Core chunks this surface still handles itself.
    *
    * A migration affordance, not a design: cowork's `tool_use`/`tool_result` carry
@@ -194,9 +185,6 @@ export function handleCoreChunk(
       const raw = (event.input as Record<string, unknown>) || {};
       const input = ctx.normaliseToolInput ? ctx.normaliseToolInput(name, raw) : raw;
       store.addToolCall(chatId, { id: toolId, name, input, status: 'running', startTime: Date.now() });
-      // Watchdog before the surface extras: the point is to catch a tool that
-      // never finishes, so arming it must not depend on what follows.
-      ctx.watchTool?.(toolId, name);
       ctx.onToolStarted?.(toolId, name, input);
       return true;
     }

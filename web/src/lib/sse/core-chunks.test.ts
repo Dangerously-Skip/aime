@@ -265,43 +265,6 @@ describe('relay chunks — the ones that hang when unhandled', () => {
   });
 });
 
-describe('the stuck-tool watchdog', () => {
-  /**
-   * Existed on cowork ONLY, written after a large PDF read hung there. Chat and
-   * code have the identical failure mode and had no watchdog at all — code runs
-   * the longest tools of any surface.
-   */
-  it('is armed for every tool call when the surface provides it', () => {
-    const s = fakeStore();
-    const watchTool = vi.fn();
-    handleCoreChunk({ type: 'tool_use', id: 't1', name: 'Read' }, ctx(s, { watchTool }));
-    expect(watchTool).toHaveBeenCalledWith('t1', 'Read');
-  });
-
-  it('is armed BEFORE the surface extras, so it does not depend on them', () => {
-    const order: string[] = [];
-    const s = fakeStore();
-    handleCoreChunk({ type: 'tool_use', id: 't1', name: 'Read' }, ctx(s, {
-      watchTool: () => order.push('watch'),
-      onToolStarted: () => order.push('extras'),
-    }));
-    expect(order).toEqual(['watch', 'extras']);
-  });
-
-  it('every conversation surface arms it', () => {
-    const SRC = path.resolve(__dirname, '../..');
-    for (const rel of [
-      'components/surfaces/chat/chat-surface.tsx',
-      'components/surfaces/cowork/cowork-surface.tsx',
-      'components/surfaces/code/code-surface.tsx',
-    ]) {
-      const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
-      expect(src, `${rel} does not arm the stuck-tool watchdog`).toMatch(/watchTool:/);
-      expect(src, `${rel} does not import it`).toContain('watchStuckTool');
-    }
-  });
-});
-
 /** The relay deps are required, so "forgot one" cannot reach runtime. */
 describe('no surface can forget a relay handler', () => {
   const SRC = path.resolve(__dirname, '../..');

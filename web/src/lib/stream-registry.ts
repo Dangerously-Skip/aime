@@ -22,11 +22,26 @@ export type StreamAbortReason =
 /** The cause object handed to `AbortController.abort()` so the reason survives. */
 export class StreamAbortCause extends Error {
   readonly reason: StreamAbortReason;
-  constructor(reason: StreamAbortReason) {
-    super(`Stream aborted (${reason})`);
+  /**
+   * What specifically timed out, in the user's words — e.g. "the WebFetch tool
+   * ran for 120s without returning". A bare reason is not enough to write a
+   * truthful message: 'timeout' covers both a dead connection and one slow tool
+   * call, and telling a user their agent "may be stuck" when a WebFetch was
+   * half a second from returning sent them to retry work already on disk.
+   */
+  readonly detail?: string;
+  constructor(reason: StreamAbortReason, detail?: string) {
+    super(`Stream aborted (${reason})${detail ? `: ${detail}` : ''}`);
     this.name = 'StreamAbortCause';
     this.reason = reason;
+    this.detail = detail;
   }
+}
+
+/** The `detail` off an abort cause, when there is one. */
+export function abortDetailOf(signal: AbortSignal | null | undefined): string | undefined {
+  const cause: unknown = signal?.reason;
+  return cause instanceof StreamAbortCause ? cause.detail : undefined;
 }
 
 /**
@@ -93,10 +108,10 @@ export const streamRegistry = {
    * Abort the stream for chatId, carrying WHY on the signal. A no-op when no
    * stream is running for that chat.
    */
-  abort: (chatId: string, reason: StreamAbortReason = 'user') => {
+  abort: (chatId: string, reason: StreamAbortReason = 'user', detail?: string) => {
     const controller = controllers.get(chatId);
     controllers.delete(chatId);
-    controller?.abort(new StreamAbortCause(reason));
+    controller?.abort(new StreamAbortCause(reason, detail));
   },
 
   /**

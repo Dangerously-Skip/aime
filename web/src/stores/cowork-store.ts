@@ -4,6 +4,11 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
+import {
+  findUnregisteredArtifacts,
+  markTurnStart,
+  turnStartedAt,
+} from '@/lib/artifact-reconcile';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import { cleanStaleStreamingFlags } from '@/stores/chat-store';
 import { type SessionControls } from '@/lib/slash-commands';
@@ -144,10 +149,15 @@ export const useCoworkStore = create<CoworkStore>()(
 
       setModelRoute: (opt) => set({ modelRoute: opt }),
 
-      startStreaming: (chatId) => set((state) => ({
-        isStreaming: true,
-        currentChatId: chatId || state.currentChatId,
-      })),
+      startStreaming: (chatId) => {
+        // Stamped here so an aborted turn can tell its own files from every
+        // previous turn's when it reconciles the scratch directory.
+        if (chatId) markTurnStart(chatId);
+        set((state) => ({
+          isStreaming: true,
+          currentChatId: chatId || state.currentChatId,
+        }));
+      },
 
       stopStreaming: (chatId) =>
         set((state) => {
@@ -347,4 +357,19 @@ onStreamAborted(({ chatId }) => {
   if (!state.messages[chatId]?.length) return;
   state.completeRunningTools(chatId);
   state.stopStreaming(chatId);
+
+  // An aborted turn stops delivering tool_use events but does not un-write the
+  // files it already produced, so ask the disk what is actually there. Without
+  // this, a finished 18-slide deck sat in scratch while the UI showed a timeout
+  // and an instruction to try again.
+  const since = turnStartedAt(chatId);
+  if (since === undefined) return;
+  const current = useCoworkStore.getState();
+  const known = [
+    ...(current.artifactFiles[chatId] ?? []),
+    ...(current.contextFiles[chatId] ?? []),
+  ];
+  void findUnregisteredArtifacts(chatId, known, since).then((paths) => {
+    for (const p of paths) useCoworkStore.getState().addArtifactFile(chatId, p);
+  });
 });

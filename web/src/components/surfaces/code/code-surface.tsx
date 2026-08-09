@@ -21,7 +21,6 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
-import { watchStuckTool } from "@/lib/stuck-tool-watchdog";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import { useMemoryStore } from "@/stores/memory-store";
@@ -816,15 +815,6 @@ export function CodeSurface() {
           },
           // The watchdog cowork has had all along. Code runs the longest tools of
           // any surface and had no protection from one that stops progressing.
-          watchTool: (toolId, toolName) =>
-            watchStuckTool({
-              chatId,
-              toolId,
-              toolName,
-              getToolStatus: () =>
-                useCodeStore.getState().messages[chatId]?.at(-1)?.toolCalls?.find((t) => t.id === toolId)?.status,
-              subscribe: (listener) => useCodeStore.subscribe(listener),
-            }),
           skip: ['tool_use', 'tool_result'],
         })
       ) {

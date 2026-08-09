@@ -96,7 +96,6 @@ import type { Capability } from "@/lib/models/types";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
-import { watchStuckTool } from "@/lib/stuck-tool-watchdog";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { useDocumentPrint } from "@/hooks/use-document-print";
@@ -780,6 +779,59 @@ export function CoworkSurface() {
     [modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown]
   );
 
+  /**
+   * Everything that describes the USER's setup rather than a particular message.
+   *
+   * There are two places that start a turn — the composer and the auto-continue
+   * — and the second one used to hand-copy a subset of these fields. It dropped
+   * eight, including `deckTheme`: a user who had chosen Magazine Bold asked for
+   * a themed deck, the turn auto-continued, and the deck came back unstyled
+   * because the continuation ran as a user with no theme set. `searchSettings`,
+   * `memories`, `projectInstructions`, `projectKnowledge` and the context bus
+   * went the same way, silently.
+   *
+   * Per-MESSAGE things stay out — history, attachments and sessionControls
+   * differ legitimately between the two callers. Everything here does not, and
+   * `cowork-turn-context.test.tsx` fails if a field is added to one caller and
+   * not the other.
+   */
+  const turnContext = useCallback(
+    () => ({
+      personalPreferences: personalPreferences || undefined,
+      displayName: displayName || undefined,
+      projectInstructions: projectInstructions || undefined,
+      projectKnowledge: projectKnowledge || undefined,
+      apiKey: anthropicApiKey || undefined,
+      cwd: folder || projectFolder || scratchDir || undefined,
+      crossSurfaceContext: crossSurfaceContext || undefined,
+      securitySettings: {
+        blockDangerousCommands,
+        blockNetworkCommands,
+        restrictToProjectFolder,
+        disableBashTool,
+      },
+      searchSettings,
+      deckTheme,
+    }),
+    [
+      personalPreferences,
+      displayName,
+      projectInstructions,
+      projectKnowledge,
+      anthropicApiKey,
+      folder,
+      projectFolder,
+      scratchDir,
+      crossSurfaceContext,
+      blockDangerousCommands,
+      blockNetworkCommands,
+      restrictToProjectFolder,
+      disableBashTool,
+      searchSettings,
+      deckTheme,
+    ]
+  );
+
   const handleFolderChange = useCallback(
     (f: string | null) => {
       if (chatId) {
@@ -942,15 +994,6 @@ export function CoworkSurface() {
           notify: (title, body) => {
             if (!document.hasFocus()) showNotification(title, body);
           },
-          watchTool: (toolId, toolName) =>
-            watchStuckTool({
-              chatId: chatId,
-              toolId,
-              toolName,
-              getToolStatus: () =>
-                useCoworkStore.getState().messages[chatId]?.at(-1)?.toolCalls?.find((t) => t.id === toolId)?.status,
-              subscribe: (listener) => useCoworkStore.subscribe(listener),
-            }),
           skip: ['tool_use', 'tool_result'],
         })
       ) {
@@ -975,20 +1018,6 @@ export function CoworkSurface() {
             input: toolInput,
             status: "running",
             startTime: Date.now(),
-          });
-          // Auto-abort if a single tool stops making progress — the Agent SDK can
-          // hang on certain operations (e.g. large PDF reads). The watchdog cancels
-          // itself as soon as the tool completes normally.
-          watchStuckTool({
-            chatId,
-            toolId,
-            toolName,
-            getToolStatus: () =>
-              useCoworkStore
-                .getState()
-                .messages[chatId]?.at(-1)
-                ?.toolCalls?.find((t) => t.id === toolId)?.status,
-            subscribe: (listener) => useCoworkStore.subscribe(listener),
           });
           // The marker can arrive in the command OR in the output — the model
           // either writes the expression or computes it with a script. Same parse
@@ -1214,12 +1243,15 @@ export function CoworkSurface() {
             // and the turn that triggered it was already closed by succeed().
             runRecorder.begin({ trigger: "hook", model: route?.model ?? undefined });
             void sendMessage(continuePrompt, chatId, "cowork", route?.model ?? null, {
-              personalPreferences: personalPreferences || undefined,
-              displayName: displayName || undefined,
-              cwd: folder || projectFolder || scratchDir || undefined,
+              // Spread the shared context rather than re-listing it. The
+              // hand-written version of this object omitted deckTheme,
+              // searchSettings, memories, projectInstructions,
+              // projectKnowledge, crossSurfaceContext, contextBusEvents and
+              // securitySettings — so an auto-continued turn ran as a
+              // differently-configured user than the one who typed the prompt.
+              ...turnContext(),
               history: hist.length > 0 ? hist : undefined,
               sessionControls: currentControls,
-              apiKey: anthropicApiKey || undefined,
               providerConfig: route?.providerConfig,
             });
           }, 1500);
@@ -1354,38 +1386,33 @@ export function CoworkSurface() {
 
       const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
       const route = resolveRoute();
+      // Everything that describes the USER's setup rather than this particular
+      // message. Built in one place because the auto-continue path below sends
+      // its own turn, and a hand-copied subset there silently dropped eight
+      // fields — `deckTheme` among them, which is why a themed deck came back
+      // unstyled on an auto-continued turn.
       // Open the run record before the turn starts so an immediate failure is
       // still attributed rather than lost.
       runRecorder.begin({ trigger: "manual", model: route?.model ?? undefined });
       await sendMessage(trimmed, id, "cowork", route?.model ?? null, {
-        personalPreferences: personalPreferences || undefined,
-        displayName: displayName || undefined,
+        ...turnContext(),
         providerConfig: route?.providerConfig,
-        projectInstructions: projectInstructions || undefined,
-        projectKnowledge: projectKnowledge || undefined,
+        // Per-message, so deliberately not part of the shared context.
         attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-        apiKey: anthropicApiKey || undefined,
-        cwd: folder || projectFolder || scratchDir || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
-        crossSurfaceContext: crossSurfaceContext || undefined,
         contextBusEvents: busEvents.length > 0 ? busEvents : undefined,
         sessionControls: currentControls,
-        securitySettings: {
-          blockDangerousCommands,
-          blockNetworkCommands,
-          restrictToProjectFolder,
-          disableBashTool,
-        },
-        searchSettings,
-        deckTheme,
       });
     },
     [
       chatId,
       runRecorder,
       resolveRoute,
-      folder,
+      // Carries the settings half of the turn; omitting it is how a theme or
+      // security change fails to take effect until some other dep happens to
+      // change — the same stale-closure bug this list already documents below.
+      turnContext,
       addMessage,
       startStreaming,
       sendMessage,
@@ -1393,10 +1420,6 @@ export function CoworkSurface() {
       addConversation,
       setActiveConversation,
       setCurrentChat,
-      personalPreferences,
-      displayName,
-      projectInstructions,
-      projectKnowledge,
       attachments,
       // Read inside the callback and previously missing, so a slash command, a
       // project switch or a security-setting change did not take effect until
@@ -1406,14 +1429,6 @@ export function CoworkSurface() {
       pendingFolder,
       setFolder,
       currentProjectId,
-      crossSurfaceContext,
-      projectFolder,
-      scratchDir,
-      anthropicApiKey,
-      blockDangerousCommands,
-      blockNetworkCommands,
-      restrictToProjectFolder,
-      disableBashTool,
     ]
   );
 
@@ -1450,14 +1465,14 @@ export function CoworkSurface() {
       // still attributed rather than lost.
       runRecorder.begin({ trigger: 'hook', model: route?.model ?? undefined });
       void sendMessage(prompt, bgId, 'cowork', route?.model ?? null, {
-        personalPreferences: personalPreferences || undefined,
-        displayName: displayName || undefined,
-        apiKey: anthropicApiKey || undefined,
-        cwd: folder || projectFolder || scratchDir || undefined,
+        // A background run is still the same user's setup. Listing a subset here
+        // meant a standing order produced unthemed decks and searched with the
+        // wrong provider, in a path nobody watches while it happens.
+        ...turnContext(),
         providerConfig: route?.providerConfig,
       });
     },
-    [addConversation, addMessage, startStreaming, sendMessage, runRecorder, resolveRoute, personalPreferences, displayName, anthropicApiKey, folder, projectFolder, scratchDir]
+    [addConversation, addMessage, startStreaming, sendMessage, runRecorder, resolveRoute, turnContext]
   );
 
   // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store

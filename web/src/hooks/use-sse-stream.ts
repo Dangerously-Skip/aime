@@ -5,16 +5,34 @@ import {
   streamRegistry,
   StreamAbortCause,
   abortReasonOf,
+  abortDetailOf,
   notifyStreamAborted,
 } from '@/lib/stream-registry';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
 
-/** Abort the stream if no data arrives for this long (the server heartbeats ~30s). */
+/** Abort the stream if no data arrives for this long (the server heartbeats every 15s). */
 const INACTIVITY_TIMEOUT_MS = 120_000;
 
-/** What the user is told when a stream dies of inactivity. */
-const INACTIVITY_TIMEOUT_MESSAGE =
-  'Request timed out — the agent may be stuck. Try again.';
+/**
+ * What the user is told when a stream dies of inactivity.
+ *
+ * Two rules, both learned from the message this replaces ("Request timed out —
+ * the agent may be stuck. Try again."):
+ *
+ * 1. Say what actually happened. That text described a dead connection, but the
+ *    same code path fires when one slow tool is killed mid-turn, and the two
+ *    call for opposite responses.
+ * 2. Never tell the user to redo work without telling them it may already exist.
+ *    A killed turn leaves whatever it had already written on disk. "Try again"
+ *    sent someone to rebuild an 18-slide deck that was sitting in the scratch
+ *    directory, complete.
+ */
+function timeoutMessage(detail?: string): string {
+  const what = detail
+    ? `The turn was stopped because ${detail}.`
+    : 'The connection went quiet for two minutes, so the turn was stopped.';
+  return `${what} Anything already written to disk was kept — check Artifacts before running it again.`;
+}
 
 /**
  * Cross-realm-safe AbortError check. `error instanceof DOMException` is false
@@ -348,7 +366,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           // first so message state is finalised even if a surface's onError
           // resolves a different chatId than the one this stream was started for.
           notifyStreamAborted({ chatId, reason: 'timeout' });
-          pinnedOnError(new Error(INACTIVITY_TIMEOUT_MESSAGE));
+          pinnedOnError(new Error(timeoutMessage(abortDetailOf(controller.signal))));
           return;
         }
 

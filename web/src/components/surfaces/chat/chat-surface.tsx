@@ -10,7 +10,6 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
-import { watchStuckTool } from "@/lib/stuck-tool-watchdog";
 import { streamRegistry } from "@/lib/stream-registry";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -271,15 +270,6 @@ export function ChatSurface() {
           notify: (title, body) => {
             if (!document.hasFocus()) showNotification(title, body);
           },
-          watchTool: (toolId, toolName) =>
-            watchStuckTool({
-              chatId: cid,
-              toolId,
-              toolName,
-              getToolStatus: () =>
-                useChatStore.getState().messages[cid]?.at(-1)?.toolCalls?.find((t) => t.id === toolId)?.status,
-              subscribe: (listener) => useChatStore.subscribe(listener),
-            }),
           onToolStarted: (_toolId, toolName, toolInput) => {
             const categorized = categorizeToolCall(toolName, toolInput);
             if (categorized?.category !== "artifact" || !isValidSidebarEntry(categorized.path)) return;
