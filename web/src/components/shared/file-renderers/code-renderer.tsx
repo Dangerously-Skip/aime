@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import hljs from "highlight.js/lib/common";
 // The one tested escaper. This file carried a private copy that differed only in
 // the apostrophe entity (&#039; vs &#39; — both valid references for '), and it
 // was the guard on a `dangerouslySetInnerHTML` sink with no test of its own.
 import { escapeHtml } from "@/lib/documents/render";
+import { useIsDarkTheme } from "@/hooks/use-dark-theme";
 
 interface CodeRendererProps {
   content: string;
@@ -54,27 +55,25 @@ const EXT_TO_LANG: Record<string, string> = {
  */
 export function CodeRenderer({ content, ext }: CodeRendererProps) {
   const lang = EXT_TO_LANG[ext] || "";
-  const [isDark, setIsDark] = useState(false);
+  const isDark = useIsDarkTheme();
 
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const html = document.documentElement;
-    const compute = () => setIsDark(html.classList.contains("dark"));
-    compute();
-    const obs = new MutationObserver(compute);
-    obs.observe(html, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-
-  // Swap the highlight.js stylesheet for the active theme. We pull from a CDN
-  // so we don't have to bundle two themes; cached after first load.
+  /**
+   * Swap the highlight.js stylesheet for the active theme.
+   *
+   * Served from `public/`, not a CDN. This used to fetch
+   * `cdn.jsdelivr.net/npm/highlight.js@11/styles/...` at runtime, which in a
+   * DESKTOP app means syntax highlighting silently degrades to unstyled text
+   * with no network — and a request to a third party every time the theme
+   * changes. The files are already in `node_modules`; `postinstall` copies them
+   * beside `pdf.worker.min.mjs`, which solved the same problem the same way.
+   */
   useEffect(() => {
     if (typeof document === "undefined") return;
     const id = isDark ? "hljs-theme-dark" : "hljs-theme-light";
     const otherId = isDark ? "hljs-theme-light" : "hljs-theme-dark";
     const url = isDark
-      ? "https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.css"
-      : "https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github.css";
+      ? "/hljs/github-dark.css"
+      : "/hljs/github.css";
     document.getElementById(otherId)?.remove();
     if (!document.getElementById(id)) {
       const link = document.createElement("link");
