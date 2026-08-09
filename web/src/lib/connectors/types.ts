@@ -8,7 +8,14 @@ export interface ConnectorDefinition {
 
   // Auth config
   auth: {
-    type: 'oauth2' | 'api_key' | 'aws_iam' | 'mcp-oauth' | 'mcp-self-auth';
+    /**
+     * `app-password` is a service reached with a username plus a
+     * service-issued password, over its own protocols rather than OAuth —
+     * iCloud, via IMAP and DAV. It lives in the connector catalogue because
+     * that is where a user looks to connect their email; "it is not OAuth" is
+     * an implementation detail they should not have to know.
+     */
+    type: 'oauth2' | 'api_key' | 'aws_iam' | 'mcp-oauth' | 'mcp-self-auth' | 'app-password';
     authUrl?: string;
     tokenUrl?: string;
     scopes?: string[];
@@ -47,7 +54,15 @@ export interface ConnectorDefinition {
   };
 
   // MCP server config
-  mcp: {
+  /**
+   * Optional, because not every connector is an MCP server.
+   *
+   * iCloud's tools run in-process on the `aime` server — there is no external
+   * process or URL to describe, and nothing to provision into `.mcp.json`. The
+   * two provisioning call sites read `mcp.tokenInjection` and are only reached
+   * for connectors that HAVE one.
+   */
+  mcp?: {
     transport: 'stdio' | 'http';
     // For stdio:
     command?: string;

@@ -593,6 +593,9 @@ describe('credentialBearingArgs — against the REAL registry', () => {
     const { substituteAppDir } = await import('@/lib/connectors/provision-guard');
 
     const offenders = CONNECTOR_REGISTRY.filter((c) => {
+      // Not every connector runs an MCP server — iCloud's tools are in-process,
+      // so it has no args to inspect and cannot leak a credential through them.
+      if (!c.mcp) return false;
       // Substituted exactly as the provision route does, since {appDir} expands to
       // a real path and that path is what would be inspected.
       const args = substituteAppDir(c.mcp.args, '/Applications/AIME.app/Contents/Resources');
@@ -604,7 +607,7 @@ describe('credentialBearingArgs — against the REAL registry', () => {
 
   it('covers the stdio connectors, so the assertion above is not vacuous', async () => {
     const { CONNECTOR_REGISTRY } = await import('@/lib/connectors/registry');
-    const withArgs = CONNECTOR_REGISTRY.filter((c) => (c.mcp.args?.length ?? 0) > 0);
+    const withArgs = CONNECTOR_REGISTRY.filter((c) => (c.mcp?.args?.length ?? 0) > 0);
     expect(withArgs.length).toBeGreaterThan(3);
   });
 });

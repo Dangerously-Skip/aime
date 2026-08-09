@@ -306,7 +306,7 @@ export function SidebarCustomize() {
                       className="flex w-full items-center gap-2 rounded-md border border-dashed border-sidebar-border px-2 py-1.5 text-xs text-muted-foreground hover:text-sidebar-foreground hover:border-primary/30 transition-colors"
                     >
                       <Globe className="h-3.5 w-3.5 shrink-0" />
-                      <span className="flex-1 text-left">Browse OAuth connectors</span>
+                      <span className="flex-1 text-left">Browse connectors</span>
                       <ChevronRight className="h-3 w-3" />
                     </button>
                   </div>

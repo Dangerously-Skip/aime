@@ -312,6 +312,53 @@ export function BrowseConnectors() {
         return;
       }
 
+      /**
+       * Username plus a service-issued password — iCloud, over IMAP and DAV.
+       *
+       * Two prompts: the Apple ID is not secret and showing it is how the user
+       * confirms the right account. `/api/icloud/connect` verifies against the
+       * real server before storing, so a rejected credential fails here rather
+       * than looking connected and breaking every tool later.
+       *
+       * Nothing is provisioned into `.mcp.json` — the tools are in-process and
+       * appear as soon as a credential exists.
+       */
+      if (connector.auth.type === 'app-password') {
+        const username = await promptText(connector, {
+          title: `Connect ${connector.name}`,
+          label: 'Apple ID',
+          placeholder: 'you@icloud.com',
+          buttonText: 'Next',
+        });
+        if (!username) return;
+        const secret = await promptText(connector, {
+          title: `Connect ${connector.name}`,
+          label: 'App-specific password',
+          placeholder: 'abcd-efgh-ijkl-mnop',
+          inputType: 'password',
+        });
+        if (!secret) return;
+
+        setConnectingId(connector.id);
+        try {
+          const res = await fetch('/api/icloud/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appleId: username, appPassword: secret }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error ?? 'Could not connect.');
+          setEnabled(connector.id, true);
+          sendFeatureAdoptionEvent({ feature: `connector:${connector.id}` });
+        } catch (err) {
+          console.error(`Failed to connect ${connector.id}:`, err);
+          reportConnectorError(connector, err);
+        } finally {
+          setConnectingId(null);
+        }
+        return;
+      }
+
       if (connector.auth.type === 'api_key') {
         const key = await promptApiKey(connector);
         if (!key) return;

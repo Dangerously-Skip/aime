@@ -126,7 +126,10 @@ function storedCredential(
   secrets: EntrySecrets | undefined,
 ): string | undefined {
   if (!secrets) return undefined;
-  const injection = connector.mcp.tokenInjection;
+  // A connector with no MCP server (iCloud speaks IMAP/DAV in-process) has no
+  // token to inject and never provisions; returning early beats asserting.
+  const injection = connector.mcp?.tokenInjection;
+  if (!injection) return undefined;
   const named =
     injection.method === 'env' ? secrets.env?.[injection.envVar] : secrets.headers?.[injection.headerName];
   if (named) return named;
@@ -140,7 +143,8 @@ function storedCredential(
 /** The same, for a keyless install where secrets are still inline in the entry. */
 function inlineCredential(connector: ConnectorDefinition, entry: Entry | undefined): string | undefined {
   if (!entry) return undefined;
-  const injection = connector.mcp.tokenInjection;
+  const injection = connector.mcp?.tokenInjection;
+  if (!injection) return undefined;
   if (injection.method === 'env') {
     const value = (entry.env as Record<string, string> | undefined)?.[injection.envVar];
     return value && !value.includes('${') ? value : undefined;

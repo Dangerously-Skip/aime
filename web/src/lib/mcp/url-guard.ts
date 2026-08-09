@@ -210,7 +210,7 @@ function originIndex(): Map<string, OriginMatcher[]> {
     // endpoint (stdio, paste-token) still owns its name, it just can never be
     // proven by origin — which is the correct, fail-closed answer.
     add(c.id, c.auth.mcpUrl);
-    add(c.id, c.mcp.url);
+    add(c.id, c.mcp?.url);
   }
   for (const s of MCP_CATALOG) add(s.id, s.url);
   ORIGIN_INDEX = index;
