@@ -35,6 +35,10 @@ const RICH_RENDERERS: Record<string, () => Promise<{ default: ComponentType<Rend
   ".tsv": () => import("./csv-renderer").then(m => ({ default: m.CsvRenderer as unknown as ComponentType<RendererProps> })),
   ".mmd": () => import("./mermaid-renderer").then(m => ({ default: m.MermaidRenderer as unknown as ComponentType<RendererProps> })),
   ".mermaid": () => import("./mermaid-renderer").then(m => ({ default: m.MermaidRenderer as unknown as ComponentType<RendererProps> })),
+  // A generated deck arrived here as markup with an "Open" button to a browser.
+  // The deck was fine; there was no way to look at it without leaving the app.
+  ".html": () => import("./html-renderer").then(m => ({ default: m.HtmlRenderer as unknown as ComponentType<RendererProps> })),
+  ".htm": () => import("./html-renderer").then(m => ({ default: m.HtmlRenderer as unknown as ComponentType<RendererProps> })),
 };
 
 /** Markdown extensions — rendered as rich markdown instead of raw code. */

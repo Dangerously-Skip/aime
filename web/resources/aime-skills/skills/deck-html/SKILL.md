@@ -79,6 +79,27 @@ class="slide">`.
 Do not hand-write CSS for slide layout. The primitives exist; a bespoke grid is
 how a deck stops matching its own theme halfway through.
 
+## Pictures
+
+A deck of nothing but type reads as a draft, however good the theme is. Generate
+the visuals with `CreateImage`: it saves the file next to the deck and hands back
+a relative path, and the theme's palette and character are applied for you, so
+describe the SUBJECT rather than the styling.
+
+Lead with the cover, then any slide whose point is visual — a place, a product,
+a person, a mood. `image-hero` and `image-grid` are the layouts built for them.
+
+Never invent an image URL. When generation fails or the per-turn cap is reached,
+drop in a labelled placeholder instead of removing the visual:
+
+```html
+<div class="img-placeholder" role="img" aria-label="Photo of the restaurant exterior">Photo: restaurant exterior</div>
+```
+
+It inherits the theme's tokens, so the slide still looks designed, and the label
+says exactly what to substitute. A slide that quietly loses its picture looks
+like the layout was always that empty.
+
 ## Themes
 
 Pick by what the deck is FOR, then say why in one line.

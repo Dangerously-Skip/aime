@@ -114,7 +114,7 @@ describe('the skill and the theme library agree', () => {
     // The skill names two vocabularies — themes and layouts — plus a few known
     // terms. Anything slug-shaped outside all three is a dead reference the
     // model would follow mid-task.
-    const allowed = new Set(['deck-html', 'craft-deck', 'craft-web', 'craft-doc', 'theme-link']);
+    const allowed = new Set(['deck-html', 'craft-deck', 'craft-web', 'craft-doc', 'theme-link', 'img-placeholder']);
     for (const w of named) {
       if (allowed.has(w) || themeFiles.includes(w) || layoutNames.includes(w)) continue;
       expect.fail(`skill names '${w}', which is neither a theme, a layout, nor a known term`);
