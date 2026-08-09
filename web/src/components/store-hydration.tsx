@@ -7,6 +7,7 @@ import { useChatStore } from "@/stores/chat-store";
 import { useCoworkStore } from "@/stores/cowork-store";
 import { useCodeStore } from "@/stores/code-store";
 import { useBrowserStore } from "@/stores/browser-store";
+import { THEME_CLASSES, themeSpec, type ThemeId } from '@/lib/themes/app-themes';
 import { useSettingsStore } from "@/stores/settings-store";
 import { useProjectStore } from "@/stores/project-store";
 import { useProviderStore } from "@/stores/provider-store";
@@ -81,23 +82,27 @@ export function useRehydrated() {
   return useHydrationFlag(() => rehydrated);
 }
 
-function applyTheme(theme: 'light' | 'dark' | 'system' | 'emma', animate = true) {
-  const isDark =
-    theme === 'dark' ||
-    (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  const isEmma = theme === 'emma';
+/**
+ * Put the right class on <html>.
+ *
+ * Driven by the THEMES table rather than a chain of `theme === '...'` checks:
+ * the branch version needed editing in four places to add a theme, and one of
+ * those places (the diff viewer) had already drifted into calling the light
+ * pink theme dark.
+ */
+function applyTheme(theme: ThemeId, animate = true) {
+  const spec = themeSpec(theme);
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
   const html = document.documentElement;
   if (animate) html.classList.add('transitioning');
 
-  // Remove all theme classes first
-  html.classList.remove('dark', 'emma');
+  // Strip every theme class before adding one, so switching never leaves two on.
+  html.classList.remove(...THEME_CLASSES);
 
-  if (isEmma) {
-    html.classList.add('emma');
-  } else if (isDark) {
-    html.classList.add('dark');
-  }
+  if (spec.className) html.classList.add(spec.className);
+  // `system` owns no class of its own; it borrows dark's when the OS is dark.
+  else if (spec.dark === 'auto' && prefersDark) html.classList.add('dark');
 
   if (animate) setTimeout(() => html.classList.remove('transitioning'), 350);
 }

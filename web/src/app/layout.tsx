@@ -4,6 +4,7 @@ import { APP_NAME, APP_DESCRIPTION } from "@/config/branding";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StoreHydration } from "@/components/store-hydration";
 import "./globals.css";
+import { preHydrationThemeScript } from "@/lib/themes/app-themes";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -30,7 +31,7 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var h=document.documentElement;h.classList.add('no-transition');var d=JSON.parse(localStorage.getItem('aime:app')||localStorage.getItem('nibcowork:app')||'{}');var t=(d.state||{}).theme||'light';if(t==='emma'){h.classList.add('emma')}else{var isDark=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(isDark)h.classList.add('dark')}requestAnimationFrame(function(){requestAnimationFrame(function(){h.classList.remove('no-transition')})});}catch(e){}})();`,
+            __html: preHydrationThemeScript(),
           }}
         />
       </head>

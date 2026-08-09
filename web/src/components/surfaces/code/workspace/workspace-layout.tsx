@@ -13,6 +13,8 @@ import {
   type DockviewTheme,
 } from "dockview";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
+import { pruneEmptyGroups } from "@/lib/code-workspace/prune-layout";
+import { useIsDarkTheme } from "@/hooks/use-dark-theme";
 import { PanelToolbar } from "./panel-toolbar";
 import { BranchHeader } from "./branch-header";
 import { GitHistory } from "./git-history";
@@ -224,21 +226,15 @@ interface WorkspaceLayoutProps {
 }
 
 /**
- * Watches <html> classList for `.dark` / `.emma` and returns the matching
- * dockview theme. Reactive — re-renders when the user flips the app theme.
+ * Watches <html> classList and returns the matching dockview theme. Reactive —
+ * re-renders when the user flips the app theme.
+ *
+ * Asks the theme registry rather than testing for `.dark` literally: Max is a
+ * dark theme with its own class, and the literal test would have handed it the
+ * LIGHT editor theme.
  */
 function useDockviewTheme(): DockviewTheme {
-  const [isDark, setIsDark] = useState(false);
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const html = document.documentElement;
-    const compute = () => setIsDark(html.classList.contains("dark"));
-    compute();
-    const obs = new MutationObserver(compute);
-    obs.observe(html, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-  return isDark ? themeAbyssSpaced : themeLightSpaced;
+  return useIsDarkTheme() ? themeAbyssSpaced : themeLightSpaced;
 }
 
 export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: WorkspaceLayoutProps) {
@@ -270,7 +266,17 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
     // Restore saved snapshot if we have one. fromJSON discards params,
     // so we stamp them back onto every panel afterwards.
     const paramsObj = ctx as unknown as Record<string, unknown>;
-    const saved = layout.dockviewLayout;
+    /**
+     * Prune before restoring. A saved layout can carry groups with no panels in
+     * them — one real profile had two — and dockview renders each as a blank
+     * region with no tab. `fromJSON` would faithfully bring them back on every
+     * launch, so a single stray panel-close became permanent.
+     */
+    const pruned = pruneEmptyGroups(layout.dockviewLayout);
+    if (pruned.removed > 0) {
+      console.log(`[ide] dropped ${pruned.removed} empty panel group(s) from the saved layout`);
+    }
+    const saved = pruned.layout;
     let restored = false;
     if (saved && typeof saved === "object") {
       try {
@@ -332,7 +338,9 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
           // the Zustand persist middleware tries to JSON.stringify the
           // whole store. dockview will re-receive params on restore via
           // updateParameters in onReady.
-          const raw = event.api.toJSON() as unknown;
+          // Pruned on the way out too, so a layout saved while a group happened
+        // to be empty does not store the phantom in the first place.
+        const raw = pruneEmptyGroups(event.api.toJSON() as unknown).layout;
           const snapshot = raw as {
             panels?: Record<string, { params?: unknown } & Record<string, unknown>>;
           };

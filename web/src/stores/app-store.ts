@@ -2,10 +2,12 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { migrateThemeId, type ThemeId } from '@/lib/themes/app-themes';
 import { getGatedStorage } from '@/lib/gated-storage';
 
 export type Surface = 'chat' | 'cowork' | 'code' | 'browser' | 'assistant';
-export type Theme = 'light' | 'dark' | 'system' | 'emma';
+/** Re-exported so existing imports keep working; the list lives in one place. */
+export type Theme = ThemeId;
 
 export type SidebarMode = 'history' | 'projects' | 'customize';
 export type CustomizeSection = 'landing' | 'skills' | 'connectors' | 'browse-connectors' | 'browse-marketplace' | 'automation' | 'agents' | 'design';
@@ -77,6 +79,21 @@ export const useAppStore = create<AppStore>()(
       name: 'aime:app',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
+      /**
+       * v1: "The Emma" was renamed to "Zara".
+       *
+       * This store had no migration path at all, and a renamed enum value needs
+       * one: zustand merges the persisted slice over the defaults, so a stored
+       * `theme: 'emma'` would survive as a value nothing recognises, `applyTheme`
+       * would match no class, and the user would silently find themselves on
+       * light — a theme they never picked, with nothing to explain it.
+       */
+      version: 1,
+      migrate: (persisted: unknown, _version: number) => {
+        const state = persisted as Record<string, unknown> | null;
+        if (!state) return state as never;
+        return { ...state, theme: migrateThemeId(state.theme) } as never;
+      },
       partialize: (state) => {
         // These four are transient view state — dropped from the persisted slice.
         const { viewingProjectId, selectedSkillId, selectedConnectorId, selectedAgentName, ...rest } = state;
