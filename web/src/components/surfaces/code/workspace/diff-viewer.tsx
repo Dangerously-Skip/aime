@@ -29,6 +29,7 @@ import {
 import { getGitDiff } from "@/lib/code-workspace/ipc";
 import { useAppStore } from "@/stores/app-store";
 import { PanelShell } from "./panel-shell";
+import { isDarkTheme } from "@/lib/themes/app-themes";
 
 // ── language detection ───────────────────────────────────────────────────
 
@@ -280,7 +281,15 @@ export function DiffViewer({
 
   // ── Render ──────────────────────────────────────────────────────────────
 
-  const diffViewTheme: "light" | "dark" = theme === "dark" || theme === "emma" ? "dark" : "light";
+  // Was `theme === "dark" || theme === "emma"`, which called the light pink
+  // theme dark and rendered its diffs inverted. Asking the registry instead
+  // means a new theme cannot be forgotten here.
+  const diffViewTheme: "light" | "dark" = isDarkTheme(
+    theme,
+    typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches,
+  )
+    ? "dark"
+    : "light";
 
   const headerActions = (
     <>

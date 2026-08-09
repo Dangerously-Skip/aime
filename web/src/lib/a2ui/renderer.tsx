@@ -3,7 +3,7 @@
 /**
  * A2UI React renderer — Premium edition.
  * Renders A2UIDocument components with polished card styling.
- * Supports light, dark, and emma themes via CSS variables.
+ * Supports every app theme via CSS variables.
  */
 
 import React from 'react';
