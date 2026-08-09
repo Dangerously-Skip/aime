@@ -1,8 +1,11 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { resolveSearchRoute } from '../search/resolve';
 import { supportsNativeWebSearch } from '../search/native-search';
+import { fetchUrl, describeFailure } from '../fetch-url';
 import { correctWebSearchSection } from '../surfaces/shared/web-search-prompt';
 import { themeInstruction } from '../themes/resolve';
+import { allowedPluginPaths } from '../themes/deck-format';
+import { imageInstruction } from '../images/prompt';
 import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
@@ -208,6 +211,41 @@ export class ClaudeProvider extends BaseProvider {
     }
 
     /**
+     * The credential images are generated with.
+     *
+     * Borrowed exactly as search borrows one, and for the same reason: anyone
+     * using OpenRouter for inference has already supplied the key an image model
+     * needs, and asking for a second copy is how a capability stays switched off
+     * forever. The secret is resolved here on the server and never travels
+     * through settings or the request body.
+     */
+    /**
+     * Cost control, per turn.
+     *
+     * The user accepted the cost, which is not the same as accepting an
+     * unbounded one: a deck with a picture per slide is a plausible request and
+     * an uncapped loop is a plausible bug. The count is reported in every
+     * result so the budget is visible to the model as it spends, rather than
+     * arriving as a refusal it has to work around.
+     */
+    const IMAGE_BUDGET = 16;
+    let imagesGenerated = 0;
+
+    const imageApiKey = await (async () => {
+      const providerId =
+        (searchSettings as { openrouterProviderId?: string | null } | undefined)
+          ?.openrouterProviderId ?? null;
+      if (!providerId) return null;
+      try {
+        const { getCredentialStore } = await import('../models/credentials');
+        return await getCredentialStore().getField(providerId, 'apiKey');
+      } catch {
+        // An unreadable store means "no image generation", not a failed turn.
+        return null;
+      }
+    })();
+
+    /**
      * The SDK's built-in `WebSearch` — Anthropic's server-side search.
      *
      * Denied unconditionally for the whole life of this app, which was right
@@ -220,6 +258,24 @@ export class ClaudeProvider extends BaseProvider {
 
     const denied = new Set<string>([
       ...(nativeWebSearch ? [] : ['WebSearch']),
+      /**
+       * The built-in `WebFetch` is denied unconditionally, in favour of the
+       * `mcp__aime__FetchUrl` tool defined below.
+       *
+       * Not a policy choice — a mechanical one. `WebFetch` takes no timeout, and
+       * the SDK has no way to cancel one tool, so a page that never answers can
+       * only be dealt with by killing the entire query on TOOL_DEADLINE_MS. That
+       * is 180 seconds of nothing followed by the loss of everything the turn had
+       * already produced, in exchange for a paywall that could have been reported
+       * in under a second.
+       *
+       * A failed fetch is ordinary on the open web. It has to come back as a tool
+       * RESULT the model can act on — "paywalled, try another source" — so the
+       * agent moves on. That requires owning the tool, which is why this is a
+       * deny rather than a preference expressed in the system prompt. Narrowing
+       * `allowedTools` would do nothing: it is an auto-approve list.
+       */
+      'WebFetch',
       ...(deniedTools ?? []),
       // Derived from the user setting rather than left to the route, for the same
       // reason: a caller that assembles its own params cannot forget it.
@@ -259,18 +315,40 @@ export class ClaudeProvider extends BaseProvider {
      * on purpose is still explicable.
      */
     const themeNote = themeInstruction(deckTheme ?? null);
+    /**
+     * Advertised independently of the deck theme, which is where it lived first
+     * and why a whole run finished with no pictures: `themeInstruction` only
+     * fires when a theme is set, so a pptx deck — and every mockup, page and
+     * document, none of which set one — never heard the tool existed.
+     */
+    const imageNote = imageInstruction(!!imageApiKey);
+    const extraNotes = themeNote + imageNote;
     const systemPrompt = (() => {
       if (typeof rawSystemPrompt === 'string') {
-        return correctWebSearchSection(rawSystemPrompt, searchAvailable) + themeNote;
+        return correctWebSearchSection(rawSystemPrompt, searchAvailable) + extraNotes;
       }
       if (rawSystemPrompt && typeof rawSystemPrompt === 'object' && 'append' in rawSystemPrompt) {
         const a = (rawSystemPrompt as { append?: string }).append;
         return {
           ...rawSystemPrompt,
-          append: (a ? correctWebSearchSection(a, searchAvailable) : '') + themeNote,
+          append: (a ? correctWebSearchSection(a, searchAvailable) : '') + extraNotes,
         };
       }
-      return rawSystemPrompt;
+      /**
+       * No prompt to append to — but the theme note still has to survive.
+       *
+       * This branch used to `return rawSystemPrompt`, silently discarding
+       * `themeNote` whenever the prompt was absent or an object without an
+       * `append` key. A dropped instruction is invisible: the deck simply comes
+       * back in the wrong format, which is indistinguishable from the model
+       * ignoring an instruction it was actually given, and the two have opposite
+       * fixes.
+       */
+      if (!extraNotes) return rawSystemPrompt;
+      if (rawSystemPrompt && typeof rawSystemPrompt === 'object') {
+        return { ...rawSystemPrompt, append: extraNotes };
+      }
+      return extraNotes;
     })();
     const model = explicitModel
       || surfaceConfig?.model
@@ -279,7 +357,28 @@ export class ClaudeProvider extends BaseProvider {
       || this.permissionMode;
 
     // Scan for installed plugins to pass to SDK
-    const pluginPaths = await this.scanPlugins();
+    /**
+     * The pptx plugin is withheld when a theme is set — see themes/deck-format.
+     * Prose had already failed three times here; this is the mechanism behind
+     * the claim.
+     */
+    const allPluginPaths = await this.scanPlugins();
+    const pluginPaths = allowedPluginPaths(allPluginPaths, deckTheme?.id ?? null, params.prompt);
+    /**
+     * Logged either way, because "no theme set" and "theme set but ignored" look
+     * identical from the outside and have completely different fixes. Working
+     * that out took three rounds of guessing; one line makes the next one a
+     * lookup.
+     */
+    if (pluginPaths.length !== allPluginPaths.length) {
+      console.log(
+        `[Claude] Withholding the pptx plugin: the '${deckTheme?.id}' deck theme is set and the request did not ask for PowerPoint by name.`,
+      );
+    } else if (!deckTheme?.id) {
+      console.log(
+        '[Claude] No deck theme on this request — pptx stays available and no theme steering was added.',
+      );
+    }
     console.log('[Claude] Plugin paths found:', pluginPaths);
 
     /**
@@ -450,7 +549,7 @@ export class ClaudeProvider extends BaseProvider {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (tool as any)(
             'SearchWeb',
-            'Search the web and get back a list of real, current results (title, URL, snippet). Use this whenever you need information you do not have, especially anything time-sensitive: rankings, prices, recent events, current documentation. Do NOT guess URLs — search first, then WebFetch a result if you need the full page.',
+            'Search the web and get back a list of real, current results (title, URL, snippet). Use this whenever you need information you do not have, especially anything time-sensitive: rankings, prices, recent events, current documentation. Do NOT guess URLs — search first, then FetchUrl a result if you need the full page.',
             { query: z.string().describe('The search query.') },
             async ({ query: q }: { query: string }) => {
               try {
@@ -484,6 +583,109 @@ export class ClaudeProvider extends BaseProvider {
       version: '1.0.0',
       tools: [
         ...searchTools,
+        /**
+         * The bounded replacement for the built-in `WebFetch`, which is denied
+         * below for the same reason `WebSearch` is: it cannot be made safe from
+         * out here.
+         *
+         * `WebFetch` has no timeout and the SDK exposes no per-tool cancel, so a
+         * page that never answers stalls the turn until TOOL_DEADLINE_MS kills
+         * the entire query — losing everything the agent had already produced.
+         * A paywalled article did exactly that at 63s and counting, alongside
+         * four sibling fetches that each returned in about 1.5 seconds.
+         *
+         * What is given up: WebFetch does model-backed extraction against its
+         * `prompt`, so it returns less text than this does. That is a real cost,
+         * paid deliberately — a smaller result is worth less than a turn that
+         * finishes, and truncation keeps the difference bounded.
+         */
+        /**
+         * Make a picture, for whatever the agent is building.
+         *
+         * Not a deck feature. A mockup, a landing page and a document all read
+         * as unfinished without imagery, and the alternatives the model reaches
+         * for otherwise are both bad: an invented image URL renders as a broken
+         * `<img>` (which looks like a bug rather than a gap), or the visual is
+         * dropped and the layout silently loses its composition.
+         *
+         * Bounded and capped. `IMAGE_TIMEOUT_MS` stops one slow generation
+         * stalling a turn, and `imageBudget` stops a fourteen-slide deck quietly
+         * spending real money — a cap the user can see in the result text rather
+         * than discovering on a bill.
+         */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'CreateImage',
+          'Generate an image and save it next to the file you are building. Use it whenever a deck, page, mockup or document needs a picture — a cover visual, a product shot, an illustration. Returns a RELATIVE path to embed directly. If it fails, use the .img-placeholder markup instead; never invent an image URL.',
+          {
+            prompt: z.string().describe('What the image should show. Describe the subject and composition; the deck theme is applied automatically.'),
+            filename: z.string().describe('A short kebab-case name without extension, e.g. "pizza-cover".'),
+          },
+          async ({ prompt: imgPrompt, filename }: { prompt: string; filename: string }) => {
+            if (imagesGenerated >= IMAGE_BUDGET) {
+              return {
+                content: [{ type: 'text' as const, text: `Image budget reached (${IMAGE_BUDGET} for this turn). Use the .img-placeholder markup for any remaining visuals.` }],
+                isError: true,
+              };
+            }
+            const { generateImage, describeImageFailure } = await import('../images/generate');
+            const result = await generateImage({
+              prompt: imgPrompt,
+              apiKey: imageApiKey ?? null,
+              themeId: deckTheme?.id ?? null,
+            });
+            if (!result.ok) {
+              return {
+                content: [{ type: 'text' as const, text: describeImageFailure(result.kind, result.message) }],
+                isError: true,
+              };
+            }
+            imagesGenerated++;
+            try {
+              const fsp = await import('fs/promises');
+              const nodePath = await import('path');
+              // Sanitised rather than trusted: the name reaches the filesystem.
+              const safe = filename.replace(/[^a-z0-9-]/gi, '-').slice(0, 60) || 'image';
+              const ext = result.mimeType.includes('jpeg') ? 'jpg' : 'png';
+              const dir = nodePath.join(effectiveCwd ?? getScratchDir(chatId ?? 'default'), 'images');
+              await fsp.mkdir(dir, { recursive: true });
+              const abs = nodePath.join(dir, `${safe}.${ext}`);
+              await fsp.writeFile(abs, Buffer.from(result.base64, 'base64'));
+              return {
+                content: [{
+                  type: 'text' as const,
+                  // Relative, because the deck must survive being moved or emailed.
+                  text: `Saved. Embed it with src="images/${safe}.${ext}" (relative to the file you are writing). ${imagesGenerated}/${IMAGE_BUDGET} images used this turn.`,
+                }],
+              };
+            } catch (e) {
+              return {
+                content: [{ type: 'text' as const, text: `The image was generated but could not be saved: ${e instanceof Error ? e.message : 'unknown'}. Use the .img-placeholder markup.` }],
+                isError: true,
+              };
+            }
+          }
+        ),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tool as any)(
+          'FetchUrl',
+          'Read a web page and get its text back. Use this after SearchWeb to read a result you found. Returns quickly whether it succeeds or not: if a page is paywalled, blocked or slow it says so, and you should then try a DIFFERENT source rather than retrying the same URL.',
+          {
+            url: z.string().describe('The full URL to read, taken from a search result.'),
+          },
+          async ({ url: target }: { url: string }) => {
+            const result = await fetchUrl(target);
+            if (!result.ok) {
+              return {
+                content: [{ type: 'text' as const, text: describeFailure(target, result.kind, result.message) }],
+                isError: true,
+              };
+            }
+            const header = result.title ? `# ${result.title}\n${result.url}\n\n` : `${result.url}\n\n`;
+            const tail = result.truncated ? '\n\n[truncated]' : '';
+            return { content: [{ type: 'text' as const, text: header + result.text + tail }] };
+          }
+        ),
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (tool as any)(
           'CronCreate',
@@ -1661,12 +1863,23 @@ export class ClaudeProvider extends BaseProvider {
     }
 
     // Per-tool watchdog: abort the query if any single tool runs past
-    // TOOL_DEADLINE_MS. The SDK doesn't expose per-tool timeouts, and
-    // WebFetch in particular can hang for many minutes when its model-
-    // backed summarization step is slow (e.g. nib AI Studio Gateway
-    // queueing). Without this, a single hung tool freezes the whole
-    // session until the user manually aborts.
-    const TOOL_DEADLINE_MS = 90_000;
+    // TOOL_DEADLINE_MS. The SDK exposes no per-tool timeout — `interrupt()`,
+    // `close()` and `stopTask()` are the only cancellation levers, and none of
+    // them cancels one tool and continues — and WebFetch in particular can hang
+    // for many minutes when its model-backed summarization step is slow. Without
+    // this, a single hung tool freezes the session until the user aborts.
+    //
+    // THE ONLY per-tool deadline in the app, and deliberately so. A second one
+    // ran in the browser for a while, which could not work: a client abort tears
+    // down a `fetch` and leaves this subprocess running to completion. It was
+    // deleted rather than re-tuned.
+    //
+    // 90_000 was below the runtime of the tools this comment itself calls slow.
+    // A WebFetch measured at 120.5s returned correct and complete; killing the
+    // QUERY for it cost the whole turn, including an already-written deck, to
+    // save 30 seconds. `timeout-ordering.test.ts` holds this below every
+    // surface's queryTimeoutSecs and above that observed WebFetch.
+    const TOOL_DEADLINE_MS = 180_000;
     const activeTools = new Map<string, { name: string; startedAt: number }>();
     // Use a single-element array so TS doesn't narrow to `never` —
     // the assignment below happens inside an interval callback which

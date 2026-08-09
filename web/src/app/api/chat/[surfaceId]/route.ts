@@ -20,15 +20,19 @@ const TOOL_PROFILES: Record<string, string[]> = {
   // (Brave/Tavily/OpenRouter); only searxng uses the external MCP above. Both
   // names must appear in every profile that promises search, or which provider
   // the user picked would silently decide whether search survives a profile.
-  minimal: ['WebSearch', 'WebFetch', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb'],
+  minimal: ['WebSearch', 'mcp__aime__FetchUrl', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb'],
   coding: [
     'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep', 'Bash',
-    'WebSearch', 'WebFetch', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb',
+    'WebSearch', 'mcp__aime__FetchUrl', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb',
     // A coding profile that cannot produce a document or a spreadsheet is not
     // what the label ("Read/Write/Edit/Glob/Grep/Bash + Web tools") promises;
     // these were never enumerated because the list predates them mattering.
     'ExcelRead', 'ExcelWrite', 'ExcelEdit',
     'mcp__aime__DocumentCreate', 'mcp__aime__SkillCreate', 'Skill',
+    // Imagery is not deck-specific: a mockup, a landing page and a document all
+    // read as unfinished without it, and the profile that builds those is this
+    // one. Withholding it here means the model falls back to an invented URL.
+    'mcp__aime__CreateImage',
   ],
   full: [], // empty = no restriction (use surface defaults)
 };
@@ -345,6 +349,30 @@ export async function POST(
       // connector support, and session management. Gateway routing for billing is
       // handled inside ClaudeProvider via ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL env vars.
       const provider = getProvider(providerName as string);
+
+      /**
+       * A client that has gone away must stop the agent.
+       *
+       * Nothing used to connect the two. The client's watchdogs abort a `fetch`,
+       * which tears down the HTTP response and nothing else — the SDK subprocess
+       * on this side kept running to completion, spending tokens on a stream
+       * with no reader and writing files no `tool_use` event would ever announce.
+       * That is not a leak in the abstract: an 18-slide deck was finished half a
+       * minute after the user had been told the agent was stuck.
+       *
+       * `POST /api/abort` was built for exactly this, complete with tests, and no
+       * client ever called it. The signal is the better hook anyway — it fires
+       * when the browser crashes or the machine sleeps, which no explicit call
+       * survives. `timeout-ordering.test.ts` asserts this listener still exists.
+       */
+      req.signal.addEventListener('abort', () => {
+        console.warn('[CHAT] Client disconnected — aborting query for', chatId);
+        try {
+          provider.abort(chatId as string, surfaceId);
+        } catch (e) {
+          console.error('[CHAT] Abort on client disconnect failed:', e);
+        }
+      });
 
       // ── Every independent read, started at once ────────────────────────
       // Nine serialized filesystem round-trips used to sit between the request

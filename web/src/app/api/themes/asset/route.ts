@@ -21,18 +21,34 @@ export const runtime = 'nodejs';
  */
 const ASSETS = path.resolve(process.cwd(), 'resources/html-deck/assets');
 
+/**
+ * `.js` is served as well as `.css` so the in-app deck viewer gets `runtime.js`
+ * — keyboard navigation, presenter mode and the overview grid. Without it the
+ * preview renders slide one and nothing responds, which reads as broken rather
+ * than as a still image.
+ *
+ * The allowlist stays an allowlist. It is what stops this becoming a general
+ * file-read endpoint, and it is checked AFTER resolution, so an encoded
+ * traversal that lands outside `ASSETS` fails on containment first.
+ */
+const TYPES: Record<string, string> = {
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+};
+
 export async function GET(req: NextRequest) {
   const rel = req.nextUrl.searchParams.get('file') ?? '';
   const resolved = path.resolve(ASSETS, rel);
+  const contentType = TYPES[path.extname(resolved)];
 
-  if (!resolved.startsWith(ASSETS + path.sep) || !resolved.endsWith('.css')) {
+  if (!resolved.startsWith(ASSETS + path.sep) || !contentType) {
     return new NextResponse('Not found', { status: 404 });
   }
   if (!fs.existsSync(resolved)) return new NextResponse('Not found', { status: 404 });
 
   return new NextResponse(fs.readFileSync(resolved, 'utf-8'), {
     headers: {
-      'Content-Type': 'text/css; charset=utf-8',
+      'Content-Type': contentType,
       // Vendored files change only when the app updates.
       'Cache-Control': 'public, max-age=3600',
     },

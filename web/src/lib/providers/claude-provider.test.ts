@@ -22,6 +22,19 @@ vi.mock('os', async (orig) => {
 // tests are about behaviour GIVEN a setting, so the stored answer is pinned to
 // all-off and each test opts in to what it is exercising — otherwise every case
 // would depend on whatever is in this machine's ~/.aime/security.json.
+/**
+ * A stored credential, so the image-generation branch is actually reached.
+ *
+ * Without this the no-theme image test skipped itself on any machine without a
+ * real provider configured — and skipping silently is how it passed while the
+ * bug it was written for was reintroduced. Verified by sabotage.
+ */
+vi.mock('../models/credentials', () => ({
+  getCredentialStore: () => ({
+    getField: async (_id: string, field: string) => (field === 'apiKey' ? 'sk-test-image' : null),
+  }),
+}));
+
 vi.mock('../security/settings', async (orig) => {
   const actual = await orig<typeof import('../security/settings')>();
   return { ...actual, loadSecuritySettings: async () => ({
@@ -128,8 +141,9 @@ describe('option assembly', () => {
 
     expect(options.allowedTools).toContain('Read');
     expect(options.allowedTools).toContain('Bash');
-    // Nothing withheld on a plain first-party run — see the WebSearch block below.
-    expect(options.disallowedTools).toEqual([]);
+    // Only WebFetch, which is denied on every run in favour of the bounded
+    // `mcp__aime__FetchUrl` — see the WebSearch block below for the rest.
+    expect(options.disallowedTools).toEqual(['WebFetch']);
     expect(options.maxTurns).toBe(20);
     expect(options.permissionMode).toBe('bypassPermissions');
     expect(options.allowDangerouslySkipPermissions).toBe(true);
@@ -472,7 +486,7 @@ describe('deniedTools', () => {
       const { canUseTool } = await captureOptions(new ClaudeProvider(), {
         prompt: 'search for the top pizza places in western sydney',
       });
-      const r = await canUseTool('WebFetch', { url: INVENTED }, { toolUseID: 'u1' });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: INVENTED }, { toolUseID: 'u1' });
       expect(r.behavior).toBe('deny');
       expect(r.message).toMatch(/did not come from anywhere/i);
       // Closes off the follow-on behaviour the transcript shows.
@@ -483,7 +497,7 @@ describe('deniedTools', () => {
       const { canUseTool } = await captureOptions(new ClaudeProvider(), {
         prompt: 'summarise https://example.com/menu for me',
       });
-      const r = await canUseTool('WebFetch', { url: 'https://example.com/menu' }, { toolUseID: 'u2' });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: 'https://example.com/menu' }, { toolUseID: 'u2' });
       expect(r.behavior).toBe('allow');
     });
 
@@ -492,7 +506,7 @@ describe('deniedTools', () => {
         prompt: 'now read that page',
         history: [{ role: 'user' as const, content: 'check https://example.com/a' }],
       });
-      const r = await canUseTool('WebFetch', { url: 'https://example.com/a' }, { toolUseID: 'u3' });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: 'https://example.com/a' }, { toolUseID: 'u3' });
       expect(r.behavior).toBe('allow');
     });
 
@@ -504,7 +518,7 @@ describe('deniedTools', () => {
       const { canUseTool } = await captureOptions(new ClaudeProvider(), {
         prompt: 'start from https://www.broadsheet.com.au/sydney',
       });
-      const r = await canUseTool('WebFetch', { url: INVENTED }, { toolUseID: 'u4' });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: INVENTED }, { toolUseID: 'u4' });
       expect(r.behavior).toBe('deny');
     });
 
@@ -527,7 +541,7 @@ describe('deniedTools', () => {
           { role: 'assistant' as const, content: `Let me try ${INVENTED} — a predictable pattern.` },
         ],
       });
-      const r = await canUseTool('WebFetch', { url: INVENTED }, { toolUseID: 'u6' });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: INVENTED }, { toolUseID: 'u6' });
       expect(r.behavior).toBe('deny');
     });
 
@@ -536,7 +550,7 @@ describe('deniedTools', () => {
         prompt: 'try again',
         history: [{ role: 'user' as const, content: `read ${INVENTED} please` }],
       });
-      const r = await canUseTool('WebFetch', { url: INVENTED }, { toolUseID: 'u7' });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: INVENTED }, { toolUseID: 'u7' });
       expect(r.behavior).toBe('allow');
     });
 
@@ -564,7 +578,7 @@ describe('deniedTools', () => {
    */
   it('offers the SDK WebSearch on a first-party run', async () => {
     const { options } = await captureOptions(new ClaudeProvider(), {});
-    expect(options.disallowedTools).toEqual([]);
+    expect(options.disallowedTools).not.toContain('WebSearch');
     expect((await captureOptions(new ClaudeProvider(), {})).canUseTool).toBeDefined();
   });
 
@@ -572,7 +586,7 @@ describe('deniedTools', () => {
     const { options } = await captureOptions(new ClaudeProvider(), {
       providerEnv: { CLAUDE_CODE_USE_BEDROCK: '1' },
     });
-    expect(options.disallowedTools).toEqual(['WebSearch']);
+    expect(options.disallowedTools).toContain('WebSearch');
   });
 
   /**
@@ -584,14 +598,14 @@ describe('deniedTools', () => {
     const { options } = await captureOptions(new ClaudeProvider(), {
       baseUrl: 'https://openrouter.ai/api/v1',
     });
-    expect(options.disallowedTools).toEqual(['WebSearch']);
+    expect(options.disallowedTools).toContain('WebSearch');
   });
 
   it('leaves every other tool alone', async () => {
     const { canUseTool } = await captureOptions(new ClaudeProvider(), {
       deniedTools: ['Bash'],
     });
-    for (const t of ['Read', 'Write', 'Glob', 'WebFetch', 'mcp__aime__DocumentCreate']) {
+    for (const t of ['Read', 'Write', 'Glob', 'mcp__aime__DocumentCreate']) {
       expect((await canUseTool(t, {}, { toolUseID: `ok-${t}` })).behavior, t).toBe('allow');
     }
   });
@@ -2491,5 +2505,106 @@ describe('aborting a query cancels its outstanding rendezvous', () => {
 
     await run(provider, { chatId: 'stop-chat-2' });
     expect(result).toMatchObject({ ok: false });
+  });
+});
+
+/**
+ * The theme has to reach the MODEL, not merely resolve correctly.
+ *
+ * Reported three times, each with the same symptom and a different cause: a user
+ * picks a design in Customize, asks for a deck, and gets a plain `.pptx`. Two of
+ * those causes are fixed — the instruction did not steer the FORMAT, and the
+ * auto-continue path dropped `deckTheme` from the request. This pins the leg
+ * between them: given a theme, the system prompt the SDK is handed must contain
+ * the steering. If this passes and it still produces pptx, the fault is upstream
+ * (no theme in the request) or downstream (the model ignoring its prompt), and
+ * that is worth being able to tell apart quickly.
+ */
+describe('the deck theme reaches the system prompt', () => {
+  const promptText = (systemPrompt: unknown): string =>
+    typeof systemPrompt === 'string'
+      ? systemPrompt
+      : ((systemPrompt as { append?: string })?.append ?? '');
+
+  it('carries the theme id and the HTML-deck steering', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      // The real surface config, so this exercises the production branch rather
+      // than the no-prompt edge case.
+      surfaceId: 'cowork',
+      deckTheme: { id: 'magazine-bold', source: 'global' },
+    });
+    const text = promptText(options.systemPrompt);
+    expect(text, 'the theme never reaches the model').toContain('magazine-bold');
+    expect(text, 'nothing steers away from pptx').toMatch(/do NOT reach for the pptx/i);
+    expect(text).toMatch(/deck-html/);
+  });
+
+  it('says nothing about decks when no theme is set', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {});
+    expect(promptText(options.systemPrompt)).not.toMatch(/do NOT reach for the pptx/i);
+  });
+
+  /**
+   * The regression: image guidance used to live INSIDE the theme note, so a run
+   * with no theme — every mockup, page and document, plus any deck that came out
+   * as pptx — never heard the tool existed. A whole deck run finished with no
+   * pictures because of this.
+   */
+  it('offers CreateImage guidance even with NO theme set', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      surfaceId: 'cowork',
+      // The provider reads this field through a cast (it is not on the public
+      // SearchSettings type), so the test has to as well.
+      searchSettings: { openrouterProviderId: 'test-provider' } as unknown as QueryParams['searchSettings'],
+    });
+    const text = promptText(options.systemPrompt);
+    expect(text, 'the image tool is never mentioned without a deck theme').toContain(
+      'CreateImage',
+    );
+    expect(text).toMatch(/mockup/i);
+    expect(text, 'still gated behind a deck theme').not.toMatch(/do NOT reach for the pptx/i);
+  });
+
+  it('offers CreateImage guidance alongside the theme', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      surfaceId: 'cowork',
+      deckTheme: { id: 'aurora', source: 'global' },
+    });
+    expect(promptText(options.systemPrompt)).toMatch(/CreateImage/);
+  });
+});
+
+/**
+ * The filter has to be WIRED, not merely correct in its own file. A pure
+ * function nobody calls is the same shape of failure as prose nobody follows.
+ */
+describe('the pptx plugin is withheld from the SDK when a theme is set', () => {
+  it('is absent from the options handed to the SDK', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      surfaceId: 'cowork',
+      prompt: 'build me a slide deck of the results',
+      deckTheme: { id: 'magazine-bold', source: 'global' },
+    });
+    const plugins = (options.plugins ?? []) as unknown[];
+    const names = plugins.map((p) =>
+      String((p as { path?: string })?.path ?? p).split('/').filter(Boolean).pop(),
+    );
+    expect(names, 'the ppt plugin is still reachable despite a theme').not.toContain('ppt');
+  });
+
+  it('is present when the user asks for PowerPoint by name', async () => {
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      surfaceId: 'cowork',
+      prompt: 'make me a PowerPoint of the results',
+      deckTheme: { id: 'magazine-bold', source: 'global' },
+    });
+    const plugins = (options.plugins ?? []) as unknown[];
+    const names = plugins.map((p) =>
+      String((p as { path?: string })?.path ?? p).split('/').filter(Boolean).pop(),
+    );
+    // Only meaningful on a machine where the plugin is installed; skip quietly
+    // rather than asserting something the environment cannot support.
+    if (!names.length) return;
+    expect(names).toContain('ppt');
   });
 });
