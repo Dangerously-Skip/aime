@@ -219,6 +219,20 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
   },
 
   {
+    id: 'icloud',
+    name: 'iCloud',
+    description: 'Mail, Calendar and Contacts — reads your inbox and writes drafts; it cannot send',
+    category: 'communication',
+    auth: {
+      // Not OAuth: Apple publishes no API for user data, so this speaks IMAP and
+      // DAV with an app-specific password. The catalogue is still the right home
+      // — a user connecting their email should not have to know the difference.
+      type: 'app-password',
+      hint: 'Create one at appleid.apple.com → Sign-In and Security → App-Specific Passwords. Not your Apple ID password — iCloud rejects that when two-factor is on.',
+    },
+  },
+
+  {
     id: 'outlook-mail',
     name: 'Outlook Mail',
     description: 'Read, send, and search email via Microsoft Graph',

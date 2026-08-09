@@ -16,11 +16,11 @@ import { buildTrustedMcpEntry } from './provision-guard';
  */
 
 describe('the live registry is registry.ts', () => {
-  it('exposes the sixteen connectors the app ships, not a thirteen-entry subset', () => {
+  it('exposes the seventeen connectors the app ships, not a thirteen-entry subset', () => {
     // The dead directory's ids were jira/confluence/outlook/sharepoint/
     // google-drive — names this registry does not use. If any of them ever
     // resolves again, `./registry` has stopped meaning this file.
-    expect(CONNECTOR_REGISTRY).toHaveLength(16);
+    expect(CONNECTOR_REGISTRY).toHaveLength(17);
     expect(Object.keys(CONNECTOR_MAP)).toEqual(
       expect.arrayContaining(['atlassian', 'google-workspace', 'm365-graph', 'onedrive-sharepoint']),
     );
@@ -43,7 +43,7 @@ describe('aws declares an env var that a bypass could not weaponise', () => {
     // HIGHEST-precedence entry in the AWS credential chain, so a value written
     // there shadows the working profile and breaks every AWS tool call rather than
     // just naming a profile that does not exist.
-    expect(CONNECTOR_MAP.aws.mcp.tokenInjection).toEqual({
+    expect(CONNECTOR_MAP.aws.mcp!.tokenInjection).toEqual({
       method: 'env',
       envVar: 'AWS_PROFILE',
     });
@@ -58,7 +58,9 @@ describe('aws declares an env var that a bypass could not weaponise', () => {
       'AWS_CONFIG_FILE',
     ]);
     for (const c of CONNECTOR_REGISTRY) {
-      const injection = c.mcp.tokenInjection;
+      // Not every connector is MCP-backed; iCloud speaks IMAP/DAV in-process.
+      const injection = c.mcp?.tokenInjection;
+      if (!injection) continue;
       if (injection.method !== 'env') continue;
       expect(forbidden.has(injection.envVar), `${c.id} → ${injection.envVar}`).toBe(false);
     }

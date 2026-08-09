@@ -76,9 +76,33 @@ describe('a credential can actually be entered', () => {
     );
   });
 
-  it('is offered in Settings, with a nav entry that reaches it', () => {
-    expect(read('src/components/settings/settings-dialog.tsx')).toMatch(/icloud:\s*ICloudSection/);
-    expect(read('src/components/settings/settings-nav.tsx')).toMatch(/id:\s*"icloud"/);
+  /**
+   * In the Connectors catalogue, not Settings.
+   *
+   * It first shipped as a Settings section on the reasoning that everything in
+   * Connectors is OAuth and this is not. That is an implementation detail the
+   * user should never have to know: "connect my email" belongs where the other
+   * services are. The auth type carries the difference instead.
+   */
+  it('is a connector, listed in the catalogue', async () => {
+    const { CONNECTOR_MAP } = await import('@/lib/connectors/registry');
+    const c = CONNECTOR_MAP.icloud;
+    expect(c, 'iCloud is not in the connector registry').toBeDefined();
+    expect(c.auth.type).toBe('app-password');
+    // Its tools are in-process, so it has nothing to provision.
+    expect(c.mcp, 'iCloud declares an MCP server it does not have').toBeUndefined();
+  });
+
+  it('the catalogue knows how to connect it', () => {
+    const browse = read('src/components/customize/browse-connectors.tsx');
+    expect(browse, 'the Connectors view has no branch for app-password').toContain(
+      "auth.type === 'app-password'",
+    );
+    expect(browse).toContain('/api/icloud/connect');
+  });
+
+  it('is not left behind in Settings as a second way in', () => {
+    expect(read('src/components/settings/settings-nav.tsx')).not.toMatch(/id:\s*"icloud"/);
   });
 });
 
@@ -99,10 +123,20 @@ describe('draft-only survives the wiring', () => {
     expect(draft).toMatch(/NOT sent|not been sent/i);
   });
 
-  it('the Settings copy states it too', () => {
-    expect(read('src/components/settings/sections/icloud-section.tsx')).toMatch(
-      /cannot send/i,
-    );
+  /**
+   * Stated where the user decides to connect it. The guarantee is only worth
+   * having if the person granting access can see it.
+   */
+  it('the connector card says it cannot send', async () => {
+    const { CONNECTOR_MAP } = await import('@/lib/connectors/registry');
+    expect(CONNECTOR_MAP.icloud.description).toMatch(/cannot send/i);
+  });
+
+  /** And the connect dialog explains which password is wanted. */
+  it('the hint distinguishes an app-specific password from the account one', async () => {
+    const { CONNECTOR_MAP } = await import('@/lib/connectors/registry');
+    expect(CONNECTOR_MAP.icloud.auth.hint).toMatch(/appleid\.apple\.com/);
+    expect(CONNECTOR_MAP.icloud.auth.hint).toMatch(/not your Apple ID password/i);
   });
 });
 

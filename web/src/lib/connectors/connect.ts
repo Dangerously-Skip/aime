@@ -59,6 +59,12 @@ export interface ConnectOutcome {
  * orchestrator then reports what it needed instead of hanging.
  */
 export interface ConnectDeps {
+  /**
+   * Injectable so a flow that verifies a credential server-side can be driven
+   * in tests without a live endpoint — the same seam `fetch-url` and the image
+   * and mail clients use.
+   */
+  fetchImpl?: typeof fetch;
   /** Ask for a secret (API token, client secret). Return null to cancel. */
   requestSecret?: (
     connector: ConnectorDefinition,
@@ -152,6 +158,49 @@ export async function connectConnector(
 
   try {
     switch (auth.type) {
+      /**
+       * A service reached with a username plus a service-issued password, over
+       * its own protocols rather than OAuth. iCloud, via IMAP and DAV.
+       *
+       * Two prompts rather than one because both halves are needed and only the
+       * second is secret — showing the Apple ID in clear is right, and it is
+       * also what the user checks to confirm the correct account.
+       *
+       * The verify-and-store happens behind `/api/icloud/connect`, which tests
+       * the credential against the real server before writing it. So there is no
+       * token to hand back and nothing to provision into `.mcp.json`: the tools
+       * are in-process and appear as soon as a credential exists.
+       */
+      case 'app-password': {
+        if (!deps.requestText || !deps.requestSecret) {
+          return { status: 'unsupported', message: 'This service needs a username and password.' };
+        }
+        const username = await deps.requestText(connector, {
+          label: 'Apple ID',
+          placeholder: 'you@icloud.com',
+        });
+        if (!username) return cancelled;
+        const secret = await deps.requestSecret(connector, {
+          label: 'App-specific password',
+          placeholder: 'abcd-efgh-ijkl-mnop',
+          hint: auth.hint,
+        });
+        if (!secret) return cancelled;
+
+        const res = await (deps.fetchImpl ?? fetch)('/api/icloud/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appleId: username, appPassword: secret }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          // The server already turned "iCloud said no" into something a person
+          // can act on; passing it through beats inventing a second wording.
+          return { status: 'error', message: data.error ?? 'Could not connect.' };
+        }
+        return { status: 'connected' };
+      }
+
       case 'api_key': {
         if (!deps.requestSecret) {
           return { status: 'unsupported', message: 'This service needs an API token.' };

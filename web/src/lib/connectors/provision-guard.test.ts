@@ -65,7 +65,7 @@ describe('decideProvision — the caller cannot choose what runs', () => {
     // github is an http connector in the registry — that is what must be written
     expect(d.entry).toEqual({
       transport: 'streamable-http',
-      url: CONNECTOR_MAP.github.mcp.url,
+      url: CONNECTOR_MAP.github.mcp!.url,
       headers: { Authorization: 'Bearer ghp_real' },
     });
   });
@@ -143,7 +143,7 @@ describe('decideProvision — token hygiene', () => {
   it('allows an empty token and injects no env for it (aws_iam inherits the environment)', () => {
     const d = ok(decideProvision({ connectorId: 'aws' }, { appDir: APP_DIR }));
     expect(d.entry.env).toBeUndefined();
-    expect(d.entry.command).toBe(CONNECTOR_MAP.aws.mcp.command);
+    expect(d.entry.command).toBe(CONNECTOR_MAP.aws.mcp!.command);
   });
 });
 
@@ -259,7 +259,7 @@ describe('substituteAppDir', () => {
     // pass over the args.
     const def: ConnectorDefinition = {
       ...CONNECTOR_MAP['google-personal'],
-      mcp: { ...CONNECTOR_MAP['google-personal'].mcp, args: ['{appDir}/s.mjs'] },
+      mcp: { ...CONNECTOR_MAP['google-personal'].mcp!, args: ['{appDir}/s.mjs'] },
     };
     const entry = buildTrustedMcpEntry(def, '{appDir}', '/D');
     expect(entry.args).toEqual(['/D/s.mjs']);
@@ -268,8 +268,13 @@ describe('substituteAppDir', () => {
 });
 
 describe('every registry connector produces a usable entry', () => {
-  it('has a command for stdio and a url for http, for all 16', () => {
+  it('has a command for stdio and a url for http, for every MCP-backed one', () => {
     for (const [id, connector] of Object.entries(CONNECTOR_MAP)) {
+      // Not every connector runs an MCP server: iCloud speaks IMAP and DAV from
+      // in-process tools, so it has nothing to provision and `buildTrustedMcpEntry`
+      // rightly refuses it. Skipping is the assertion that it HAS no mcp block,
+      // not a way of ducking the check.
+      if (!connector.mcp) continue;
       const entry = buildTrustedMcpEntry(connector, 'tok', APP_DIR);
       if (entry.transport === 'stdio') {
         expect(entry.command, `${id} stdio command`).toBeTruthy();

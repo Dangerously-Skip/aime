@@ -126,7 +126,7 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
             onClick={() => setCustomizeSection("browse-connectors")}
           >
             <Globe className="h-3.5 w-3.5 mr-1.5" />
-            Browse OAuth connectors
+            Browse connectors
           </Button>
         </div>
 

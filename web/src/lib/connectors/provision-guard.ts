@@ -141,6 +141,12 @@ export function buildTrustedMcpEntry(
   appDir: string,
 ): TrustedMcpEntry {
   const { mcp } = connector;
+  if (!mcp) {
+    // Only MCP-backed connectors are ever provisioned into `.mcp.json`. Reaching
+    // here with, say, iCloud — whose tools run in-process — is a caller bug, and
+    // a loud one beats writing a malformed entry that fails at load time.
+    throw new Error(`${connector.id} has no MCP server to provision`);
+  }
 
   if (mcp.transport === 'stdio') {
     const entry: TrustedMcpEntry = {
@@ -187,6 +193,17 @@ export function decideProvision(
     : undefined;
   if (!connector) {
     return { ok: false, error: 'Unknown connector' };
+  }
+  /**
+   * A connector with no MCP server cannot be provisioned into `.mcp.json`.
+   *
+   * iCloud is the case: its tools run in-process on the `aime` server, reached
+   * over IMAP and DAV, so there is no command or URL to write. Refusing here
+   * rather than further down means the caller gets a reason instead of a throw,
+   * and no half-formed entry can reach the config.
+   */
+  if (!connector.mcp) {
+    return { ok: false, error: `${connector.name} has no MCP server to provision` };
   }
 
   // Empty is legitimate (aws_iam, and stdio servers reading their own env).

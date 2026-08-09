@@ -290,6 +290,9 @@ describe('connectConnector — every registry connector is reachable', () => {
       requestText: async () => 'text',
       runAwsAuth: async () => {},
       resolveMcpUrl: async (_c, u) => u.replace(/\{[a-z_]+\}/g, 'resolved'),
+      // app-password connectors verify their credential server-side; a satisfied
+      // dependency set includes the transport that check runs over.
+      fetchImpl: (async () => ({ ok: true, json: async () => ({ ok: true }) })) as unknown as typeof fetch,
     });
     for (const connector of Object.values(CONNECTOR_MAP)) {
       const r = await connectConnector(connector, full);

@@ -124,7 +124,7 @@ async function refreshTokenIfNeeded(
         // overwrite unrelated credentials (AWS_ACCESS_KEY_ID,
         // SUMOLOGIC_ACCESS_KEY) in any entry carrying more than one.
         const { CONNECTOR_MAP } = await import('@/lib/connectors/registry');
-        const injection = CONNECTOR_MAP[connectorId as string]?.mcp.tokenInjection;
+        const injection = CONNECTOR_MAP[connectorId as string]?.mcp?.tokenInjection;
         const keys = Object.keys(envObj);
         if (injection?.method === 'env' && injection.envVar in envObj) {
           envObj[injection.envVar] = newAccessToken;
