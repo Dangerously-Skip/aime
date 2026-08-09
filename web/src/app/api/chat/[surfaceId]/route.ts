@@ -33,6 +33,10 @@ const TOOL_PROFILES: Record<string, string[]> = {
     // read as unfinished without it, and the profile that builds those is this
     // one. Withholding it here means the model falls back to an invented URL.
     'mcp__aime__CreateImage',
+    // iCloud is a capability the user explicitly connected; a tool profile that
+    // silently withheld it would look like the connector had stopped working.
+    'mcp__aime__MailSearch', 'mcp__aime__MailRead', 'mcp__aime__MailDraft',
+    'mcp__aime__CalendarEvents', 'mcp__aime__ContactsSearch',
   ],
   full: [], // empty = no restriction (use surface defaults)
 };
