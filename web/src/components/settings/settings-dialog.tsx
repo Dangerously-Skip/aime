@@ -15,6 +15,7 @@ import { DataSection } from "./sections/data-section"
 import { MemorySection } from "./sections/memory-section"
 import { SecuritySection } from "./sections/security-section"
 import { SearchSection } from "./sections/search-section"
+import { ICloudSection } from "./sections/icloud-section"
 import { IdentitySection } from "./sections/identity-section"
 import { RoiSection } from "./sections/roi-section"
 
@@ -28,6 +29,7 @@ const sectionComponents: Record<string, React.ComponentType> = {
   code: CodeSection,
   security: SecuritySection,
   search: SearchSection,
+  icloud: ICloudSection,
   memory: MemorySection,
   data: DataSection,
   roi: RoiSection,

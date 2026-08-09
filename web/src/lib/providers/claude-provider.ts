@@ -6,6 +6,7 @@ import { correctWebSearchSection } from '../surfaces/shared/web-search-prompt';
 import { themeInstruction } from '../themes/resolve';
 import { allowedPluginPaths } from '../themes/deck-format';
 import { imageInstruction } from '../images/prompt';
+import { loadICloudCredentials } from '../icloud/credentials';
 import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
@@ -228,6 +229,13 @@ export class ClaudeProvider extends BaseProvider {
      * result so the budget is visible to the model as it spends, rather than
      * arriving as a refusal it has to work around.
      */
+    /**
+     * Loaded once per query. `null` when iCloud is not connected, which keeps
+     * the five tools off the model's list entirely rather than offering
+     * capabilities that answer "not configured".
+     */
+    const icloudCreds = await loadICloudCredentials();
+
     const IMAGE_BUDGET = 16;
     let imagesGenerated = 0;
 
@@ -599,6 +607,140 @@ export class ClaudeProvider extends BaseProvider {
          * paid deliberately — a smaller result is worth less than a turn that
          * finishes, and truncation keeps the difference bounded.
          */
+        /**
+         * iCloud, over the standards Apple actually runs.
+         *
+         * Mounted only when a credential is stored, so an unconnected user is
+         * not offered five tools that all answer "not configured" — the model
+         * would try one, fail, and spend a turn discovering what we knew.
+         *
+         * Draft-only by construction: there is no send tool here and no SMTP
+         * client behind it. This agent reads web pages, so silent send would
+         * turn a prompt injection from "says something wrong" into "mails your
+         * contacts".
+         */
+        ...(icloudCreds
+          ? [
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (tool as any)(
+                'MailSearch',
+                "Search the user's iCloud mail. Returns sender, subject, date and read state — not bodies; use MailRead for one. Filters combine, so leaving them off returns the most recent mail in the mailbox.",
+                {
+                  query: z.string().optional().describe('Free text, matched against subject and body.'),
+                  from: z.string().optional().describe('Sender address or part of one.'),
+                  since: z.string().optional().describe('ISO date; only mail on or after it.'),
+                  unseenOnly: z.boolean().optional().describe('Only unread mail.'),
+                  limit: z.number().optional().describe('Default 10, max 25.'),
+                },
+                async (args: { query?: string; from?: string; since?: string; unseenOnly?: boolean; limit?: number }) => {
+                  const { searchMail } = await import('../icloud/mail');
+                  const r = await searchMail(icloudCreds, args);
+                  if (!r.ok) return { content: [{ type: 'text' as const, text: r.message }], isError: true };
+                  if (r.value.length === 0) {
+                    // A real empty result, not a failure — said explicitly, because
+                    // conflating the two is what teaches a model to invent data.
+                    return { content: [{ type: 'text' as const, text: 'No matching mail. This is a real empty result, not an error.' }] };
+                  }
+                  return {
+                    content: [{
+                      type: 'text' as const,
+                      text: r.value
+                        .map((m) => `[uid ${m.uid}]${m.seen ? '' : ' UNREAD'} ${m.date}\n  From: ${m.from}\n  Subject: ${m.subject}`)
+                        .join('\n\n'),
+                    }],
+                  };
+                }
+              ),
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (tool as any)(
+                'MailRead',
+                'Read one iCloud message in full, by the uid MailSearch returned. Long bodies are truncated.',
+                { uid: z.number().describe('The uid from MailSearch.') },
+                async ({ uid }: { uid: number }) => {
+                  const { readMail } = await import('../icloud/mail');
+                  const r = await readMail(icloudCreds, uid);
+                  if (!r.ok) return { content: [{ type: 'text' as const, text: r.message }], isError: true };
+                  const v = r.value;
+                  return {
+                    content: [{
+                      type: 'text' as const,
+                      text: `From: ${v.from}\nDate: ${v.date}\nSubject: ${v.subject}\n\n${v.body}${v.truncated ? '\n\n[truncated]' : ''}`,
+                    }],
+                  };
+                }
+              ),
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (tool as any)(
+                'MailDraft',
+                'Write a DRAFT into the user\'s iCloud Drafts folder. It is NOT sent — the user reviews and sends it from Mail or iCloud.com. Say so when you report back; do not imply the mail has gone.',
+                {
+                  to: z.string().describe('Recipient address.'),
+                  subject: z.string().describe('Subject line.'),
+                  body: z.string().describe('Plain-text body.'),
+                  cc: z.string().optional().describe('Optional cc address.'),
+                },
+                async (args: { to: string; subject: string; body: string; cc?: string }) => {
+                  const { draftMail } = await import('../icloud/mail');
+                  const r = await draftMail(icloudCreds, args);
+                  if (!r.ok) return { content: [{ type: 'text' as const, text: r.message }], isError: true };
+                  return {
+                    content: [{
+                      type: 'text' as const,
+                      text: `Draft saved to ${r.value.mailbox}. It has NOT been sent — tell the user it is waiting in Mail for them to review and send.`,
+                    }],
+                  };
+                }
+              ),
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (tool as any)(
+                'CalendarEvents',
+                "Read events from the user's iCloud calendars in a date window. Defaults to the next seven days. All-day events come back as a plain date with no time, which is correct — do not add one.",
+                {
+                  from: z.string().optional().describe('ISO date, inclusive. Defaults to now.'),
+                  to: z.string().optional().describe('ISO date, exclusive. Defaults to 7 days out.'),
+                  calendar: z.string().optional().describe('Restrict to one calendar by name.'),
+                },
+                async (args: { from?: string; to?: string; calendar?: string }) => {
+                  const { getEvents } = await import('../icloud/calendar');
+                  const r = await getEvents(icloudCreds, args);
+                  if (!r.ok) return { content: [{ type: 'text' as const, text: r.message }], isError: true };
+                  if (r.value.length === 0) {
+                    return { content: [{ type: 'text' as const, text: 'Nothing scheduled in that window. A real empty result, not an error.' }] };
+                  }
+                  return {
+                    content: [{
+                      type: 'text' as const,
+                      text: r.value
+                        .map((e) => `${e.allDay ? `${e.start} (all day)` : `${e.start} → ${e.end}`}  ${e.summary}${e.location ? `\n  at ${e.location}` : ''}`)
+                        .join('\n'),
+                    }],
+                  };
+                }
+              ),
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (tool as any)(
+                'ContactsSearch',
+                "Look somebody up in the user's iCloud contacts by name, company, email or phone.",
+                { query: z.string().describe('Name, company, email or phone fragment.') },
+                async ({ query: q }: { query: string }) => {
+                  const { searchContacts } = await import('../icloud/calendar');
+                  const r = await searchContacts(icloudCreds, q);
+                  if (!r.ok) return { content: [{ type: 'text' as const, text: r.message }], isError: true };
+                  if (r.value.length === 0) {
+                    return { content: [{ type: 'text' as const, text: `No contact matches "${q}". A real empty result, not an error — do not guess an address.` }] };
+                  }
+                  return {
+                    content: [{
+                      type: 'text' as const,
+                      text: r.value
+                        .map((c) => `${c.name}${c.org ? ` — ${c.org}` : ''}${c.emails.length ? `\n  ${c.emails.join(', ')}` : ''}${c.phones.length ? `\n  ${c.phones.join(', ')}` : ''}`)
+                        .join('\n\n'),
+                    }],
+                  };
+                }
+              ),
+            ]
+          : []),
         /**
          * Make a picture, for whatever the agent is building.
          *
