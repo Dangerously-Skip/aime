@@ -19,8 +19,44 @@ export const runtime = 'nodejs';
  * originate same-host (the shim is not meant to be a public open proxy).
  */
 
-function anthropicError(status: number, message: string, type = 'invalid_request_error') {
-  return Response.json({ type: 'error', error: { type, message } }, { status });
+function anthropicError(
+  status: number,
+  message: string,
+  type = 'invalid_request_error',
+  headers?: Record<string, string>,
+) {
+  return Response.json({ type: 'error', error: { type, message } }, { status, headers });
+}
+
+/**
+ * The status the CALLER should see for an upstream failure.
+ *
+ * Everything except 401/403 used to collapse to 502, which made four unrelated
+ * problems indistinguishable: a malformed request, a model that no longer
+ * exists, a rate limit, and the provider actually being down. Hours were spent
+ * on "why is the proxy 502ing" with no way to tell which of those it was — the
+ * upstream reason existed, in a response body that went to the SDK subprocess
+ * and nowhere a human could read it.
+ *
+ * Passing 429 through matters beyond diagnosis. The Agent SDK backs off and
+ * retries a rate limit, honouring `retry-after`; it cannot do that for a 502,
+ * so masking one as the other converted a recoverable pause into a failed turn.
+ *
+ * 5xx stays 502: the upstream really is a bad gateway from the caller's side.
+ */
+function callerStatusFor(upstream: number): number {
+  if (upstream >= 400 && upstream < 500) return upstream;
+  return 502;
+}
+
+/** Rate-limit hints, which are useless to the SDK if we drop them. */
+function retryHeaders(res: Response): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const h of ['retry-after', 'x-ratelimit-reset', 'x-ratelimit-remaining']) {
+    const v = res.headers.get(h);
+    if (v) out[h] = v;
+  }
+  return out;
 }
 
 function upstreamKey(req: Request): string | undefined {
@@ -93,10 +129,27 @@ export async function POST(
 
   if (!upstreamRes.ok) {
     const detail = await upstreamRes.text().catch(() => '');
+    /**
+     * Log it, because the response body goes to the SDK subprocess and nowhere
+     * a human looks.
+     *
+     * Without this line the only visible symptom of a failing provider was a
+     * tool that appeared to hang: the SDK posts the tool RESULT back here, gets
+     * a 502, retries, and the turn never advances — so the last tool sits at
+     * `running` in the UI and the per-tool watchdog eventually reports it as
+     * hung. A user watching that sees "search is broken". Search was fine; the
+     * model call after it was not, and the reason was in a string nobody read.
+     */
+    console.error(
+      `[llm-proxy] upstream ${upstreamRes.status} for model=${body.model}: ${detail.slice(0, 500)}`,
+    );
     return anthropicError(
-      upstreamRes.status === 401 || upstreamRes.status === 403 ? upstreamRes.status : 502,
+      callerStatusFor(upstreamRes.status),
       `Upstream error ${upstreamRes.status}: ${detail.slice(0, 500)}`,
-      'api_error',
+      // The Anthropic error taxonomy the SDK switches on. A rate limit named as
+      // an `api_error` is retried on the wrong schedule, if at all.
+      upstreamRes.status === 429 ? 'rate_limit_error' : 'api_error',
+      retryHeaders(upstreamRes),
     );
   }
 
