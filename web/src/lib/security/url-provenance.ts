@@ -142,8 +142,21 @@ export class UrlProvenance {
   }
 }
 
-/** Tool names whose `url` input this guard applies to. */
+/**
+ * Tool names whose `url` input this guard applies to.
+ *
+ * `FetchUrl` is our own bounded replacement for the built-in `WebFetch`, which
+ * is now denied in the provider. Listing it is not housekeeping: this guard is
+ * the whole defence against the model inventing a plausible-looking URL instead
+ * of searching, and it keys on the TOOL NAME. Swapping the tool without adding
+ * the new name would have left the guard installed, passing its own tests, and
+ * protecting nothing — the exact shape of failure this codebase keeps finding.
+ *
+ * `WebFetch` stays listed. It is denied rather than removed from the SDK, and a
+ * guard that only covers the tools currently reachable is one config change away
+ * from being wrong.
+ */
 export function isUrlFetchTool(toolName: string): boolean {
   const base = toolName.split('__').pop() ?? toolName;
-  return base === 'WebFetch' || base === 'web_fetch';
+  return base === 'WebFetch' || base === 'web_fetch' || base === 'FetchUrl';
 }

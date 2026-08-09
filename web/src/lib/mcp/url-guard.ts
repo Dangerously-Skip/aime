@@ -77,6 +77,54 @@ function isPrivateHost(host: string): boolean {
   return false;
 }
 
+/**
+ * May the agent fetch this URL?
+ *
+ * Deliberately stricter than `validateMcpServerUrl`, and here rather than in a
+ * file of its own so that "what counts as a private host" has exactly one
+ * definition. An MCP server on `localhost` is a supported setup — that is how a
+ * locally-run server is reached — but a URL the MODEL chose is a different trust
+ * class entirely. It can come from a search result, a page it just read, or its
+ * own guess, so loopback and link-local are SSRF targets rather than features:
+ * `169.254.169.254` is cloud metadata, and `127.0.0.1` is this app's own API.
+ *
+ * http is allowed because much of the web still redirects through it; the
+ * private-range checks are what carry the security, not the scheme.
+ */
+export function validateFetchUrl(raw: unknown): UrlVerdict {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return { ok: false, reason: 'not-a-url', message: 'No URL given.' };
+  }
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return { ok: false, reason: 'not-a-url', message: `Not a valid URL: ${String(raw).slice(0, 120)}` };
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    return {
+      ok: false,
+      reason: 'unsupported-scheme',
+      message: `Only http and https can be fetched (got ${url.protocol.replace(':', '')}).`,
+    };
+  }
+  if (url.username || url.password) {
+    return {
+      ok: false,
+      reason: 'credentials-in-url',
+      message: 'Refusing to fetch a URL with credentials embedded in it.',
+    };
+  }
+  if (isLoopbackHost(url.hostname) || isLinkLocalHost(url.hostname) || isPrivateHost(url.hostname)) {
+    return {
+      ok: false,
+      reason: isLinkLocalHost(url.hostname) ? 'link-local' : 'private-over-http',
+      message: `Refusing to fetch ${url.hostname} — it is a private or local address, not a public web page.`,
+    };
+  }
+  return { ok: true, url: url.toString(), loopback: false };
+}
+
 /** Strict dotted-quad only; rejects the octal/short forms that bypass naive checks. */
 function parseIPv4(host: string): [number, number, number, number] | null {
   const parts = host.split('.');
