@@ -190,10 +190,32 @@ function mintCredentialKey(webDir) {
     process.exit(code ?? 0);
   });
 
-  next.on('close', (code) => {
-    if (code !== 0 && code !== null) {
-      electron.kill();
-      process.exit(code);
-    }
+  /**
+   * If the server dies, the window must not outlive it.
+   *
+   * `code !== null` was the whole bug: Node reports `null` when a child is
+   * killed by a SIGNAL, which is precisely how `next dev` dies in practice —
+   * the OOM killer under memory pressure, or a stray `kill`. Both fell through
+   * this condition silently, leaving an Electron window pointing at a dead
+   * origin. Every request then hangs with no error, which reads as the app
+   * having frozen; the actual event happened minutes or hours earlier and was
+   * never reported.
+   *
+   * A clean `code === 0` gets the same treatment. `next dev` exiting 0 on its
+   * own is not a normal event either, and the window is just as dead after it.
+   */
+  next.on('close', (code, signal) => {
+    console.error(
+      `\n[dev-with-port] The Next.js dev server exited (${
+        signal ? `killed by ${signal}` : `code ${code}`
+      }).\n` +
+      `  Closing the app window too — it would otherwise sit there looking frozen,\n` +
+      `  because every request goes to a server that is no longer running.\n` +
+      (signal === 'SIGKILL'
+        ? `  SIGKILL usually means the OS ran out of memory. Check swap before relaunching.\n`
+        : ''),
+    );
+    electron.kill();
+    process.exit(code ?? 1);
   });
 })();
