@@ -805,11 +805,28 @@ export class ClaudeProvider extends BaseProvider {
               await fsp.mkdir(dir, { recursive: true });
               const abs = nodePath.join(dir, `${safe}.${ext}`);
               await fsp.writeFile(abs, Buffer.from(result.base64, 'base64'));
+              /**
+               * Name the DIRECTORY, not just the relative path.
+               *
+               * This said `src="images/x.png"` "relative to the file you are
+               * writing" — while having no idea where the model would write it.
+               * A deck landed in the home directory, the images were in the
+               * scratch directory, and every `<img>` in it was broken. The
+               * relative form is still right (a deck has to survive being moved
+               * with its folder), but it only works if the document goes in the
+               * same place, so that is now stated rather than assumed.
+               */
+              const dirAbs = nodePath.dirname(dir);
               return {
                 content: [{
                   type: 'text' as const,
-                  // Relative, because the deck must survive being moved or emailed.
-                  text: `Saved. Embed it with src="images/${safe}.${ext}" (relative to the file you are writing). ${imagesGenerated}/${IMAGE_BUDGET} images used this turn.`,
+                  text:
+                    `Saved to ${abs}.\n\n` +
+                    `Write your document into ${dirAbs} and embed the image as ` +
+                    `src="images/${safe}.${ext}" — that relative path only resolves if the ` +
+                    `document is in that directory. Do NOT write the document somewhere else ` +
+                    `(your home directory, /tmp) or the image will be missing.\n\n` +
+                    `${imagesGenerated}/${IMAGE_BUDGET} images used this turn.`,
                 }],
               };
             } catch (e) {

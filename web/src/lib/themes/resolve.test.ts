@@ -450,3 +450,22 @@ describe('changing the design from the conversation', () => {
     expect(t()).toMatch(/does not change their default/i);
   });
 });
+
+/**
+ * The deck landed in the home directory with relative stylesheet links, so it
+ * had neither styling nor pictures: `../.claude/...` resolved to `/Users/.claude/...`
+ * and `images/...` pointed at a folder that was never created there.
+ */
+describe('the deck is told where to live', () => {
+  const t = () => themeInstruction({ id: 'magazine-bold', source: 'global' });
+
+  it('says to write it in the working directory', () => {
+    expect(t()).toMatch(/WORKING DIRECTORY/);
+    expect(t(), 'does not name the failure it prevents').toMatch(/home directory/i);
+  });
+
+  it('says to link the stylesheets absolutely', () => {
+    expect(t()).toMatch(/ABSOLUTE path/);
+    expect(t(), 'does not explain what a relative link does').toMatch(/unstyled deck/i);
+  });
+});
