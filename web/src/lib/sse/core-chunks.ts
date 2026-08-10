@@ -155,6 +155,27 @@ export function isCoreChunk(type: string): type is CoreChunkType {
  * the tool finished. That reasoning was duplicated in three comments; it lives
  * here now.
  */
+/**
+ * Chats whose last event was a tool call, so the next text starts a paragraph.
+ *
+ * Module-level rather than store state: it is meaningful only between two
+ * events of one turn, and persisting it would put a stray blank line at the top
+ * of a conversation restored from disk.
+ */
+const toolSinceText = new Set<string>();
+
+/** Read and clear — a separator is inserted once, not before every later block. */
+function textResumedAfterTool(chatId: string): boolean {
+  const had = toolSinceText.has(chatId);
+  toolSinceText.delete(chatId);
+  return had;
+}
+
+/** Forget a chat's boundary state, e.g. when its turn ends. */
+export function resetTextBoundary(chatId: string): void {
+  toolSinceText.delete(chatId);
+}
+
 export function handleCoreChunk(
   event: Record<string, unknown>,
   ctx: CoreChunkContext,
@@ -169,16 +190,35 @@ export function handleCoreChunk(
       store.completeRunningTools(chatId);
       return true;
 
-    case 'text':
+    case 'text': {
       store.completeRunningTools(chatId);
-      store.appendToLastAssistant(chatId, (event.content as string) || '');
+      /*
+       * A blank line when text resumes after a tool call.
+       *
+       * The provider yields one `text` event per content BLOCK, and the client
+       * appends each straight onto the last assistant message. A turn that says
+       * something, calls a tool, then says something else therefore rendered as
+       * one run-on sentence:
+       *
+       *   "Let me start by reading the deck template and the layouts I'll
+       *    needNow let me read the magazine-bold theme"
+       *
+       * Seen three times before anyone chased it, and it reads as a streaming
+       * corruption rather than a missing separator, which is why it kept being
+       * mistaken for something worse.
+       */
+      const resumed = textResumedAfterTool(chatId);
+      store.appendToLastAssistant(chatId, (resumed ? '\n\n' : '') + ((event.content as string) || ''));
       return true;
+    }
 
     case 'thinking':
       store.appendToLastAssistant(chatId, '', (event.content as string) || '');
       return true;
 
     case 'tool_use': {
+      // The next text block belongs to a new paragraph — see the `text` case.
+      toolSinceText.add(chatId);
       store.completeRunningTools(chatId);
       const toolId = (event.id as string) || `tool_${Date.now()}`;
       const name = (event.name as string) || 'Unknown';

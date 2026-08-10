@@ -65,6 +65,22 @@ export interface SystemInitData {
  * Claude Agent SDK provider implementation.
  * Matches the exact behavior from the original server.js.
  */
+/**
+ * Why a run ended, in words, for the cases where the SDK stops on a LIMIT
+ * rather than because the work is done.
+ *
+ * Each of these produces a normal-looking result message. Without this the UI
+ * shows a truncated answer and the user is left to infer that a ceiling exists,
+ * which is what happened: a deck build stopped halfway and the only signal was
+ * that it stopped. Phrased as what to do next, not as an error code.
+ */
+const STOP_REASONS: Record<string, string> = {
+  error_max_turns:
+    'I ran out of steps for this turn before finishing. Say "continue" and I\'ll pick up where I left off.',
+  error_max_budget_usd:
+    'I reached this turn\'s spending limit before finishing. Say "continue" to keep going, or raise the limit in Settings.',
+};
+
 export class ClaudeProvider extends BaseProvider {
   private defaultAllowedTools: string[];
   private defaultMaxTurns: number;
@@ -2145,6 +2161,24 @@ export class ClaudeProvider extends BaseProvider {
             totalCostUsd: c.total_cost_usd as number | undefined,
             numTurns: c.num_turns as number | undefined,
           };
+
+          /*
+           * A turn that ran out of room must SAY it ran out of room.
+           *
+           * The SDK reports this in `subtype`, and we used to read only `usage`
+           * off this message — so a run that stopped mid-deck arrived at the UI
+           * as a completed assistant message. There is nothing to distinguish
+           * "finished" from "cut off" except the content trailing away, which is
+           * exactly how it was reported: "it got part of the way through then I
+           * had to reprompt it". The user had to GUESS the limit existed.
+           *
+           * This is the same shape as the tool deadline further up: the failure
+           * is real and bounded, and the only defect is that it was silent.
+           */
+          const stopped = STOP_REASONS[c.subtype as string];
+          if (stopped) {
+            yield { type: 'text', content: `\n\n_${stopped}_`, provider: this.name };
+          }
         }
 
         // Debug: log all system messages to find session_id

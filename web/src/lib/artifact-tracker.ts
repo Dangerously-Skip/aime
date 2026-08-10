@@ -1,7 +1,13 @@
 /**
  * Shared artifact tracking utilities.
  * Categorizes tool calls into "context" (files read) and "artifact" (files created/edited).
- * Used by both Cowork and Chat surfaces.
+ *
+ * Chat calls `categorizeToolCall` from here. Cowork does NOT — it has its own
+ * copy in `cowork-surface.tsx`, a superset handling `spawn_agent` and search
+ * queries, which imports the pattern constants below but duplicates the branch
+ * logic. Saying so because this header used to claim both surfaces shared it,
+ * and a comment asserting a consolidation that is not there is worse than no
+ * comment: it stops the next person from looking.
  */
 
 // Bash patterns that indicate file creation/modification (capture group 1 = output path)
@@ -41,6 +47,73 @@ export function isValidSidebarEntry(path: string): boolean {
 export interface CategorizedToolCall {
   category: "context" | "artifact";
   path: string;
+}
+
+/** The shape this needs off a message; deliberately narrower than the store's. */
+interface ToolCallLike {
+  name: string;
+  input?: Record<string, unknown>;
+}
+interface MessageLike {
+  toolCalls?: ToolCallLike[];
+}
+
+/**
+ * Every artifact a conversation has produced, read back from its own transcript.
+ *
+ * Chat used to ACCUMULATE this in component state as the stream ran, with a
+ * comment on the reset saying artifacts "can't be derived". They can — the tool
+ * calls are on the messages and the messages are persisted — and the cost of
+ * believing otherwise was that the panel showed 0 for a conversation whose deck
+ * was sitting in the transcript two inches away. Switching conversations and
+ * back, or reloading the app, emptied it; only the turn you were watching live
+ * ever had contents.
+ *
+ * Deriving also removes the two `setArtifactFiles([])` resets and their
+ * `react-hooks/set-state-in-effect` suppressions: a value computed from the
+ * conversation cannot be stale for the conversation.
+ *
+ * Two passes, because they catch different things:
+ *   1. `categorizeToolCall` — the tool NAMED a path (Write, Edit, `cat > f`)
+ *   2. `BASH_ARTIFACT_EXT` — a command MENTIONED a document filename, which is
+ *      how a script that writes its own output (`… script.sh in.md out.pptx`)
+ *      gets noticed at all
+ *
+ * Insertion order is preserved so the panel reads chronologically.
+ */
+export function artifactsFromMessages(messages: readonly MessageLike[]): string[] {
+  const found = new Set<string>();
+
+  for (const msg of messages) {
+    for (const tc of msg.toolCalls ?? []) {
+      const input = tc.input ?? {};
+
+      // The sweep below reads left to right; `categorizeToolCall` reports only
+      // the RIGHTMOST document in a command. Sweeping first is what keeps the
+      // panel chronological when one call produces several files.
+      if (tc.name === "Bash" && typeof input.command === "string") {
+        // The loop below always runs to exhaustion, which resets lastIndex on its
+        // own — this is belt and braces against a future early `break`, not a bug
+        // being held at bay. Said plainly because the identical line elsewhere in
+        // this codebase IS load-bearing.
+        BASH_ARTIFACT_EXT.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = BASH_ARTIFACT_EXT.exec(input.command)) !== null) {
+          const path = match[1];
+          if (path.length < 3 || path.startsWith(".") || path === "/dev/null") continue;
+          if (!isValidSidebarEntry(path)) continue;
+          found.add(path);
+        }
+      }
+
+      const categorized = categorizeToolCall(tc.name, input);
+      if (categorized?.category === "artifact" && isValidSidebarEntry(categorized.path)) {
+        found.add(categorized.path);
+      }
+    }
+  }
+
+  return [...found];
 }
 
 export function categorizeToolCall(

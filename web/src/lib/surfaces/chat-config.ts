@@ -77,7 +77,18 @@ and checkable ("sentences average 12 words"), never vague ("professional yet
 friendly"). It governs prose you draft FOR them, not your replies to them.
 `,
     model: 'sonnet',
-    maxTurns: 20,
+    /*
+     * 20 was right when Chat only answered questions. It now builds HTML decks
+     * and generates images, and one deck spends its turns like this: read the
+     * template, read the layouts, read the theme CSS, one CreateImage per
+     * visual slide, write the file, verify it. That ran out mid-deck and simply
+     * STOPPED — the user saw a half-finished answer with nothing saying why and
+     * had to type "go on then". The ceiling still exists (a chat surface should
+     * not run away), but it is now past the longest legitimate workflow rather
+     * than in the middle of it, and hitting it now says so — see the
+     * `error_max_turns` branch in claude-provider.ts.
+     */
+    maxTurns: 60,
     maxBudgetUsd: 1.0,
     queryTimeoutSecs: 300,
     includePartialMessages: true,
