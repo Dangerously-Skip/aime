@@ -1507,6 +1507,42 @@ export class ClaudeProvider extends BaseProvider {
       // than branching per toggle, is what stops the second one being wired into
       // half the path: there is a single approval flow and it cannot be reached
       // with the wrong one enabled.
+      /**
+       * A shell command writing outside the working directory.
+       *
+       * `restrictToProjectFolder` governs the file TOOLS, and says so — but the
+       * hole was walked through twice in one session: a deck written to the home
+       * directory (leaving its images behind, so every picture was broken), and
+       * four probe scripts written into the user's REPOSITORY, one of them
+       * re-deriving the credential decryption by hand.
+       *
+       * Neither was malicious; both were the agent needing somewhere to put a
+       * file and picking a path nobody sanctioned. This turns the common forms
+       * into the same approval card a destructive command gets, rather than a
+       * silent write. It is a speed bump, not a sandbox — see the module.
+       */
+      if (
+        security.restrictToProjectFolder &&
+        toolMatches(toolName, SHELL_TOOLS) &&
+        typeof input.command === 'string'
+      ) {
+        const { shellWriteOutside } = await import('../security/shell-write-scope');
+        const outside = shellWriteOutside(input.command, effectiveCwd);
+        if (outside.target) {
+          console.warn('[SECURITY] Shell write outside the working directory:', outside.target);
+          return {
+            behavior: 'deny' as const,
+            message:
+              `That command writes to ${outside.target} via ${outside.what}, which is outside ` +
+              `the working directory this session is restricted to. Write inside the working ` +
+              `directory instead — anything you generate belongs beside the other files for ` +
+              `this task, and a document written elsewhere loses the images and assets that ` +
+              `were generated for it. If it genuinely has to go somewhere else, say so and let ` +
+              `the user decide.`,
+          };
+        }
+      }
+
       if (
         (security.blockDangerousCommands || security.blockNetworkCommands) &&
         toolMatches(toolName, SHELL_TOOLS) &&

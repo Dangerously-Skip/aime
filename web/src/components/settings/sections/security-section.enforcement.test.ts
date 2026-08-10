@@ -230,3 +230,56 @@ describe('every toggle that admits to being guidance says so out loud', () => {
     }
   });
 });
+
+/**
+ * The same toggle, via the shell.
+ *
+ * `restrictToProjectFolder` is proved above against the file tools, which is
+ * where it started and where its description scopes it. But the gap was walked
+ * through twice in one session — a deck redirected into the home directory, and
+ * probe scripts written into the user's repository — so the common shell forms
+ * are now refused too.
+ *
+ * This lives here rather than beside the matcher because a matcher that is
+ * correct and unwired is the failure this codebase keeps producing: sabotaging
+ * the `canUseTool` branch left the matcher's own 26 tests green.
+ */
+describe('restrictToProjectFolder also covers obvious shell writes', () => {
+  it('refuses a redirect to the home directory', async () => {
+    const canUseTool = await canUseToolWithToggle('restrictToProjectFolder', true, { cwd: CWD });
+    const r = await canUseTool(
+      'Bash',
+      { command: 'cat > /Users/x/deck.html << EOF' },
+      { toolUseID: 'sh-1' } as never,
+    );
+    expect(r.behavior).toBe('deny');
+    expect((r as { message: string }).message).toMatch(/outside the working directory/i);
+  });
+
+  /** "Denies every shell command" must not pass this. */
+  it('leaves ordinary commands alone', async () => {
+    const canUseTool = await canUseToolWithToggle('restrictToProjectFolder', true, { cwd: CWD });
+    const r = await canUseTool('Bash', { command: 'npm test' }, { toolUseID: 'sh-2' } as never);
+    expect(r.behavior).toBe('allow');
+  });
+
+  it('leaves writes inside the working directory alone', async () => {
+    const canUseTool = await canUseToolWithToggle('restrictToProjectFolder', true, { cwd: CWD });
+    const r = await canUseTool(
+      'Bash',
+      { command: `echo x > ${CWD}/out.txt` },
+      { toolUseID: 'sh-3' } as never,
+    );
+    expect(r.behavior).toBe('allow');
+  });
+
+  it('does nothing when the toggle is off', async () => {
+    const canUseTool = await canUseToolWithToggle('restrictToProjectFolder', false, { cwd: CWD });
+    const r = await canUseTool(
+      'Bash',
+      { command: 'cat > /Users/x/deck.html' },
+      { toolUseID: 'sh-4' } as never,
+    );
+    expect(r.behavior).toBe('allow');
+  });
+});
