@@ -377,6 +377,55 @@ describe('stream translation', () => {
     expect(chunks.some((c) => c.type === 'tool_use')).toBe(false);
   });
 
+  /**
+   * A run that stopped because it hit a LIMIT looks, in the UI, exactly like a
+   * run that finished: a result message, a done event, an assistant reply that
+   * just trails off. That is how a half-built deck was reported — "it got part
+   * of the way through then I had to reprompt it" — with the user left to infer
+   * from nothing that a ceiling existed.
+   *
+   * These assert the reason reaches the transcript, not that a constant is
+   * defined somewhere.
+   */
+  describe('a run that hit a limit says so', () => {
+    it('reports running out of turns, and how to resume', async () => {
+      scriptChunks([
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'Half a deck' }] } },
+        { type: 'result', subtype: 'error_max_turns', num_turns: 60, usage: {} },
+      ]);
+      const chunks = await run(new ClaudeProvider(), {});
+
+      const said = chunks.filter((c) => c.type === 'text').map((c) => c.content).join('');
+      expect(said).toContain('ran out of steps');
+      expect(said, 'the user is not told how to resume').toContain('continue');
+    });
+
+    it('reports the spend limit separately from the turn limit', async () => {
+      scriptChunks([{ type: 'result', subtype: 'error_max_budget_usd', usage: {} }]);
+      const chunks = await run(new ClaudeProvider(), {});
+
+      const said = chunks.filter((c) => c.type === 'text').map((c) => c.content).join('');
+      expect(said).toContain('spending limit');
+    });
+
+    /*
+     * The complement, and the one that would make the feature obnoxious: an
+     * ordinary completed turn must stay silent. A note appended to every reply
+     * is noise people stop reading, at which point it is not there for the turn
+     * that needed it.
+     */
+    it('says nothing when the run simply finished', async () => {
+      scriptChunks([
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'A whole deck' }] } },
+        { type: 'result', subtype: 'success', num_turns: 4, usage: {} },
+      ]);
+      const chunks = await run(new ClaudeProvider(), {});
+
+      const said = chunks.filter((c) => c.type === 'text').map((c) => c.content).join('');
+      expect(said).toBe('A whole deck');
+    });
+  });
+
   it('always terminates the stream with a done event', async () => {
     scriptChunks([]);
     const chunks = await run(new ClaudeProvider(), {});

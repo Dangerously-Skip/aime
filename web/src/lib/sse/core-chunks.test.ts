@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { handleCoreChunk, isCoreChunk, type ConversationStreamStore } from './core-chunks';
+import { resetTextBoundary, handleCoreChunk, isCoreChunk, type ConversationStreamStore } from './core-chunks';
 import { useChatStore } from '@/stores/chat-store';
 import { useCoworkStore } from '@/stores/cowork-store';
 import { useCodeStore } from '@/stores/code-store';
@@ -291,5 +291,73 @@ describe('no surface can forget a relay handler', () => {
       'utf8',
     );
     expect(src).toMatch(/canRelayToClient:\s*false/);
+  });
+});
+
+/**
+ * The run-on sentence, seen three times before it was chased:
+ *
+ *   "Let me start by reading the deck template and the layouts I'll needNow let
+ *    me read the magazine-bold theme to understand its tokens"
+ *
+ * The provider yields one `text` event per content BLOCK and the client appends
+ * each onto the last assistant message. Say something, call a tool, say
+ * something else, and the two halves are welded together. It reads like a
+ * streaming corruption, which is why it was repeatedly mistaken for one.
+ */
+describe('text that resumes after a tool call starts a paragraph', () => {
+  /*
+   * The boundary flag is module-level and keyed by chatId, and every test here
+   * uses the same default chat — so without this a tool call in one test would
+   * put a blank line at the front of the next test's first message.
+   */
+  beforeEach(() => {
+    resetTextBoundary('c1');
+    resetTextBoundary('chat-a');
+    resetTextBoundary('chat-b');
+  });
+
+  it('separates the halves of the reported message', () => {
+    const s = fakeStore();
+    handleCoreChunk({ type: 'text', content: "…and the layouts I'll need" }, ctx(s));
+    handleCoreChunk({ type: 'tool_use', id: 't1', name: 'Read' }, ctx(s));
+    handleCoreChunk({ type: 'text', content: 'Now let me read the theme' }, ctx(s));
+
+    const appended = s.appendToLastAssistant.mock.calls.map((c) => c[1]);
+    expect(appended[0]).toBe("…and the layouts I'll need");
+    expect(appended[1], 'the two halves are still welded together').toBe(
+      '\n\nNow let me read the theme',
+    );
+  });
+
+  /** Ordinary consecutive text must not grow blank lines it never had. */
+  it('does not separate text that follows text', () => {
+    const s = fakeStore();
+    handleCoreChunk({ type: 'text', content: 'one' }, ctx(s));
+    handleCoreChunk({ type: 'text', content: 'two' }, ctx(s));
+    expect(s.appendToLastAssistant.mock.calls[1][1]).toBe('two');
+  });
+
+  /**
+   * Inserted once per boundary, not before every block after the first tool —
+   * otherwise a turn with several tools accumulates blank lines.
+   */
+  it('separates once per tool boundary', () => {
+    const s = fakeStore();
+    handleCoreChunk({ type: 'tool_use', id: 't1', name: 'Read' }, ctx(s));
+    handleCoreChunk({ type: 'text', content: 'a' }, ctx(s));
+    handleCoreChunk({ type: 'text', content: 'b' }, ctx(s));
+    const appended = s.appendToLastAssistant.mock.calls.map((c) => c[1]);
+    expect(appended[0]).toBe('\n\na');
+    expect(appended[1]).toBe('b');
+  });
+
+  /** One chat's tool call must not put a blank line in another's reply. */
+  it('is tracked per chat', () => {
+    const a = fakeStore();
+    const b = fakeStore();
+    handleCoreChunk({ type: 'tool_use', id: 't1', name: 'Read' }, ctx(a, { chatId: 'chat-a' }));
+    handleCoreChunk({ type: 'text', content: 'hello' }, ctx(b, { chatId: 'chat-b' }));
+    expect(b.appendToLastAssistant.mock.calls[0][1]).toBe('hello');
   });
 });

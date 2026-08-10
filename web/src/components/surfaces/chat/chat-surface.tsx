@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { MessageList } from "@/components/shared/message-list";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { ChatTitleBar } from "@/components/shared/chat-title-bar";
@@ -41,7 +41,7 @@ import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import type { CanvasArtifact } from "@/stores/chat-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
-import { categorizeToolCall, isValidSidebarEntry, BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
+import { categorizeToolCall, isValidSidebarEntry, artifactsFromMessages } from "@/lib/artifact-tracker";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
@@ -97,11 +97,7 @@ export function ChatSurface() {
     useAtSuggestions();
   // Cron jobs now route to standing orders via useAssistantStore (see cron_create handler)
   // Artifact tracking — files created by Write/Edit/Bash tool calls
-  const [artifactFiles, setArtifactFiles] = useState<string[]>([]);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
-  const addArtifactFile = useCallback((path: string) => {
-    setArtifactFiles((prev) => prev.includes(path) ? prev : [...prev, path]);
-  }, []);
   const { isDragging, dropZoneProps } = useFileDrop(
     useCallback((file: AttachmentFile) => setAttachments((prev) => [...prev, file]), [])
   );
@@ -115,21 +111,22 @@ export function ChatSurface() {
   // Local: collapse/expand the right Artifacts column
   const [artifactsSidebarOpen, setArtifactsSidebarOpen] = useState(true);
 
-  // Clear local artifact state on conversation change. Canvas-store lifecycle
-  // is handled by <CanvasOverlay /> via its own useEffect.
-  const lastChatIdRef = useRef<string>("");
-  useEffect(() => {
-    if (!chatId) return;
-    if (lastChatIdRef.current === chatId) return;
-    lastChatIdRef.current = chatId;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- ref-guarded, fires only on an actual conversation switch; artifacts accumulate from stream events so they can't be derived
-    setArtifactFiles([]);
-  }, [chatId]);
   const messages = useChatStore(
     (s) =>
       (s.currentChatId ? s.messages[s.currentChatId] : undefined) ??
       EMPTY_MESSAGES
   );
+
+  /*
+   * Read back from the transcript rather than accumulated as the stream runs.
+   *
+   * Accumulating meant the panel was correct only for the turn you were watching:
+   * switching conversations cleared it, reloading the app cleared it, and a
+   * conversation whose deck was three messages up showed "Artifacts 0". The
+   * messages carry the tool calls and are persisted, so there was never anything
+   * to accumulate.
+   */
+  const artifactFiles = useMemo(() => artifactsFromMessages(messages), [messages]);
   const modelRoute = useChatStore((s) => s.modelRoute);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const setModelRoute = useChatStore((s) => s.setModelRoute);
@@ -242,9 +239,7 @@ export function ChatSurface() {
       if (prevMessages && prevMessages.length > 0) {
         summarizeConversation(prevId, prevMessages);
       }
-      // Clear artifact state for the new conversation
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- ref-guarded conversation switch; paired with the stream abort + summarize side effects above
-      setArtifactFiles([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- ref-guarded conversation switch; the preview is a transient panel, not something the new conversation can derive
       setPreviewPath(null);
     }
   }, [chatId]);
@@ -308,7 +303,8 @@ export function ChatSurface() {
           onToolStarted: (_toolId, toolName, toolInput) => {
             const categorized = categorizeToolCall(toolName, toolInput);
             if (categorized?.category !== "artifact" || !isValidSidebarEntry(categorized.path)) return;
-            addArtifactFile(categorized.path);
+            // The panel derives itself from the transcript (see `artifactFiles`);
+            // this callback exists only for the side effect below.
             if (!currentProjectId) return;
             const fileName = categorized.path.split("/").pop() || categorized.path;
             useProjectStore.getState().addArtifact(currentProjectId, {
@@ -358,25 +354,6 @@ export function ChatSurface() {
       const doneId = streamChatIdRef.current || getChatId();
       completeRunningTools(doneId);
       stopStreaming(doneId);
-      // Detect binary artifacts from Bash tool calls (e.g. ppt plugin .pptx output)
-      if (doneId) {
-        const msgs = useChatStore.getState().messages[doneId] ?? [];
-        for (const msg of msgs) {
-          for (const tc of msg.toolCalls ?? []) {
-            if (tc.name === "Bash" && tc.input?.command) {
-              const cmd = String(tc.input.command);
-              BASH_ARTIFACT_EXT.lastIndex = 0;
-              let match;
-              while ((match = BASH_ARTIFACT_EXT.exec(cmd)) !== null) {
-                const filePath = match[1];
-                if (filePath.length < 3 || filePath.startsWith(".") || filePath === "/dev/null") continue;
-                if (!isValidSidebarEntry(filePath)) continue;
-                addArtifactFile(filePath);
-              }
-            }
-          }
-        }
-      }
       if (!document.hasFocus()) {
         showNotification("Task complete", "Claude has finished working on your request.");
       }
@@ -1014,7 +991,7 @@ export function ChatSurface() {
                     <span className="truncate text-foreground/80 group-hover:text-foreground">{c.title}</span>
                   </button>
                 ))}
-                {artifactFiles.map((filePath) => {
+                {artifactFiles.map((filePath: string) => {
                   const name = filePath.split("/").pop() || filePath;
                   return (
                     <button

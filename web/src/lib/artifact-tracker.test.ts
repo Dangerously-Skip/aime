@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { categorizeToolCall, isValidSidebarEntry } from './artifact-tracker';
+import { categorizeToolCall, isValidSidebarEntry, artifactsFromMessages } from './artifact-tracker';
 
 describe('categorizeToolCall', () => {
   describe('artifact tools', () => {
@@ -128,5 +128,91 @@ describe('isValidSidebarEntry', () => {
     expect(isValidSidebarEntry('/home/u/.quarry/tmp/x.txt')).toBe(false);
     expect(isValidSidebarEntry('/home/u/.quarry/scratch/chat1/out.pptx')).toBe(true);
     expect(isValidSidebarEntry('/home/u/.quarry/scratch/chat1/documents/extracted.txt')).toBe(false);
+  });
+});
+
+/**
+ * The panel is read back from the transcript, not accumulated as the stream
+ * runs. It showed "Artifacts 0" for a conversation whose deck was three
+ * messages up, because the list lived in component state that a conversation
+ * switch — or a reload — emptied.
+ */
+describe('artifactsFromMessages', () => {
+  it('finds the deck a Bash heredoc wrote', () => {
+    expect(
+      artifactsFromMessages([
+        { toolCalls: [{ name: 'Bash', input: { command: 'cat > /Users/me/work/deck.html << "EOF"' } }] },
+      ]),
+    ).toEqual(['/Users/me/work/deck.html']);
+  });
+
+  /*
+   * `categorizeToolCall` answers with ONE path per tool call — the last document
+   * it sees — which is why this walks every match instead of calling it and
+   * stopping. A single command that emits a deck and its handout is one call and
+   * two artifacts, and reporting only the handout is how a file goes missing
+   * from a panel that is otherwise working.
+   */
+  it('finds every document a single command produced, not just the last', () => {
+    expect(
+      artifactsFromMessages([
+        {
+          toolCalls: [
+            { name: 'Bash', input: { command: 'sh build.sh --deck /w/deck.pdf --handout /w/handout.pdf' } },
+          ],
+        },
+      ]),
+    ).toEqual(['/w/deck.pdf', '/w/handout.pdf']);
+  });
+
+  it('finds Write and Edit alongside shell writes, in order, without duplicates', () => {
+    expect(
+      artifactsFromMessages([
+        { toolCalls: [{ name: 'Write', input: { file_path: '/w/a.md' } }] },
+        { toolCalls: [{ name: 'Read', input: { file_path: '/w/source.md' } }] },
+        {
+          toolCalls: [
+            { name: 'Edit', input: { file_path: '/w/a.md' } },
+            { name: 'Bash', input: { command: 'echo x > /w/b.html' } },
+          ],
+        },
+      ]),
+    ).toEqual(['/w/a.md', '/w/b.html']);
+  });
+
+  /*
+   * The point of deriving: the SAME transcript must give the SAME list on a
+   * later render, with no live stream and no accumulated state. This is the
+   * case that was broken — reopen the conversation and the panel read 0.
+   */
+  it('gives the same answer when the conversation is reopened', () => {
+    const transcript = [
+      { toolCalls: [{ name: 'Bash', input: { command: 'cat > /w/deck.html << "EOF"' } }] },
+      { toolCalls: [{ name: 'Write', input: { file_path: '/w/notes.md' } }] },
+    ];
+    expect(artifactsFromMessages(transcript)).toEqual(artifactsFromMessages(transcript));
+    expect(artifactsFromMessages(transcript)).toHaveLength(2);
+  });
+
+  it('leaves out reads, empty turns, and the app\'s own internals', () => {
+    expect(
+      artifactsFromMessages([
+        {},
+        { toolCalls: [] },
+        { toolCalls: [{ name: 'Read', input: { file_path: '/w/x.md' } }] },
+        { toolCalls: [{ name: 'Bash', input: { command: 'curl -s https://x.com > /dev/null' } }] },
+        { toolCalls: [{ name: 'Write', input: { file_path: '/Users/me/.aime/documents/tmp.txt' } }] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('keeps finding documents across turns', () => {
+    expect(
+      artifactsFromMessages([
+        { toolCalls: [{ name: 'Bash', input: { command: 'sh mk.sh /w/one.pdf' } }] },
+        { toolCalls: [{ name: 'Bash', input: { command: 'sh mk.sh /w/two.pdf' } }] },
+      ]),
+      'the second document was missed',
+    ).toEqual(['/w/one.pdf', '/w/two.pdf']);
   });
 });
