@@ -216,3 +216,133 @@ describe('artifactsFromMessages', () => {
     ).toEqual(['/w/one.pdf', '/w/two.pdf']);
   });
 });
+
+/**
+ * Cowork's sidebar shows what the agent is DOING; Chat's lists files. That was
+ * the only real difference between the two copies of this function, and keeping
+ * two copies to express it meant only one of them was ever reachable from a
+ * test — so Cowork's entire categorisation ran unverified.
+ *
+ * These drive both modes through the one implementation.
+ */
+describe('richContext (Cowork) vs files-only (Chat)', () => {
+  const RICH = { richContext: true };
+
+  it.each([
+    ['spawn_agent', { agentName: 'researcher', task: 'find comparable filings' }],
+    ['mcp__web-search__web_search', { query: 'iso 27001 scope' }],
+    ['WebSearch', { query: 'iso 27001 scope' }],
+    ['Bash', { command: 'npm run typecheck' }],
+  ])('%s is an activity entry for Cowork', (tool, input) => {
+    expect(categorizeToolCall(tool, input, RICH)?.category).toBe('context');
+  });
+
+  it.each([
+    ['spawn_agent', { agentName: 'researcher', task: 'find comparable filings' }],
+    ['mcp__web-search__web_search', { query: 'iso 27001 scope' }],
+    ['WebSearch', { query: 'iso 27001 scope' }],
+    ['Bash', { command: 'npm run typecheck' }],
+  ])('%s is nothing for Chat', (tool, input) => {
+    expect(categorizeToolCall(tool, input)).toBeNull();
+  });
+
+  it('labels activity entries so the sidebar can tell them from paths', () => {
+    expect(categorizeToolCall('spawn_agent', { agentName: 'scout', task: 'dig' }, RICH)?.path)
+      .toContain('scout');
+    expect(categorizeToolCall('WebSearch', { query: 'acme ltd' }, RICH)?.path)
+      .toContain('acme ltd');
+    expect(categorizeToolCall('Bash', { command: 'npm run build' }, RICH)?.path)
+      .toContain('npm run build');
+  });
+
+  it('falls back to a generic label when a subagent is unnamed', () => {
+    expect(categorizeToolCall('spawn_agent', { task: 'dig' }, RICH)?.path).toContain('subagent');
+  });
+
+  it('truncates a long command rather than pasting it into the sidebar', () => {
+    const path = categorizeToolCall('Bash', { command: 'x'.repeat(200) }, RICH)!.path;
+    expect(path.length).toBeLessThan(80);
+    expect(path).toContain('...');
+  });
+
+  /*
+   * The half that must NOT vary by surface. A file is a file on both, and a mode
+   * flag that changed this would be the drift the consolidation exists to stop.
+   */
+  it.each([
+    ['Write', { file_path: '/w/a.md' }, 'artifact'],
+    ['Bash', { command: 'cat > /w/deck.html' }, 'artifact'],
+    ['Read', { file_path: '/w/src.md' }, 'context'],
+    ['WebFetch', { url: 'https://x.com' }, null],
+    ['Bash', { command: 'ls -la' }, null],
+  ])('%s categorises identically in both modes', (tool, input, expected) => {
+    const chat = categorizeToolCall(tool, input);
+    const cowork = categorizeToolCall(tool, input, RICH);
+    expect(cowork).toEqual(chat);
+    expect(chat?.category ?? null).toBe(expected);
+  });
+});
+
+/**
+ * Gaps found by mutation-testing this file (74% score, 111 survivors). Most of
+ * those are the regex TABLE, where survivors are largely equivalent mutants and
+ * chasing them writes tests for the tool rather than for a bug — the same
+ * conclusion stryker.conf.json already records for destructive-commands.ts.
+ *
+ * These are the survivors that were NOT that: guards in the code this change
+ * added or consolidated, where nothing would have noticed if the condition
+ * inverted. Two of the tests in this file were vacuous when first written, so
+ * "I checked carefully" is not the standard here.
+ */
+describe('guards that nothing was checking', () => {
+  it('does not mine a non-Bash tool for document names', () => {
+    // `Read` with an input that happens to carry a `command` key must not have
+    // its value swept — only Bash runs commands.
+    expect(
+      artifactsFromMessages([
+        { toolCalls: [{ name: 'Read', input: { command: 'sh mk.sh /w/report.pdf' } }] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it('survives a Bash call whose command is not a string', () => {
+    expect(() =>
+      artifactsFromMessages([{ toolCalls: [{ name: 'Bash', input: { command: 42 } }] }]),
+    ).not.toThrow();
+    expect(artifactsFromMessages([{ toolCalls: [{ name: 'Bash', input: { command: 42 } }] }])).toEqual([]);
+  });
+
+  it('skips dotfiles the sweep would otherwise pick up', () => {
+    expect(
+      artifactsFromMessages([
+        { toolCalls: [{ name: 'Bash', input: { command: 'sh mk.sh .cache.pdf' } }] },
+      ]),
+      'a dotfile was listed as an artifact',
+    ).toEqual([]);
+  });
+
+  it('truncates a long subagent task instead of pasting it into the sidebar', () => {
+    const path = categorizeToolCall(
+      'spawn_agent',
+      { agentName: 'scout', task: 'x'.repeat(200) },
+      { richContext: true },
+    )!.path;
+    expect(path).toContain('…');
+    expect(path.length).toBeLessThan(70);
+  });
+
+  it('leaves a short subagent task whole', () => {
+    const path = categorizeToolCall(
+      'spawn_agent',
+      { agentName: 'scout', task: 'find filings' },
+      { richContext: true },
+    )!.path;
+    expect(path).toBe('agent: scout: find filings');
+    expect(path).not.toContain('…');
+  });
+
+  it('leaves a short command whole', () => {
+    expect(categorizeToolCall('Bash', { command: 'npm run build' }, { richContext: true })!.path)
+      .toBe('bash: npm run build');
+  });
+});

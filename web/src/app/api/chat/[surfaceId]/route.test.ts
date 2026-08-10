@@ -662,3 +662,64 @@ describe('client-relay callbacks (regression)', () => {
     expect(typeof providerParams().onDocumentPrint).toBe('function');
   });
 });
+
+/**
+ * The three ceilings, and which of them was actually holding the line.
+ *
+ * `maxBudgetUsd` was declared on every surface, rendered in Settings →
+ * Capabilities as "Budget: $1.00", and never forwarded — the route passed only
+ * a caller-supplied value, and no caller supplies one. So spend was unbounded
+ * while the UI said otherwise, and the TURN count was doing all the work at a
+ * number that means nothing to anyone.
+ *
+ * Driving the real route rather than reading the config, because reading the
+ * config is what made it look fine for as long as it did.
+ */
+describe('run limits reach the provider', () => {
+  const SURFACES = ['chat', 'cowork', 'code', 'browser', 'assistant'] as const;
+
+  it.each(SURFACES)('%s sends its own spend ceiling', async (surface) => {
+    await post(surface, { message: 'hi', chatId: 'c1' });
+    const sent = providerParams().maxBudgetUsd;
+    expect(sent, `${surface} forwarded no budget`).toBeGreaterThan(0);
+  });
+
+  it.each(SURFACES)('%s sends its own turn backstop', async (surface) => {
+    await post(surface, { message: 'hi', chatId: 'c1' });
+    expect(providerParams().maxTurns).toBeGreaterThan(0);
+  });
+
+  /*
+   * Both ceilings are lower-only, and for the same reason: a surface's value is
+   * policy, so a request that could RAISE it is a request that can opt out of
+   * the policy. The turn clamp already had this; the budget did not, because it
+   * had no surface value to clamp against.
+   */
+  it('lets a caller lower the budget', async () => {
+    await post('cowork', { message: 'hi', chatId: 'c1', maxBudgetUsd: 0.25 });
+    expect(providerParams().maxBudgetUsd).toBe(0.25);
+  });
+
+  it('refuses to let a caller raise the budget', async () => {
+    await post('chat', { message: 'hi', chatId: 'c1', maxBudgetUsd: 999 });
+    const sent = providerParams().maxBudgetUsd!;
+    expect(sent, 'a caller raised the surface ceiling').toBeLessThan(999);
+  });
+
+  it('refuses to let a caller raise the turn ceiling', async () => {
+    await post('assistant', { message: 'hi', chatId: 'c1', maxTurns: 5000 });
+    expect(providerParams().maxTurns!).toBeLessThan(5000);
+  });
+
+  /*
+   * Unattended surfaces get a tighter backstop than interactive ones — nobody is
+   * watching a standing order, so a runaway bills until the timeout. This is the
+   * only turn-count distinction worth having; the rest were arbitrary.
+   */
+  it('keeps unattended surfaces below interactive ones', async () => {
+    await post('assistant', { message: 'hi', chatId: 'c1' });
+    const unattended = providerParams().maxTurns!;
+    await post('cowork', { message: 'hi', chatId: 'c1' });
+    expect(unattended).toBeLessThan(providerParams().maxTurns!);
+  });
+});

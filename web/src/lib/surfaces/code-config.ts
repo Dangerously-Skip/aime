@@ -1,6 +1,7 @@
 import type { SurfaceConfig } from './index';
 import { APP_NAME } from '@/config/branding';
 import { webSearchPrompt } from './shared/web-search-prompt';
+import { TURN_BACKSTOP } from './shared/limits';
 
 export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -31,7 +32,7 @@ ${webSearchPrompt()}`,
     settingSources: ['user', 'project', 'local'],
     enableFileCheckpointing: true,
     model: 'sonnet',
-    maxTurns: 200,
+    maxTurns: TURN_BACKSTOP.interactive,
     maxBudgetUsd: 10.0,
     queryTimeoutSecs: 600,
     includePartialMessages: true,

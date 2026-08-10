@@ -79,6 +79,7 @@ import {
   BASH_NOISE,
   BASH_ARTIFACT_EXT,
   isValidSidebarEntry,
+  categorizeToolCall,
 } from "@/lib/artifact-tracker";
 import { useHeartbeatStore } from "@/stores/heartbeat-store";
 import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
@@ -134,93 +135,6 @@ interface SearchQueryGroup {
   results: SearchResult[];
 }
 
-function categorizeToolCall(
-  toolName: string,
-  toolInput: Record<string, unknown>,
-): { category: "context" | "artifact"; path: string } | null {
-  // spawn_agent — show as context entry
-  if (toolName === "spawn_agent") {
-    const agentName = typeof toolInput.agentName === "string" ? toolInput.agentName : null;
-    const task = typeof toolInput.task === "string" ? toolInput.task : "";
-    const label = agentName
-      ? `${AGENT_PREFIX}${agentName}: ${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`
-      : `${AGENT_PREFIX}subagent: ${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`;
-    return { category: "context", path: label };
-  }
-
-  // Explicit artifact tools
-  if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit" ||
-      toolName === "ExcelWrite" || toolName === "ExcelEdit" ||
-      toolName.endsWith("__ExcelWrite") || toolName.endsWith("__ExcelEdit") ||
-      toolName.endsWith(":ExcelWrite") || toolName.endsWith(":ExcelEdit")) {
-    const raw = toolInput.file_path || toolInput.path || toolInput.notebook_path;
-    return typeof raw === "string" ? { category: "artifact", path: raw } : null;
-  }
-
-  // MCP search tools — categorize as context with the query
-  if (toolName.includes("web_search") || toolName.includes("searxng") || toolName === "WebSearch") {
-    const raw = toolInput.query || toolInput.q;
-    return typeof raw === "string" ? { category: "context", path: `${SEARCH_PREFIX}${raw}` } : null;
-  }
-
-  // WebFetch — never add to sidebar (URLs aren't files; search results go to SearchResultsCard)
-  if (toolName === "WebFetch") {
-    return null;
-  }
-
-  // Explicit context tools — only show files from the user's working folder
-  if (toolName === "Read" || toolName === "Glob" || toolName === "Grep" ||
-      toolName === "ExcelRead" || toolName.endsWith("__ExcelRead") || toolName.endsWith(":ExcelRead")) {
-    const raw = toolInput.file_path || toolInput.path || toolInput.pattern || toolInput.url || toolInput.query;
-    if (typeof raw !== "string") return null;
-    // Filter out agent-internal files that aren't user context
-    if (raw.includes('.claude/') || raw.includes('CLAUDE.md') || raw.includes('/plugins/') ||
-        raw.includes('.aime/') || raw.includes('.quarry/') || raw.includes('/scratch/') ||
-        raw.endsWith('.sh') || raw.endsWith('.py') || raw.includes('node_modules/')) return null;
-    // Glob patterns aren't meaningful context entries
-    if (toolName === "Glob" || toolName === "Grep") return null;
-    return { category: "context", path: raw };
-  }
-
-  // Bash — inspect command to decide
-  if (toolName === "Bash") {
-    const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
-    if (!cmd) return null;
-
-    // Check if it's a file-creation command
-    for (const pat of BASH_WRITE_PATTERNS) {
-      const m = cmd.match(pat);
-      if (m?.[1]) {
-        const p = m[1].replace(/['"]/g, "");
-        // Skip non-file targets
-        if (p === "/dev/null" || p.startsWith("&") || /^[0-9]+$/.test(p)) continue;
-        return { category: "artifact", path: p };
-      }
-    }
-
-    // Script invocations whose output is a binary/document type
-    // (e.g. `bash generate_presentation.sh in.md out.pptx` produces the .pptx).
-    // Pick the rightmost matching token — by convention scripts take outputs
-    // as the last positional arg. Surfacing here means the artifact appears
-    // inline as soon as the tool_use event arrives, without waiting for the
-    // onDone scan that runs after the whole stream finishes.
-    BASH_ARTIFACT_EXT.lastIndex = 0;
-    const extMatches = [...cmd.matchAll(BASH_ARTIFACT_EXT)];
-    if (extMatches.length > 0) {
-      const last = extMatches[extMatches.length - 1][1].replace(/['"]/g, "");
-      return { category: "artifact", path: last };
-    }
-
-    // Skip noisy read/explore commands
-    if (BASH_NOISE.test(cmd)) return null;
-
-    // Other Bash commands — context with a short description of the command
-    const short = cmd.length > 60 ? cmd.substring(0, 57) + "..." : cmd;
-    return { category: "context", path: `${COMMAND_PREFIX}${short}` };
-  }
-
-  return null;
-}
 
 function fileDisplayName(path: string) {
   return contextEntryDisplayName(path);
@@ -1057,7 +971,7 @@ export function CoworkSurface() {
               .catch(() => {});
           }
           // Categorize into sidebar panels
-          const categorized = categorizeToolCall(toolName, toolInput);
+          const categorized = categorizeToolCall(toolName, toolInput, { richContext: true });
           if (categorized && chatId && isValidSidebarEntry(categorized.path)) {
             // Skip search query entries — redundant with SearchResultsCard
             if (isSearchEntry(categorized.path)) {

@@ -2,13 +2,18 @@
  * Shared artifact tracking utilities.
  * Categorizes tool calls into "context" (files read) and "artifact" (files created/edited).
  *
- * Chat calls `categorizeToolCall` from here. Cowork does NOT — it has its own
- * copy in `cowork-surface.tsx`, a superset handling `spawn_agent` and search
- * queries, which imports the pattern constants below but duplicates the branch
- * logic. Saying so because this header used to claim both surfaces shared it,
- * and a comment asserting a consolidation that is not there is worse than no
- * comment: it stops the next person from looking.
+ * Genuinely shared now. Cowork used to keep its own copy inside
+ * `cowork-surface.tsx` — a superset that also showed spawned agents, search
+ * queries and bare commands — while this header claimed both surfaces used
+ * this one. Two implementations of a rule is how they drift, and the drift here
+ * was already load-bearing: only Cowork's copy reset `BASH_ARTIFACT_EXT`'s
+ * lastIndex, and only this one was reachable from tests.
+ *
+ * The difference between them was never the CATEGORISING, it was which entries
+ * a sidebar wants to show. That is now `CategorizeOptions.richContext` — one
+ * flag, at the call site, instead of a second function.
  */
+import { AGENT_PREFIX, SEARCH_PREFIX, COMMAND_PREFIX } from './cowork/context-entry';
 
 // Bash patterns that indicate file creation/modification (capture group 1 = output path)
 export const BASH_WRITE_PATTERNS = [
@@ -84,6 +89,19 @@ interface MessageLike {
 export function artifactsFromMessages(messages: readonly MessageLike[]): string[] {
   const found = new Set<string>();
 
+  /*
+   * One rule, applied to both passes.
+   *
+   * It used to sit only in the sweep, so `sh mk.sh .cache.pdf` was filtered
+   * there and then let straight back in by `categorizeToolCall`, which runs its
+   * own extension match with no dotfile guard. A hidden working file in the
+   * artifacts panel is small, but two passes disagreeing about what an artifact
+   * IS is the shape that put a second copy of this whole function in
+   * cowork-surface.tsx. Found by mutation testing, not by reading.
+   */
+  const keep = (path: string): boolean =>
+    path.length >= 3 && !path.startsWith('.') && path !== '/dev/null' && isValidSidebarEntry(path);
+
   for (const msg of messages) {
     for (const tc of msg.toolCalls ?? []) {
       const input = tc.input ?? {};
@@ -99,15 +117,12 @@ export function artifactsFromMessages(messages: readonly MessageLike[]): string[
         BASH_ARTIFACT_EXT.lastIndex = 0;
         let match: RegExpExecArray | null;
         while ((match = BASH_ARTIFACT_EXT.exec(input.command)) !== null) {
-          const path = match[1];
-          if (path.length < 3 || path.startsWith(".") || path === "/dev/null") continue;
-          if (!isValidSidebarEntry(path)) continue;
-          found.add(path);
+          if (keep(match[1])) found.add(match[1]);
         }
       }
 
       const categorized = categorizeToolCall(tc.name, input);
-      if (categorized?.category === "artifact" && isValidSidebarEntry(categorized.path)) {
+      if (categorized?.category === "artifact" && keep(categorized.path)) {
         found.add(categorized.path);
       }
     }
@@ -116,10 +131,38 @@ export function artifactsFromMessages(messages: readonly MessageLike[]): string[
   return [...found];
 }
 
+export interface CategorizeOptions {
+  /**
+   * Show the things that are activity rather than files: a spawned agent, a
+   * search query, a bare command. Cowork's sidebar is a picture of what the
+   * agent is DOING and wants them; Chat's lists files and would only be
+   * cluttered. This is the whole difference between the two surfaces, and it
+   * used to be expressed as two copies of the function.
+   */
+  richContext?: boolean;
+}
+
 export function categorizeToolCall(
   toolName: string,
   toolInput: Record<string, unknown>,
+  opts: CategorizeOptions = {},
 ): CategorizedToolCall | null {
+  // A spawned subagent is activity, not a file — shown only where activity is.
+  if (toolName === "spawn_agent") {
+    if (!opts.richContext) return null;
+    const agentName = typeof toolInput.agentName === "string" ? toolInput.agentName : null;
+    const task = typeof toolInput.task === "string" ? toolInput.task : "";
+    const label = `${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`;
+    return { category: "context", path: `${AGENT_PREFIX}${agentName ?? "subagent"}: ${label}` };
+  }
+
+  // Search queries, likewise.
+  if (toolName.includes("web_search") || toolName.includes("searxng") || toolName === "WebSearch") {
+    if (!opts.richContext) return null;
+    const raw = toolInput.query || toolInput.q;
+    return typeof raw === "string" ? { category: "context", path: `${SEARCH_PREFIX}${raw}` } : null;
+  }
+
   // Explicit artifact tools
   if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit" ||
       toolName === "ExcelWrite" || toolName === "ExcelEdit" ||
@@ -170,7 +213,11 @@ export function categorizeToolCall(
 
     if (BASH_NOISE.test(cmd)) return null;
 
-    return null; // Chat doesn't need bash context entries cluttering the sidebar
+    // A command that wrote nothing recognisable is still activity worth showing
+    // where activity is shown, and clutter where it is not.
+    if (!opts.richContext) return null;
+    const short = cmd.length > 60 ? cmd.substring(0, 57) + "..." : cmd;
+    return { category: "context", path: `${COMMAND_PREFIX}${short}` };
   }
 
   return null;

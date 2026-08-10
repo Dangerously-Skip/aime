@@ -1,6 +1,7 @@
 import type { SurfaceConfig } from './index';
 import { PPT_PROMPT } from './shared/ppt-prompt';
 import { APP_NAME } from '@/config/branding';
+import { TURN_BACKSTOP } from './shared/limits';
 
 export function getChatConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -78,19 +79,23 @@ friendly"). It governs prose you draft FOR them, not your replies to them.
 `,
     model: 'sonnet',
     /*
-     * 20 was right when Chat only answered questions. It now builds HTML decks
-     * and generates images, and one deck spends its turns like this: read the
-     * template, read the layouts, read the theme CSS, one CreateImage per
-     * visual slide, write the file, verify it. That ran out mid-deck and simply
-     * STOPPED — the user saw a half-finished answer with nothing saying why and
-     * had to type "go on then". The ceiling still exists (a chat surface should
-     * not run away), but it is now past the longest legitimate workflow rather
-     * than in the middle of it, and hitting it now says so — see the
-     * `error_max_turns` branch in claude-provider.ts.
+     * Interactive, so it gets the interactive backstop. See TURN_BACKSTOP.
+     *
+     * It was 20, which was right when Chat only answered questions. It now
+     * builds HTML decks and generates images — template, layouts, theme CSS, a
+     * CreateImage per visual slide, the write, the check — and it ran out
+     * mid-deck and simply STOPPED, with nothing saying why. The number was never
+     * the real governor though; spend and wall-clock below are.
      */
-    maxTurns: 60,
-    maxBudgetUsd: 1.0,
-    queryTimeoutSecs: 300,
+    maxTurns: TURN_BACKSTOP.interactive,
+    /*
+     * Was $1.00, and inert — the route never forwarded it. Raised with the same
+     * change that made it real, because a deck's images are the expensive part
+     * and $1 would now cut off work that used to complete.
+     */
+    maxBudgetUsd: 3.0,
+    /* 300s predates decks too; matched to Cowork and Code, which do this work. */
+    queryTimeoutSecs: 600,
     includePartialMessages: true,
     mcpServers: {},
     ...overrides,

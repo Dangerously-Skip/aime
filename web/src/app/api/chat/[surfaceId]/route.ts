@@ -1036,9 +1036,27 @@ export async function POST(
             typeof requestedMaxTurns === 'number' && requestedMaxTurns > 0
               ? Math.min(requestedMaxTurns, surfaceConfig.maxTurns ?? requestedMaxTurns)
               : surfaceConfig.maxTurns,
-          ...(typeof requestedBudgetUsd === 'number' && requestedBudgetUsd > 0
-            ? { maxBudgetUsd: requestedBudgetUsd }
-            : {}),
+          /**
+           * The SPEND ceiling, same lower-only rule as turns above.
+           *
+           * The surface's own value was never passed. Only a caller-supplied
+           * one was, and no caller supplies one — so every surface's
+           * `maxBudgetUsd` was inert while Settings → Capabilities rendered it
+           * per surface as "Budget: $1.00". A number shown to the user with
+           * nothing enforcing it, which is the shape this codebase keeps
+           * finding.
+           *
+           * It matters more than the turn count. Turns are a proxy for cost and
+           * a poor one — the same 60 turns is a few cents of Reads or several
+           * dollars of image generation. This is the limit that maps onto what
+           * the user actually cares about, which is why the turn ceiling can now
+           * be a loose runaway backstop instead of the only thing holding the
+           * line. See the note on `maxTurns` in the surface configs.
+           */
+          maxBudgetUsd:
+            typeof requestedBudgetUsd === 'number' && requestedBudgetUsd > 0
+              ? Math.min(requestedBudgetUsd, surfaceConfig.maxBudgetUsd ?? requestedBudgetUsd)
+              : surfaceConfig.maxBudgetUsd,
           systemPrompt,
           attachments: attachments || undefined,
           webSearch: webSearch || undefined,
