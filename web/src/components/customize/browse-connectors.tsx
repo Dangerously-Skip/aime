@@ -328,6 +328,9 @@ export function BrowseConnectors() {
           title: `Connect ${connector.name}`,
           label: 'Apple ID',
           placeholder: 'you@icloud.com',
+          // The dialog defaults to a password field — right for a token, wrong
+          // for an address the user needs to read back to confirm the account.
+          inputType: 'email',
           buttonText: 'Next',
         });
         if (!username) return;

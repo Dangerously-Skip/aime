@@ -42,8 +42,31 @@ export async function GET() {
       }
     }
 
-    return Response.json({ connectedIds: ids });
+    return Response.json({ connectedIds: [...ids, ...(await credentialBackedIds())] });
   } catch {
-    return Response.json({ connectedIds: [] });
+    // The MCP config may be missing entirely on a fresh install; a
+    // credential-backed connector is still connected and must still be reported.
+    return Response.json({ connectedIds: await credentialBackedIds() });
+  }
+}
+
+/**
+ * Connectors that are connected WITHOUT an entry in the MCP config.
+ *
+ * "Connected" meant "has a server in `.mcp.json`" for as long as every connector
+ * was an MCP server. iCloud is not: it speaks IMAP and DAV from in-process tools
+ * and provisions nothing, so its card sat on "Connect" no matter how many times
+ * the user connected it — the credential was stored, verified, and completely
+ * invisible to the only thing the UI consults.
+ *
+ * Never throws. An unreadable credential store means "not connected", the same
+ * answer the tools themselves give.
+ */
+async function credentialBackedIds(): Promise<string[]> {
+  try {
+    const { loadICloudCredentials } = await import('@/lib/icloud/credentials');
+    return (await loadICloudCredentials()) ? ['icloud'] : [];
+  } catch {
+    return [];
   }
 }
