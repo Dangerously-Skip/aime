@@ -306,3 +306,33 @@ describe('the model is told the tool exists', () => {
     expect(skill).toContain('img-placeholder');
   });
 });
+
+/**
+ * Where the document goes decides whether the image resolves.
+ *
+ * The tool said: embed `src="images/x.png"` "relative to the file you are
+ * writing" — while having no idea where that would be. A deck was written to the
+ * home directory, the images were in the scratch directory, and every `<img>`
+ * was broken. The relative form is right (a deck must survive being moved with
+ * its folder); the assumption that the document lands beside it was not stated,
+ * so it did not hold.
+ */
+describe('the image tool says where the document must go', () => {
+  const provider = () =>
+    fs.readFileSync(path.resolve(process.cwd(), 'src/lib/providers/claude-provider.ts'), 'utf-8');
+
+  it('names the directory, not just the relative path', () => {
+    const src = provider();
+    const result = /Saved to \$\{abs\}[\s\S]{0,700}/.exec(src)?.[0] ?? '';
+    expect(result, 'the success message does not exist in the expected form').not.toBe('');
+    expect(result, 'the message never names the directory to write into').toMatch(
+      /Write your document into \$\{dirAbs\}/,
+    );
+  });
+
+  it('warns against the two places it actually went wrong', () => {
+    const result = /Saved to \$\{abs\}[\s\S]{0,700}/.exec(provider())?.[0] ?? '';
+    expect(result).toMatch(/home directory/i);
+    expect(result).toMatch(/images\/\$\{safe\}\.\$\{ext\}/);
+  });
+});
