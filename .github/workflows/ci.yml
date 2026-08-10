@@ -175,6 +175,9 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ vars.FAST_RUNNER || 'self-hosted' }}
     timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
 
@@ -188,11 +191,23 @@ jobs:
         working-directory: web
         run: npm ci
 
-      # Fails below the ratchet in stryker.conf.json, which sits just under the
-      # current score so a drop in test strength is what breaks it.
-      - name: Mutation tests
+      # Two scopes, two ratchets. Stryker has a single global thresholds.break,
+      # so one config could not hold security to 80 and pure logic to 78 — and
+      # merging them would let an unrelated 79% file drag the SECURITY ratchet
+      # down, which is how a gate quietly stops gating.
+      #
+      # `if: always()` on the second, so a failure in the first still collects
+      # the second's signal. Deliberately NOT continue-on-error: that reports the
+      # job's conclusion as success, and the whole point is that this job can go
+      # red.
+      - name: Mutation tests (security)
         working-directory: web
         run: npm run test:mutation
+
+      - name: Mutation tests (logic)
+        if: always()
+        working-directory: web
+        run: npm run test:mutation:logic
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -200,3 +215,24 @@ jobs:
           name: mutation-report
           path: web/reports/mutation/
           retention-days: 14
+
+      # A weekly job nobody looks at is a log line with extra steps. This one has
+      # no PR to turn red, so a failure needs somewhere to land — one issue,
+      # reopened and commented rather than duplicated, so a run of bad weeks does
+      # not produce a run of identical issues.
+      - name: Report a drop in test strength
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TITLE="Mutation score dropped below its ratchet"
+          BODY="A scheduled mutation run finished under its threshold, which means the suite got weaker rather than the code getting worse. Report artifact is on the run.
+
+          $RUN_URL"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label ci
+          fi

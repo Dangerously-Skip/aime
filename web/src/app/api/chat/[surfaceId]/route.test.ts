@@ -723,3 +723,125 @@ describe('run limits reach the provider', () => {
     expect(unattended).toBeLessThan(providerParams().maxTurns!);
   });
 });
+
+/**
+ * Picking a run back up when it hits the TURN ceiling.
+ *
+ * Reporting "say continue" was the first fix and only half of one — it made a
+ * silent truncation legible, and left the user typing "go on then" for a number
+ * that means nothing to them. Turns are a chunk size; the ceilings that end a
+ * run are spend, wall-clock, and a cap so a non-converging plan cannot spin.
+ */
+describe('resuming a run that hit the turn ceiling', () => {
+  /** Yields `max_turns` for the first `n` calls, then completes normally. */
+  function scriptResumes(n: number, costPerLeg = 0) {
+    let call = 0;
+    mocks.queryMock.mockImplementation(async function* () {
+      const leg = call++;
+      yield { type: 'text', content: `leg${leg}`, provider: 'claude' };
+      if (costPerLeg) {
+        yield { type: 'usage', provider: 'claude', totalCostUsd: costPerLeg, outputTokens: 10 };
+      }
+      if (leg < n) {
+        yield { type: 'text', content: 'ran out', provider: 'claude', limitReason: 'max_turns' };
+      }
+    });
+    return () => call;
+  }
+
+  it('continues the work instead of stopping and asking', async () => {
+    const calls = scriptResumes(1);
+    const { events } = await post('chat', { message: 'build a deck', chatId: 'c1' });
+
+    expect(calls(), 'the run was not resumed').toBe(2);
+    const text = events.filter((e) => e.type === 'text').map((e) => e.content).join('');
+    expect(text).toContain('leg0');
+    expect(text).toContain('leg1');
+  });
+
+  /*
+   * The advice must match what happens. "Say continue" is wrong when the app is
+   * about to continue by itself, so that note is swallowed while resuming — and
+   * must reappear once resuming stops, since then it IS the advice.
+   */
+  it('does not tell the user to continue while it is continuing', async () => {
+    scriptResumes(1);
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+    const text = events.filter((e) => e.type === 'text').map((e) => e.content).join('');
+    expect(text).not.toContain('ran out');
+  });
+
+  it('gives up after a bounded number of resumes, and then says so', async () => {
+    const calls = scriptResumes(99);
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+
+    expect(calls(), 'a non-converging run spun without limit').toBeLessThanOrEqual(4);
+    const text = events.filter((e) => e.type === 'text').map((e) => e.content).join('');
+    expect(text, 'gave up silently').toContain('ran out');
+  });
+
+  /*
+   * The SDK's own budget cap is PER QUERY, so a resume would hand each leg a
+   * fresh allowance and the ceiling would be as fictional as it was before it
+   * was wired up. Each leg gets what is LEFT.
+   */
+  it('passes the remaining budget to each resumed leg, not the full one', async () => {
+    scriptResumes(2, 1.2);
+    await post('chat', { message: 'hi', chatId: 'c1' });
+
+    const budgets = mocks.queryMock.mock.calls.map((c) => c[0].maxBudgetUsd as number);
+    expect(budgets[0]).toBe(3.0);
+    expect(budgets[1], 'the second leg got a fresh budget').toBeCloseTo(1.8, 5);
+    expect(budgets[2]).toBeCloseTo(0.6, 5);
+  });
+
+  it('stops resuming once the budget is spent', async () => {
+    const calls = scriptResumes(99, 3.0);
+    await post('chat', { message: 'hi', chatId: 'c1' });
+    expect(calls(), 'resumed past the spend ceiling').toBe(1);
+  });
+
+  it('reports the whole turn’s cost, not just the last leg', async () => {
+    scriptResumes(2, 0.4);
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+    const done = events.find((e) => e.type === 'done') as { usage: Record<string, number> };
+    expect(done.usage.cost, 'a resumed turn under-reported its cost').toBeCloseTo(1.2, 5);
+    expect(done.usage.outputTokens).toBe(30);
+  });
+
+  /*
+   * The spend ceiling is the real one. Resuming past it would make it exactly
+   * as meaningless as the turn count it replaced.
+   */
+  it('never resumes a run that hit the spend ceiling', async () => {
+    let call = 0;
+    mocks.queryMock.mockImplementation(async function* () {
+      call++;
+      yield { type: 'text', content: 'out of money', provider: 'claude', limitReason: 'hard' };
+    });
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+
+    expect(call, 'resumed past the spend ceiling').toBe(1);
+    const text = events.filter((e) => e.type === 'text').map((e) => e.content).join('');
+    expect(text).toContain('out of money');
+  });
+
+  it('asks the model to carry on rather than start again', async () => {
+    scriptResumes(1);
+    await post('chat', { message: 'build a deck', chatId: 'c1' });
+
+    const resumePrompt = mocks.queryMock.mock.calls[1][0].prompt as string;
+    expect(resumePrompt).toMatch(/continue/i);
+    expect(resumePrompt).not.toBe('build a deck');
+  });
+
+  it('leaves an ordinary run alone', async () => {
+    let call = 0;
+    mocks.queryMock.mockImplementation(async function* () {
+      call++;
+      yield { type: 'text', content: 'done in one', provider: 'claude' };
+    });
+    await post('chat', { message: 'hi', chatId: 'c1' });
+    expect(call).toBe(1);
+  });
+});

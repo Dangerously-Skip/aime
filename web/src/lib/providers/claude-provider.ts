@@ -2177,7 +2177,22 @@ export class ClaudeProvider extends BaseProvider {
            */
           const stopped = STOP_REASONS[c.subtype as string];
           if (stopped) {
-            yield { type: 'text', content: `\n\n_${stopped}_`, provider: this.name };
+            yield {
+              type: 'text',
+              content: `\n\n_${stopped}_`,
+              provider: this.name,
+              /*
+               * The machine-readable half, riding on the chunk the client
+               * already renders rather than as a new chunk type — a type every
+               * surface would have to learn to ignore is a worse trade than a
+               * field they already ignore.
+               *
+               * The route reads this to decide whether the run can be picked up
+               * automatically. Only `max_turns` qualifies: turns are a chunk
+               * size, spend is the actual ceiling.
+               */
+              limitReason: c.subtype === 'error_max_turns' ? 'max_turns' : 'hard',
+            };
           }
         }
 

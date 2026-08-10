@@ -20,10 +20,11 @@
     "dist:win": "next build && electron-builder --win",
     "dist:linux": "next build && electron-builder --linux",
     "test:e2e": "playwright test",
-    "test:mutation": "stryker run",
+    "test:mutation": "stryker run stryker.security.mjs",
     "lint:strict": "eslint --max-warnings 30",
     "eval:baseline": "vitest run --config vitest.eval.config.ts src/lib/craft/baseline.eval.ts",
-    "eval:compare": "vitest run --config vitest.eval.config.ts src/lib/craft/compare.eval.ts"
+    "eval:compare": "vitest run --config vitest.eval.config.ts src/lib/craft/compare.eval.ts",
+    "test:mutation:logic": "stryker run stryker.logic.mjs"
   },
   "build": {
     "appId": "com.aime.app",
