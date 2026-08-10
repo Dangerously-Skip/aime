@@ -113,6 +113,30 @@ export async function POST(
   const target = `${upstreamBase.replace(/\/$/, '')}/chat/completions`;
   const oaReq = anthropicToOpenAI(body, body.model);
 
+  /**
+   * One line per proxied turn, so a tool-result problem is a lookup rather than
+   * an inference.
+   *
+   * Three rounds of this session were spent deciding whether a tool result
+   * reached the model. The tool ran (5.2s, correct data), the translation was
+   * verified correct in isolation, and the model still said the tool was not
+   * connected — with nothing recorded in between to separate "the model never
+   * saw it" from "the model saw it and ignored it". This records exactly that
+   * boundary: what went out, and whether the tool results in it had content.
+   */
+  {
+    const msgs = (oaReq as { messages?: Array<Record<string, unknown>> }).messages ?? [];
+    const toolMsgs = msgs.filter((m) => m.role === 'tool');
+    if (toolMsgs.length > 0) {
+      const empty = toolMsgs.filter((m) => !String(m.content ?? '').trim()).length;
+      console.log(
+        `[llm-proxy] → ${body.model}: ${msgs.length} msgs, ${toolMsgs.length} tool result(s)` +
+          `${empty ? `, ${empty} EMPTY` : ''}` +
+          `, first result: ${JSON.stringify(String(toolMsgs[0].content ?? '').slice(0, 120))}`,
+      );
+    }
+  }
+
   let upstreamRes: Response;
   try {
     upstreamRes = await fetch(target, {
