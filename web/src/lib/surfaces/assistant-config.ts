@@ -4,6 +4,7 @@ import { APP_NAME } from '@/config/branding';
 export function getAssistantConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
     allowedTools: [
+      'mcp__aime__FetchUrl', 'mcp__aime__MailSearch', 'mcp__aime__MailRead', 'mcp__aime__MailDraft', 'mcp__aime__CalendarEvents', 'mcp__aime__ContactsSearch',
       'WebSearch', 'WebFetch', 'mcp__aime__canvas',
       'StandingOrderCreate', 'StandingOrderList',
       'StandingOrderUpdate', 'StandingOrderCancel', 'StandingOrderHistory',

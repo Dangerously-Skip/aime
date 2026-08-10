@@ -5,6 +5,7 @@ import { webSearchPrompt } from './shared/web-search-prompt';
 export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
     allowedTools: [
+      'mcp__aime__FetchUrl', 'mcp__aime__CreateImage',
       'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep',
       'WebFetch', 'Agent', 'NotebookEdit',
       // Craft lives in skills (`craft-web`, `craft-deck`, `craft-doc`), installed

@@ -181,7 +181,10 @@ describe('provider parameter assembly', () => {
       // `mcp__aime__SearchWeb` serves the API-key providers in-process. Listing
       // only one would make the user's provider choice decide whether search
       // survives a profile — the same bug, one provider later.
-      'WebSearch', 'WebFetch', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb',
+      // `mcp__aime__FetchUrl`, not `WebFetch`: the built-in is denied in the
+      // provider because it takes no timeout, so a profile listing it would
+      // auto-approve a tool that cannot run and prompt for the one that can.
+      'WebSearch', 'mcp__aime__FetchUrl', 'mcp__web-search__web_search', 'mcp__aime__SearchWeb',
       // plus the in-app plumbing PLUMBING_TOOLS exempts: asking, delegating,
       // todos, canvas and the connector card. None acts on the world, and
       // TOOL_PROFILES never enumerated them.
@@ -526,7 +529,20 @@ describe('memory extraction', () => {
 
     const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
 
-    expect(mocks.extractMemoriesMock).toHaveBeenCalledWith('hi', 'a'.repeat(60), undefined);
+    /*
+     * The fourth argument is the model the turn ran on, and it is the point.
+     * Extraction used to hardcode `claude-haiku-4-5-20251001` and build a bare
+     * Anthropic client; with ANTHROPIC_BASE_URL pointing at the llm-proxy, that
+     * id reached whatever provider the user configured and came back
+     * "not a valid model ID" — on every turn, silently, for anyone not on
+     * Anthropic.
+     */
+    expect(mocks.extractMemoriesMock).toHaveBeenCalledWith(
+      'hi',
+      'a'.repeat(60),
+      undefined,
+      'sonnet',
+    );
     const memEvent = events.find((e) => e.type === 'memory_extract');
     expect(memEvent).toBeDefined();
     expect((memEvent!.memories as unknown[])).toHaveLength(1);
