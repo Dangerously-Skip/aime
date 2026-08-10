@@ -229,3 +229,70 @@ describe('the model is told iCloud is connected', () => {
     expect(route).toMatch(/loadICloudCredentials\(\)/);
   });
 });
+
+/**
+ * Connected, and the card still said "Connect".
+ *
+ * The credential was stored and verified — `GET /api/icloud/connect` answered
+ * `{connected: true, appleId: …}` — while the Connectors row offered to connect
+ * it again. The UI hydrates from `/api/connectors/hydrate`, which reads
+ * `config.mcpServers`. That was a complete definition of "connected" for as long
+ * as every connector was an MCP server; iCloud provisions nothing there by
+ * design, so it was structurally invisible to the only source the card consults.
+ *
+ * The same shape as the connectors PROMPT missing it: a second place that
+ * enumerates connectors from the MCP config and therefore cannot see one that
+ * does not live there.
+ */
+describe('a credential-backed connector shows as connected', () => {
+  it('hydrate reports connectors that have no MCP entry', () => {
+    const route = read('src/app/api/connectors/hydrate/route.ts');
+    expect(route).toMatch(/loadICloudCredentials/);
+    /*
+     * The SUCCESS return specifically. Checking only that the helper is
+     * mentioned somewhere in the file passes while the happy path ignores it —
+     * verified by sabotage, which is how this assertion came to be this narrow.
+     */
+    const success = /return Response\.json\(\{ connectedIds: \[\.\.\.ids[^)]*\)/.exec(route)?.[0] ?? '';
+    expect(success, 'the normal path does not include credential-backed ids').toMatch(
+      /credentialBackedIds/,
+    );
+  });
+
+  /**
+   * Including when there is no MCP config at all. A fresh install has no file,
+   * the read throws, and the catch used to return an empty list — so the one
+   * connector that does not need the file would have been hidden by its absence.
+   */
+  it('reports it even when the MCP config cannot be read', () => {
+    const route = read('src/app/api/connectors/hydrate/route.ts');
+    const cat = /\} catch \{[\s\S]*?\n\}/.exec(route)?.[0] ?? '';
+    expect(cat, 'the failure path drops credential-backed connectors').toMatch(
+      /credentialBackedIds/,
+    );
+  });
+});
+
+/**
+ * "Could it be because email is being masked on entry?" — a good catch, and a
+ * real bug even though it was not the cause. The shared dialog defaults to
+ * `type="password"` because it was built for API tokens; an Apple ID is an
+ * address the user needs to read back to confirm they typed the right account.
+ */
+describe('the connect dialog asks for the right kinds of value', () => {
+  it('does not mask the Apple ID', () => {
+    const browse = read('src/components/customize/browse-connectors.tsx');
+    const branch = /auth\.type === 'app-password'[\s\S]{0,1400}/.exec(browse)?.[0] ?? '';
+    const appleIdPrompt = /label: 'Apple ID'[\s\S]{0,300}/.exec(branch)?.[0] ?? '';
+    expect(appleIdPrompt, 'the Apple ID field inherits the password default').toMatch(
+      /inputType: 'email'/,
+    );
+  });
+
+  it('still masks the app-specific password', () => {
+    const browse = read('src/components/customize/browse-connectors.tsx');
+    const branch = /auth\.type === 'app-password'[\s\S]{0,1400}/.exec(browse)?.[0] ?? '';
+    const pw = /label: 'App-specific password'[\s\S]{0,300}/.exec(branch)?.[0] ?? '';
+    expect(pw).toMatch(/inputType: 'password'/);
+  });
+});
