@@ -52,6 +52,8 @@ import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { useDocumentPrint } from "@/hooks/use-document-print";
+import { useDeckTheme } from "@/hooks/use-deck-theme";
+import { useSearchSettings } from "@/hooks/use-search-settings";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -163,6 +165,26 @@ export function ChatSurface() {
   const printDocument = useDocumentPrint();
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  /**
+   * The settings half of a turn, which Chat alone was not sending.
+   *
+   * Cowork and Code sent all three; Chat sent none, so on this surface a chosen
+   * deck theme never reached the model (every deck came back as an unstyled
+   * pptx, because the format steering is gated on a theme being set) and search
+   * resolved to `none`. The server log said so plainly once it was asked:
+   *
+   *   [Claude] No deck theme on this request — pptx stays available…
+   *   [Claude] aime tools: icloud=yes search=none
+   *
+   * Same shape as the cowork auto-continue drift: a second place that builds
+   * the request and fell behind the first.
+   */
+  const deckTheme = useDeckTheme();
+  const searchSettings = useSearchSettings();
+  const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
+  const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
+  const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
+  const disableBashTool = useSettingsStore((s) => s.disableBashTool);
   // Built-in (Claude) reachability, which is the user's key OR the server's env
   // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
   const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
@@ -506,6 +528,14 @@ export function ChatSurface() {
         sessionControls: sessionControls,
         toolProfile: toolProfile,
         providerConfig: route?.providerConfig,
+        securitySettings: {
+          blockDangerousCommands,
+          blockNetworkCommands,
+          restrictToProjectFolder,
+          disableBashTool,
+        },
+        searchSettings,
+        deckTheme,
       });
     },
     [
@@ -541,6 +571,16 @@ export function ChatSurface() {
       currentProjectId,
       crossSurfaceContext,
       toolProfile,
+      // Read inside the callback. Omitting them means a theme change, a search
+      // provider change or a security toggle does not take effect until some
+      // OTHER dependency happens to change — the stale-closure bug the cowork
+      // dep list already records.
+      deckTheme,
+      searchSettings,
+      blockDangerousCommands,
+      blockNetworkCommands,
+      restrictToProjectFolder,
+      disableBashTool,
     ]
   );
 
