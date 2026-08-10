@@ -2,6 +2,7 @@ import type { SurfaceConfig } from './index';
 import { PPT_PROMPT } from './shared/ppt-prompt';
 import { APP_NAME } from '@/config/branding';
 import { webSearchPrompt } from './shared/web-search-prompt';
+import { TURN_BACKSTOP } from './shared/limits';
 
 export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -77,7 +78,7 @@ friendly"). It governs prose you draft FOR them, not your replies to them.
     settingSources: ['user', 'project'],
     enableFileCheckpointing: true,
     model: 'opus',
-    maxTurns: 200,
+    maxTurns: TURN_BACKSTOP.interactive,
     maxBudgetUsd: 5.0,
     queryTimeoutSecs: 600,
     includePartialMessages: true,

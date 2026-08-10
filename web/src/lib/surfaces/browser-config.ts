@@ -1,5 +1,6 @@
 import type { SurfaceConfig } from './index';
 import { APP_NAME } from '@/config/branding';
+import { TURN_BACKSTOP } from './shared/limits';
 
 export function getBrowserConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -44,7 +45,8 @@ export function getBrowserConfig(overrides: Partial<SurfaceConfig> = {}): Surfac
 - Never submit forms with personal data without explicit user confirmation.
 - Keep responses concise — focus on actions, not lengthy descriptions.`,
     model: 'sonnet',
-    maxTurns: 25,
+    /* Automation, nobody watching — see TURN_BACKSTOP. */
+    maxTurns: TURN_BACKSTOP.unattended,
     maxBudgetUsd: 2.0,
     queryTimeoutSecs: 300,
     includePartialMessages: true,

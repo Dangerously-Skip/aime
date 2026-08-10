@@ -1,5 +1,6 @@
 import type { SurfaceConfig } from './index';
 import { APP_NAME } from '@/config/branding';
+import { TURN_BACKSTOP } from './shared/limits';
 
 export function getAssistantConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -34,7 +35,8 @@ Examples:
 ## Tone
 Be concise. After calling StandingOrderCreate, confirm in one sentence what was scheduled. Do not explain how standing orders work — just confirm the action.`,
     model: 'sonnet',
-    maxTurns: 30,
+    /* Standing orders run unattended — see TURN_BACKSTOP. */
+    maxTurns: TURN_BACKSTOP.unattended,
     maxBudgetUsd: 1.0,
     queryTimeoutSecs: 300,
     includePartialMessages: true,
