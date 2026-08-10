@@ -856,7 +856,21 @@ export function CoworkSurface() {
     const prevId = prevChatIdRef.current;
     prevChatIdRef.current = chatId || null;
     if (prevId && prevId !== chatId) {
-      streamRegistry.abort(prevId);
+      /*
+       * Deliberately NOT aborting the previous conversation's stream.
+       *
+       * It used to, "so its chunks don't land in the new conversation" — a real
+       * concern, already solved somewhere else: `useSSEStream` pins its
+       * callbacks at stream start, so output goes to the chat the stream was
+       * STARTED for regardless of what is on screen, and
+       * `chat-surface.stream.test.tsx` has asserted that for a while.
+       *
+       * With the spillover handled, the abort only did harm: opening or
+       * switching to another chat killed a turn that was still working, and a
+       * long research run could not be left to finish while you did something
+       * else. Concurrent conversations are the point of a registry keyed by
+       * chatId.
+       */
       const prevMessages = useCoworkStore.getState().messages[prevId];
       if (prevMessages && prevMessages.length > 0) {
         summarizeConversation(prevId, prevMessages);

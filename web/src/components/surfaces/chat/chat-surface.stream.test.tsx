@@ -211,3 +211,43 @@ describe('ChatSurface — Stop closes the Run (DEFECT 5a)', () => {
     expect(activeRun()?.status).toBe('timeout');
   });
 });
+
+/**
+ * "It seems if I open a new chat the running query in the current chat dies. I
+ * would want to be able to have multiple chats concurrently."
+ *
+ * Switching conversations called `streamRegistry.abort(prevId)`, justified by a
+ * comment about chunks landing in the wrong conversation. That concern was real
+ * and had already been solved elsewhere: `useSSEStream` pins its callbacks at
+ * stream start, which is what the test above this one asserts. So the abort was
+ * doing nothing except killing work — a long research turn could not be left to
+ * run while you did anything else.
+ *
+ * A registry keyed by chatId exists precisely so several can be in flight.
+ */
+describe('a running turn survives switching conversations', () => {
+  const src = () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    (require('fs') as typeof import('fs')).readFileSync(
+      (require('path') as typeof import('path')).resolve(
+        process.cwd(),
+        'src/components/surfaces/chat/chat-surface.tsx',
+      ),
+      'utf-8',
+    );
+
+  it('does not abort the previous conversation on switch', () => {
+    // Comments stripped: the note explaining WHY necessarily names the call it
+    // replaced, and matching that would pass while the call was back.
+    const code = src().replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*/gm, '$1');
+    const switchEffect = /const prevId = prevChatIdRef\.current;[\s\S]{0,900}/.exec(code)?.[0] ?? '';
+    expect(switchEffect, 'switching conversations still kills the running turn').not.toMatch(
+      /streamRegistry\.abort\(prevId\)/,
+    );
+  });
+
+  /** Stop must still work — this removes an automatic abort, not the manual one. */
+  it('still lets the user stop a turn deliberately', () => {
+    expect(src()).toMatch(/onCancel=\{chatId \? \(\) => streamRegistry\.abort\(chatId\)/);
+  });
+});
