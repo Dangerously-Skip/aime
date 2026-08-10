@@ -1,8 +1,23 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MemoryCategory } from './types';
 
-/** Model used for memory extraction — can be overridden via MEMORY_EXTRACTION_MODEL env var. */
-const EXTRACTION_MODEL = process.env.MEMORY_EXTRACTION_MODEL || 'claude-haiku-4-5-20251001';
+/**
+ * The model extraction falls back to when the caller names none.
+ *
+ * A hardcoded Anthropic id used to be the ONLY option, and it is wrong for
+ * anyone not on Anthropic. `ANTHROPIC_BASE_URL` points at this app's llm-proxy,
+ * so the id travelled to whatever provider the user configured and came back:
+ *
+ *   [llm-proxy] upstream 400: "claude-haiku-4-5-20251001 is not a valid model ID"
+ *
+ * — on every single turn, for an OpenRouter user, silently. Memory extraction
+ * was simply dead for them, and the only trace was a 400 in a log nobody reads.
+ *
+ * This is the failure `resolveSendRoute` exists to prevent, in a file that never
+ * called it: code that skips the chokepoint resolves against the built-in
+ * Anthropic registry and then demands an Anthropic account.
+ */
+const FALLBACK_MODEL = process.env.MEMORY_EXTRACTION_MODEL || 'claude-haiku-4-5-20251001';
 
 const EXTRACTION_PROMPT = `You are a memory extraction system. Analyze the conversation turn and extract useful memories about the user.
 
@@ -48,6 +63,12 @@ export async function extractMemories(
   userMessage: string,
   assistantResponse: string,
   apiKey?: string,
+  /**
+   * The model to extract with, resolved by the caller from the user's own
+   * configuration. Extraction is a background nicety, so an unresolvable model
+   * means "skip", never "fail the turn".
+   */
+  model?: string | null,
 ): Promise<ExtractedMemory[]> {
   // Skip trivial responses
   if (assistantResponse.length < 50) return [];
@@ -58,7 +79,7 @@ export async function extractMemories(
   try {
     const client = new Anthropic({ apiKey: key });
     const response = await client.messages.create({
-      model: EXTRACTION_MODEL,
+      model: model || FALLBACK_MODEL,
       max_tokens: 1024,
       system: EXTRACTION_PROMPT,
       messages: [

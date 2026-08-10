@@ -1112,6 +1112,10 @@ export async function POST(
             message as string,
             collectedResponse,
             (apiKey as string) || undefined,
+            // The model the TURN ran on. Extraction used to hardcode an
+            // Anthropic id, which 400s against any other provider — on every
+            // turn, invisibly, for anyone on OpenRouter.
+            effectiveModel,
           );
           if (extracted.length > 0) {
             await sse.writeEvent({
