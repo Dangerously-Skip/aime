@@ -586,6 +586,18 @@ export class ClaudeProvider extends BaseProvider {
         ]
       : [];
 
+    /**
+     * What is actually on the in-process server, logged once per query.
+     *
+     * The UI shows a tool "completing" even when the SDK refuses it, because the
+     * refusal comes back AS a tool result — so a missing tool and a working one
+     * look identical from the outside. The truth only appeared once the proxy
+     * logged the result text: `No such tool available: mcp__aime__MailSearch`.
+     */
+    console.log(
+      `[Claude] aime tools: icloud=${icloudCreds ? 'yes' : 'NO'} search=${searchRoute ? searchRoute.providerId : 'none'}`,
+    );
+
     const aimeMcpServer = createSdkMcpServer({
       name: 'aime',
       version: '1.0.0',
