@@ -982,7 +982,16 @@ export async function POST(
         cacheReadInputTokens?: number;
         cacheCreationInputTokens?: number;
         totalCostUsd?: number;
-      } | null = null;
+      } = {};
+
+      /**
+       * The turn's spend ceiling, resolved once because two things need it: the
+       * SDK options below, and the resume logic that subtracts from it.
+       */
+      const effectiveBudgetUsd =
+        typeof requestedBudgetUsd === 'number' && requestedBudgetUsd > 0
+          ? Math.min(requestedBudgetUsd, surfaceConfig.maxBudgetUsd ?? requestedBudgetUsd)
+          : surfaceConfig.maxBudgetUsd;
       let toolCallCount = 0;
       const streamStartMs = Date.now();
       let queryTimedOut = false;
@@ -1004,7 +1013,38 @@ export async function POST(
       }
 
       try {
-        for await (const chunk of provider.query({
+        /**
+         * Turns are a CHUNK SIZE; spend is the ceiling.
+         *
+         * Reporting "I ran out of steps, say continue" was the minimum fix — it
+         * replaced a silent truncation with a legible one, but it still left the
+         * user typing "go on then" and the model reconstructing where it was.
+         * The turn count is not a resource anyone budgets in, so stopping on it
+         * and asking a human to press go is ceremony around an arbitrary number.
+         *
+         * So the run is picked up automatically, and the things that DO mean
+         * something are what end it:
+         *
+         *   - spend      — accumulated across segments, passed to each one as
+         *                  the REMAINING budget, because the SDK's own cap is
+         *                  per-query and would otherwise reset on every resume
+         *   - wall-clock — the existing query timer, which is not reset either
+         *   - a cap on resumes, so a plan that never converges cannot spin here
+         *     even if the first two somehow allow it
+         *
+         * `max_budget` is never resumed: that is the ceiling doing its job, and
+         * continuing past it would make it as fictional as it was last week.
+         *
+         * The provider resumes the SDK session on its own — same chatId, same
+         * cwd — so a continuation carries the full context rather than starting
+         * over. See `options.resume` in claude-provider.ts.
+         */
+        const MAX_RESUMES = 3;
+        const RESUME_PROMPT =
+          'Continue from exactly where you stopped. Do not restart, re-plan, or ' +
+          'summarise what you have already done — take the next step.';
+
+        const queryParams = {
           prompt: finalMessage,
           chatId: chatId as string,
           userId: userId as string,
@@ -1053,10 +1093,7 @@ export async function POST(
            * be a loose runaway backstop instead of the only thing holding the
            * line. See the note on `maxTurns` in the surface configs.
            */
-          maxBudgetUsd:
-            typeof requestedBudgetUsd === 'number' && requestedBudgetUsd > 0
-              ? Math.min(requestedBudgetUsd, surfaceConfig.maxBudgetUsd ?? requestedBudgetUsd)
-              : surfaceConfig.maxBudgetUsd,
+          maxBudgetUsd: effectiveBudgetUsd,
           systemPrompt,
           attachments: attachments || undefined,
           webSearch: webSearch || undefined,
@@ -1070,7 +1107,23 @@ export async function POST(
           onBrowserToolUse,
           onConnectorRequest,
           onDocumentPrint,
-        })) {
+        };
+
+        let resumes = 0;
+        let spentUsd = 0;
+        let resumeRun = false;
+
+        do {
+          resumeRun = false;
+          const remainingUsd = effectiveBudgetUsd
+            ? Math.max(0, effectiveBudgetUsd - spentUsd)
+            : undefined;
+
+          for await (const chunk of provider.query(
+            resumes === 0
+              ? queryParams
+              : { ...queryParams, prompt: RESUME_PROMPT, maxBudgetUsd: remainingUsd },
+          )) {
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);
             toolCallCount++;
@@ -1086,17 +1139,47 @@ export async function POST(
           // reads usage off the `done` event, and two sources for one number is
           // how they drift apart.
           if (chunk.type === 'usage') {
+            /*
+             * Summed, not replaced. A resumed turn is several SDK queries and
+             * the user had one turn — reporting the last leg would understate
+             * both the cost shown in ROI and the total that decides whether
+             * another resume is affordable.
+             */
+            const add = (a: number | undefined, b: unknown) =>
+              typeof b === 'number' ? (a ?? 0) + b : a;
             reported = {
-              inputTokens: chunk.inputTokens as number | undefined,
-              outputTokens: chunk.outputTokens as number | undefined,
-              cacheReadInputTokens: chunk.cacheReadInputTokens as number | undefined,
-              cacheCreationInputTokens: chunk.cacheCreationInputTokens as number | undefined,
-              totalCostUsd: chunk.totalCostUsd as number | undefined,
+              inputTokens: add(reported?.inputTokens, chunk.inputTokens),
+              outputTokens: add(reported?.outputTokens, chunk.outputTokens),
+              cacheReadInputTokens: add(reported?.cacheReadInputTokens, chunk.cacheReadInputTokens),
+              cacheCreationInputTokens: add(reported?.cacheCreationInputTokens, chunk.cacheCreationInputTokens),
+              totalCostUsd: add(reported?.totalCostUsd, chunk.totalCostUsd),
             };
+            spentUsd = reported.totalCostUsd ?? spentUsd;
             continue;
+          }
+          /*
+           * A ceiling we can pick up from. Swallowed rather than relayed: the
+           * provider's note tells the user to say "continue", which would be
+           * wrong advice when we are about to do it for them.
+           */
+          if (chunk.limitReason === 'max_turns') {
+            const budgetLeft = !effectiveBudgetUsd || spentUsd < effectiveBudgetUsd;
+            const timeLeft = !queryTimedOut;
+            if (resumes < MAX_RESUMES && budgetLeft && timeLeft) {
+              resumeRun = true;
+              continue;
+            }
+            // Out of resumes or out of the resources that matter — fall through
+            // and let the provider's note stand, since now it IS the advice.
           }
           await sse.writeEvent(chunk);
         }
+
+          if (resumeRun) {
+            resumes++;
+            console.log(`[CHAT] Turn ceiling reached; resuming (${resumes}/${MAX_RESUMES})`);
+          }
+        } while (resumeRun);
       } catch (streamError: unknown) {
         const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
         if (!queryTimedOut) {
