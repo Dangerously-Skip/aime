@@ -18,9 +18,18 @@ import { base, ratchet } from './stryker.base.mjs';
  *
  *   npm run test:mutation
  *
- * Overall 83.35 on 2026-08-11 — down from 84.6 because `shell-write-scope.ts`
- * joined the scope since, not because anything regressed. Still clear of the
- * 80 ratchet. Scores by file, measured 2026-07-29:
+ * Overall 84.98 on 2026-08-11, so the ratchet moves 80 → 82. It is set two
+ * points below rather than one because ~30 mutants here are killed by TIMEOUT,
+ * and a loaded runner can turn a timeout into a survivor; a ratchet that goes
+ * red on machine load is one people raise the threshold to silence.
+ *
+ * `private-address.ts` joined that day at 88.05 — the SSRF address predicates,
+ * extracted from `mcp/url-guard.ts` so they could be measured as the control
+ * they are. In that file their score was diluted by server-NAME derivation,
+ * which is ordinary logic, and the combined number said nothing useful about
+ * either half. An IPv4-mapped IPv6 literal had walked through every check.
+ *
+ * Scores by file, measured 2026-07-29:
  *   settings.ts              92%
  *   path-containment.ts      92%
  *   tool-policy.ts           91%  — was 76; the decision store had no tests at all
@@ -38,5 +47,5 @@ export default {
     'src/lib/path-containment.ts',
     'src/lib/mcp/tool-policy.ts',
   ],
-  thresholds: ratchet(80),
+  thresholds: ratchet(82),
 };

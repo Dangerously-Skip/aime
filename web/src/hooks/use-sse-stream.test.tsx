@@ -4,6 +4,7 @@ import { renderHook } from '@testing-library/react';
 import { useSSEStream, stripMessagesForHistory, type SSEEvent, type StreamUsage } from './use-sse-stream';
 import { streamRegistry } from '@/lib/stream-registry';
 import { useChatStore, type Message } from '@/stores/chat-store';
+import { handleCoreChunk } from '@/lib/sse/core-chunks';
 
 /**
  * The sentinel for "this was reported to the user as a timeout". Not the word
@@ -483,5 +484,109 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     expect(last.isStreaming).toBe(false);
     expect(last.isLoading).toBe(false);
     expect(useChatStore.getState().isStreaming).toBe(false);
+  });
+});
+
+/**
+ * The text-boundary flag has to be cleared when the turn ends, however it ends.
+ *
+ * `resetTextBoundary` shipped exported and called from nothing but its own unit
+ * tests — the "capability built but never wired up" shape, and invisible to a
+ * green suite because the function itself was well covered. The leak shows up
+ * on the ABORTED path specifically: a turn stopped between a tool call and the
+ * next text block leaves its chatId marked, so the NEXT turn's first reply opens
+ * with a stray blank line.
+ *
+ * Driven through the real hook rather than by calling the helper, because
+ * "somebody calls it" was the entire defect.
+ */
+describe('the text boundary does not outlive its turn', () => {
+  const frame = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
+
+  /**
+   * The chunks must travel the route the SURFACES use, not just reach
+   * `onChunk`.
+   *
+   * My first attempt at this test asserted on a flag that was never set: the
+   * hook hands events to `onChunk`, and it is the surface that passes them to
+   * `handleCoreChunk`. Deleting the fix under test changed nothing, which is
+   * the same vacuity this file's own history keeps producing. So the harness
+   * wires the two together the way chat-surface.tsx does.
+   */
+  const appended: string[] = [];
+  const store = {
+    addMessage: vi.fn(),
+    appendToLastAssistant: (_id: string, t: string) => { appended.push(t); },
+    addToolCall: vi.fn(),
+    updateToolResult: vi.fn(),
+    completeRunningTools: vi.fn(),
+  };
+  const feed = (chatId: string) => (event: SSEEvent) =>
+    handleCoreChunk(event as Record<string, unknown>, {
+      chatId,
+      store,
+      printDocument: vi.fn(),
+      onCanvas: vi.fn(),
+    } as never);
+
+  it('clears the flag after a stream that ended mid-tool', async () => {
+    appended.length = 0;
+    const chatId = 'boundary-chat';
+    const { result } = renderHook(() =>
+      useSSEStream({
+        onChunk: feed(chatId),
+        onError: vi.fn(),
+        onDone: vi.fn(),
+        onUsage: vi.fn(),
+        setIsStreaming: vi.fn(),
+        chatId,
+      }),
+    );
+
+    // Text, then a tool call and nothing after it — the shape that leaves the
+    // boundary flag set when the turn stops there.
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        frame({ type: 'text', content: 'Reading the theme' }),
+        frame({ type: 'tool_use', id: 't1', name: 'Read', input: {} }),
+      ]),
+    );
+    await result.current.sendMessage('build a deck', chatId, 'chat', null);
+    expect(appended, 'the tool call never reached the handler').toContain('Reading the theme');
+
+    // A fresh turn on the same chat. If the flag survived, this is prefixed
+    // with a blank line.
+    appended.length = 0;
+    fetchMock.mockResolvedValueOnce(sseResponse([frame({ type: 'text', content: 'Next turn.' })]));
+    await result.current.sendMessage('go on', chatId, 'chat', null);
+
+    expect(appended[0], 'the next turn opened with a stray blank line').toBe('Next turn.');
+  });
+
+  /* The complement: within ONE turn, a tool call between two text blocks must
+   * still separate them. A reset that fired too eagerly would undo that fix. */
+  it('still separates text either side of a tool call in the same turn', async () => {
+    appended.length = 0;
+    const chatId = 'same-turn';
+    const { result } = renderHook(() =>
+      useSSEStream({
+        onChunk: feed(chatId),
+        onError: vi.fn(),
+        onDone: vi.fn(),
+        onUsage: vi.fn(),
+        setIsStreaming: vi.fn(),
+        chatId,
+      }),
+    );
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        frame({ type: 'text', content: "the layouts I'll need" }),
+        frame({ type: 'tool_use', id: 't1', name: 'Read', input: {} }),
+        frame({ type: 'text', content: 'Now let me read the theme' }),
+      ]),
+    );
+    await result.current.sendMessage('build a deck', chatId, 'chat', null);
+
+    expect(appended.join(''), 'the halves were welded together').toContain("need\n\nNow let me");
   });
 });

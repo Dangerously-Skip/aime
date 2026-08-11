@@ -24,12 +24,19 @@
  * KNOWN LIMIT, stated rather than implied: only literal IPs are inspected. A
  * hostname that resolves to a private address passes, and DNS can change between
  * this check and the fetch (rebinding). Closing that needs resolve-then-pin at
- * connect time, which belongs in the fetch layer, not here.
+ * connect time, which belongs in the fetch layer, not here — and the fetch layer
+ * now does re-run this check on every REDIRECT hop, which was the other half of
+ * the same gap. See `fetch-url.ts`.
+ *
+ * Literal IPs are inspected in both families. IPv6 is parsed rather than
+ * pattern-matched because `::ffff:127.0.0.1` is loopback and normalises to
+ * `[::ffff:7f00:1]`, which looks like nothing at all to a string test.
  *
  * Pure and synchronous — no DNS, no network.
  */
 import { CONNECTOR_REGISTRY } from '@/lib/connectors/registry';
 import { MCP_CATALOG } from '@/lib/mcp/catalog';
+import { isLoopbackHost, isLinkLocalHost, isPrivateHost } from '@/lib/security/private-address';
 
 export type UrlRejection =
   | 'not-a-url'
@@ -42,40 +49,6 @@ export type UrlRejection =
 export type UrlVerdict =
   | { ok: true; url: string; loopback: boolean }
   | { ok: false; reason: UrlRejection; message: string };
-
-/** 127.0.0.0/8, ::1, and the names that always mean this machine. */
-function isLoopbackHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
-  if (h === 'localhost' || h.endsWith('.localhost')) return true;
-  if (h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
-  const v4 = parseIPv4(h);
-  return v4 !== null && v4[0] === 127;
-}
-
-/** 169.254.0.0/16 and fe80::/10 — cloud metadata and IPv6 link-local. */
-function isLinkLocalHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
-  const v4 = parseIPv4(h);
-  if (v4 && v4[0] === 169 && v4[1] === 254) return true;
-  // fe80::/10 covers fe80 through febf
-  return /^fe[89ab][0-9a-f]:/.test(h);
-}
-
-/** RFC1918 plus IPv6 unique-local (fc00::/7). Loopback is handled separately. */
-function isPrivateHost(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
-  const v4 = parseIPv4(h);
-  if (v4) {
-    const [a, b] = v4;
-    if (a === 10) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 0) return true; // 0.0.0.0/8 — "this network"
-    return false;
-  }
-  if (/^f[cd][0-9a-f]{2}:/.test(h)) return true;
-  return false;
-}
 
 /**
  * May the agent fetch this URL?
@@ -125,21 +98,58 @@ export function validateFetchUrl(raw: unknown): UrlVerdict {
   return { ok: true, url: url.toString(), loopback: false };
 }
 
-/** Strict dotted-quad only; rejects the octal/short forms that bypass naive checks. */
-function parseIPv4(host: string): [number, number, number, number] | null {
-  const parts = host.split('.');
-  if (parts.length !== 4) return null;
-  const nums: number[] = [];
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
-    // A leading zero means an octal literal to some resolvers; refuse to guess.
-    if (part.length > 1 && part.startsWith('0')) return null;
-    const n = Number(part);
-    if (n > 255) return null;
-    nums.push(n);
+/**
+ * A URL for a service the USER chose to run — a self-hosted SearXNG, say.
+ *
+ * Deliberately more permissive than `validateFetchUrl` and stricter than
+ * nothing, because the two failure modes here point in opposite directions:
+ *
+ *   - `http://192.168.1.10:8080` is a completely ordinary self-hosted instance.
+ *     Refusing private addresses, which is right for a URL the MODEL picked,
+ *     would break a real configuration for no gain — the user typed this one.
+ *   - `http://169.254.169.254` is never a search engine. Link-local is cloud
+ *     metadata and nothing else, so it is refused in every context.
+ *
+ * It matters because `/api/search-proxy` takes this value from the REQUEST (the
+ * renderer holds settings), so it is caller-controlled, and `runSearch` fetches
+ * it server-side. Combined with the same-origin check on that route, the
+ * remaining reach is "a local program can make the app fetch a LAN address it
+ * could have fetched itself".
+ */
+export function validateServiceUrl(raw: unknown): UrlVerdict {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return { ok: false, reason: 'not-a-url', message: 'No address given.' };
   }
-  return nums as [number, number, number, number];
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return { ok: false, reason: 'not-a-url', message: 'That is not a valid address.' };
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    return {
+      ok: false,
+      reason: 'unsupported-scheme',
+      message: `Only http and https are supported (got ${url.protocol.replace(':', '')}).`,
+    };
+  }
+  if (url.username || url.password) {
+    return {
+      ok: false,
+      reason: 'credentials-in-url',
+      message: 'Remove the username and password from the address.',
+    };
+  }
+  if (isLinkLocalHost(url.hostname)) {
+    return {
+      ok: false,
+      reason: 'link-local',
+      message: 'That is a link-local address, which is cloud metadata rather than a service.',
+    };
+  }
+  return { ok: true, url: url.toString(), loopback: isLoopbackHost(url.hostname) };
 }
+
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Server identity.

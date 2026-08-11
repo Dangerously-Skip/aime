@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveSearchRoute, type SearchSettings } from '@/lib/search/resolve';
 import { runSearch, SearchError } from '@/lib/search/execute';
 import { withStoredCredential } from '@/lib/search/server-credentials';
+import { isCrossOriginRequest } from '@/lib/security/same-origin';
+import { validateServiceUrl } from '@/lib/mcp/url-guard';
 
 /**
  * Search, for callers outside the agent loop (the browser surface, widgets).
@@ -30,8 +32,40 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ results: [], error: 'bad_request' }, { status: 400 });
   }
 
+  /*
+   * This route takes a fetch TARGET from the request body, so the caller matters.
+   *
+   * `settings.searchInstanceUrl` reaches `runSearch`, which does
+   * `fetch(new URL('/search', instanceUrl))` server-side. The route it replaced
+   * read that host from `process.env` only; taking it from the body made it
+   * caller-controlled, and the app ships a browser surface, so "the caller" can
+   * be any page the user happens to be looking at. A `text/plain` POST needs no
+   * preflight, and the distinguishable 401/502/timeout statuses are a working
+   * internal port scanner even without reading a single response body.
+   */
+  if (isCrossOriginRequest(req)) {
+    return NextResponse.json({ results: [], error: 'forbidden' }, { status: 403 });
+  }
+
   const query = body.query?.trim();
   if (!query) return NextResponse.json({ results: [] });
+
+  /*
+   * A self-hosted instance on a LAN address is an ordinary setup, so this is NOT
+   * `validateFetchUrl` — the user typed this address, unlike a URL the model
+   * picked out of a search result. Link-local is refused in both, being cloud
+   * metadata and never a search engine.
+   */
+  const instance = (body.settings as { searchInstanceUrl?: unknown } | undefined)?.searchInstanceUrl;
+  if (typeof instance === 'string' && instance.trim() !== '') {
+    const verdict = validateServiceUrl(instance);
+    if (!verdict.ok) {
+      return NextResponse.json(
+        { results: [], error: 'bad_instance_url', detail: verdict.message },
+        { status: 400 },
+      );
+    }
+  }
 
   // Settings come from the caller (the renderer holds them); env is the legacy
   // fallback so existing SEARXNG_INSTANCES installs keep working.

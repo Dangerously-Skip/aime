@@ -234,5 +234,11 @@ jobs:
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"
           else
+            # `--label ci` fails the whole step when the label does not exist,
+            # and this repo has none — so the alert added to fix "nobody sees a
+            # failing weekly job" would itself have failed silently. Create it
+            # on demand; `|| true` because a race or a permissions gap must not
+            # cost us the issue, which is the part that matters.
+            gh label create ci --color ededed --description "CI and build health" 2>/dev/null || true
             gh issue create --title "$TITLE" --body "$BODY" --label ci
           fi
