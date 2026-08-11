@@ -65,6 +65,15 @@ export interface StreamChunk {
  */
 export interface QueryParams {
   prompt: string;
+  /**
+   * This call continues the SAME user turn rather than starting a new one.
+   *
+   * Set by the chat route's resume loop. It exists because some per-turn state
+   * is built from the PROMPT — URL provenance most importantly — and a resume's
+   * prompt is "continue from where you stopped", which contains none of the
+   * turn's actual content.
+   */
+  isResume?: boolean;
   chatId: string;
   surfaceId?: string;
   userId?: string;

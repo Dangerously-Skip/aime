@@ -83,6 +83,8 @@ const STOP_REASONS: Record<string, string> = {
 
 export class ClaudeProvider extends BaseProvider {
   private defaultAllowedTools: string[];
+  /** Per-chat URL provenance, so the legs of a resumed turn share one set. */
+  private urlProvenanceByChat = new Map<string, UrlProvenance>();
   private defaultMaxTurns: number;
   private permissionMode: string;
   private abortControllers: Map<string, AbortController>;
@@ -425,7 +427,23 @@ export class ClaudeProvider extends BaseProvider {
      * invented address never does. Per-request: a link seen last week does not
      * license a fetch today.
      */
-    const urlProvenance = new UrlProvenance([
+    /*
+     * Carried across the legs of one turn, rebuilt for a new one.
+     *
+     * This was constructed fresh per `query()` call, which was correct until
+     * the route learned to resume: a resumed leg is a second call whose prompt
+     * is "continue from where you stopped", and the client's `history` excludes
+     * the current turn's user message. So everything the turn had seen —
+     * including a URL the USER pasted — was gone by leg two, and `FetchUrl`
+     * refused it with "did not come from anywhere in this conversation", a
+     * refusal that also tells the model not to try variants. The turn dead-ended
+     * on its own guard.
+     *
+     * Keyed by chat and replaced on the next non-resume turn, so a link seen
+     * last week still does not license a fetch today.
+     */
+    const carried = params.isResume && chatId ? this.urlProvenanceByChat.get(chatId) : undefined;
+    const urlProvenance = carried ?? new UrlProvenance([
       params.prompt,
       // USER turns only. Seeding from assistant turns as well let the model
       // launder an invented URL: mention it in one reply, and the next turn
@@ -434,6 +452,7 @@ export class ClaudeProvider extends BaseProvider {
       // a failed guessing run and the transcript is full of made-up addresses.
       ...(history ?? []).filter((h) => h.role === 'user').map((h) => h.content),
     ]);
+    if (chatId) this.urlProvenanceByChat.set(chatId, urlProvenance);
 
     const abortController = new AbortController();
     /** Every rendezvous this query opens dies with it. */
@@ -2347,27 +2366,51 @@ export class ClaudeProvider extends BaseProvider {
           continue;
         }
 
-        // Handle tool results — try multiple field names for the tool use ID
-        // since different SDK versions may use different conventions
-        if (c.type === 'tool_result' || c.type === 'result') {
-          const toolUseId = (c.tool_use_id || c.toolUseId || c.id) as string;
-          activeTools.delete(toolUseId);
-          // Anything a tool returned is a real source, so its URLs become
-          // fetchable. This is what makes search → read work: without it the
-          // guard would refuse the very results it asked the model to go get.
-          try {
-            const payload = c.result ?? c.content ?? c;
-            urlProvenance.record(
-              typeof payload === 'string' ? payload : JSON.stringify(payload),
-            );
-          } catch { /* a payload that will not serialise carries no URLs we can use */ }
-          yield {
-            type: 'tool_result',
-            result: (c.result || c.content || c) as unknown,
-            tool_use_id: toolUseId,
-            provider: this.name,
-          };
-          continue;
+        /**
+         * Tool results, which arrive as `user` messages carrying tool_result
+         * BLOCKS — not as a `tool_result` message.
+         *
+         * This used to read `if (c.type === 'tool_result' || c.type === 'result')`.
+         * The Agent SDK has no `tool_result` message type at all (its union is
+         * user / assistant / result / system / stream_event), so the only thing
+         * that ever reached that branch was the TERMINAL result message falling
+         * through from above — which emitted one bogus tool_result per turn,
+         * with no tool_use_id, and recorded the turn summary as provenance.
+         *
+         * The consequence was not cosmetic. `urlProvenance.record` lives here,
+         * so nothing was ever recorded, and `FetchUrl` refused every URL that
+         * SearchWeb had just returned: "did not come from anywhere in this
+         * conversation". The search → read loop the guard was written to PERMIT
+         * was the one thing it reliably blocked.
+         */
+        if (c.type === 'user') {
+          const content = (c.message as { content?: unknown } | undefined)?.content;
+          const blocks = Array.isArray(content) ? content : [];
+          let sawToolResult = false;
+          for (const block of blocks as Array<Record<string, unknown>>) {
+            if (block?.type !== 'tool_result') continue;
+            sawToolResult = true;
+            const toolUseId = block.tool_use_id as string;
+            activeTools.delete(toolUseId);
+            // Anything a tool returned is a real source, so its URLs become
+            // fetchable. This is what makes search → read work.
+            const payload = c.tool_use_result ?? block.content ?? '';
+            try {
+              urlProvenance.record(
+                typeof payload === 'string' ? payload : JSON.stringify(payload),
+              );
+            } catch { /* a payload that will not serialise carries no URLs we can use */ }
+            yield {
+              type: 'tool_result',
+              result: payload as unknown,
+              tool_use_id: toolUseId,
+              provider: this.name,
+            };
+          }
+          // A `user` message with no tool_result blocks is the prompt echo; let
+          // it take the existing path rather than silently changing what the
+          // surfaces receive.
+          if (sawToolResult) continue;
         }
 
         // Skip system chunks, pass through others

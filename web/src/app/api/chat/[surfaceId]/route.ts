@@ -1122,7 +1122,16 @@ export async function POST(
           for await (const chunk of provider.query(
             resumes === 0
               ? queryParams
-              : { ...queryParams, prompt: RESUME_PROMPT, maxBudgetUsd: remainingUsd },
+              : {
+                  ...queryParams,
+                  prompt: RESUME_PROMPT,
+                  maxBudgetUsd: remainingUsd,
+                  // Same user turn. Without this the provider rebuilds URL
+                  // provenance from this prompt — which says only "continue" —
+                  // and the turn's own links, including any the user pasted,
+                  // stop being fetchable halfway through.
+                  isResume: true,
+                },
           )) {
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);
@@ -1154,7 +1163,32 @@ export async function POST(
               cacheCreationInputTokens: add(reported?.cacheCreationInputTokens, chunk.cacheCreationInputTokens),
               totalCostUsd: add(reported?.totalCostUsd, chunk.totalCostUsd),
             };
-            spentUsd = reported.totalCostUsd ?? spentUsd;
+            /*
+             * ESTIMATE when the backend does not report a price.
+             *
+             * `total_cost_usd` is an Anthropic-API field. Bedrock, Vertex,
+             * OpenRouter and every other backend leave it undefined, so
+             * `spentUsd` stayed at 0 for those users and each of three resumes
+             * was handed the full budget again — up to 4× the ceiling Settings
+             * shows, on exactly the accounts where a mis-set ceiling costs real
+             * money. The spend gate cannot be the ONLY thing that works on
+             * first-party keys.
+             *
+             * Same estimator the `done` event falls back to, so the number that
+             * bounds resumes and the number shown to the user cannot disagree.
+             */
+            if (typeof reported.totalCostUsd === 'number') {
+              spentUsd = reported.totalCostUsd;
+            } else {
+              const { estimateCostUsd } = await import('@/lib/models/pricing');
+              spentUsd = estimateCostUsd(
+                effectiveModel || 'claude-sonnet-4-6',
+                (reported.inputTokens ?? 0) +
+                  (reported.cacheReadInputTokens ?? 0) +
+                  (reported.cacheCreationInputTokens ?? 0),
+                reported.outputTokens ?? 0,
+              );
+            }
             continue;
           }
           /*

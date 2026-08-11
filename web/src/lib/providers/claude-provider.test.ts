@@ -572,6 +572,89 @@ describe('deniedTools', () => {
     });
 
     /**
+     * The search → read loop the guard exists to PERMIT, which it was in fact
+     * blocking 100% of the time.
+     *
+     * `urlProvenance.record` sat under `if (c.type === 'tool_result' || …)`,
+     * and the Agent SDK has no `tool_result` message type — results arrive as
+     * `user` messages carrying tool_result BLOCKS. So nothing was ever
+     * recorded, and every URL SearchWeb returned was then refused with "did not
+     * come from anywhere in this conversation… Do not try variants", which
+     * dead-ends the turn on its own guard.
+     *
+     * Driven by feeding the SDK message shape through the real stream, because
+     * the defect was entirely about which shape the code was looking for.
+     */
+    it('allows a URL a tool returned, in the shape the SDK actually sends', async () => {
+      const FOUND = 'https://health.aws.amazon.com/health/status';
+      scriptChunks([
+        {
+          type: 'assistant',
+          message: { content: [{ type: 'tool_use', name: 'mcp__aime__SearchWeb', input: { query: 'aws status' }, id: 's1' }] },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 's1', content: `Top result: ${FOUND}` },
+            ],
+          },
+        },
+      ]);
+      const provider = new ClaudeProvider();
+      const { canUseTool } = await captureOptions(provider, { prompt: 'what is on the aws status page' });
+
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: FOUND }, { toolUseID: 'u9' });
+      expect(r.behavior, 'a search result was not fetchable').toBe('allow');
+    });
+
+    it('still refuses an invented URL after a tool result has been recorded', async () => {
+      scriptChunks([
+        {
+          type: 'user',
+          message: { content: [{ type: 'tool_result', tool_use_id: 's1', content: 'See https://example.com/real' }] },
+        },
+      ]);
+      const provider = new ClaudeProvider();
+      const { canUseTool } = await captureOptions(provider, { prompt: 'search' });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: INVENTED }, { toolUseID: 'u10' });
+      expect(r.behavior).toBe('deny');
+    });
+
+    /**
+     * A resumed leg is a second `query()` call whose prompt is "continue from
+     * where you stopped", and the client's history excludes the current turn's
+     * user message — so a per-call provenance set left even the user's OWN
+     * pasted URL unsourced halfway through a turn.
+     */
+    it('remembers the turn’s URLs across a resume', async () => {
+      const provider = new ClaudeProvider();
+      scriptChunks([]);
+      await captureOptions(provider, { chatId: 'resume-chat', prompt: 'summarise https://example.com/report' });
+
+      scriptChunks([]);
+      const { canUseTool } = await captureOptions(provider, {
+        chatId: 'resume-chat',
+        prompt: 'Continue from exactly where you stopped.',
+        isResume: true,
+      });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: 'https://example.com/report' }, { toolUseID: 'u11' });
+      expect(r.behavior, 'the user’s own pasted URL stopped being fetchable').toBe('allow');
+    });
+
+    /* A NEW turn must not inherit it — that is the whole point of per-turn. */
+    it('forgets them on the next real turn', async () => {
+      const provider = new ClaudeProvider();
+      scriptChunks([]);
+      await captureOptions(provider, { chatId: 'fresh-chat', prompt: 'summarise https://example.com/report' });
+
+      scriptChunks([]);
+      const { canUseTool } = await captureOptions(provider, { chatId: 'fresh-chat', prompt: 'hello again' });
+      const r = await canUseTool('mcp__aime__FetchUrl', { url: 'https://example.com/report' }, { toolUseID: 'u12' });
+      expect(r.behavior, 'a URL from a previous turn still licensed a fetch').toBe('deny');
+    });
+
+    /**
      * The hole that let the guessing survive the first fix, caught in the wild.
      *
      * Provenance was seeded from the whole history, assistant turns included.

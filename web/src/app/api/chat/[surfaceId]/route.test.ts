@@ -826,6 +826,63 @@ describe('resuming a run that hit the turn ceiling', () => {
     expect(text).toContain('out of money');
   });
 
+  /*
+   * `total_cost_usd` is an ANTHROPIC-API field. Bedrock, Vertex and OpenRouter
+   * leave it undefined, so the spend gate — the ceiling that replaced the
+   * arbitrary turn count — did nothing at all for those users: `spentUsd`
+   * stayed 0 and every resume got the full budget again. A limit that only
+   * works on first-party keys is not the limit Settings is displaying.
+   */
+  describe('when the backend reports tokens but no price', () => {
+    /** Legs that report usage the way a non-Anthropic backend does. */
+    function scriptUntyped(n: number, outputTokens: number) {
+      let call = 0;
+      mocks.queryMock.mockImplementation(async function* () {
+        const leg = call++;
+        yield { type: 'text', content: `leg${leg}`, provider: 'claude' };
+        yield { type: 'usage', provider: 'claude', inputTokens: 1000, outputTokens };
+        if (leg < n) {
+          yield { type: 'text', content: 'ran out', provider: 'claude', limitReason: 'max_turns' };
+        }
+      });
+      return () => call;
+    }
+
+    it('estimates the spend and narrows each resumed leg', async () => {
+      scriptUntyped(2, 20_000);
+      await post('chat', { message: 'hi', chatId: 'c1' });
+
+      const budgets = mocks.queryMock.mock.calls.map((c) => c[0].maxBudgetUsd as number);
+      expect(budgets[0]).toBe(3.0);
+      expect(budgets[1], 'the second leg got the full budget again').toBeLessThan(3.0);
+      expect(budgets[2], 'the budget did not keep narrowing').toBeLessThan(budgets[1]);
+    });
+
+    it('stops resuming once the estimate exhausts the budget', async () => {
+      // Enough output that one leg alone is worth more than chat's $3 ceiling.
+      const calls = scriptUntyped(99, 5_000_000);
+      await post('chat', { message: 'hi', chatId: 'c1' });
+      expect(calls(), 'resumed past an estimated ceiling').toBe(1);
+    });
+
+    /*
+     * The residual, stated rather than left implicit: a backend reporting no
+     * usage AT ALL cannot be gated on spend, and the resume cap is then the only
+     * bound. That is why the cap exists alongside the budget rather than being
+     * replaced by it.
+     */
+    it('still bounds a backend that reports no usage at all', async () => {
+      let call = 0;
+      mocks.queryMock.mockImplementation(async function* () {
+        call++;
+        yield { type: 'text', content: 'x', provider: 'claude' };
+        yield { type: 'text', content: 'ran out', provider: 'claude', limitReason: 'max_turns' };
+      });
+      await post('chat', { message: 'hi', chatId: 'c1' });
+      expect(call).toBeLessThanOrEqual(4);
+    });
+  });
+
   it('asks the model to carry on rather than start again', async () => {
     scriptResumes(1);
     await post('chat', { message: 'build a deck', chatId: 'c1' });

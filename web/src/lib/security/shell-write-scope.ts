@@ -1,3 +1,5 @@
+import path from 'path';
+import { homedir } from 'os';
 import { blankQuoted } from './destructive-commands';
 import { canonicalise } from './write-scope';
 
@@ -21,9 +23,15 @@ import { canonicalise } from './write-scope';
  *
  * Shell is not parseable by regex and this does not pretend otherwise. It looks
  * for the ordinary ways a command names a destination — a redirect, `tee`, and
- * the last argument of `cp`/`mv` — and only when that destination is an ABSOLUTE
- * path outside the working directory. Anything computed, substituted, or piped
- * through another program is invisible to it.
+ * the last argument of `cp`/`mv` — and resolves it: absolute as written, `~` and
+ * `$HOME` expanded, relative against the working directory. Anything COMPUTED
+ * (`$D/out`, a command substitution) or written by a program the shell merely
+ * launched is invisible, and reported as invisible rather than guessed at.
+ *
+ * That resolution is the fix for the first version of this file, which required
+ * a literal leading `/` and so missed `~/deck.html` — which is, verbatim, the
+ * first incident listed above. It caught the absolute spelling of the exact
+ * write it was written for and nothing else.
  *
  * So it is a speed bump on the common case, not a sandbox. It is worth having
  * because the common case is what actually happened, twice, and because the
@@ -32,15 +40,74 @@ import { canonicalise } from './write-scope';
  * heuristic.
  */
 
-/** Where a shell command may name a destination we can actually see. */
+/**
+ * Where a shell command may name a destination we can actually see.
+ *
+ * Each captures the destination TOKEN, not a path shape. The first version of
+ * this file captured `(\/…)` — a literal leading slash — which meant it saw
+ * only fully absolute destinations and missed:
+ *
+ *     echo x > ~/deck.html          the home directory, and VERBATIM the
+ *                                   incident quoted in this file's header
+ *     echo x > $HOME/deck.html      the same thing spelled differently
+ *     echo x > ../../deck.html      out of the working directory by relative path
+ *     echo x > "/Users/me/a b.html" a path with a space, which MUST be quoted
+ *
+ * The last one is the worst of the four: the scan runs on `blankQuoted`, so a
+ * quoted destination was invisible to a pattern that then required a `/` where
+ * the quote was. That is not an exotic evasion — it is how anyone writes a path
+ * containing a space.
+ *
+ * The `d` flag is load-bearing. Matching happens on the BLANKED command (so an
+ * operator inside quotes stays hidden), and `m.indices[1]` is then used to read
+ * the real destination out of the original string at the same offsets. Blanking
+ * preserves length precisely so this works.
+ */
+const DEST = String.raw`("[^"]*"|'[^']*'|[^\s;|&>]+)`;
 const WRITE_FORMS: Array<{ pattern: RegExp; what: string }> = [
-  // `> /abs/path`, `>> /abs/path`, `2> /abs/path`. Not `>&1`.
-  { pattern: /(?:^|[\s;|&])\d?>{1,2}\s*(\/[^\s;|&>]+)/g, what: 'a redirect' },
-  // `tee /abs/path`, `tee -a /abs/path`
-  { pattern: /(?:^|[\s;|&])tee\s+(?:-\S+\s+)*(\/[^\s;|&]+)/g, what: 'tee' },
-  // `cp a /abs/dir`, `mv a /abs/dir`, `install ... /abs/path`
-  { pattern: /(?:^|[\s;|&])(?:cp|mv|install|rsync)\s+(?:-\S+\s+)*\S+\s+(\/[^\s;|&]+)/g, what: 'a copy or move' },
+  // `> path`, `>> path`, `2> path`. Not `>&1`.
+  { pattern: new RegExp(String.raw`(?:^|[\s;|&])\d?>{1,2}\s*(?!&)${DEST}`, 'gd'), what: 'a redirect' },
+  // `tee path`, `tee -a path`
+  { pattern: new RegExp(String.raw`(?:^|[\s;|&])tee\s+(?:-\S+\s+)*${DEST}`, 'gd'), what: 'tee' },
+  // `cp a dest`, `mv a dest`, `install … dest`
+  {
+    pattern: new RegExp(String.raw`(?:^|[\s;|&])(?:cp|mv|install|rsync)\s+(?:-\S+\s+)*\S+\s+${DEST}`, 'gd'),
+    what: 'a copy or move',
+  },
 ];
+
+/**
+ * The absolute path a destination token denotes, or null when it cannot be
+ * known from the text.
+ *
+ * Returning null for anything computed is the honest answer and matches what
+ * this module claims: it reads the command AS WRITTEN. `$D/out` where `D` was
+ * assigned earlier is genuinely invisible, and pretending otherwise would be the
+ * "claim with no mechanism" this codebase keeps finding. `$HOME` is the one
+ * exception because it is not really a variable — it is a fixed location that
+ * every shell sets, and it is one of the two ways the motivating incident was
+ * actually written.
+ */
+function resolveDestination(raw: string, cwd: string): string | null {
+  let p = raw.trim();
+  if (
+    (p.startsWith('"') && p.endsWith('"') && p.length > 1) ||
+    (p.startsWith("'") && p.endsWith("'") && p.length > 1)
+  ) {
+    p = p.slice(1, -1);
+  }
+  if (!p) return null;
+
+  if (p === '~' || p.startsWith('~/')) p = homedir() + p.slice(1);
+  else if (p === '$HOME' || p.startsWith('$HOME/')) p = homedir() + p.slice('$HOME'.length);
+  else if (p === '${HOME}' || p.startsWith('${HOME}/')) p = homedir() + p.slice('${HOME}'.length);
+
+  // Anything still carrying a substitution is not readable from the text.
+  if (/[$`]/.test(p)) return null;
+  // A relative destination is resolved against the working directory, which is
+  // what makes `../../deck.html` visible as an escape rather than a filename.
+  return canonicalise(path.isAbsolute(p) ? p : path.join(cwd, p));
+}
 
 /**
  * Paths every session legitimately writes to regardless of the working
@@ -92,11 +159,18 @@ export function shellWriteOutside(command: unknown, cwd: string | undefined): Sh
     pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = pattern.exec(scannable)) !== null) {
-      const raw = m[1];
+      // Matched on the BLANKED text so an operator inside quotes stays hidden;
+      // read back from the ORIGINAL so a quoted destination is still visible.
+      const span = m.indices?.[1];
+      if (!span) continue;
+      const raw = command.slice(span[0], span[1]);
       if (!raw) continue;
-      const target = canonicalise(raw);
+
+      const target = resolveDestination(raw, root);
+      // Not knowable from the text. Stated as a limit rather than guessed at.
+      if (!target) continue;
       if (alwaysAllowed(target)) continue;
-      if (target === root || target.startsWith(root + '/')) continue;
+      if (target === root || target.startsWith(root + path.sep)) continue;
       return { target: raw, what };
     }
   }
