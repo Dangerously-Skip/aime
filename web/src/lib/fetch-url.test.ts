@@ -225,3 +225,126 @@ describe('replacing WebFetch does not disable the guards that watched it', () =>
     ).toMatch(/'WebFetch'/);
   });
 });
+
+/**
+ * The private-address check has to run on every HOP, not just on what the model
+ * typed.
+ *
+ * With `redirect: 'follow'` it ran once, on a value the server stops controlling
+ * after the first response. A page the agent legitimately read links to
+ * `https://attacker.example/x`, that 302s to the EC2 metadata endpoint, undici
+ * follows it, the content-type is `text/plain`, and the instance credentials
+ * come back to the model as tool output. `url-guard.ts`'s header says
+ * resolve-then-pin belongs in the fetch layer; this is the fetch layer.
+ */
+describe('redirects are validated hop by hop', () => {
+  /** A fake server: a map of URL → response, so a chain can be scripted. */
+  const server = (routes: Record<string, { status?: number; location?: string; body?: string }>) => {
+    const seen: string[] = [];
+    const impl = vi.fn(async (url: string) => {
+      seen.push(url);
+      const r = routes[url] ?? { status: 404 };
+      return {
+        ok: (r.status ?? 200) < 400,
+        status: r.status ?? 200,
+        statusText: '',
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === 'location'
+              ? (r.location ?? null)
+              : 'text/html; charset=utf-8',
+        },
+        text: async () => r.body ?? '',
+      };
+    }) as unknown as typeof fetch;
+    return { impl, seen };
+  };
+
+  /*
+   * The load-bearing option, asserted directly.
+   *
+   * A fake cannot emulate undici following a 302 internally — it hands back the
+   * 3xx either way — so every test below passes just as happily with
+   * `redirect: 'follow'`, under which the real client would follow the hop
+   * itself and none of this code would ever see it. The option IS the guard, so
+   * it gets its own assertion rather than being implied by the others.
+   */
+  it('asks the client not to follow redirects itself', async () => {
+    const { impl } = server({ 'https://example.com/x': { status: 200, body: '<p>Hello there, world.</p>' } });
+    await fetchUrl('https://example.com/x', { fetchImpl: impl });
+
+    const init = (impl as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0][1];
+    expect(init.redirect, 'the client would follow hops past the guard').toBe('manual');
+  });
+
+  it('refuses a redirect into cloud metadata', async () => {
+    const { impl, seen } = server({
+      'https://attacker.example/x': {
+        status: 302,
+        location: 'http://169.254.169.254/latest/meta-data/iam/security-credentials/',
+      },
+    });
+    const r = await fetchUrl('https://attacker.example/x', { fetchImpl: impl });
+
+    expect(r.ok, 'the redirect was followed into metadata').toBe(false);
+    expect(r.ok === false && r.kind).toBe('refused');
+    expect(
+      seen.some((u) => u.includes('169.254.169.254')),
+      'the metadata endpoint was actually requested',
+    ).toBe(false);
+  });
+
+  it('refuses a redirect to loopback dressed as IPv6', async () => {
+    const { impl } = server({
+      'https://attacker.example/x': { status: 302, location: 'http://[::ffff:127.0.0.1]:3100/api/health' },
+    });
+    const r = await fetchUrl('https://attacker.example/x', { fetchImpl: impl });
+    expect(r.ok).toBe(false);
+  });
+
+  /*
+   * The complement, and the reason this follows redirects at all rather than
+   * refusing them: http→https, trailing slashes and CDN hops are how the web
+   * works, and a guard that broke them would be turned off.
+   */
+  it('follows an ordinary redirect and returns the destination', async () => {
+    const { impl, seen } = server({
+      'http://example.com/article': { status: 301, location: 'https://example.com/article' },
+      'https://example.com/article': { status: 200, body: '<p>The article body, which is long enough to be real content.</p>' },
+    });
+    const r = await fetchUrl('http://example.com/article', { fetchImpl: impl });
+
+    expect(r.ok, r.ok === false ? r.message : '').toBe(true);
+    expect(r.ok === true && r.text).toContain('article body');
+    expect(seen).toEqual(['http://example.com/article', 'https://example.com/article']);
+  });
+
+  it('resolves a relative Location against the hop it came from', async () => {
+    const { impl, seen } = server({
+      'https://example.com/a/old': { status: 302, location: '../b/new' },
+      'https://example.com/b/new': { status: 200, body: '<p>Moved here, with enough text to count.</p>' },
+    });
+    const r = await fetchUrl('https://example.com/a/old', { fetchImpl: impl });
+    expect(r.ok).toBe(true);
+    expect(seen[1]).toBe('https://example.com/b/new');
+  });
+
+  it('gives up on a redirect loop instead of spinning', async () => {
+    const { impl, seen } = server({
+      'https://example.com/a': { status: 302, location: 'https://example.com/b' },
+      'https://example.com/b': { status: 302, location: 'https://example.com/a' },
+    });
+    const r = await fetchUrl('https://example.com/a', { fetchImpl: impl });
+
+    expect(r.ok).toBe(false);
+    expect(r.ok === false && r.message).toMatch(/redirect/i);
+    expect(seen.length, 'the loop was not bounded').toBeLessThanOrEqual(7);
+  });
+
+  /* A 3xx with no Location is not a redirect; it is the response. */
+  it('treats a 3xx without a Location as the final response', async () => {
+    const { impl } = server({ 'https://example.com/x': { status: 304 } });
+    const r = await fetchUrl('https://example.com/x', { fetchImpl: impl });
+    expect(r.ok === false && r.kind).not.toBe('refused');
+  });
+});

@@ -119,17 +119,65 @@ export async function fetchUrl(
 
   let response: Response;
   try {
-    response = await doFetch(verdict.url, {
-      redirect: 'follow',
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        // Without a browser-shaped UA a large share of sites serve a challenge
-        // page instead of content, which reads to the model as an empty article.
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
-      },
-    });
+    /**
+     * Every hop is validated, not just the first.
+     *
+     * `redirect: 'follow'` made the private-address check a one-time check on a
+     * value the server stops controlling after the first response. A public page
+     * the agent legitimately read links to `https://attacker.example/x`, which
+     * 302s to `http://169.254.169.254/latest/meta-data/iam/security-credentials/`;
+     * undici follows it, the content-type is `text/plain`, and the instance
+     * credentials come back as tool output. `url-guard.ts`'s own header says
+     * resolve-then-pin "belongs in the fetch layer" — this is the fetch layer,
+     * and it was not doing it.
+     *
+     * `manual` rather than a redirect count of 0 because we still want to follow
+     * ordinary redirects: http→https, trailing slashes and CDN hops are how the
+     * web works, and refusing them would break most real fetches. What changes is
+     * that each destination goes back through `validateFetchUrl` first.
+     */
+    const MAX_HOPS = 5;
+    let target = verdict.url;
+    let hops = 0;
+    for (;;) {
+      response = await doFetch(target, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: {
+          // Without a browser-shaped UA a large share of sites serve a challenge
+          // page instead of content, which reads to the model as an empty article.
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+        },
+      });
+
+      const location = response.status >= 300 && response.status < 400
+        ? response.headers.get('location')
+        : null;
+      if (!location) break;
+
+      if (++hops > MAX_HOPS) {
+        return { ok: false, kind: 'network', message: `Too many redirects (more than ${MAX_HOPS}).` };
+      }
+      // Relative Locations are both legal and common, so resolve against the hop
+      // we are on rather than the URL we started from.
+      let next: string;
+      try {
+        next = new URL(location, target).toString();
+      } catch {
+        return { ok: false, kind: 'network', message: 'Redirected to a URL that could not be parsed.' };
+      }
+      const hop = validateFetchUrl(next);
+      if (!hop.ok) {
+        return {
+          ok: false,
+          kind: 'refused',
+          message: `Redirected to an address that cannot be fetched. ${hop.message}`,
+        };
+      }
+      target = hop.url;
+    }
   } catch (e) {
     // `AbortSignal.timeout` rejects with TimeoutError; anything else is the
     // network. The distinction is worth keeping because only one of them is

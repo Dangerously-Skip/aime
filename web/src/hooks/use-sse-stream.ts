@@ -9,6 +9,7 @@ import {
   notifyStreamAborted,
 } from '@/lib/stream-registry';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
+import { resetTextBoundary } from '@/lib/sse/core-chunks';
 
 /** Abort the stream if no data arrives for this long (the server heartbeats every 15s). */
 const INACTIVITY_TIMEOUT_MS = 120_000;
@@ -383,6 +384,16 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         const err = error instanceof Error ? error : new Error(String(error));
         pinnedOnError(err);
       } finally {
+        /*
+         * The turn is over however it ended, so the text-boundary flag goes with
+         * it. `resetTextBoundary` was exported and called from nothing but its
+         * own tests, which meant a turn ABORTED between a tool call and the next
+         * text block left its chatId marked — and the next turn's first reply
+         * opened with a stray blank line. Here rather than on `done` precisely
+         * because the aborted path is the one that leaks.
+         */
+        resetTextBoundary(chatId);
+
         // Only the stream that still owns the chat may reset shared state: a
         // superseded stream settling late must not delete the live stream's
         // registry entry, drop its inactivity timer, or flip its flag off.

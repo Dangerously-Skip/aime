@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import {
   validateMcpServerUrl,
+  validateFetchUrl,
+  validateServiceUrl,
+  isNameTakenError,
+  NAME_TAKEN_PHRASE,
   deriveServerName,
   hostSlugName,
   isBuiltInServerId,
@@ -342,5 +346,193 @@ describe('built-in identity lookup', () => {
     expect(
       builtInIdOwnsUrl('outlook-mail', 'https://agent365.svc.cloud.microsoft.evil.io/x'),
     ).toBe(false);
+  });
+});
+
+/**
+ * The bypass: an IPv6 literal that carries an IPv4 address.
+ *
+ * `http://[::ffff:127.0.0.1]/` is a routable way to say 127.0.0.1, and the
+ * WHATWG parser normalises it to `[::ffff:7f00:1]` — which matched none of the
+ * string tests these checks used to be. Loopback and 169.254.169.254 both
+ * passed, i.e. the two targets this module's header names as its reason for
+ * existing. A reviewer confirmed it end to end: Node's fetch on the mapped form
+ * returns the body of a server bound to 127.0.0.1.
+ *
+ * Every literal below is written the way a caller would type it; the assertions
+ * run on whatever `new URL` turns it into, which is the form the guard sees.
+ */
+describe('IPv6 literals that reach a private address', () => {
+  it.each([
+    // IPv4-mapped — the verified bypass.
+    ['http://[::ffff:127.0.0.1]/', 'loopback, mapped'],
+    ['http://[::ffff:169.254.169.254]/', 'cloud metadata, mapped'],
+    ['http://[::ffff:10.0.0.1]/', 'RFC1918, mapped'],
+    ['http://[::ffff:192.168.1.1]/', 'RFC1918, mapped'],
+    ['http://[0:0:0:0:0:ffff:7f00:1]/', 'loopback, mapped and unabbreviated'],
+    // IPv4-compatible — deprecated, still routed.
+    ['http://[::127.0.0.1]/', 'loopback, compatible'],
+    ['http://[::169.254.169.254]/', 'metadata, compatible'],
+    // NAT64 — a plain translation to the embedded v4.
+    ['http://[64:ff9b::169.254.169.254]/', 'metadata via NAT64'],
+    // The v6-native ranges.
+    ['http://[::1]/', 'loopback'],
+    ['http://[::]/', 'unspecified — 0.0.0.0'],
+    ['http://[fe80::1]/', 'link-local'],
+    ['http://[febf::1]/', 'link-local, top of the range'],
+    ['http://[fd00::1]/', 'unique-local'],
+    ['http://[fc00::1]/', 'unique-local, bottom of the range'],
+    ['http://[fe80::1%25eth0]/', 'link-local with a zone id'],
+  ])('refuses %s (%s)', (url) => {
+    const v = validateFetchUrl(url);
+    expect(v.ok, `${url} was allowed`).toBe(false);
+  });
+
+  /*
+   * The complement. A guard that refuses real IPv6 hosts would push every
+   * v6-only site onto "it is a private address", which is both wrong and
+   * unfalsifiable from the message.
+   */
+  it.each([
+    ['https://[2606:4700:4700::1111]/', 'Cloudflare DNS'],
+    ['https://[2001:4860:4860::8888]/', 'Google DNS'],
+    ['https://[2400:cb00::1]/', 'ordinary global unicast'],
+  ])('still allows %s (%s)', (url) => {
+    expect(validateFetchUrl(url).ok, `${url} was refused`).toBe(true);
+  });
+
+  /*
+   * The v4 forms the WHATWG parser normalises for us. Asserted so that a future
+   * change to the parse order cannot quietly reopen them — they are the classic
+   * bypass list and it is not obvious from the code that URL handles them.
+   */
+  it.each([
+    ['http://2130706433/', 'decimal 127.0.0.1'],
+    ['http://0x7f000001/', 'hex 127.0.0.1'],
+    ['http://0/', '0 — 0.0.0.0'],
+    ['http://127.1/', 'short form'],
+  ])('refuses %s (%s)', (url) => {
+    expect(validateFetchUrl(url).ok, `${url} was allowed`).toBe(false);
+  });
+});
+
+/**
+ * `validateServiceUrl` — a URL for a service the USER chose to run.
+ *
+ * It exists because the two failure modes point in opposite directions. A
+ * self-hosted SearXNG on `http://192.168.1.10:8080` is an ordinary setup, so
+ * `validateFetchUrl`'s private-address rule (right for a URL the MODEL picked)
+ * would break a real installation. Link-local is refused in both, being cloud
+ * metadata and never a service.
+ */
+describe('validateServiceUrl', () => {
+  it.each([
+    'http://192.168.1.10:8080',
+    'http://10.0.0.5:8080',
+    'http://172.16.4.4:8888',
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+    'https://searx.example.org',
+    'https://searx.example.org/custom/path',
+  ])('allows the self-hosted instance %s', (url) => {
+    expect(validateServiceUrl(url).ok, `${url} was refused`).toBe(true);
+  });
+
+  it.each([
+    ['http://169.254.169.254', 'link-local'],
+    ['http://[fe80::1]', 'link-local'],
+    ['http://[::ffff:169.254.169.254]', 'link-local'],
+    ['http://[64:ff9b::169.254.169.254]', 'link-local'],
+  ])('refuses %s (%s)', (url, reason) => {
+    const v = validateServiceUrl(url);
+    expect(v.ok, `${url} was allowed`).toBe(false);
+    expect(v.ok === false && v.reason).toBe(reason);
+  });
+
+  it.each([
+    ['file:///etc/passwd', 'unsupported-scheme'],
+    ['ftp://example.com', 'unsupported-scheme'],
+    ['http://user:pw@example.com', 'credentials-in-url'],
+    ['not a url', 'not-a-url'],
+    ['', 'not-a-url'],
+    ['   ', 'not-a-url'],
+  ])('refuses %s as %s', (url, reason) => {
+    const v = validateServiceUrl(url);
+    expect(v.ok).toBe(false);
+    expect(v.ok === false && v.reason).toBe(reason);
+  });
+
+  it.each([null, undefined, 42, {}, []])('refuses the non-string %p', (bad) => {
+    expect(validateServiceUrl(bad).ok).toBe(false);
+  });
+
+  it('reports loopback so a caller can treat it differently', () => {
+    const local = validateServiceUrl('http://127.0.0.1:8080');
+    expect(local.ok === true && local.loopback).toBe(true);
+    const remote = validateServiceUrl('https://searx.example.org');
+    expect(remote.ok === true && remote.loopback).toBe(false);
+  });
+
+  it('normalises the URL it returns', () => {
+    const v = validateServiceUrl('  https://searx.example.org  ');
+    expect(v.ok === true && v.url).toBe('https://searx.example.org/');
+  });
+});
+
+/**
+ * The "that name belongs to another origin" refusal crosses a boundary as a
+ * plain Error message — that is all `runMcpOAuthFlow` preserves — so the phrase
+ * and its recogniser have to agree. Two string literals that must match and
+ * live in different files is precisely the pair that drifts.
+ */
+describe('isNameTakenError', () => {
+  it('recognises a message built from the shared phrase', () => {
+    expect(isNameTakenError(`github is ${NAME_TAKEN_PHRASE}.`)).toBe(true);
+  });
+
+  it('recognises it mid-sentence, since callers wrap it', () => {
+    expect(isNameTakenError(`Setup failed: that name is ${NAME_TAKEN_PHRASE} — pick another.`)).toBe(true);
+  });
+
+  it.each([
+    'Something else went wrong',
+    'connected to a different server',
+    '',
+  ])('does not claim %p', (msg) => {
+    expect(isNameTakenError(msg)).toBe(false);
+  });
+});
+
+/**
+ * `validateMcpServerUrl` and `validateFetchUrl` share the address predicates but
+ * differ on policy — an MCP server on localhost is a supported setup, a URL the
+ * MODEL picked is not. The IPv6 forms have to be refused on both paths, and
+ * only one of them had tests.
+ */
+describe('validateMcpServerUrl and IPv6 literals', () => {
+  it.each([
+    'http://[::ffff:169.254.169.254]/mcp',
+    'http://[fe80::1]/mcp',
+    'http://[64:ff9b::169.254.169.254]/mcp',
+  ])('refuses link-local %s', (url) => {
+    const v = validateMcpServerUrl(url);
+    expect(v.ok, `${url} was allowed`).toBe(false);
+    expect(v.ok === false && v.reason).toBe('link-local');
+  });
+
+  it('treats an IPv6-mapped loopback as loopback, so plaintext http is allowed', () => {
+    const v = validateMcpServerUrl('http://[::ffff:127.0.0.1]:3000/mcp');
+    expect(v.ok).toBe(true);
+    expect(v.ok === true && v.loopback).toBe(true);
+  });
+
+  it('refuses plaintext http to a mapped RFC1918 address', () => {
+    const v = validateMcpServerUrl('http://[::ffff:192.168.1.10]:3000/mcp');
+    expect(v.ok).toBe(false);
+    expect(v.ok === false && v.reason).toBe('private-over-http');
+  });
+
+  it('allows https to a v6 global unicast host', () => {
+    expect(validateMcpServerUrl('https://[2606:4700::1111]/mcp').ok).toBe(true);
   });
 });
