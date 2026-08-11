@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import os from 'os';
 import { shellWriteOutside } from './shell-write-scope';
 
 /**
@@ -113,5 +114,91 @@ describe('the limits are real', () => {
 
   it('cannot see through a program that writes on its own', () => {
     expect(shellWriteOutside('python -c "open(\'/Users/x/o\',\'w\')"', CWD).target).toBeNull();
+  });
+});
+
+/**
+ * The forms the first version of this file could not see.
+ *
+ * It captured `(\/…)` — a literal leading slash — so it caught the ABSOLUTE
+ * spelling of the incident in its own header and missed every other way of
+ * writing the same destination. Found by review, not by these tests, which is
+ * the point: the original suite asserted the cases the pattern was built from.
+ */
+describe('destinations that are not spelled with a leading slash', () => {
+  const HOME = os.homedir();
+
+  it('catches the home directory written with a tilde', () => {
+    const v = shellWriteOutside('cat > ~/first-advantage-verification.html << "EOF"', CWD);
+    expect(v.target, 'the motivating incident walked through').not.toBeNull();
+    expect(v.what).toBe('a redirect');
+  });
+
+  it.each([
+    ['echo x > $HOME/out.txt', '$HOME'],
+    ['echo x > ${HOME}/out.txt', '${HOME}'],
+    ['tee ~/out.txt', 'tilde with tee'],
+    ['cp deck.html ~/deck.html', 'tilde with cp'],
+  ])('catches %s (%s)', (cmd) => {
+    expect(shellWriteOutside(cmd, CWD).target, `${cmd} was allowed`).not.toBeNull();
+  });
+
+  it('catches a relative path that climbs out of the working directory', () => {
+    expect(shellWriteOutside('echo x > ../../deck.html', CWD).target).not.toBeNull();
+  });
+
+  it('catches a quoted destination, which is how a path with a space is written', () => {
+    const v = shellWriteOutside(`echo x > "${HOME}/my deck.html"`, CWD);
+    expect(v.target, 'a quoted path was invisible to the scan').not.toBeNull();
+  });
+
+  it.each([
+    `cat x | tee "${'${HOME}'}/y.txt"`,
+    `cp a '${HOME}/b.txt'`,
+  ])('catches the quoted form of %s', (cmd) => {
+    expect(shellWriteOutside(cmd, CWD).target, `${cmd} was allowed`).not.toBeNull();
+  });
+
+  /*
+   * The complement. Every one of these resolves INSIDE the working directory,
+   * and a gate that fires on them is one people learn to click through — the
+   * failure the destructive-command gate's own header warns about.
+   */
+  it.each([
+    'echo x > out.txt',
+    'echo x > ./b.txt',
+    'echo x > sub/dir/c.txt',
+    'echo x > ../santo-domingo-test-cwd-sibling/../aime-test-cwd/inside.txt',
+    'make 2>&1 | tee build.log',
+    'cp a.txt b.txt',
+    'echo "writing to ~/etc/hosts"',
+    "git commit -m 'moved it to ~/archive'",
+  ])('%s stays silent', (cmd) => {
+    expect(shellWriteOutside(cmd, CWD).target, `${cmd} would prompt`).toBeNull();
+  });
+
+  /*
+   * A computed path that ALSO climbs out is where the "can I see this" check
+   * earns its place. Without it, `../$D/out` resolves to a literal directory
+   * named `$D` above the working directory, and the user gets an approval
+   * prompt naming a destination that does not exist and was never going to be
+   * written — a gate crying wolf about its own parse failure.
+   */
+  it('does not invent a target for a computed path that climbs out', () => {
+    // Two levels, not one: CWD sits under /tmp, and /tmp is always allowed, so
+    // a single `..` lands somewhere permitted and proves nothing either way.
+    const v = shellWriteOutside('D=zz; echo hi > ../../$D/out.txt', CWD);
+    expect(v.target, `prompted about ${v.target}, which is a parse artefact`).toBeNull();
+  });
+
+  it('does not invent a target for a command substitution that climbs out', () => {
+    expect(shellWriteOutside('echo hi > "../../$(cat where.txt)/out"', CWD).target).toBeNull();
+  });
+
+  it('still says nothing it cannot actually see', () => {
+    // A variable assigned earlier in the same command is not readable from the
+    // text, and claiming otherwise would be a guess dressed as a check.
+    expect(shellWriteOutside('D=/Users/x; echo hi > "$D/out"', CWD).target).toBeNull();
+    expect(shellWriteOutside('echo hi > "$(cat where.txt)"', CWD).target).toBeNull();
   });
 });

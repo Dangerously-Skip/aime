@@ -50,7 +50,7 @@
  */
 
 /** Matches http(s) URLs in free text, stopping before trailing punctuation. */
-const URL_RE = /https?:\/\/[^\s<>"'`)\]}]+/gi;
+const URL_RE = /https?:\/\/[^\s<>"'`\]}]+/gi;
 
 /**
  * Compare on scheme + host + path, ignoring query and fragment.
@@ -72,13 +72,32 @@ export function normalizeUrl(raw: string): string | null {
   }
 }
 
+/**
+ * Drop the punctuation prose wraps around a URL, keeping what belongs to it.
+ *
+ * A closing paren is genuinely ambiguous — `(see https://x.com/a)` ends the
+ * sentence, `…/wiki/Nice_(disambiguation)` is part of the address — so it is
+ * decided by BALANCE rather than by excluding the character. Excluding it was
+ * the previous approach and it truncated every Wikipedia-style URL at the first
+ * `(`: the guard then recorded `…/Foo_(bar` and refused the real
+ * `…/Foo_(bar)` the model went on to fetch, which reads as the fetch tool
+ * randomly rejecting a link the search just returned.
+ */
+function trimProse(raw: string): string {
+  let s = raw.replace(/[.,;:!?]+$/, '');
+  const count = (c: string) => (s.split(c).length - 1);
+  while (s.endsWith(')') && count(')') > count('(')) {
+    s = s.slice(0, -1).replace(/[.,;:!?]+$/, '');
+  }
+  return s;
+}
+
 /** Every URL appearing in a blob of text, normalized and de-duplicated. */
 export function extractUrls(text: string): string[] {
   if (!text) return [];
   const out = new Set<string>();
   for (const m of text.match(URL_RE) ?? []) {
-    // Strip trailing punctuation the regex may have swallowed from prose.
-    const n = normalizeUrl(m.replace(/[.,;:!?]+$/, ''));
+    const n = normalizeUrl(trimProse(m));
     if (n) out.add(n);
   }
   return [...out];
