@@ -14,6 +14,7 @@ const FONT_CLASS_MAP: Record<string, string> = {
   sans: "chat-font-sans",
   mono: "chat-font-mono",
   system: "chat-font-system",
+  dyslexic: "chat-font-dyslexic",
 };
 
 interface ToolCall {

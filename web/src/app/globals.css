@@ -589,15 +589,58 @@ code {
 }
 
 /*
- * OpenDyslexic was declared here and never wired up.
+ * OpenDyslexic, BUNDLED.
  *
- * Nothing in the app sets `font-family: OpenDyslexic` and Settings offers only
- * default/sans/mono/system, so the rule was unreachable — browsers do not fetch
- * a font whose family is never used. Removed as dead code rather than left
- * looking like a working accessibility option.
+ * It was declared here once and never wired up — nothing set
+ * `font-family: OpenDyslexic` and Settings offered only default/sans/mono/
+ * system, so the rule was unreachable and browsers never fetched a family
+ * nobody used. It was removed rather than left looking like a working
+ * accessibility option, with a note saying what a real one would need. This is
+ * that.
  *
- * If it is added back it should be BUNDLED, not fetched from a CDN: someone who
- * needs a dyslexia-friendly face is exactly the person for whom "silently falls
- * back to the default font when offline" is a real failure rather than a
- * cosmetic one. The Bitstream Vera licence it inherits permits redistribution.
+ * `local()` is deliberately absent. Someone who has installed the font
+ * system-wide would otherwise get their copy and everyone else would get ours,
+ * which makes a rendering difference impossible to reproduce.
+ *
+ * Served from `public/`, not a CDN: the person who needs this face is exactly
+ * the one for whom "silently falls back to the default when offline" is a real
+ * failure rather than a cosmetic one. Redistribution is permitted by the
+ * Bitstream Vera licence, whose notice ships beside the files in
+ * `public/fonts/opendyslexic/LICENSE.txt`.
  */
+@font-face {
+  font-family: 'OpenDyslexic';
+  src: url('/fonts/opendyslexic/OpenDyslexic-Regular.woff') format('woff');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'OpenDyslexic';
+  src: url('/fonts/opendyslexic/OpenDyslexic-Bold.woff') format('woff');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'OpenDyslexic';
+  src: url('/fonts/opendyslexic/OpenDyslexic-Italic.woff') format('woff');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'OpenDyslexic';
+  src: url('/fonts/opendyslexic/OpenDyslexic-BoldItalic.woff') format('woff');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+.chat-font-dyslexic {
+  font-family: 'OpenDyslexic', var(--font-inter), system-ui, sans-serif;
+  /* The glyphs are weighted at the bottom and run wide; the default leading
+   * crowds them, which undoes most of what the face is for. */
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+}

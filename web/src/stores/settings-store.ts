@@ -8,7 +8,7 @@ import { DEFAULT_PUSH_TO_TALK, validateAccelerator } from '@/lib/voice/accelerat
 import type { Tier } from '@/lib/models/types';
 import type { SearchProviderId } from '@/lib/search/providers';
 
-export type ChatFont = 'default' | 'sans' | 'mono' | 'system';
+export type ChatFont = 'default' | 'sans' | 'mono' | 'system' | 'dyslexic';
 export type ToolAccessMode = 'onDemand' | 'alwaysLoaded';
 export type ToolProfile = 'minimal' | 'coding' | 'full';
 export type SessionResetMode = 'manual' | 'daily' | 'idle';

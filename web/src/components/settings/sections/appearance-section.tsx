@@ -43,6 +43,15 @@ const fontOptions: {
     family: '-apple-system',
     style: { fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' },
   },
+  {
+    // Bundled, not fetched — see the @font-face block in globals.css. The
+    // preview below renders in the real face, so choosing it is a decision
+    // made by looking rather than by reading a label.
+    value: 'dyslexic',
+    label: 'OpenDyslexic',
+    family: 'OpenDyslexic',
+    style: { fontFamily: 'OpenDyslexic, sans-serif' },
+  },
 ]
 
 function ThemePreview({ value }: { value: Theme }) {
