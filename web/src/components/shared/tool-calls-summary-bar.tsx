@@ -7,6 +7,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Wrench, ChevronDown, Loader2, AlertTriangle } from "lucide-react";
+import { describeToolProgress } from "@/lib/tool-activity";
 import { ToolCallCard } from "./tool-call-card";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 
@@ -49,31 +50,20 @@ export function ToolCallsSummaryBar({
 }: ToolCallsSummaryBarProps) {
   const { running, label, icon, runningStartTime } = useMemo(() => {
     const running = toolCalls.filter((t) => t.status === "running");
-    const completed = toolCalls.filter((t) => t.status === "complete");
     const errored = toolCalls.filter((t) => t.status === "error");
-    const total = toolCalls.length;
 
-    let label: string;
-    let icon: "spinner" | "wrench" | "warning";
-    let runningStartTime: number | null = null;
-
-    if (running.length > 0) {
-      const current = running[running.length - 1];
-      const currentName = current.name;
-      runningStartTime = current.startTime;
-      if (completed.length + errored.length === 0) {
-        label = `Running ${currentName}...`;
-      } else {
-        label = `${completed.length + errored.length} completed, ${running.length} running (${currentName})`;
-      }
-      icon = "spinner";
-    } else if (errored.length > 0) {
-      label = `${total} action${total !== 1 ? "s" : ""} (${errored.length} failed)`;
-      icon = "warning";
-    } else {
-      label = `${total} action${total !== 1 ? "s" : ""} completed`;
-      icon = "wrench";
-    }
+    /*
+     * Say what it is DOING, not how many things have happened.
+     *
+     * This used to read `Running mcp__aime__SearchWeb...`, and then — for the
+     * minutes a research turn spends in tools — a collapsed "7 actions
+     * completed". Neither tells the user whether it is working or wedged, and
+     * both leak an internal tool id they never chose. See lib/tool-activity.
+     */
+    const label = describeToolProgress(toolCalls);
+    const icon: "spinner" | "wrench" | "warning" =
+      running.length > 0 ? "spinner" : errored.length > 0 ? "warning" : "wrench";
+    const runningStartTime = running.length > 0 ? running[running.length - 1].startTime : null;
 
     return { running, label, icon, runningStartTime };
   }, [toolCalls]);
