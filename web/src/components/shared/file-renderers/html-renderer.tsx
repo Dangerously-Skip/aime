@@ -36,13 +36,13 @@ interface HtmlRendererProps {
 
 export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRendererProps) {
   const { html, isDeck, slides } = useMemo(() => {
-    const prepared = prepareDeckForPreview(content);
+    const prepared = prepareDeckForPreview(content, path);
     return {
       html: prepared.html,
       isDeck: looksLikeDeck(content),
       slides: countSlides(content),
     };
-  }, [content]);
+  }, [content, path]);
 
   const frameRef = useRef<HTMLIFrameElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);

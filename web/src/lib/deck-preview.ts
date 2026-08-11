@@ -21,6 +21,24 @@
 /** Where the rewritten stylesheets and scripts are fetched from. */
 export const ASSET_ROUTE = '/api/themes/asset';
 
+/** Where images written NEXT TO the deck are fetched from. */
+export const DECK_ASSET_ROUTE = '/api/deck/asset';
+
+/**
+ * A relative `src` — the deck's own generated images.
+ *
+ * `CreateImage` writes `<deck dir>/images/x.png` and `themeInstruction` tells
+ * the model to embed it as `src="images/x.png"`. Correct for a file opened from
+ * disk; in the preview the deck is the `srcDoc` of an iframe whose base URL is
+ * the APP ORIGIN, so each of those requested `http://localhost:PORT/images/…`
+ * and 404'd — every picture in a themed deck showed as broken.
+ *
+ * Deliberately excludes anything already absolute (`/`, `http:`, `data:`,
+ * `file:`): an inline data URI works as-is, and an absolute filesystem path is
+ * the stylesheet case `ASSET_REF` already handles.
+ */
+const RELATIVE_IMG = /\bsrc\s*=\s*"(?!(?:[a-z]+:|\/\/|\/|#))([^"]+)"/gi;
+
 /**
  * Matches an html-deck asset reference however it was written — with or without
  * a `file://` scheme, and under any home directory, since the path is absolute
@@ -100,14 +118,29 @@ function withBridge(html: string): string {
  * Leaves http(s) and data URLs alone: an image the deck legitimately sourced
  * from the web, or inlined, must keep working.
  */
-export function prepareDeckForPreview(html: string): PreparedDeck {
+/**
+ * @param deckPath where the deck itself lives, when the caller knows. Only with
+ *   it can a relative `src` be resolved — the route needs a directory to
+ *   contain the lookup to, and without one the image is left alone rather than
+ *   pointed somewhere arbitrary.
+ */
+export function prepareDeckForPreview(html: string, deckPath?: string): PreparedDeck {
   let rewritten = 0;
-  const out = html.replace(ASSET_REF, (whole, attr: string, rel: string) => {
+  let out = html.replace(ASSET_REF, (whole, attr: string, rel: string) => {
     const safe = safeRelative(rel);
     if (!safe) return whole;
     rewritten++;
     return `${attr}="${ASSET_ROUTE}?file=${encodeURIComponent(safe)}"`;
   });
+
+  if (deckPath) {
+    out = out.replace(RELATIVE_IMG, (whole, rel: string) => {
+      const safe = safeRelative(rel);
+      if (!safe) return whole;
+      rewritten++;
+      return `src="${DECK_ASSET_ROUTE}?deck=${encodeURIComponent(deckPath)}&file=${encodeURIComponent(safe)}"`;
+    });
+  }
   // Only decks get the navigation shim; an arbitrary generated page has no
   // slides to step through and should not have a script injected into it.
   return { html: looksLikeDeck(out) ? withBridge(out) : out, rewritten };

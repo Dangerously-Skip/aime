@@ -328,3 +328,48 @@ describe('the summary line', () => {
     expect(text).toMatch(/4 pairs over 4 briefs/);
   });
 });
+
+/**
+ * A judge reply with a brace before the JSON.
+ *
+ * `[...text.matchAll(/\{[\s\S]*\}/g)]` is greedy, so it produced exactly ONE
+ * candidate — first `{` to last `}` — which made `.reverse()` a no-op and left
+ * `shrinkToJson` offering only the first balanced object inside that span. The
+ * comment above it claimed the opposite. Every such reply was counted
+ * unparseable, silently shrinking both `n` and the brief count that bounds the
+ * bootstrap CI.
+ */
+describe('parseVerdict finds the LAST object, not the first', () => {
+  it('skips an example object quoted before the answer', () => {
+    const reply = 'Note: the format {"a":1} is wrong. My answer:\n{"dimensions":{},"overall":"second"}';
+    expect(parseVerdict(reply)?.overall).toBe('second');
+  });
+
+  it('skips a whole worked example', () => {
+    const reply = [
+      'For instance {"overall":"first"} would mean A wins.',
+      'Here is my verdict:',
+      '{"dimensions":{},"overall":"tie"}',
+    ].join('\n');
+    expect(parseVerdict(reply)?.overall).toBe('tie');
+  });
+
+  it('is not confused by a brace inside a string', () => {
+    const reply = '{"dimensions":{},"overall":"second","note":"the } here is prose"}';
+    expect(parseVerdict(reply)?.overall).toBe('second');
+  });
+
+  it('is not confused by an escaped quote inside a string', () => {
+    const reply = '{"dimensions":{},"overall":"first","note":"they said \\"} \\" oddly"}';
+    expect(parseVerdict(reply)?.overall).toBe('first');
+  });
+
+  it('still reads a bare object with no prose around it', () => {
+    expect(parseVerdict('{"dimensions":{},"overall":"first"}')?.overall).toBe('first');
+  });
+
+  it('still returns null when there is no verdict at all', () => {
+    expect(parseVerdict('I could not decide. {"notes":"hmm"}')).toBeNull();
+    expect(parseVerdict('no braces here')).toBeNull();
+  });
+});
