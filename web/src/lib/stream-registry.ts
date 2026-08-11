@@ -128,4 +128,15 @@ export const streamRegistry = {
   },
 
   has: (chatId: string) => controllers.has(chatId),
+
+  /**
+   * Is ANY stream running?
+   *
+   * `isStreaming` is one boolean for the whole surface, and it gates the
+   * composer. Once conversations were allowed to run concurrently, the first
+   * stream to finish turned it off while another was still going — so the Stop
+   * button on a live turn became Send. The flag cannot become per-chat without
+   * touching every consumer, but it can at least be asked the right question.
+   */
+  any: () => controllers.size > 0,
 };

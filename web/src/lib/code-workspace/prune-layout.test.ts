@@ -172,3 +172,80 @@ describe('it is applied on both restore and save', () => {
     expect(src).toMatch(/pruneEmptyGroups\(event\.api\.toJSON\(\)[^)]*\)/);
   });
 });
+
+/**
+ * The two ways the collapse produced a layout dockview refuses.
+ *
+ * Both were invisible to the existing tests because those only exercised
+ * collapse at depth ≥ 1, where the survivor becomes a child rather than the
+ * root, and never asserted anything about orientation.
+ *
+ * The cost was not a one-off: `workspace-layout.tsx` prunes on SAVE as well as
+ * on restore, so an invalid layout was written back to disk and the user's
+ * arrangement was discarded on every launch.
+ */
+describe('the pruned layout is one dockview will accept', () => {
+  const leaf = (id: string, views: string[] = ['v']) => ({
+    type: 'leaf',
+    data: { id, views },
+    size: 100,
+  });
+  const branch = (...children: unknown[]) => ({ type: 'branch', data: children, size: 200 });
+
+  it('keeps the root a branch when only one group survives', () => {
+    // Chat and Editor side by side; the Editor is closed, leaving an empty group.
+    const layout = { grid: { root: branch(leaf('empty', []), leaf('chat')) } };
+    const { layout: out } = pruneEmptyGroups(layout);
+
+    const root = (out as { grid: { root: { type?: string } } }).grid.root;
+    expect(root.type, 'dockview throws "root must be of type branch" on this').toBe('branch');
+  });
+
+  it('keeps the surviving group inside that root', () => {
+    const layout = { grid: { root: branch(leaf('empty', []), leaf('chat')) } };
+    const { layout: out } = pruneEmptyGroups(layout);
+    expect(JSON.stringify(out), 'the surviving panel was dropped').toContain('"chat"');
+  });
+
+  /*
+   * Orientation is derived from DEPTH, and serialized branches carry none, so
+   * lifting a branch up a level rotates it. Asserted as depth because that is
+   * the thing dockview reads.
+   */
+  it('does not lift a surviving BRANCH up a level', () => {
+    const inner = branch(leaf('chat'), leaf('viewer'));
+    const layout = { grid: { root: branch(branch(leaf('empty', []), inner), leaf('tree')) } };
+    const { layout: out } = pruneEmptyGroups(layout);
+
+    const depthOf = (node: unknown, id: string, d = 0): number => {
+      const n = node as { type?: string; data?: unknown };
+      if (n?.type === 'branch') {
+        for (const c of (n.data as unknown[]) ?? []) {
+          const found = depthOf(c, id, d + 1);
+          if (found >= 0) return found;
+        }
+        return -1;
+      }
+      return (n as { data?: { id?: string } })?.data?.id === id ? d : -1;
+    };
+
+    const before = depthOf(layout.grid.root, 'chat');
+    const after = depthOf((out as { grid: { root: unknown } }).grid.root, 'chat');
+    expect(before).toBeGreaterThan(0);
+    expect(after, 'chat and viewer would come back stacked instead of side by side').toBe(before);
+  });
+
+  it('still collapses a redundant level around a single LEAF', () => {
+    const layout = { grid: { root: branch(branch(leaf('empty', []), leaf('chat')), leaf('tree')) } };
+    const { layout: out } = pruneEmptyGroups(layout);
+    const root = (out as { grid: { root: { data: Array<{ type?: string }> } } }).grid.root;
+    expect(root.data[0].type, 'a one-child wrapper survived around a leaf').not.toBe('branch');
+  });
+
+  it('leaves a clean layout untouched', () => {
+    const layout = { grid: { root: branch(leaf('chat'), leaf('tree')) } };
+    const { layout: out, removed } = pruneEmptyGroups(layout);
+    expect(removed).toBe(0);
+    expect(out).toBe(layout);
+  });
+});
