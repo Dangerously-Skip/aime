@@ -618,7 +618,7 @@ export function CodeSurface() {
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   /** Sent with every turn; without it the server never learns search exists. */
   const searchSettings = useSearchSettings();
-  const deckTheme = useDeckTheme();
+  const deckTheme = useDeckTheme(chatId);
   // Built-in (Claude) reachability, which is the user's key OR the server's env
   // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
   const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();

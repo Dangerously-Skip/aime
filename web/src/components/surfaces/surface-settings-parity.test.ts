@@ -74,9 +74,14 @@ describe('surfaces send the same settings', () => {
    * A theme only reaches the model if the surface resolves one. Reading the
    * store directly would miss the project-level override, which is why there is
    * a hook.
+   *
+   * Matched on the CALL, not on `useDeckTheme()` exactly: the hook now takes the
+   * conversation id, because the project override was keyed on an
+   * `activeProjectId` that nothing ever set. Pinning the empty argument list
+   * pinned the shape of a signature rather than the rule being enforced.
    */
   it.each(SURFACES)('%s resolves the theme through the shared hook', (surface) => {
-    expect(surfaceSrc(surface)).toMatch(/useDeckTheme\(\)/);
+    expect(surfaceSrc(surface)).toMatch(/useDeckTheme\(/);
   });
 
   it.each(SURFACES)('%s resolves search through the shared hook', (surface) => {

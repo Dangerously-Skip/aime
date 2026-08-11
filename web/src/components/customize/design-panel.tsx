@@ -6,7 +6,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 const DECK_W = 1280;
 const DECK_H = 720;
 import { useSettingsStore } from '@/stores/settings-store';
-import { useProjectStore } from '@/stores/project-store';
+import { useProjectStore } from '@/stores/project-store'
+import { useChatStore } from '@/stores/chat-store'
+import { useConversationStore } from '@/stores/conversation-store';
 import { resolveDeckTheme } from '@/lib/themes/resolve';
 import { Check, Loader2, Palette } from 'lucide-react';
 
@@ -151,8 +153,26 @@ export function DesignPanel() {
   const deckTheme = useSettingsStore((s) => s.deckTheme);
   const setDeckTheme = useSettingsStore((s) => s.setDeckTheme);
   const projects = useProjectStore((s) => s.projects);
-  const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const updateProject = useProjectStore((s) => s.updateProject);
+
+  /*
+   * The project of the CONVERSATION that is open, not `activeProjectId`.
+   *
+   * `setActiveProject` has no callers anywhere in `src`, so that field is
+   * permanently null: `activeProject` was always undefined, the
+   * Everything/<project> toggle below never rendered, and there was no way to
+   * set a per-project theme at all — while `resolveDeckTheme` carried a
+   * `source: 'project'` branch that could therefore never fire.
+   *
+   * The conversation is also the right key rather than merely an available one:
+   * every other project-scoped value resolves that way, so a last-selected
+   * field would disagree with all of them as soon as you opened a conversation
+   * belonging to a different project.
+   */
+  const currentChatId = useChatStore((s) => s.currentChatId);
+  const conversations = useConversationStore((s) => s.conversations);
+  const activeProjectId =
+    conversations.find((c) => c.id === currentChatId)?.projectId ?? null;
 
   const [themes, setThemes] = useState<DeckTheme[] | null>(null);
   const [scope, setScope] = useState<'global' | 'project'>('global');

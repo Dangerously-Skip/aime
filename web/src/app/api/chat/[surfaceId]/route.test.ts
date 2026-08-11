@@ -892,6 +892,25 @@ describe('resuming a run that hit the turn ceiling', () => {
     expect(resumePrompt).not.toBe('build a deck');
   });
 
+  /*
+   * The provider re-inlines every attachment's full extracted text into the
+   * prompt unconditionally, and `queryOptions.resume` means the SDK session
+   * already has it. A 150KB PDF on a turn that resumes three times was sent
+   * four times — billed against the same budget that gates the next resume.
+   */
+  it('does not re-send attachments on a resumed leg', async () => {
+    scriptResumes(1);
+    await post('chat', {
+      message: 'summarise this',
+      chatId: 'c1',
+      attachments: [{ name: 'report.pdf', content: 'x'.repeat(5000), type: 'application/pdf', category: 'document' }],
+    });
+
+    const calls = mocks.queryMock.mock.calls;
+    expect(calls[0][0].attachments, 'the first leg lost its attachment').toHaveLength(1);
+    expect(calls[1][0].attachments, 'the whole document was sent again').toBeUndefined();
+  });
+
   it('leaves an ordinary run alone', async () => {
     let call = 0;
     mocks.queryMock.mockImplementation(async function* () {
