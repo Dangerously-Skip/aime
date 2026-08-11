@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { dedupeProviders, duplicateProviderCount } from '@/lib/models/dedupe-providers';
 import type { ProviderConfig, ScannedModel } from '@/lib/models/providers';
 
 /**
@@ -95,6 +96,23 @@ export const useProviderStore = create<ProviderStore>()(
       name: 'aime:providers',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
+      /**
+       * Repair duplicate rows written before `providerIdForPreset` reused ids.
+       *
+       * On rehydrate rather than as a versioned `migrate`, deliberately: these
+       * payloads were written before this store had a `version` at all, and a
+       * migration that may or may not fire on an unversioned payload — depending
+       * on how the middleware compares `undefined` to `0` — is the kind of
+       * mechanism that looks applied and is not. This one runs on every load and
+       * is idempotent, so its correctness does not depend on that answer.
+       */
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        const removed = duplicateProviderCount(state.providers);
+        if (removed === 0) return;
+        state.providers = dedupeProviders(state.providers);
+        console.log(`[providers] merged ${removed} duplicate provider row(s)`);
+      },
     },
   ),
 );

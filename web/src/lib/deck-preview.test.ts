@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { describe, it, expect } from 'vitest';
 import {
   prepareDeckForPreview,
@@ -189,11 +191,10 @@ describe('the deck can be driven from outside the sandbox', () => {
  */
 describe('the viewer never touches the frame’s document', () => {
   const src = () =>
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require('fs').readFileSync(
-      require('path').resolve(__dirname, '../components/shared/file-renderers/html-renderer.tsx'),
+    fs.readFileSync(
+      path.resolve(process.cwd(), 'src/components/shared/file-renderers/html-renderer.tsx'),
       'utf-8',
-    ) as string;
+    );
 
   it('does not read contentWindow.document', () => {
     const code = src().replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*/g, '');

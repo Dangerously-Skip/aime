@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import * as fs from 'fs';
+import * as path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
 import { ChatSurface } from './chat-surface';
@@ -227,12 +229,8 @@ describe('ChatSurface — Stop closes the Run (DEFECT 5a)', () => {
  */
 describe('a running turn survives switching conversations', () => {
   const src = () =>
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    (require('fs') as typeof import('fs')).readFileSync(
-      (require('path') as typeof import('path')).resolve(
-        process.cwd(),
-        'src/components/surfaces/chat/chat-surface.tsx',
-      ),
+    fs.readFileSync(
+      path.resolve(process.cwd(), 'src/components/surfaces/chat/chat-surface.tsx'),
       'utf-8',
     );
 
