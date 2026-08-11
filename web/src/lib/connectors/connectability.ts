@@ -90,6 +90,34 @@ export function classifyConnectability(
         detail: 'Paste an API token from the service.',
       };
 
+    /**
+     * An Apple ID plus an app-specific password, over IMAP/CalDAV/CardDAV.
+     *
+     * Added to `types.ts` and `registry.ts` and not here, so it fell to
+     * `default` → "Unsupported authentication type", and that string is not
+     * cosmetic: `classifyCatalog` feeds `buildConnectorsPrompt`, which put
+     * iCloud in the UNAVAILABLE bucket and told the model
+     *
+     *     NOT available in this installation — never offer to connect these:
+     *       - iCloud — Unsupported authentication type.
+     *
+     * directly contradicting the `icloudConnected` block a few lines above it
+     * when connected, and suppressing the offer entirely when not. Which is the
+     * same "the model recommends Microsoft 365 instead" failure the connector
+     * work was done to fix.
+     *
+     * `available` unconditionally, unlike the OAuth cases: nothing has to be
+     * configured in the build for this to work. The user makes the password at
+     * appleid.apple.com and pastes it, so the only thing that can be missing is
+     * the user's own action, which is what `paste-token` effort means.
+     */
+    case 'app-password':
+      return {
+        effort: 'paste-token',
+        available: true,
+        detail: 'Sign in with your Apple ID and an app-specific password.',
+      };
+
     case 'aws_iam':
       // "Instant" only if the credentials it depends on actually exist. The old
       // verdict was unconditional, so the chat prompt advertised AWS as one click

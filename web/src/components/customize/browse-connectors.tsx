@@ -697,6 +697,29 @@ export function BrowseConnectors() {
         return;
       }
 
+      /*
+       * An app-password connector stores its secret in the credential store,
+       * not in `.mcp.json`, so `deprovisionConnector` — which edits that file —
+       * had nothing to remove and removed nothing.
+       *
+       * The result was the failure the comment below this one warns about,
+       * happening for real: the card went grey, and the Apple ID and
+       * app-specific password stayed encrypted on disk, so
+       * `loadICloudCredentials()` kept returning them, the provider kept
+       * mounting all five mail/calendar/contacts tools with full inbox access,
+       * and `/api/connectors/hydrate` flipped the card back to "connected" on
+       * the next reload. `DELETE /api/icloud/connect` existed for this and had
+       * zero callers anywhere in the app.
+       */
+      if (connector?.auth.type === 'app-password') {
+        try {
+          await fetch('/api/icloud/connect', { method: 'DELETE' });
+        } catch (err) {
+          console.error(`Failed to remove stored credentials for ${connectorId}:`, err);
+        }
+        return;
+      }
+
       // DESTRUCTIVE, and asked for: the user pressed Disconnect, not the toggle.
       // Without the explicit intent the route defaults to `disable`, which leaves
       // the credential encrypted at rest and the grant live upstream — the app

@@ -37,6 +37,34 @@ export async function getEvents(
     return { ok: false, kind: 'not-configured', message: 'iCloud Calendar is not connected.' };
   }
 
+  /*
+   * A date that will not parse has to come back as a RESULT, not as a throw.
+   *
+   * These were passed straight to `new Date()` and then to `davDate`, which
+   * calls `.toISOString()` — and that throws `RangeError: Invalid time value`
+   * on an Invalid Date. The tool schema says "ISO date", so the model reaching
+   * for `CalendarEvents({ from: "tomorrow" })` is an ordinary mistake, and it
+   * escaped the `DavResult` contract entirely: discovery succeeded, then the
+   * first fetch threw out of `getEvents` and out of the MCP tool handler
+   * instead of returning `{ ok: false }` the model could read and correct.
+   */
+  const from = opts.from ? new Date(opts.from) : new Date();
+  const to = opts.to
+    ? new Date(opts.to)
+    : new Date(from.getTime() + DEFAULT_WINDOW_DAYS * 86_400_000);
+  for (const [label, value, raw] of [
+    ['from', from, opts.from],
+    ['to', to, opts.to],
+  ] as const) {
+    if (Number.isNaN(value.getTime())) {
+      return {
+        ok: false,
+        kind: 'unexpected',
+        message: `\`${label}\` is not a date I can read: ${String(raw).slice(0, 60)}. Use an ISO date such as 2026-08-11.`,
+      };
+    }
+  }
+
   const home = await discoverHome(creds, 'caldav');
   if (!home.ok) return err(home);
 
@@ -46,11 +74,6 @@ export async function getEvents(
   const wanted = opts.calendar
     ? collections.value.filter((c) => c.displayName.toLowerCase() === opts.calendar!.toLowerCase())
     : collections.value;
-
-  const from = opts.from ? new Date(opts.from) : new Date();
-  const to = opts.to
-    ? new Date(opts.to)
-    : new Date(from.getTime() + DEFAULT_WINDOW_DAYS * 86_400_000);
 
   const all: CalendarEvent[] = [];
   for (const c of wanted) {
