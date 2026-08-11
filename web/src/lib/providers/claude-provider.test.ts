@@ -426,6 +426,110 @@ describe('stream translation', () => {
     });
   });
 
+  /**
+   * Text as it is written, and each sentence exactly once.
+   *
+   * `includePartialMessages` was declared on all five surfaces and forwarded
+   * nowhere, so text could only appear when a whole API turn landed: on a turn
+   * with twenty tool calls, a one-line preamble, then minutes of a motionless
+   * screen, then the rest in lumps. It was reported as the response being cut
+   * off and never recovering.
+   *
+   * The hazard in fixing it is duplication — the complete `assistant` message
+   * still arrives after the deltas, carrying the same text — so these assert the
+   * JOINED output, not just that deltas happen.
+   */
+  describe('streaming text deltas', () => {
+    const deltas = (...parts: string[]) => [
+      { type: 'stream_event', event: { type: 'message_start' } },
+      ...parts.map((text) => ({
+        type: 'stream_event',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+      })),
+    ];
+    const said = (chunks: Array<Record<string, unknown>>) =>
+      chunks.filter((c) => c.type === 'text').map((c) => c.content).join('');
+
+    it('emits each delta as it arrives', async () => {
+      scriptChunks(deltas('Let me ', 'research ', 'house prices'));
+      const chunks = await run(new ClaudeProvider(), {});
+      expect(chunks.filter((c) => c.type === 'text')).toHaveLength(3);
+      expect(said(chunks)).toBe('Let me research house prices');
+    });
+
+    it('does not repeat the text when the complete message follows', async () => {
+      scriptChunks([
+        ...deltas('Let me ', 'research ', 'house prices'),
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'Let me research house prices' }] } },
+      ]);
+      const chunks = await run(new ClaudeProvider(), {});
+      expect(said(chunks), 'the reply was delivered twice').toBe('Let me research house prices');
+    });
+
+    /*
+     * A delta stream can stop mid-block — an abort, a dropped connection — and
+     * the final message is then the only place the tail exists. Suppressing the
+     * final block outright would lose it.
+     */
+    it('fills in the tail when the deltas stopped early', async () => {
+      scriptChunks([
+        ...deltas('Let me research '),
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'Let me research house prices' }] } },
+      ]);
+      const chunks = await run(new ClaudeProvider(), {});
+      expect(said(chunks)).toBe('Let me research house prices');
+    });
+
+    /* Streaming off (or a provider that sends none) must still deliver it all. */
+    it('emits the whole block when no deltas arrived', async () => {
+      scriptChunks([
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'The whole reply' }] } },
+      ]);
+      expect(said(await run(new ClaudeProvider(), {}))).toBe('The whole reply');
+    });
+
+    it('keeps the blocks of one message separate', async () => {
+      scriptChunks([
+        { type: 'stream_event', event: { type: 'message_start' } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'first' } } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'second' } } },
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'first' }, { type: 'text', text: 'second' }] } },
+      ]);
+      expect(said(await run(new ClaudeProvider(), {}))).toBe('firstsecond');
+    });
+
+    /* A second API turn starts a new message; its indices must not inherit the
+     * previous turn's accumulated text, or its first block would be swallowed. */
+    it('starts a new message cleanly', async () => {
+      scriptChunks([
+        ...deltas('turn one'),
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'turn one' }] } },
+        ...deltas('turn two'),
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'turn two' }] } },
+      ]);
+      expect(said(await run(new ClaudeProvider(), {}))).toBe('turn oneturn two');
+    });
+
+    it('ignores non-text deltas', async () => {
+      scriptChunks([
+        { type: 'stream_event', event: { type: 'message_start' } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"a":' } } },
+        { type: 'stream_event', event: { type: 'content_block_stop', index: 0 } },
+      ]);
+      expect(said(await run(new ClaudeProvider(), {}))).toBe('');
+    });
+
+    it('only asks the SDK for partials when the surface wants them', async () => {
+      scriptChunks([]);
+      const on = await captureOptions(new ClaudeProvider(), { includePartialMessages: true });
+      expect(on.options.includePartialMessages).toBe(true);
+
+      scriptChunks([]);
+      const off = await captureOptions(new ClaudeProvider(), {});
+      expect(off.options.includePartialMessages).toBeUndefined();
+    });
+  });
+
   it('always terminates the stream with a done event', async () => {
     scriptChunks([]);
     const chunks = await run(new ClaudeProvider(), {});

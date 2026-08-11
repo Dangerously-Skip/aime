@@ -1074,6 +1074,8 @@ export async function POST(
            * ceiling existed; there was just no way for the caller to ask for a
            * smaller one.
            */
+          // Declared by every surface and forwarded by nobody until now.
+          includePartialMessages: surfaceConfig.includePartialMessages,
           maxTurns:
             typeof requestedMaxTurns === 'number' && requestedMaxTurns > 0
               ? Math.min(requestedMaxTurns, surfaceConfig.maxTurns ?? requestedMaxTurns)

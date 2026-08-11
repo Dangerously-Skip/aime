@@ -162,6 +162,7 @@ export class ClaudeProvider extends BaseProvider {
       deckTheme,
       maxTurns: explicitMaxTurns,
       maxBudgetUsd,
+      includePartialMessages,
       systemPrompt: explicitSystemPrompt,
       model: explicitModel,
       attachments,
@@ -471,6 +472,12 @@ export class ClaudeProvider extends BaseProvider {
       ...(history ?? []).filter((h) => h.role === 'user').map((h) => h.content),
     ]);
     if (chatId) this.urlProvenanceByChat.set(chatId, urlProvenance);
+
+    /**
+     * Text already sent as deltas, per content-block index of the CURRENT
+     * assistant message. Cleared on `message_start`.
+     */
+    const streamedBlocks = new Map<number, string>();
 
     const abortController = new AbortController();
     /** Every rendezvous this query opens dies with it. */
@@ -1330,6 +1337,16 @@ export class ClaudeProvider extends BaseProvider {
       // one and never has to be refused mid-turn.
       disallowedTools: [...denied],
       maxTurns,
+      /**
+       * Stream the text as it is written.
+       *
+       * Every surface config has declared this since they were written, and it
+       * reached the SDK from nowhere — so text could only appear when a whole
+       * API turn landed. On a turn with twenty tool calls that is a one-line
+       * preamble, then minutes of a motionless screen, then the rest in lumps.
+       * Reported, reasonably, as "cut off mid response and didn't recover".
+       */
+      ...(includePartialMessages ? { includePartialMessages: true } : {}),
       // Enforced by the SDK mid-run, unlike any ceiling this app can apply
       // between turns. Omitted entirely when unset so the default (no cap)
       // is the SDK's, not a number invented here.
@@ -2308,6 +2325,37 @@ export class ClaudeProvider extends BaseProvider {
           continue;
         }
 
+        /**
+         * Text as it is written, one delta at a time.
+         *
+         * The complete `assistant` message still arrives afterwards with the
+         * same text in it, so the two have to be reconciled or every sentence
+         * appears twice. `streamedBlocks` records how much of each content
+         * block index we have already sent; the assistant branch below emits
+         * only the remainder, which is normally nothing.
+         *
+         * Reconciling on LENGTH rather than by suppressing the final block
+         * outright, because a delta stream can be cut off mid-block (an abort,
+         * a dropped connection) and the final message is then the only place
+         * the tail exists.
+         */
+        if (c.type === 'stream_event') {
+          const ev = (c as { event?: Record<string, unknown> }).event;
+          const evType = ev?.type;
+
+          if (evType === 'message_start') {
+            streamedBlocks.clear();
+          } else if (evType === 'content_block_delta') {
+            const delta = ev!.delta as { type?: string; text?: string } | undefined;
+            if (delta?.type === 'text_delta' && delta.text) {
+              const idx = (ev!.index as number) ?? 0;
+              streamedBlocks.set(idx, (streamedBlocks.get(idx) ?? '') + delta.text);
+              yield { type: 'text', content: delta.text, provider: this.name };
+            }
+          }
+          continue;
+        }
+
         // Handle assistant messages - extract text and tool_use blocks
         if (c.type === 'assistant' && c.message) {
           // A new assistant message means any previous turn's tools have finished executing.
@@ -2316,13 +2364,16 @@ export class ClaudeProvider extends BaseProvider {
           const message = c.message as Record<string, unknown>;
           const content = message.content;
           if (Array.isArray(content)) {
-            for (const block of content) {
+            for (const [blockIndex, block] of content.entries()) {
               if (block.type === 'text' && block.text) {
-                yield {
-                  type: 'text',
-                  content: block.text as string,
-                  provider: this.name,
-                };
+                // Whatever the deltas did not already carry — usually nothing
+                // when streaming is on, and the whole block when it is off.
+                const already = streamedBlocks.get(blockIndex) ?? '';
+                const full = block.text as string;
+                const remainder = full.startsWith(already) ? full.slice(already.length) : full;
+                if (remainder) {
+                  yield { type: 'text', content: remainder, provider: this.name };
+                }
               } else if (block.type === 'tool_use') {
                 const toolName = block.name as string;
                 const toolInput = block.input as Record<string, unknown>;

@@ -74,6 +74,17 @@ export interface QueryParams {
    * turn's actual content.
    */
   isResume?: boolean;
+  /**
+   * Stream the assistant's text as it is written, rather than only when a whole
+   * API turn lands.
+   *
+   * Declared on every surface config since they were written and forwarded
+   * NOWHERE, so it has never been on: text could only appear at the end of an
+   * API turn. On a turn with twenty tool calls that means a short preamble, then
+   * four minutes of a still screen while work happens, then the rest in lumps —
+   * which reads as the response being cut off and the app hanging.
+   */
+  includePartialMessages?: boolean;
   chatId: string;
   surfaceId?: string;
   userId?: string;
