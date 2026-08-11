@@ -2,7 +2,7 @@ import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { resolveSearchRoute } from '../search/resolve';
 import { supportsNativeWebSearch } from '../search/native-search';
 import { fetchUrl, describeFailure } from '../fetch-url';
-import { correctWebSearchSection } from '../surfaces/shared/web-search-prompt';
+import { correctWebSearchSection, type SearchToolKind } from '../surfaces/shared/web-search-prompt';
 import { themeInstruction } from '../themes/resolve';
 import { allowedPluginPaths } from '../themes/deck-format';
 import { imageInstruction } from '../images/prompt';
@@ -280,7 +280,14 @@ export class ClaudeProvider extends BaseProvider {
      * third-party account. We were switching it off and then telling the user to
      * self-host SearXNG. See search/native-search.ts.
      */
-    const nativeWebSearch = supportsNativeWebSearch({ baseUrl, providerEnv });
+    const nativeWebSearch = supportsNativeWebSearch({
+      baseUrl,
+      providerEnv,
+      // Both of these were invisible to it, and each produced a tool the run
+      // could not actually use — see NativeSearchInputs.
+      ambientBedrock: !providerEnv && !baseUrl && isBedrockConfigured(),
+      userDeclinedSearch: searchSettings?.searchProvider === 'none',
+    });
 
     const denied = new Set<string>([
       ...(nativeWebSearch ? [] : ['WebSearch']),
@@ -330,7 +337,18 @@ export class ClaudeProvider extends BaseProvider {
      * either was known. Correcting it means the prompt and the mounted tools
      * agree, which is the invariant this whole area keeps breaking.
      */
-    const searchAvailable = nativeWebSearch || searchRoute !== null;
+    /*
+     * WHICH tool, not merely whether. The prompt names the tool it wants
+     * called, and the external searxng MCP is mounted only for searxng — so a
+     * Tavily user was told to call `web_search`, got "No such tool available",
+     * and was forbidden in the same paragraph from using the `SearchWeb` that
+     * WAS mounted.
+     */
+    const searchTool: SearchToolKind = searchRoute
+      ? (searchRoute.providerId === 'searxng' ? 'mcp-searxng' : 'aime-searchweb')
+      : nativeWebSearch
+        ? 'native'
+        : 'none';
     const rawSystemPrompt = explicitSystemPrompt
       || surfaceConfig?.systemPrompt
       || undefined;
@@ -351,13 +369,13 @@ export class ClaudeProvider extends BaseProvider {
     const extraNotes = themeNote + imageNote;
     const systemPrompt = (() => {
       if (typeof rawSystemPrompt === 'string') {
-        return correctWebSearchSection(rawSystemPrompt, searchAvailable) + extraNotes;
+        return correctWebSearchSection(rawSystemPrompt, searchTool) + extraNotes;
       }
       if (rawSystemPrompt && typeof rawSystemPrompt === 'object' && 'append' in rawSystemPrompt) {
         const a = (rawSystemPrompt as { append?: string }).append;
         return {
           ...rawSystemPrompt,
-          append: (a ? correctWebSearchSection(a, searchAvailable) : '') + extraNotes,
+          append: (a ? correctWebSearchSection(a, searchTool) : '') + extraNotes,
         };
       }
       /**

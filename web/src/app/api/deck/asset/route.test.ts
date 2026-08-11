@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as nodePath from 'path';
 import { NextRequest } from 'next/server';
 import { GET } from './route';
 
@@ -15,7 +18,29 @@ const get = (deck: string, file: string) =>
     ),
   );
 
-const DECK = '/tmp/deck-asset-test/deck.html';
+/*
+ * Fixtures are built by the test, in its own temp directory. The first version
+ * pointed at files I had created by hand in /tmp — which passed until I tidied
+ * up, then failed in the full suite for a reason that had nothing to do with
+ * the code. A test that depends on state it did not create is not a test.
+ */
+let dir: string;
+let DECK: string;
+
+beforeAll(() => {
+  dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'deck-asset-'));
+  fs.mkdirSync(nodePath.join(dir, 'images'));
+  fs.writeFileSync(nodePath.join(dir, 'images', 'cover.png'), 'PNG-ish');
+  fs.writeFileSync(nodePath.join(dir, 'deck.html'), '<html>');
+  // A sibling of the deck's DIRECTORY, so a `..` climb has something to find.
+  fs.writeFileSync(nodePath.join(dir, '..', nodePath.basename(dir) + '-secret.png'), 'secret');
+  DECK = nodePath.join(dir, 'deck.html');
+});
+
+afterAll(() => {
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(nodePath.join(nodePath.dirname(dir), nodePath.basename(dir) + '-secret.png'), { force: true });
+});
 
 describe('serving a deck-adjacent image', () => {
   it('serves an image beside the deck', async () => {
@@ -33,13 +58,13 @@ describe('serving a deck-adjacent image', () => {
 
 describe('it cannot be turned into a file reader', () => {
   it.each([
-    ['a parent-directory climb', '../secret.png'],
-    ['a deeper climb', '../../etc/hosts.png'],
-    ['an encoded climb', '..%2Fsecret.png'],
-    ['an absolute path', '/tmp/secret.png'],
+    ['a parent-directory climb', () => `../${nodePath.basename(dir)}-secret.png`],
+    ['a deeper climb', () => '../../etc/hosts.png'],
+    ['an encoded climb', () => `..%2F${nodePath.basename(dir)}-secret.png`],
+    ['an absolute path', () => nodePath.join(nodePath.dirname(dir), `${nodePath.basename(dir)}-secret.png`)],
   ])('refuses %s', async (_label, file) => {
-    const res = await get(DECK, file);
-    expect(res.status, `${file} was served`).toBe(404);
+    const res = await get(DECK, file());
+    expect(res.status, `${file()} was served`).toBe(404);
   });
 
   it('refuses a non-image beside the deck', async () => {

@@ -34,15 +34,19 @@ describe('hasWebSearchMcp', () => {
 });
 
 describe('webSearchPrompt with no search MCP mounted', () => {
-  const prompt = webSearchPrompt(false);
+  const prompt = webSearchPrompt('none');
 
   it('does not claim a web_search tool the run does not have', () => {
     expect(prompt).not.toMatch(/web_search/);
     expect(prompt).not.toMatch(/ONLY search mechanism/);
   });
 
-  it('points at WebFetch as the way to read a page', () => {
-    expect(prompt).toMatch(/WebFetch is your web tool/);
+  it('points at FetchUrl as the way to read a page', () => {
+    // NOT WebFetch: it is in the provider's unconditional deny set, so the old
+    // wording sent the model at a tool that answers "it has been turned off in
+    // settings. Do not try it again" while the working one sat unmentioned.
+    expect(prompt).toMatch(/`FetchUrl` is your web tool/);
+    expect(prompt).toMatch(/built-in `WebFetch` is turned off/);
     expect(prompt).toMatch(/whenever the user gives you a URL/);
   });
 
@@ -97,13 +101,13 @@ describe('webSearchPrompt with no search MCP mounted', () => {
 });
 
 describe('webSearchPrompt with the search MCP mounted', () => {
-  const prompt = webSearchPrompt(true);
+  const prompt = webSearchPrompt('mcp-searxng');
 
   it('keeps the original guidance verbatim', () => {
-    expect(prompt).toMatch(/tool: web_search/);
+    expect(prompt).toMatch(/tool: `web_search`/);
     expect(prompt).toMatch(/ONLY search mechanism/);
-    // The WebFetch restriction only makes sense when search results exist.
-    expect(prompt).toMatch(/Do NOT use WebFetch to re-fetch URLs/);
+    // The re-fetch restriction only makes sense when search results exist.
+    expect(prompt).toMatch(/Do NOT re-fetch URLs already present/);
   });
 });
 
@@ -114,8 +118,8 @@ describe('the surfaces that carry the section', () => {
   ])('%s tells the truth when nothing is mounted', (_name, get) => {
     vi.stubEnv('SEARXNG_INSTANCES', '');
     const prompt = promptOf(get());
-    expect(prompt).toMatch(/WebFetch is your web tool/);
-    expect(prompt).not.toMatch(/tool: web_search/);
+    expect(prompt).toMatch(/`FetchUrl` is your web tool/);
+    expect(prompt).not.toMatch(/tool: `web_search`/);
   });
 
   it.each([
@@ -124,10 +128,16 @@ describe('the surfaces that carry the section', () => {
   ])('%s restores the search guidance when it IS mounted', (_name, get) => {
     vi.stubEnv('SEARXNG_INSTANCES', 'https://searx.example');
     const prompt = promptOf(get());
-    expect(prompt).toMatch(/tool: web_search/);
-    expect(prompt).not.toMatch(/WebFetch is your web tool/);
+    expect(prompt).toMatch(/tool: `web_search`/);
+    expect(prompt).not.toMatch(/`FetchUrl` is your web tool/);
   });
 
+  /*
+   * `allowedTools` is an AUTO-APPROVE list, so WebFetch appearing here has
+   * never meant it is usable — the provider denies it unconditionally in favour
+   * of `mcp__aime__FetchUrl`. Kept as a reminder of that distinction, which is
+   * the trap this codebase keeps rediscovering.
+   */
   it('leaves WebFetch in allowedTools either way — it was never the blocker', () => {
     vi.stubEnv('SEARXNG_INSTANCES', '');
     expect(getCoworkConfig().allowedTools).toContain('WebFetch');

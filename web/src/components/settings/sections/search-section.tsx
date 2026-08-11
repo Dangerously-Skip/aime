@@ -51,12 +51,27 @@ export function SearchSection() {
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
 
   const preset = searchProvider && searchProvider !== 'none' ? searchProviderPreset(searchProvider) : undefined
-  const route = resolveSearchRoute({
-    searchProvider,
-    searchApiKey,
-    searchInstanceUrl,
-    searchCredentialProviderId,
-  })
+  /*
+   * The `defaults` argument matters here, and omitting it made this section
+   * disagree with every turn.
+   *
+   * `useSearchSettings` sends `openrouterProviderId` on every request, so an
+   * OpenRouter-only user has search ON by default and billed against their
+   * inference key (~$0.005/query). Resolving without it here made Settings say
+   * no card is selected, "Off by default", no config block, and a disabled
+   * "Test search" button — the exact stored-vs-resolved divergence this
+   * section's own doc comment claims it exists to display.
+   */
+  const route = resolveSearchRoute(
+    {
+      searchProvider,
+      searchApiKey,
+      searchInstanceUrl,
+      searchCredentialProviderId,
+    },
+    {},
+    { openrouterProviderId: borrowable?.id ?? null },
+  )
 
   const select = (id: SearchProviderId | 'none' | null) => {
     setSearchProvider(id)
