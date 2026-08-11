@@ -7,6 +7,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
+import { baseToolLabel } from "@/lib/tool-activity";
 import { Wrench, ChevronDown, Loader2, Check, X, FileText, Globe, AlertTriangle, Square } from "lucide-react";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
@@ -147,7 +148,12 @@ export function ToolCallCard({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs transition-colors hover:bg-accent group">
         <Wrench className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="font-medium text-foreground">{name}</span>
+        {/* The tool's own id (`mcp__aime__SearchWeb`) is an internal symbol the
+            user never chose. The expanded row below still shows the full input,
+            so nothing is hidden — this is the glanceable half. */}
+        <span className="font-medium text-foreground" title={name}>
+          {baseToolLabel(name)}
+        </span>
         <span className="truncate text-muted-foreground flex-1 text-left">
           {preview}
         </span>
