@@ -60,7 +60,13 @@ export function allowedPluginPaths(
   if (asksForPptx(prompt)) return [...pluginPaths];
 
   return pluginPaths.filter((p) => {
-    const name = p.split('/').filter(Boolean).pop() ?? '';
+    // Split on BOTH separators. `scanPlugins` builds these with `path.join`,
+    // which yields backslashes on Windows — so `split('/')` returned the whole
+    // `C:\Users\…\plugins\ppt` string as the "name", nothing matched
+    // PPTX_PLUGINS, and a Windows user with a theme set got the unstyled .pptx
+    // this function exists to withhold. No log line either, so it read as the
+    // model ignoring the instruction.
+    const name = p.split(/[\\/]/).filter(Boolean).pop() ?? '';
     return !PPTX_PLUGINS.has(name.toLowerCase());
   });
 }

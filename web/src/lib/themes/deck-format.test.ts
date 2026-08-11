@@ -112,3 +112,37 @@ describe('edges', () => {
     expect(PLUGINS).toEqual(copy);
   });
 });
+
+/**
+ * Windows builds a plugin path with backslashes.
+ *
+ * `scanPlugins` uses `path.join`, so on win32 these arrive as
+ * `C:\Users\…\plugins\ppt`. Splitting on `/` alone returned that whole string
+ * as the plugin "name", nothing matched `PPTX_PLUGINS`, and a Windows user with
+ * a theme set got the plain unstyled `.pptx` this function exists to withhold —
+ * with no "Withholding the pptx plugin" log line either, so it read as the
+ * model ignoring its instructions rather than as a bug.
+ */
+describe('plugin paths in either separator', () => {
+  const WIN = ['C:\\Users\\me\\.claude\\plugins\\ppt', 'C:\\Users\\me\\.claude\\plugins\\html-deck'];
+  const NIX = ['/Users/me/.claude/plugins/ppt', '/Users/me/.claude/plugins/html-deck'];
+
+  it.each([['windows', WIN], ['posix', NIX]])('withholds the pptx plugin on %s', (_os, paths) => {
+    const kept = allowedPluginPaths(paths, 'swiss-grid', 'make me a deck about pricing');
+    expect(kept, 'the pptx plugin survived a themed request').toHaveLength(1);
+    expect(kept[0]).toContain('html-deck');
+  });
+
+  it.each([['windows', WIN], ['posix', NIX]])('keeps it when the user asks for pptx on %s', (_os, paths) => {
+    expect(allowedPluginPaths(paths, 'swiss-grid', 'give me an editable powerpoint')).toHaveLength(2);
+  });
+
+  it.each([['windows', WIN], ['posix', NIX]])('keeps it when no theme is set on %s', (_os, paths) => {
+    expect(allowedPluginPaths(paths, null, 'make me a deck')).toHaveLength(2);
+  });
+
+  it('tolerates a trailing separator', () => {
+    expect(allowedPluginPaths(['C:\\p\\ppt\\'], 'swiss-grid', 'a deck')).toHaveLength(0);
+    expect(allowedPluginPaths(['/p/ppt/'], 'swiss-grid', 'a deck')).toHaveLength(0);
+  });
+});

@@ -144,6 +144,44 @@ Reply with ONLY a JSON object, no prose around it:
 }
 
 /**
+ * Every TOP-LEVEL `{…}` span in the text, in order.
+ *
+ * Scanned rather than matched because a regex cannot count braces, and string
+ * literals are tracked so a `}` inside `"…"` does not close an object early —
+ * judge replies quote code and prose routinely.
+ */
+function balancedObjects(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}' && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        out.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Pull the verdict out of a judge reply.
  *
  * Returns `null` rather than a default when the reply cannot be read. An
@@ -152,10 +190,19 @@ Reply with ONLY a JSON object, no prose around it:
  * `aggregate` reports them.
  */
 export function parseVerdict(text: string): JudgeVerdict | null {
-  // Last balanced object wins: models prepend explanation despite instructions,
-  // and any leading prose containing braces would defeat a first-match regex.
-  const candidates = [...text.matchAll(/\{[\s\S]*\}/g)].map((m) => m[0]);
-  for (const raw of candidates.reverse()) {
+  /*
+   * Last balanced object wins: models prepend explanation despite instructions.
+   *
+   * This used to be `[...text.matchAll(/\{[\s\S]*\}/g)]`, which is GREEDY and
+   * therefore yields exactly one candidate — first `{` to last `}` — so
+   * `.reverse()` was a no-op and `shrinkToJson` only ever offered the FIRST
+   * balanced object inside that span. The opposite of what the comment claimed,
+   * and the effect was silent: a reply reading `the format {"a":1} is wrong.
+   * My answer:\n{"overall":"second"}` parsed to the EXAMPLE, or to nothing, and
+   * `compare.eval.ts` counted the pair unparseable — shrinking both `n` and the
+   * brief count that bounds the bootstrap CI, while the report showed a tally.
+   */
+  for (const raw of balancedObjects(text).reverse()) {
     for (const attempt of shrinkToJson(raw)) {
       try {
         const parsed = JSON.parse(attempt);

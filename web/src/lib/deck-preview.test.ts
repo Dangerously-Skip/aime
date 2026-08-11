@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   prepareDeckForPreview,
+  DECK_ASSET_ROUTE,
   looksLikeDeck,
   countSlides,
   ASSET_ROUTE,
@@ -215,5 +216,66 @@ describe('the viewer never touches the frame’s document', () => {
 
   it('drives the deck by postMessage', () => {
     expect(src()).toMatch(/postMessage\(\s*\{\s*type:\s*"deck:step"/);
+  });
+});
+
+/**
+ * The deck's OWN images, which are not html-deck assets and were left pointing
+ * at the app origin.
+ *
+ * `CreateImage` writes `<deck dir>/images/x.png` and the theme instruction has
+ * the model embed `src="images/x.png"`. In the preview the deck is the `srcDoc`
+ * of an iframe based on the app origin, so every one of those 404'd and each
+ * generated picture rendered as a broken image — the other half of "there were
+ * no images in the generated slide deck".
+ */
+describe('images written next to the deck', () => {
+  const DECK_PATH = '/Users/me/work/deck.html';
+  const withImage = (src: string) =>
+    `<div class="deck"><section class="slide"><img src="${src}"></section></div>`;
+
+  it('repoints a relative image at the deck-asset route', () => {
+    const { html } = prepareDeckForPreview(withImage('images/cover.png'), DECK_PATH);
+    expect(html).toContain(`${DECK_ASSET_ROUTE}?deck=`);
+    expect(html).toContain(`file=${encodeURIComponent('images/cover.png')}`);
+    expect(html, 'the raw relative path survived and would 404').not.toContain('src="images/cover.png"');
+  });
+
+  it('carries the deck path so the route knows what to contain the lookup to', () => {
+    const { html } = prepareDeckForPreview(withImage('images/a.png'), DECK_PATH);
+    expect(html).toContain(`deck=${encodeURIComponent(DECK_PATH)}`);
+  });
+
+  /*
+   * Without a deck path there is no directory to resolve against, so the image
+   * is left alone. Pointing it somewhere arbitrary would be worse than a broken
+   * image: it would be a broken image plus a wrong request.
+   */
+  it('leaves relative images alone when it does not know where the deck is', () => {
+    const { html } = prepareDeckForPreview(withImage('images/a.png'));
+    expect(html).toContain('src="images/a.png"');
+  });
+
+  it.each([
+    ['an inline data URI', 'data:image/png;base64,iVBORw0KGgo='],
+    ['a remote image', 'https://example.com/a.png'],
+    ['a protocol-relative URL', '//example.com/a.png'],
+    ['an absolute path', '/already/absolute.png'],
+  ])('leaves %s untouched', (_label, src) => {
+    const { html } = prepareDeckForPreview(withImage(src), DECK_PATH);
+    expect(html).toContain(`src="${src}"`);
+  });
+
+  it('refuses to rewrite a path that climbs out of the deck folder', () => {
+    const { html } = prepareDeckForPreview(withImage('../../etc/passwd.png'), DECK_PATH);
+    expect(html, 'a traversal was handed to the route').not.toContain(DECK_ASSET_ROUTE);
+  });
+
+  it('still rewrites the html-deck stylesheets alongside', () => {
+    const deck = `<link rel="stylesheet" href="/Users/me/.claude/plugins/html-deck/assets/base.css">${withImage('images/a.png')}`;
+    const { html, rewritten } = prepareDeckForPreview(deck, DECK_PATH);
+    expect(html).toContain(`${ASSET_ROUTE}?file=base.css`);
+    expect(html).toContain(DECK_ASSET_ROUTE);
+    expect(rewritten).toBe(2);
   });
 });
