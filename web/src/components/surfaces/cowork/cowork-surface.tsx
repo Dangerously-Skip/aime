@@ -955,12 +955,33 @@ export function CoworkSurface() {
           }
           // Parallel search result fetch — the SDK doesn't expose tool results in the stream,
           // so we call searxng directly when we see a web_search tool_use event.
-          if ((toolName.includes("web_search") || toolName.includes("searxng")) && toolInput.query) {
+          /*
+           * Not updated when search became pluggable, on either axis.
+           *
+           * The gate matched only the searxng MCP names, and the in-process
+           * tool is `mcp__aime__SearchWeb`, which matches neither — so for a
+           * Brave/Tavily/OpenRouter user no fetch fired at all. And the body
+           * carried no `settings`, so even a Settings-configured SearXNG fell
+           * back to env-only on the server and answered 501; `results` came
+           * back empty, `.catch(() => {})` swallowed it, and the SearchResults
+           * sidebar stayed permanently blank.
+           */
+          if (
+            (toolName.includes("web_search") ||
+              toolName.includes("searxng") ||
+              toolName.endsWith("SearchWeb") ||
+              toolName === "WebSearch") &&
+            toolInput.query
+          ) {
             const searchQuery = String(toolInput.query);
             fetch("/api/search-proxy", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ query: searchQuery, max_results: toolInput.max_results || 10 }),
+              body: JSON.stringify({
+                query: searchQuery,
+                max_results: toolInput.max_results || 10,
+                settings: searchSettings,
+              }),
             })
               .then((r) => r.json())
               .then(({ results }) => {

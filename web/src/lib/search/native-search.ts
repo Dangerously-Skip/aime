@@ -42,6 +42,28 @@ export interface NativeSearchInputs {
   baseUrl?: string;
   /** Extra env handed to the SDK subprocess by `resolveExecution`. */
   providerEnv?: Record<string, string>;
+  /**
+   * The AMBIENT Bedrock path: `CLAUDE_CODE_USE_BEDROCK=1` plus AWS credentials
+   * in `.env`, with no BYOK provider row selected at all.
+   *
+   * This function only ever saw `providerEnv`, so the documented ambient setup
+   * was invisible to it: `resolveExecution` returns no env, `baseUrl` is
+   * undefined, and it answered `true` — while the provider routed the
+   * subprocess through `isBedrockConfigured()`/`getBedrockEnv()` anyway. The
+   * model was handed Anthropic's server-side `WebSearch` on Bedrock, which does
+   * not implement it, and the tool errored mid-turn. Precisely the false
+   * positive the note below says must never happen.
+   */
+  ambientBedrock?: boolean;
+  /**
+   * The user chose "No search" in Settings.
+   *
+   * `resolveSearchRoute` honours `'none'` by returning null, which switches off
+   * the PLUGGABLE path — but this function never saw the setting, so on a
+   * first-party key the built-in `WebSearch` stayed mounted and the prompt was
+   * upgraded to say search exists. An off-switch that switches nothing off.
+   */
+  userDeclinedSearch?: boolean;
 }
 
 /**
@@ -53,7 +75,11 @@ export interface NativeSearchInputs {
  * a tool that errors mid-turn, which is the failure mode with a history here.
  */
 export function supportsNativeWebSearch(inputs: NativeSearchInputs): boolean {
-  const { baseUrl, providerEnv } = inputs;
+  const { baseUrl, providerEnv, ambientBedrock, userDeclinedSearch } = inputs;
+
+  // An explicit "off" beats every capability check below it. It is the user's
+  // decision, not a gap for a default to fill.
+  if (userDeclinedSearch) return false;
 
   // A custom endpoint means someone else is serving the Messages API —
   // OpenRouter, a gateway, the local openai-compat shim. Anthropic's
@@ -63,6 +89,10 @@ export function supportsNativeWebSearch(inputs: NativeSearchInputs): boolean {
   const env = providerEnv ?? {};
   if (env.CLAUDE_CODE_USE_BEDROCK === '1') return false; // not available on Bedrock
   if (env.CLAUDE_CODE_USE_VERTEX === '1') return true; // available on Vertex
+
+  // No per-provider env, but the process is configured for Bedrock — the
+  // subprocess will route there, so the answer is the same as above.
+  if (ambientBedrock) return false;
 
   // No override of any kind ⇒ the SDK talks to the first-party API.
   return true;
