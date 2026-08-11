@@ -55,11 +55,20 @@ function pruneNode(node: Node): Node | null {
       .map((c) => pruneNode(c as Node))
       .filter((c): c is Node => c !== null);
     if (kept.length === 0) return null;
-    // A branch with one child is a redundant nesting level once its sibling has
-    // gone. Collapsing keeps the tree the shape dockview would have built, and
-    // avoids a column that cannot be resized because it has nothing to resize
-    // against.
-    if (kept.length === 1) return kept[0];
+    /*
+     * Collapse a redundant nesting level ONLY when the survivor is a leaf.
+     *
+     * Dockview derives a branch's orientation from its DEPTH — each level is
+     * orthogonal to the one above (`gridview.js`, `orthogonal(orientation)` per
+     * level) — and serialized branches carry no orientation of their own. So
+     * lifting a BRANCH up a level silently rotates it: close one panel and the
+     * two you left side by side come back stacked.
+     *
+     * A leaf has no children to arrange, so lifting one is free, and that is
+     * the case the collapse was written for: a column left with nothing to
+     * resize against once its sibling has gone.
+     */
+    if (kept.length === 1 && !isBranch(kept[0])) return kept[0];
     return { ...node, data: kept };
   }
 
@@ -98,8 +107,24 @@ export function pruneEmptyGroups(layout: unknown): PruneResult {
   // caller build the default rather than showing a blank workspace.
   if (!pruned) return { layout: null, removed };
 
+  /*
+   * `grid.root` must be a BRANCH. Dockview throws `dockview: root must be of
+   * type branch` — and it throws AFTER `this.clear()`, so the workspace is
+   * already gone when the restore fails and the caller rebuilds the default.
+   *
+   * Worse, the save path prunes too, so the invalid layout was written back to
+   * disk: Chat and Editor side by side, close the Editor leaving an empty
+   * group, and the arrangement was discarded on EVERY launch from then on. The
+   * collapse above is what produced a bare leaf here, and the existing tests
+   * only exercised collapse at depth ≥ 1, where the result is a child rather
+   * than the root.
+   */
+  const rooted: Node = isBranch(pruned)
+    ? pruned
+    : { type: 'branch', data: [pruned], size: (pruned as Leaf).size };
+
   return {
-    layout: { ...(l as object), grid: { ...(l!.grid as object), root: pruned } },
+    layout: { ...(l as object), grid: { ...(l!.grid as object), root: rooted } },
     removed,
   };
 }

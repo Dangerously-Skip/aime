@@ -178,6 +178,19 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
       rehydrated = true;
       trackEdits();
 
+      /*
+       * The gate opens FIRST, then the replay — the other order swallowed it.
+       *
+       * zustand's persist middleware writes synchronously inside `setState`, so
+       * a `setState` made while the gate is still shut hits a `setItem` that
+       * drops it on the floor. The value was restored in memory and never
+       * reached disk, so the very case this block exists for — onboarding
+       * completed during a slow (>15s) rehydrate, which renders from defaults —
+       * came back to the wizard on the next launch, having looked fine all
+       * session.
+       */
+      openStorageGate();
+
       // Re-apply anything the user changed while the read was in flight. The
       // persisted snapshot predates those edits, so without this the newer
       // value loses to the older one.
@@ -185,7 +198,6 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
         useSettingsStore.setState(dirty as Partial<ReturnType<typeof useSettingsStore.getState>>);
       }
 
-      openStorageGate();
       setHydrated();
     });
 

@@ -590,3 +590,90 @@ describe('the text boundary does not outlive its turn', () => {
     expect(appended.join(''), 'the halves were welded together').toContain("need\n\nNow let me");
   });
 });
+
+/**
+ * Concurrent conversations, which the surfaces now allow.
+ *
+ * Removing the switch-time abort let two streams from one hook instance run at
+ * once. Three pieces of hook state were still singular, and each produced a
+ * different wrong answer: `abort()` resolved through a ref the LAST stream to
+ * start had overwritten, the inactivity watchdog shared one timer id, and
+ * `isStreaming` — one boolean gating the composer — was flipped off by the
+ * first stream to finish.
+ */
+describe('two conversations streaming at once', () => {
+  /** A response that never ends until released, so a stream stays open. */
+  function heldResponse() {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"type":"text","content":"working"}\n\n'));
+        await gate;
+        controller.close();
+      },
+    });
+    return {
+      release,
+      response: new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }),
+    };
+  }
+
+  it('stops the conversation you are looking at, not the last one started', async () => {
+    const handlers = {
+      onChunk: vi.fn(), onError: vi.fn(), onDone: vi.fn(),
+      onUsage: vi.fn(), setIsStreaming: vi.fn(),
+    };
+    // The hook is told which chat is on screen; start with A.
+    const { result, rerender } = renderHook(
+      ({ chatId }) => useSSEStream({ ...handlers, chatId }),
+      { initialProps: { chatId: 'A' } },
+    );
+
+    const a = heldResponse();
+    const b = heldResponse();
+    fetchMock.mockResolvedValueOnce(a.response).mockResolvedValueOnce(b.response);
+
+    const runA = result.current.sendMessage('one', 'A', 'chat', null);
+    const runB = result.current.sendMessage('two', 'B', 'chat', null);
+    await Promise.resolve();
+
+    // Switch back to A and press Stop.
+    rerender({ chatId: 'A' });
+    result.current.abort();
+
+    expect(streamRegistry.has('B'), 'pressing Stop on A killed B').toBe(true);
+    expect(streamRegistry.has('A'), 'A was not stopped').toBe(false);
+
+    a.release(); b.release();
+    await Promise.allSettled([runA, runB]);
+  });
+
+  it('leaves the composer locked while another conversation is still running', async () => {
+    const setIsStreaming = vi.fn();
+    const { result } = renderHook(() =>
+      useSSEStream({
+        onChunk: vi.fn(), onError: vi.fn(), onDone: vi.fn(),
+        onUsage: vi.fn(), setIsStreaming, chatId: 'A',
+      }),
+    );
+
+    const held = heldResponse();
+    // B is dispatched first, so it takes the FIRST queued response.
+    fetchMock
+      .mockResolvedValueOnce(held.response)
+      .mockResolvedValueOnce(sseResponse(['data: {"type":"text","content":"quick"}\n\n']));
+
+    const runB = result.current.sendMessage('slow', 'B', 'chat', null);
+    await result.current.sendMessage('quick', 'A', 'chat', null);
+
+    expect(
+      setIsStreaming.mock.calls.filter(([v]) => v === false),
+      'the finished stream unlocked the composer while B was still running',
+    ).toHaveLength(0);
+
+    held.release();
+    await runB;
+    expect(setIsStreaming).toHaveBeenCalledWith(false);
+  });
+});

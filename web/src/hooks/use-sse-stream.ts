@@ -149,17 +149,38 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
   // so we can abort the correct stream even after conversation switches.
   const activeChatIdRef = useRef<string | null>(null);
 
-  // Inactivity timer ref — hoisted to hook level to avoid Turbopack TDZ issues
-  // where the bundler breaks closure scoping of block-scoped variables.
-  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /*
+   * One timer PER CHAT.
+   *
+   * Hoisted to hook level to avoid a Turbopack TDZ issue with block-scoped
+   * closures — but a single ref meant concurrent streams shared one timer id:
+   * B's per-read reset clobbered A's, then B finishing cleared the only one
+   * left, and A — whose connection had actually died — sat spinning with no
+   * 120s abort at all. Keyed by chat, so each stream can only ever cancel its
+   * own.
+   */
+  const inactivityTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const abort = useCallback(() => {
-    const id = activeChatIdRef.current ?? optionsRef.current.chatId;
+    /*
+     * The VISIBLE chat, not the last one to start.
+     *
+     * This used to resolve through `activeChatIdRef`, which whichever stream
+     * started most recently had overwritten. That was safe only while one
+     * stream could exist; since conversations were allowed to run concurrently
+     * it means: chat A is streaming, you open B and send, you switch back to A
+     * and press Stop — and B dies while A keeps going. B is even tagged as a
+     * deliberate 'user' cancel, so it finalises silently with no error shown.
+     */
+    const id = optionsRef.current.chatId || activeChatIdRef.current;
+    if (!id) return;
     // Deliberate: the user asked for this. The running stream reads the cause
     // off its signal and finalises the turn without reporting an error.
     streamRegistry.abort(id, 'user');
-    activeChatIdRef.current = null;
-    optionsRef.current.setIsStreaming(false);
+    if (activeChatIdRef.current === id) activeChatIdRef.current = null;
+    // Only when nothing else is running — another conversation's turn must not
+    // have the composer unlocked out from under it.
+    if (!streamRegistry.any()) optionsRef.current.setIsStreaming(false);
   }, []);
 
   const sendMessage = useCallback(
@@ -212,6 +233,13 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       streamRegistry.abort(chatId, 'superseded');
 
       const controller = new AbortController();
+
+      /** Clear THIS chat's inactivity timer, and only this chat's. */
+      const clearInactivityTimer = () => {
+        const t = inactivityTimersRef.current.get(chatId);
+        if (t !== undefined) clearTimeout(t);
+        inactivityTimersRef.current.delete(chatId);
+      };
       streamRegistry.set(chatId, controller);
       activeChatIdRef.current = chatId;
 
@@ -288,16 +316,16 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         // Timer ref is hoisted to hook-level useRef to avoid Turbopack TDZ
         // issues where the bundler breaks closure scoping of block-scoped vars.
         const startInactivityTimer = () => {
-          inactivityTimerRef.current = setTimeout(() => {
+          inactivityTimersRef.current.set(chatId, setTimeout(() => {
             console.warn(
               `[SSE] Inactivity timeout — no data for ${INACTIVITY_TIMEOUT_MS / 1000}s, aborting`
             );
             // Tag the cause: this is a failure to report, not a user cancel.
             controller.abort(new StreamAbortCause('timeout'));
-          }, INACTIVITY_TIMEOUT_MS);
+          }, INACTIVITY_TIMEOUT_MS));
         };
         const resetInactivityTimer = () => {
-          if (inactivityTimerRef.current !== undefined) clearTimeout(inactivityTimerRef.current);
+          clearInactivityTimer();
           startInactivityTimer();
         };
         startInactivityTimer();
@@ -398,10 +426,14 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         // superseded stream settling late must not delete the live stream's
         // registry entry, drop its inactivity timer, or flip its flag off.
         if (streamRegistry.release(chatId, controller)) {
-          if (inactivityTimerRef.current !== undefined) clearTimeout(inactivityTimerRef.current);
+          clearInactivityTimer();
           // Only surrender the abort target if it is still pointing at us.
           if (activeChatIdRef.current === chatId) activeChatIdRef.current = null;
-          pinnedSetIsStreaming(false);
+          // `isStreaming` is one boolean for the whole surface and it gates the
+          // composer, so the FIRST concurrent stream to finish used to unlock it
+          // while another was still running — turning a live turn's Stop button
+          // back into Send.
+          if (!streamRegistry.any()) pinnedSetIsStreaming(false);
         }
       }
     },
