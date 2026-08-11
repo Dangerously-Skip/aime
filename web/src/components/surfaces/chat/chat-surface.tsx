@@ -176,7 +176,7 @@ export function ChatSurface() {
    * Same shape as the cowork auto-continue drift: a second place that builds
    * the request and fell behind the first.
    */
-  const deckTheme = useDeckTheme();
+  const deckTheme = useDeckTheme(chatId);
   const searchSettings = useSearchSettings();
   const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
   const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);

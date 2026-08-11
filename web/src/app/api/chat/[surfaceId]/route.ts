@@ -999,17 +999,19 @@ export async function POST(
       // Auto-abort after surface-specific timeout
       const timeoutSecs = surfaceConfig.queryTimeoutSecs || 0;
       let queryTimer: ReturnType<typeof setTimeout> | null = null;
+      /** Named so the resume loop can re-arm the same behaviour, not a copy. */
+      const fireQueryTimeout = async () => {
+        queryTimedOut = true;
+        console.warn(`[CHAT] Query timeout after ${timeoutSecs}s — aborting`);
+        try {
+          provider.abort(chatId as string, surfaceId);
+        } catch (e) {
+          console.error('[CHAT] Abort on timeout failed:', e);
+        }
+        await sse.writeEvent({ type: 'error', message: `Query timed out after ${timeoutSecs} seconds. Try a simpler request or break it into steps.` });
+      };
       if (timeoutSecs > 0) {
-        queryTimer = setTimeout(async () => {
-          queryTimedOut = true;
-          console.warn(`[CHAT] Query timeout after ${timeoutSecs}s — aborting`);
-          try {
-            provider.abort(chatId as string, surfaceId);
-          } catch (e) {
-            console.error('[CHAT] Abort on timeout failed:', e);
-          }
-          await sse.writeEvent({ type: 'error', message: `Query timed out after ${timeoutSecs} seconds. Try a simpler request or break it into steps.` });
-        }, timeoutSecs * 1000);
+        queryTimer = setTimeout(fireQueryTimeout, timeoutSecs * 1000);
       }
 
       try {
@@ -1131,6 +1133,17 @@ export async function POST(
                   // and the turn's own links, including any the user pasted,
                   // stop being fetchable halfway through.
                   isResume: true,
+                  /*
+                   * The SDK session already has them. The provider re-inlines
+                   * every attachment's full extracted text into the prompt
+                   * unconditionally, so a turn carrying a 150KB PDF that
+                   * resumes three times sent the whole document FOUR times —
+                   * charged against the same budget that decides whether
+                   * another resume is affordable, and reading, to the model, as
+                   * the file being re-delivered alongside "do not restart or
+                   * re-summarise".
+                   */
+                  attachments: undefined,
                 },
           )) {
           if (chunk.type === 'tool_use') {
@@ -1212,6 +1225,35 @@ export async function POST(
           if (resumeRun) {
             resumes++;
             console.log(`[CHAT] Turn ceiling reached; resuming (${resumes}/${MAX_RESUMES})`);
+            /*
+             * Re-arm the wall-clock timer for the leg we are about to start.
+             *
+             * It is one-shot, and its only teeth are `provider.abort()` — which
+             * looks the chat up in a controller map the provider DELETES when a
+             * segment ends and does not re-register until ~1-2s of async setup
+             * into the next one. So a turn that resumed near the deadline could
+             * have the timer fire during that window, find no controller, and
+             * return false: the client is told "timed out" while the SDK
+             * subprocess runs on with no wall-clock bound at all.
+             *
+             * Re-arming against the ORIGINAL deadline, not a fresh full
+             * timeout — resuming must not buy more wall-clock than the surface
+             * allows.
+             */
+            if (queryTimer) clearTimeout(queryTimer);
+            if (timeoutSecs > 0) {
+              const remainingMs = timeoutSecs * 1000 - (Date.now() - streamStartMs);
+              if (remainingMs <= 0) {
+                queryTimedOut = true;
+                resumeRun = false;
+                await sse.writeEvent({
+                  type: 'error',
+                  message: `Query timed out after ${timeoutSecs} seconds. Try a simpler request or break it into steps.`,
+                });
+              } else {
+                queryTimer = setTimeout(fireQueryTimeout, remainingMs);
+              }
+            }
           }
         } while (resumeRun);
       } catch (streamError: unknown) {
