@@ -186,3 +186,66 @@ describe('classifyCatalog', () => {
     expect(zoom?.comingSoon).toBe(true);
   });
 });
+
+/**
+ * Every auth type the registry uses must be CLASSIFIED, not fall to `default`.
+ *
+ * `default` returns "Unsupported authentication type", and that string is not
+ * cosmetic — `classifyCatalog` feeds `buildConnectorsPrompt`, so an
+ * unclassified type puts its connector in the prompt's UNAVAILABLE bucket and
+ * tells the model "never offer to connect these". `app-password` was added to
+ * `types.ts` and `registry.ts` and not to the switch, so iCloud was declared
+ * unavailable to the model in the same prompt that told it iCloud was
+ * connected.
+ *
+ * Derived from the registry rather than listed, so the next auth type is
+ * covered without anyone remembering this file exists.
+ */
+describe('no auth type falls through to "unsupported"', () => {
+  const AUTH_TYPES = [...new Set(CONNECTOR_REGISTRY.map((c) => c.auth.type))];
+
+  it('the registry uses more than one auth type, so this test can fail', () => {
+    expect(AUTH_TYPES.length).toBeGreaterThan(1);
+  });
+
+  it.each(AUTH_TYPES)('%s is classified', (type) => {
+    const connector = CONNECTOR_REGISTRY.find((c) => c.auth.type === type)!;
+    const verdict = classifyConnectability(connector, {});
+    expect(verdict.detail, `${type} fell through to the default branch`).not.toMatch(
+      /unsupported authentication type/i,
+    );
+  });
+});
+
+/**
+ * iCloud specifically, because it is the one that broke and because its
+ * availability does not depend on anything in the build: the user creates the
+ * app-specific password at appleid.apple.com. There is no env var that can be
+ * missing, so a "needs-config" verdict would be wrong in every installation.
+ */
+describe('iCloud is offerable in every build', () => {
+  const icloud = CONNECTOR_REGISTRY.find((c) => c.id === 'icloud');
+
+  it('is in the registry', () => {
+    expect(icloud, 'the iCloud connector was removed or renamed').toBeDefined();
+  });
+
+  it('is available with no environment configured at all', () => {
+    const verdict = classifyConnectability(icloud!, {});
+    expect(verdict.available).toBe(true);
+    expect(verdict.effort).toBe('paste-token');
+  });
+
+  /*
+   * Through `classifyCatalog`, because that is the function
+   * `buildConnectorsPrompt` actually calls — the classification only matters
+   * because it decides which half of the prompt the connector is named in.
+   */
+  it('is classified available by the catalogue the prompt is built from', () => {
+    const classified = classifyCatalog(CONNECTOR_REGISTRY, {});
+    const entry = classified.find((c) => c.id === 'icloud');
+    expect(entry, 'iCloud vanished from the catalogue').toBeDefined();
+    expect(entry!.available, 'iCloud would be listed as "never offer to connect"').toBe(true);
+    expect(entry!.authType).toBe('app-password');
+  });
+});

