@@ -14,10 +14,16 @@ vi.mock('@/lib/mcp/secret-store', () => ({
   getMcpSecretStore: () => ({ mode: 'encrypted', get: async () => secrets.value }),
 }));
 
+/* The bucket's secret is read from the encrypted store, never from the body. */
+const bucketSecret = vi.hoisted(() => ({ value: 'SK' as string | undefined }));
+vi.mock('@/lib/models/credentials', () => ({
+  getCredentialStore: () => ({ getField: async () => bucketSecret.value }),
+}));
+
 const fetchMock = vi.hoisted(() => vi.fn());
 vi.stubGlobal('fetch', fetchMock);
 
-import { POST } from './route';
+import { POST, storageConfig } from './route';
 
 const post = (body: unknown, headers: Record<string, string> = {}) =>
   POST(
@@ -131,14 +137,35 @@ describe('publishing a deck', () => {
  * reason its endpoint is validated server-side.
  */
 describe('publishing to a bucket', () => {
+  // No secretAccessKey here — that is the point: the renderer holds only
+  // identifiers, and the secret is read server-side.
   const STORAGE = {
     endpoint: 'https://acct.r2.cloudflarestorage.com',
     bucket: 'decks',
     accessKeyId: 'AK',
-    secretAccessKey: 'SK',
     region: 'auto',
     publicBaseUrl: 'https://decks.example.com',
   };
+
+  beforeEach(() => { bucketSecret.value = 'SK'; });
+
+  it('refuses when no secret key has been saved', async () => {
+    bucketSecret.value = undefined;
+    const res = await post({ ...DECK, target: 's3', storage: STORAGE, audience: { kind: 'link' } });
+    expect(res.status).toBe(409);
+    expect((await res.json()).message).toMatch(/Settings → Sharing/);
+  });
+
+  it('does not let a caller supply the secret key', async () => {
+    bucketSecret.value = undefined;
+    const res = await post({
+      ...DECK,
+      target: 's3',
+      storage: { ...STORAGE, secretAccessKey: 'ATTACKER' },
+      audience: { kind: 'link' },
+    });
+    expect(res.status, 'a caller-supplied secret was honoured').toBe(409);
+  });
 
   it('uploads and returns the public link', async () => {
     fetchMock.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({}) }));
@@ -175,5 +202,27 @@ describe('publishing to a bucket', () => {
     fetchMock.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({}) }));
     const res = await post({ ...DECK, target: 's3', storage: STORAGE, audience: { kind: 'link' } });
     expect(res.status, 'the bucket tier asked for a Google token').toBe(200);
+  });
+});
+
+/**
+ * A caller cannot supply the signing key. Tested directly because it is
+ * otherwise unobservable: with the secret merged in either order the only
+ * difference is which key signs a request nobody can inspect, so a sabotage of
+ * the merge order failed nothing until this existed.
+ */
+describe('storageConfig', () => {
+  it('uses the stored secret', () => {
+    expect(storageConfig({ bucket: 'b' }, 'STORED').secretAccessKey).toBe('STORED');
+  });
+
+  it('ignores a secret supplied by the caller', () => {
+    const cfg = storageConfig({ bucket: 'b', secretAccessKey: 'ATTACKER' } as never, 'STORED');
+    expect(cfg.secretAccessKey, 'a caller-supplied signing key was honoured').toBe('STORED');
+  });
+
+  it('keeps the caller’s identifiers', () => {
+    const cfg = storageConfig({ bucket: 'b', endpoint: 'https://e', region: 'auto', accessKeyId: 'AK' }, 'S');
+    expect(cfg).toMatchObject({ bucket: 'b', endpoint: 'https://e', region: 'auto', accessKeyId: 'AK' });
   });
 });

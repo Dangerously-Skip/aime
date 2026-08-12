@@ -6,6 +6,8 @@ import { isCrossOriginRequest } from '@/lib/security/same-origin';
 import { readableFrom } from '../export/route';
 import { googleDriveTarget } from '@/lib/publish/google-drive';
 import { s3Target, type S3Config } from '@/lib/publish/s3-storage';
+import { getCredentialStore } from '@/lib/models/credentials';
+import { DECK_STORAGE_CREDENTIAL_ID } from '@/lib/models/credential-ids';
 import { connectorAccessToken } from '@/lib/publish/connector-token';
 import { PublishError, type Audience } from '@/lib/publish/types';
 import { CONNECTOR_REGISTRY } from '@/lib/connectors/registry';
@@ -37,6 +39,22 @@ function parseAudience(raw: unknown): Audience | null {
     return { kind: 'people', emails };
   }
   return null;
+}
+
+/**
+ * Build the bucket config from the caller's IDENTIFIERS plus the stored secret.
+ *
+ * Exported and explicit because the property that matters — a caller cannot
+ * supply the signing key — is otherwise invisible from outside: with the secret
+ * merged in either order, the only observable difference is which key signs a
+ * request nobody can inspect. Spreading `supplied` first would silently let a
+ * request override it, so the strip is written down and tested rather than
+ * implied by argument order.
+ */
+export function storageConfig(supplied: Partial<S3Config>, secretAccessKey: string): S3Config {
+  const { secretAccessKey: _ignored, ...identifiers } = supplied;
+  void _ignored;
+  return { ...identifiers, secretAccessKey } as S3Config;
 }
 
 export async function POST(req: NextRequest) {
@@ -97,15 +115,36 @@ export async function POST(req: NextRequest) {
   }
 
   /*
-   * The bucket's credentials come from the REQUEST because the renderer holds
-   * settings — same as the search instance URL. `s3Target` validates the
-   * endpoint through the same guard for the same reason: a LAN MinIO is a real
-   * setup, link-local is cloud metadata.
+   * The bucket's SECRET is read here, not accepted from the caller.
+   *
+   * The renderer holds the identifiers — endpoint, bucket, region, access key
+   * id — the same way it holds the search instance URL. The secret access key
+   * is different in kind: it goes into the encrypted credential store once,
+   * when the user saves it, and is read server-side at publish time. So it is
+   * never in localStorage and never in a request body afterwards, and a caller
+   * cannot supply one to make this app sign uploads to a bucket of their
+   * choosing.
+   *
+   * The endpoint still goes through `validateServiceUrl` inside `s3Target`: a
+   * LAN MinIO is a real setup, link-local is cloud metadata.
    */
-  const target =
-    targetId === 's3'
-      ? s3Target({ config: (body.storage ?? {}) as S3Config })
-      : googleDriveTarget({ accessToken: accessToken ?? '', label });
+  let target;
+  if (targetId === 's3') {
+    const supplied = (body.storage ?? {}) as Partial<S3Config>;
+    const secretAccessKey =
+      (await getCredentialStore()
+        .getField(DECK_STORAGE_CREDENTIAL_ID, 'secretAccessKey')
+        .catch(() => undefined)) ?? '';
+    if (!secretAccessKey) {
+      return NextResponse.json(
+        { error: 'not-connected', message: 'No storage secret key is saved. Add one in Settings → Sharing.' },
+        { status: 409 },
+      );
+    }
+    target = s3Target({ config: storageConfig(supplied, secretAccessKey) });
+  } else {
+    target = googleDriveTarget({ accessToken: accessToken ?? '', label });
+  }
 
   try {
     const result = await target.publish({
