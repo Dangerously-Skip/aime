@@ -124,3 +124,56 @@ describe('publishing a deck', () => {
     expect((await res.json()).message).toContain('Invalid Credentials');
   });
 });
+
+/**
+ * The bucket tier. Its credentials arrive in the REQUEST because the renderer
+ * holds settings — the same shape as the search instance URL, and the same
+ * reason its endpoint is validated server-side.
+ */
+describe('publishing to a bucket', () => {
+  const STORAGE = {
+    endpoint: 'https://acct.r2.cloudflarestorage.com',
+    bucket: 'decks',
+    accessKeyId: 'AK',
+    secretAccessKey: 'SK',
+    region: 'auto',
+    publicBaseUrl: 'https://decks.example.com',
+  };
+
+  it('uploads and returns the public link', async () => {
+    fetchMock.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    const res = await post({ ...DECK, target: 's3', storage: STORAGE, audience: { kind: 'link' } });
+    expect(res.status).toBe(200);
+    const out = await res.json();
+    expect(out.url).toContain('decks.example.com');
+  });
+
+  /* The guarantee, end to end through the route rather than only in the unit. */
+  it('refuses a people-share on a bucket', async () => {
+    const res = await post({
+      ...DECK,
+      target: 's3',
+      storage: STORAGE,
+      audience: { kind: 'people', emails: ['a@x.com'] },
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toMatch(/cannot restrict/i);
+  });
+
+  it('refuses a link-local endpoint', async () => {
+    const res = await post({
+      ...DECK,
+      target: 's3',
+      storage: { ...STORAGE, endpoint: 'http://169.254.169.254' },
+      audience: { kind: 'link' },
+    });
+    expect(res.status).toBe(502);
+  });
+
+  it('does not need a Google connector', async () => {
+    secrets.value = undefined;
+    fetchMock.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    const res = await post({ ...DECK, target: 's3', storage: STORAGE, audience: { kind: 'link' } });
+    expect(res.status, 'the bucket tier asked for a Google token').toBe(200);
+  });
+});

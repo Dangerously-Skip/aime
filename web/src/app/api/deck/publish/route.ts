@@ -5,6 +5,7 @@ import { bundleDeck, exportFileName } from '@/lib/deck-export';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
 import { readableFrom } from '../export/route';
 import { googleDriveTarget } from '@/lib/publish/google-drive';
+import { s3Target, type S3Config } from '@/lib/publish/s3-storage';
 import { connectorAccessToken } from '@/lib/publish/connector-token';
 import { PublishError, type Audience } from '@/lib/publish/types';
 import { CONNECTOR_REGISTRY } from '@/lib/connectors/registry';
@@ -21,7 +22,7 @@ export const runtime = 'nodejs';
  * could reach a `Publish` tool is this session's SSRF work with no undo. So it
  * is a user action from the UI, same-origin only, one deck at a time.
  */
-const TARGETS = ['google-drive'] as const;
+const TARGETS = ['google-drive', 's3'] as const;
 type TargetId = (typeof TARGETS)[number];
 
 /** The connectors that can back a Drive publish, in preference order. */
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
 
-  let body: { path?: string; target?: string; audience?: unknown };
+  let body: { path?: string; target?: string; audience?: unknown; storage?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest) {
 
   let accessToken: string | null = null;
   let label = 'Google Drive';
-  for (const id of GOOGLE_CONNECTORS) {
+  for (const id of targetId === 'google-drive' ? GOOGLE_CONNECTORS : []) {
     const connector = CONNECTOR_REGISTRY.find((c) => c.id === id);
     if (!connector) continue;
     accessToken = await connectorAccessToken(connector, deps);
@@ -95,8 +96,19 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  /*
+   * The bucket's credentials come from the REQUEST because the renderer holds
+   * settings — same as the search instance URL. `s3Target` validates the
+   * endpoint through the same guard for the same reason: a LAN MinIO is a real
+   * setup, link-local is cloud metadata.
+   */
+  const target =
+    targetId === 's3'
+      ? s3Target({ config: (body.storage ?? {}) as S3Config })
+      : googleDriveTarget({ accessToken: accessToken ?? '', label });
+
   try {
-    const result = await googleDriveTarget({ accessToken: accessToken ?? '', label }).publish({
+    const result = await target.publish({
       fileName: exportFileName(deckPath),
       html: bundled.html,
       audience,
