@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Share2 } from "lucide-react";
+import { useSettingsStore } from "@/stores/settings-store";
 import { prepareDeckForPreview, looksLikeDeck, countSlides } from "@/lib/deck-preview";
 
 /**
@@ -94,6 +95,7 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
     frameRef.current?.contentWindow?.postMessage({ type: "deck:step", delta }, "*");
   };
 
+  const deckStorage = useSettingsStore((st) => st.deckStorage);
   const [sharing, setSharing] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [recipients, setRecipients] = useState('');
@@ -109,7 +111,7 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
    * granted. So the confirmation below reports `effective`, not what was asked.
    */
   const handleShare = useCallback(
-    async (kind: 'link' | 'people') => {
+    async (kind: 'link' | 'people', target: 'google-drive' | 's3' = 'google-drive') => {
       setSharing(true);
       setShareError(null);
       setShareResult(null);
@@ -119,7 +121,10 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             path,
-            target: 'google-drive',
+            target,
+            // Identifiers only — the bucket's secret key is read server-side
+            // from the encrypted store, never sent from here.
+            ...(target === 's3' && deckStorage ? { storage: deckStorage } : {}),
             audience: kind === 'link' ? { kind } : { kind, emails: recipients.split(',') },
           }),
         });
@@ -133,7 +138,7 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
         setSharing(false);
       }
     },
-    [path, recipients],
+    [path, recipients, deckStorage],
   );
 
   const [exporting, setExporting] = useState(false);
@@ -284,6 +289,18 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
                     Enforced by Google — they sign in to open it.
                   </span>
                 </button>
+                {deckStorage?.bucket && (
+                  <button
+                    disabled={sharing}
+                    onClick={() => handleShare('link', 's3')}
+                    className="w-full rounded border border-border px-2 py-1.5 text-left hover:bg-accent disabled:opacity-50"
+                  >
+                    <span className="font-medium">Link on your own storage</span>
+                    <span className="block text-muted-foreground">
+                      Unguessable, but anyone holding it can open it.
+                    </span>
+                  </button>
+                )}
                 {shareError && <p className="text-orange-500">{shareError}</p>}
                 {sharing && <p className="text-muted-foreground">Publishing…</p>}
               </div>

@@ -23,6 +23,7 @@
  *
  *   `mcp:<serverKey>`  connector OAuth tokens   (lib/mcp/secret-store.ts)
  *   `anthropic`        the BYOK key mirror      (settings → connectors-section)
+ *   `deck-storage`     the publish bucket's key (settings → sharing-section)
  *   `<uuid>`           a model provider         (onboarding / provider-manager)
  *
  * That was implicit, and the cost of leaving it implicit was real: the Settings
@@ -38,6 +39,16 @@
  * a delete button.
  */
 export const RESERVED_CREDENTIAL_IDS = ['anthropic'] as const;
+
+/**
+ * Where the deck-publishing bucket's secret key lives.
+ *
+ * A fixed, non-UUID id, so `isProviderCredentialId` already declines to claim
+ * it and the orphan sweep cannot offer to delete it — the allowlist above does
+ * the work, and this constant exists so the relationship is written down rather
+ * than depending on a shape nobody stated. `deck-storage.test.ts` asserts it.
+ */
+export const DECK_STORAGE_CREDENTIAL_ID = 'deck-storage';
 
 /** Prefix used by connector secrets. See `secretKeyForServer`. */
 export const MCP_CREDENTIAL_PREFIX = 'mcp:';

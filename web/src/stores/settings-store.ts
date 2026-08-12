@@ -91,6 +91,22 @@ interface SettingsState {
   /** `'none'` = explicitly off (sticks); `null` = never chosen (may default on). */
   searchProvider: SearchProviderId | 'none' | null;
   searchApiKey: string | null;
+  /**
+   * Where "Share" publishes a deck, when the user has configured a bucket.
+   *
+   * The SECRET key is deliberately absent: it lives in the encrypted credential
+   * store under `deck-storage` and is read server-side at publish time, so it
+   * never sits in localStorage and never travels in a request body after the
+   * one call that sets it. Everything here is an identifier, not a secret.
+   */
+  deckStorage: {
+    preset: string;
+    endpoint: string;
+    bucket: string;
+    region: string;
+    accessKeyId: string;
+    publicBaseUrl: string;
+  } | null;
   searchInstanceUrl: string | null;
   /** Model-provider id whose stored key search borrows. An id, never a secret. */
   searchCredentialProviderId: string | null;
@@ -160,6 +176,7 @@ interface SettingsActions {
   setAnthropicApiKey: (key: string | null) => void;
   setSearchProvider: (id: SearchProviderId | 'none' | null) => void;
   setSearchApiKey: (key: string | null) => void;
+  setDeckStorage: (v: SettingsState['deckStorage']) => void;
   setSearchInstanceUrl: (url: string | null) => void;
   setSearchCredentialProviderId: (id: string | null) => void;
   setDeckTheme: (id: string | null) => void;
@@ -202,6 +219,7 @@ export const INITIAL_SETTINGS: SettingsState = {
   anthropicApiKey: null,
   searchProvider: null,
   searchApiKey: null,
+  deckStorage: null,
   searchInstanceUrl: null,
   searchCredentialProviderId: null,
   deckTheme: null,
@@ -258,6 +276,7 @@ export const PERSISTED_SETTINGS_KEYS = [
   'anthropicApiKey',
   'searchProvider',
   'searchApiKey',
+  'deckStorage',
   'searchInstanceUrl',
   'searchCredentialProviderId',
   'deckTheme',
@@ -345,6 +364,7 @@ export const useSettingsStore = create<SettingsStore>()(
       setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
       setSearchProvider: (searchProvider) => set({ searchProvider }),
       setSearchApiKey: (searchApiKey) => set({ searchApiKey }),
+      setDeckStorage: (deckStorage) => set({ deckStorage }),
       setSearchInstanceUrl: (searchInstanceUrl) => set({ searchInstanceUrl }),
       setSearchCredentialProviderId: (searchCredentialProviderId) => set({ searchCredentialProviderId }),
       setDeckTheme: (deckTheme) => set({ deckTheme }),
