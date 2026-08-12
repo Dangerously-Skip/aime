@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Download, ExternalLink } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink, Share2 } from "lucide-react";
 import { prepareDeckForPreview, looksLikeDeck, countSlides } from "@/lib/deck-preview";
 
 /**
@@ -94,6 +94,48 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
     frameRef.current?.contentWindow?.postMessage({ type: "deck:step", delta }, "*");
   };
 
+  const [sharing, setSharing] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [recipients, setRecipients] = useState('');
+  const [shareResult, setShareResult] = useState<{ url: string; summary: string } | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+
+  /**
+   * Publish to storage the user has already connected.
+   *
+   * `audience` is sent as the user's intent and the SERVER decides what it can
+   * honour — a target that cannot restrict to named people refuses rather than
+   * downgrading to an unguessable link, and the reply carries what was actually
+   * granted. So the confirmation below reports `effective`, not what was asked.
+   */
+  const handleShare = useCallback(
+    async (kind: 'link' | 'people') => {
+      setSharing(true);
+      setShareError(null);
+      setShareResult(null);
+      try {
+        const res = await fetch('/api/deck/publish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            path,
+            target: 'google-drive',
+            audience: kind === 'link' ? { kind } : { kind, emails: recipients.split(',') },
+          }),
+        });
+        const out = await res.json();
+        if (!res.ok) throw new Error(out.message || `Publish failed (${res.status})`);
+        setShareResult({ url: out.url, summary: out.summary });
+        await navigator.clipboard?.writeText(out.url).catch(() => {});
+      } catch (err) {
+        setShareError(err instanceof Error ? err.message : 'Publish failed');
+      } finally {
+        setSharing(false);
+      }
+    },
+    [path, recipients],
+  );
+
   const [exporting, setExporting] = useState(false);
 
   /**
@@ -174,7 +216,8 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
         />
       </div>
 
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+      {/* relative: the share panel is absolutely positioned against this row */}
+      <div className="relative flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <div className="flex items-center gap-1">
           <button
             onClick={() => step(-1)}
@@ -197,6 +240,57 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
           </span>
         </div>
 
+        {shareOpen && (
+          <div className="absolute bottom-10 right-2 z-20 w-80 rounded-md border border-border bg-popover p-3 text-xs shadow-lg">
+            {shareResult ? (
+              <div className="space-y-2">
+                <p className="text-foreground">{shareResult.summary}</p>
+                <input
+                  readOnly
+                  value={shareResult.url}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-[11px]"
+                />
+                <p className="text-muted-foreground">Copied to your clipboard.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-muted-foreground">
+                  Publishes a self-contained copy to your Google Drive.
+                </p>
+                <button
+                  disabled={sharing}
+                  onClick={() => handleShare('link')}
+                  className="w-full rounded border border-border px-2 py-1.5 text-left hover:bg-accent disabled:opacity-50"
+                >
+                  <span className="font-medium">Anyone with the link</span>
+                  <span className="block text-muted-foreground">
+                    No sign-in needed. Treat the link itself as the secret.
+                  </span>
+                </button>
+                <input
+                  value={recipients}
+                  onChange={(e) => setRecipients(e.target.value)}
+                  placeholder="name@company.com, other@company.com"
+                  className="w-full rounded border border-border bg-background px-2 py-1"
+                />
+                <button
+                  disabled={sharing || !recipients.trim()}
+                  onClick={() => handleShare('people')}
+                  className="w-full rounded border border-border px-2 py-1.5 text-left hover:bg-accent disabled:opacity-50"
+                >
+                  <span className="font-medium">Only these people</span>
+                  <span className="block text-muted-foreground">
+                    Enforced by Google — they sign in to open it.
+                  </span>
+                </button>
+                {shareError && <p className="text-orange-500">{shareError}</p>}
+                {sharing && <p className="text-muted-foreground">Publishing…</p>}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* A deck as written links its stylesheets by absolute path into the
             author's home directory and its images relatively, so sending
             someone the file gives them unstyled text and broken pictures. This
@@ -209,6 +303,15 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
         >
           <Download className="h-3.5 w-3.5" />
           {exporting ? 'Packaging…' : 'Export to share'}
+        </button>
+
+        <button
+          onClick={() => setShareOpen((v) => !v)}
+          title="Publish to Google Drive and get a link"
+          className="flex items-center gap-1.5 rounded px-2 py-1 transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Share2 className="h-3.5 w-3.5" />
+          Share
         </button>
 
         <button

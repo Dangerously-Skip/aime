@@ -1,6 +1,39 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { NextRequest } from 'next/server';
 import { POST, readableFrom } from './route';
+
+/*
+ * Fixtures are created HERE rather than assumed on disk. The first version of
+ * this file pointed at paths I had made by hand in /tmp, so it passed on my
+ * machine and nowhere else — and started failing the moment I tidied up.
+ */
+let root = '';
+let DECK_PATH = '';
+let OUTSIDE = '';
+
+beforeAll(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'aime-export-'));
+  const assets = path.join(root, 'home', '.claude', 'plugins', 'html-deck', 'assets');
+  fs.mkdirSync(assets, { recursive: true });
+  fs.mkdirSync(path.join(root, 'w', 'images'), { recursive: true });
+  fs.writeFileSync(path.join(assets, 'base.css'), '.slide{color:red}');
+  fs.writeFileSync(path.join(root, 'w', 'images', 'cover.png'), 'PNGBYTES');
+  OUTSIDE = path.join(root, 'outside-secret.css');
+  fs.writeFileSync(OUTSIDE, 'SECRET');
+  DECK_PATH = path.join(root, 'w', 'deck.html');
+  fs.writeFileSync(
+    DECK_PATH,
+    ['<html><head>',
+     `<link rel="stylesheet" href="${path.join(assets, 'base.css')}">`,
+     `<link rel="stylesheet" href="${OUTSIDE}">`,
+     '</head><body><img src="images/cover.png"></body></html>'].join('\n'),
+  );
+});
+
+afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 /**
  * The export reads files named by model-authored HTML, so what it is willing to
@@ -19,7 +52,7 @@ const post = (body: unknown, headers: Record<string, string> = {}) =>
 
 describe('exporting a deck', () => {
   it('inlines what sits beside the deck and the vendored assets', async () => {
-    const res = await post({ path: '/tmp/export-test/deck.html' });
+    const res = await post({ path: DECK_PATH });
     expect(res.status).toBe(200);
     const out = await res.json();
     expect(out.html).toContain('.slide{color:red}');
@@ -32,21 +65,24 @@ describe('exporting a deck', () => {
    * `<link href="/etc/…">` in it must not become a file read.
    */
   it('refuses to inline a file outside the deck folder', async () => {
-    const out = await (await post({ path: '/tmp/export-test/deck.html' })).json();
+    const out = await (await post({ path: DECK_PATH })).json();
     expect(out.html, 'an out-of-tree file was inlined').not.toContain('SECRET');
-    expect(out.missing).toContain('/tmp/outside-secret.css');
+    expect(out.missing).toContain(OUTSIDE);
   });
 
   it('refuses a cross-origin caller', async () => {
-    expect((await post({ path: '/tmp/export-test/deck.html' }, { 'sec-fetch-site': 'cross-site' })).status).toBe(403);
+    expect((await post({ path: DECK_PATH }, { 'sec-fetch-site': 'cross-site' })).status).toBe(403);
   });
 
   it.each([
     [{}, 400],
     [{ path: '   ' }, 400],
-    [{ path: '/tmp/export-test/nope.html' }, 404],
   ])('rejects %j with %i', async (body, status) => {
     expect((await post(body)).status).toBe(status);
+  });
+
+  it('404s for a deck that is not there', async () => {
+    expect((await post({ path: path.join(root, 'w', 'nope.html') })).status).toBe(404);
   });
 });
 
