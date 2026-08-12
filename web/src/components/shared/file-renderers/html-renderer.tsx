@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink } from "lucide-react";
 import { prepareDeckForPreview, looksLikeDeck, countSlides } from "@/lib/deck-preview";
 
 /**
@@ -94,6 +94,46 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
     frameRef.current?.contentWindow?.postMessage({ type: "deck:step", delta }, "*");
   };
 
+  const [exporting, setExporting] = useState(false);
+
+  /**
+   * Bundle the deck into one file and hand it to the browser's download.
+   *
+   * The server does the inlining because it needs the filesystem; the client
+   * only saves the result. `missing` is surfaced rather than swallowed — an
+   * export with an un-inlined reference looks perfect to the person who made it
+   * (they have the files locally) and is broken for everyone they send it to.
+   */
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      const res = await fetch('/api/deck/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const out = (await res.json()) as {
+        fileName: string; html: string; missing: string[]; remoteFonts: string[];
+      };
+
+      const url = URL.createObjectURL(new Blob([out.html], { type: 'text/html' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = out.fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      if (out.missing.length > 0) {
+        console.warn('[deck-export] could not inline:', out.missing);
+      }
+    } catch (err) {
+      console.error('[deck-export]', err);
+    } finally {
+      setExporting(false);
+    }
+  }, [path]);
+
   if (!isDeck) {
     // Not a deck — still better rendered than shown as source, but with none of
     // the slide chrome, which would be meaningless here.
@@ -157,8 +197,20 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
           </span>
         </div>
 
-        {/* Full-screen, presenter mode and print-to-PDF live in the browser, so
-            the way out stays one click even though the deck now renders here. */}
+        {/* A deck as written links its stylesheets by absolute path into the
+            author's home directory and its images relatively, so sending
+            someone the file gives them unstyled text and broken pictures. This
+            is the one-file version. */}
+        <button
+          onClick={handleExport}
+          disabled={exporting}
+          title="Save a single self-contained file you can email or share"
+          className="flex items-center gap-1.5 rounded px-2 py-1 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+        >
+          <Download className="h-3.5 w-3.5" />
+          {exporting ? 'Packaging…' : 'Export to share'}
+        </button>
+
         <button
           onClick={() => onOpenExternal(path)}
           className="flex items-center gap-1.5 rounded px-2 py-1 transition-colors hover:bg-accent hover:text-foreground"
