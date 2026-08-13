@@ -68,21 +68,11 @@ export function SidebarCustomize() {
         .finally(() => setLoading(false));
     } else if (customizeSection === "connectors" || customizeSection === "browse-connectors") {
       setLoading(true);
-      Promise.all([
-        fetch("/api/customize/connectors")
-          .then((r) => r.json())
-          .then((data) => setConnectors(data.connectors || []))
-          .catch(() => setConnectors([])),
-        fetch("/api/nango/status")
-          .then((r) => r.json())
-          .then((data) => {
-            const connected = (data.connectors || []).filter(
-              (c: OAuthConnectorItem) => c.connected
-            );
-            setOauthConnectors(connected);
-          })
-          .catch(() => setOauthConnectors([])),
-      ]).finally(() => setLoading(false));
+      fetch("/api/customize/connectors")
+        .then((r) => r.json())
+        .then((data) => setConnectors(data.connectors || []))
+        .catch(() => setConnectors([]))
+        .finally(() => setLoading(false));
     }
   }, [customizeSection]);
 

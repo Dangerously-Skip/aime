@@ -5,7 +5,15 @@ import type { ConnectorDefinition } from './types';
  * In Electron: uses a BrowserWindow that intercepts the redirect URL directly.
  * In browser: falls back to popup window with postMessage.
  *
- * Swappable: replace this module with Nango SDK calls for managed OAuth.
+ * This is the direct path, and it is the one that stays. A managed OAuth broker
+ * was half-integrated here once and removed: 16 of the 17 catalogued MCP servers
+ * were verified doing Dynamic Client Registration — one click, no registration,
+ * no third party, no per-call cost — the Microsoft connectors share a published
+ * public client, and GitHub can use device flow. That left a broker rescuing
+ * roughly one connector, which is not a dependency worth carrying.
+ *
+ * The case that would justify revisiting is a provider that mandates a client
+ * secret and offers no DCR. See `lib/mcp/catalog.ts` for the DCR set.
  */
 
 const DEFAULT_CALLBACK_PATH = '/api/connectors/oauth/callback';
