@@ -407,3 +407,20 @@ export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [
 export const CONNECTOR_MAP: Record<string, ConnectorDefinition> = Object.fromEntries(
   CONNECTOR_REGISTRY.map((c) => [c.id, c])
 );
+
+/**
+ * Display names for the connector categories.
+ *
+ * Lived in `nango-catalog.ts` until Nango was removed, and the keys were always
+ * this registry's own `category` union — so the browse view was importing its
+ * labels from a module about a service the app never used. Typed against
+ * `ConnectorDefinition` so a new category cannot be added without a label.
+ */
+export const CATEGORY_LABELS: Record<ConnectorDefinition['category'], string> = {
+  'project-management': 'Project Management',
+  communication: 'Communication',
+  development: 'Development',
+  cloud: 'Cloud',
+  design: 'Design',
+  documentation: 'Documentation',
+};
