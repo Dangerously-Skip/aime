@@ -1129,6 +1129,14 @@ export async function POST(
               : {
                   ...queryParams,
                   prompt: RESUME_PROMPT,
+                  /*
+                   * The ORIGINAL request, carried so per-turn decisions made
+                   * from the prompt survive the leg boundary. `asksForPptx`
+                   * reads it, and against "continue from where you stopped" it
+                   * answers no — so a turn where the user explicitly asked for
+                   * PowerPoint lost the pptx plugin halfway through.
+                   */
+                  intentPrompt: finalMessage,
                   maxBudgetUsd: remainingUsd,
                   // Same user turn. Without this the provider rebuilds URL
                   // provenance from this prompt — which says only "continue" —
@@ -1214,7 +1222,20 @@ export async function POST(
           if (chunk.limitReason === 'max_turns') {
             const budgetLeft = !effectiveBudgetUsd || spentUsd < effectiveBudgetUsd;
             const timeLeft = !queryTimedOut;
-            if (resumes < MAX_RESUMES && budgetLeft && timeLeft) {
+            /*
+             * And somebody still listening.
+             *
+             * The disconnect listener above calls `provider.abort`, which looks
+             * the chat up in a controller map the provider DELETES when a
+             * segment ends — so a browser closing while leg 1 tears down finds
+             * nothing to abort, and without this the loop cheerfully started
+             * leg 2 with a full budget and no reader. That is the exact failure
+             * the listener was added to prevent: "spending tokens on a stream
+             * with no reader". The wall-clock timer was given this treatment a
+             * few lines down; the loop condition was not.
+             */
+            const stillListening = !req.signal.aborted;
+            if (resumes < MAX_RESUMES && budgetLeft && timeLeft && stillListening) {
               resumeRun = true;
               continue;
             }

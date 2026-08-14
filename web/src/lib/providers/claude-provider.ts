@@ -86,6 +86,37 @@ export class ClaudeProvider extends BaseProvider {
   private defaultAllowedTools: string[];
   /** Per-chat URL provenance, so the legs of a resumed turn share one set. */
   private urlProvenanceByChat = new Map<string, UrlProvenance>();
+
+  /** Images generated in the CURRENT turn, per chat. See IMAGE_BUDGET. */
+  private imagesThisTurn = new Map<string, number>();
+
+  /**
+   * How many chats' worth of per-turn state to keep.
+   *
+   * The provider is a module singleton, and both maps above were written to and
+   * never pruned: after a day of use each held an entry per conversation, and a
+   * `UrlProvenance` retains every URL every tool result in that chat contained —
+   * an entire fetched page's link graph per `FetchUrl`. Monotonic growth until
+   * the process restarted.
+   *
+   * A bound rather than a TTL: the state is only meaningful for the turn in
+   * flight and the resume legs that follow it, so evicting the least recently
+   * touched chat can at worst make a very old resumed turn re-derive
+   * provenance from its prompt — which is what it did before any of this
+   * existed.
+   */
+  private static readonly TURN_STATE_LIMIT = 32;
+
+  /** Drop the oldest entries once a map outgrows the bound. Insertion-ordered. */
+  private trimTurnState(): void {
+    for (const map of [this.urlProvenanceByChat, this.imagesThisTurn] as Map<string, unknown>[]) {
+      while (map.size > ClaudeProvider.TURN_STATE_LIMIT) {
+        const oldest = map.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        map.delete(oldest);
+      }
+    }
+  }
   private defaultMaxTurns: number;
   private permissionMode: string;
   private abortControllers: Map<string, AbortController>;
@@ -278,7 +309,19 @@ export class ClaudeProvider extends BaseProvider {
     const icloudCreds = await loadICloudCredentials();
 
     const IMAGE_BUDGET = 16;
-    let imagesGenerated = 0;
+    /*
+     * Counted per TURN, not per query.
+     *
+     * These were locals, which was right until the route learned to resume: a
+     * turn is now up to four `query()` calls, each with a fresh closure, so the
+     * cap that "stops a fourteen-slide deck quietly spending real money" bounded
+     * 64 images while the tool text reported `16/16` and then reset to `1/16`.
+     * Keyed by chat and cleared when a new turn starts, the same shape as URL
+     * provenance below and for the same reason.
+     */
+    const imageCountKey = chatId || 'no-chat';
+    if (!params.isResume) this.imagesThisTurn.delete(imageCountKey);
+    const imagesUsed = () => this.imagesThisTurn.get(imageCountKey) ?? 0;
 
     const imageApiKey = await (async () => {
       const providerId =
@@ -430,7 +473,7 @@ export class ClaudeProvider extends BaseProvider {
      * the claim.
      */
     const allPluginPaths = await this.scanPlugins();
-    const pluginPaths = allowedPluginPaths(allPluginPaths, deckTheme?.id ?? null, params.prompt);
+    const pluginPaths = allowedPluginPaths(allPluginPaths, deckTheme?.id ?? null, params.intentPrompt ?? params.prompt);
     /**
      * Logged either way, because "no theme set" and "theme set but ignored" look
      * identical from the outside and have completely different fixes. Working
@@ -493,7 +536,12 @@ export class ClaudeProvider extends BaseProvider {
       // a failed guessing run and the transcript is full of made-up addresses.
       ...(history ?? []).filter((h) => h.role === 'user').map((h) => h.content),
     ]);
-    if (chatId) this.urlProvenanceByChat.set(chatId, urlProvenance);
+    if (chatId) {
+      // Re-inserted so the map stays ordered by recency for `trimTurnState`.
+      this.urlProvenanceByChat.delete(chatId);
+      this.urlProvenanceByChat.set(chatId, urlProvenance);
+      this.trimTurnState();
+    }
 
     /**
      * Text already sent as deltas, per content-block index of the CURRENT
@@ -858,7 +906,7 @@ export class ClaudeProvider extends BaseProvider {
             filename: z.string().describe('A short kebab-case name without extension, e.g. "pizza-cover".'),
           },
           async ({ prompt: imgPrompt, filename }: { prompt: string; filename: string }) => {
-            if (imagesGenerated >= IMAGE_BUDGET) {
+            if (imagesUsed() >= IMAGE_BUDGET) {
               return {
                 content: [{ type: 'text' as const, text: `Image budget reached (${IMAGE_BUDGET} for this turn). Use the .img-placeholder markup for any remaining visuals.` }],
                 isError: true,
@@ -876,7 +924,7 @@ export class ClaudeProvider extends BaseProvider {
                 isError: true,
               };
             }
-            imagesGenerated++;
+            this.imagesThisTurn.set(imageCountKey, imagesUsed() + 1);
             try {
               const fsp = await import('fs/promises');
               const nodePath = await import('path');
@@ -908,7 +956,7 @@ export class ClaudeProvider extends BaseProvider {
                     `src="images/${safe}.${ext}" — that relative path only resolves if the ` +
                     `document is in that directory. Do NOT write the document somewhere else ` +
                     `(your home directory, /tmp) or the image will be missing.\n\n` +
-                    `${imagesGenerated}/${IMAGE_BUDGET} images used this turn.`,
+                    `${imagesUsed()}/${IMAGE_BUDGET} images used this turn.`,
                 }],
               };
             } catch (e) {
@@ -2270,6 +2318,17 @@ export class ClaudeProvider extends BaseProvider {
               limitReason: c.subtype === 'error_max_turns' ? 'max_turns' : 'hard',
             };
           }
+          /*
+           * Consumed here. The branch that used to swallow this — the old
+           * `tool_result || result` test — was replaced by `c.type === 'user'`,
+           * so the terminal result fell through to the catch-all below and the
+           * whole SDK object went to the client every turn: the complete final
+           * assistant text, `session_id`, `num_turns`, `permission_denials`,
+           * `modelUsage`. No consumer has a `result` case, so it was ignored —
+           * wasted bandwidth today, and a live hazard the moment any surface
+           * renders unknown chunk types.
+           */
+          continue;
         }
 
         // Debug: log all system messages to find session_id
@@ -2485,7 +2544,25 @@ export class ClaudeProvider extends BaseProvider {
             activeTools.delete(toolUseId);
             // Anything a tool returned is a real source, so its URLs become
             // fetchable. This is what makes search → read work.
-            const payload = c.tool_use_result ?? block.content ?? '';
+            /*
+             * The BLOCK's content, not the message's `tool_use_result`.
+             *
+             * `tool_use_result` sits on the SDKUserMessage, i.e. once per
+             * message — but a message carries one block PER PARALLEL TOOL CALL.
+             * Reading it here gave every block the same payload: with SearchWeb
+             * and Read in flight together, the UI showed the search output
+             * under the Read card, and `urlProvenance.record` was handed the
+             * same text twice, so URLs only the second tool returned were never
+             * recorded and `FetchUrl` refused them — the exact failure this
+             * rewrite was written to fix.
+             *
+             * It is still used as the fallback for the single-block case, where
+             * it is the richer of the two.
+             */
+            const payload =
+              block.content ?? (blocks.filter((b) => b?.type === 'tool_result').length === 1
+                ? c.tool_use_result
+                : undefined) ?? '';
             try {
               urlProvenance.record(
                 typeof payload === 'string' ? payload : JSON.stringify(payload),

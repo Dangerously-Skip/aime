@@ -85,6 +85,14 @@ export interface QueryParams {
    * which reads as the response being cut off and the app hanging.
    */
   includePartialMessages?: boolean;
+  /**
+   * The user's actual request, when `prompt` is a continuation.
+   *
+   * Anything decided by reading the prompt — the deck format, today — must read
+   * THIS on a resume leg, or the decision flips mid-turn because "continue from
+   * where you stopped" mentions nothing the user asked for.
+   */
+  intentPrompt?: string;
   chatId: string;
   surfaceId?: string;
   userId?: string;

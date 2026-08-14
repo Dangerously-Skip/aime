@@ -195,3 +195,48 @@ describe('S3_PRESETS', () => {
     }
   });
 });
+
+/**
+ * A filename with `#` or `?` used to be signed and uploaded to a TRUNCATED key
+ * while the reported id and share URL carried the full name — so the link 404'd
+ * and revoke could not find the object.
+ */
+describe('object keys survive awkward filenames', () => {
+  const upload = async (fileName: string) => {
+    const { t, calls } = target();
+    const r = await t.publish({ fileName, html: '<html>x</html>', audience: { kind: 'link' } });
+    return { put: calls[0].url, result: r };
+  };
+
+  it('does not let a # start a fragment', async () => {
+    const { put, result } = await upload('Q3 review #2.share.html');
+    expect(put, 'the # truncated the uploaded key').toContain('%232');
+    expect(put.endsWith('.share.html'), `uploaded to ${put}`).toBe(true);
+    expect(result.url).toContain('%232');
+  });
+
+  it('does not let a ? start a query', async () => {
+    const { put } = await upload('what now?.share.html');
+    expect(put).toContain('%3F');
+  });
+
+  it('encodes spaces the same way in the upload and the share link', async () => {
+    const { put, result } = await upload('my deck.share.html');
+    const uploadedKey = put.split('/decks/')[1];
+    const sharedKey = result.url.split('decks.example.com/')[1];
+    expect(sharedKey, 'the share URL and the uploaded key disagree').toBe(uploadedKey);
+  });
+
+  it('keeps the id addressable, so revoke can find it', async () => {
+    const { t, calls } = target();
+    const r = await t.publish({ fileName: 'Q3 #2.share.html', html: 'x', audience: { kind: 'link' } });
+    await t.revoke!(r.id);
+    const del = calls.find((c) => c.method === 'DELETE')!;
+    expect(del.url, 'revoke addressed a different object than the upload').toBe(calls[0].url);
+  });
+
+  it('leaves an ordinary name alone', async () => {
+    const { put } = await upload('deck.share.html');
+    expect(put).toBe('https://acct.r2.cloudflarestorage.com/decks/deadbeef/deck.share.html');
+  });
+});

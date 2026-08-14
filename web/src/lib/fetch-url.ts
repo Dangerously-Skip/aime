@@ -106,6 +106,33 @@ export function looksPaywalled(text: string): boolean {
   );
 }
 
+/**
+ * The first `maxChars` characters of a response, without buffering the rest.
+ *
+ * Cancels the body once the cap is reached: the remote may be streaming
+ * something enormous, and there is no reason to receive it.
+ */
+async function readCapped(response: Response, maxChars: number): Promise<string> {
+  if (!response.body) return (await response.text()).slice(0, maxChars);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let out = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+      if (out.length >= maxChars) {
+        out = out.slice(0, maxChars);
+        break;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return out;
+}
+
 export async function fetchUrl(
   raw: string,
   opts: { timeoutMs?: number; fetchImpl?: typeof fetch; maxChars?: number } = {},
@@ -137,12 +164,21 @@ export async function fetchUrl(
      * that each destination goes back through `validateFetchUrl` first.
      */
     const MAX_HOPS = 5;
+    /*
+     * ONE deadline for the whole fetch, not one per hop.
+     *
+     * Each hop was given a fresh `AbortSignal.timeout`, so five hops stalling
+     * 24s each cost 120s against a module that advertises 25 — and ate most of
+     * the 180s tool deadline on the way. `AbortSignal.any` lets each request
+     * still carry its own signal while the overall budget keeps ticking.
+     */
+    const overall = AbortSignal.timeout(timeoutMs);
     let target = verdict.url;
     let hops = 0;
     for (;;) {
       response = await doFetch(target, {
         redirect: 'manual',
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.any([overall, AbortSignal.timeout(timeoutMs)]),
         headers: {
           // Without a browser-shaped UA a large share of sites serve a challenge
           // page instead of content, which reads to the model as an empty article.
@@ -209,7 +245,24 @@ export async function fetchUrl(
 
   let body: string;
   try {
-    body = await response.text();
+    /*
+     * Read with a CAP, rather than buffering everything and truncating after.
+     *
+     * `response.text()` allocated the whole body first, so a 3GB `text/plain`
+     * response — reachable the moment a search result points at one — was an
+     * OOM in the Next server process before `MAX_TEXT_CHARS` ever applied.
+     * Reading incrementally means the cap is a real limit on memory, not just
+     * on what the model sees.
+     */
+    /*
+     * The raw cap is a MEMORY bound and deliberately looser than `maxChars`,
+     * which bounds the extracted TEXT. Capping the raw body at `maxChars` made
+     * a 1000-char budget yield 985 characters of text, because the tags are
+     * stripped afterwards — the limit has to leave room for the markup it is
+     * about to discard. Eight-to-one is far above any real HTML ratio while
+     * still turning an unbounded read into a bounded one.
+     */
+    body = await readCapped(response, maxChars * 8);
   } catch (e) {
     const name = e instanceof Error ? e.name : '';
     if (name === 'TimeoutError' || name === 'AbortError') {

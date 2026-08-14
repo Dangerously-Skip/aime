@@ -921,3 +921,53 @@ describe('resuming a run that hit the turn ceiling', () => {
     expect(call).toBe(1);
   });
 });
+
+/**
+ * A resume must not start for a client that has gone away.
+ *
+ * The disconnect listener calls `provider.abort`, which looks the chat up in a
+ * controller map the provider DELETES when a segment ends — so a browser
+ * closing while leg 1 tears down finds nothing to abort. Without a check on the
+ * request signal the loop then started leg 2 with a full budget and no reader:
+ * exactly the "spending tokens on a stream with no reader" the listener exists
+ * to prevent.
+ */
+describe('a disconnected client stops the resume loop', () => {
+  it('does not start another leg once the request is aborted', async () => {
+    const ac = new AbortController();
+    let call = 0;
+    mocks.queryMock.mockImplementation(async function* () {
+      call++;
+      yield { type: 'text', content: 'half a deck', provider: 'claude' };
+      // The client goes away exactly as this leg reports its ceiling.
+      ac.abort();
+      yield { type: 'text', content: 'ran out', provider: 'claude', limitReason: 'max_turns' };
+    });
+
+    await POST(
+      new NextRequest('http://localhost:3100/api/chat/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', host: 'localhost:3100' },
+        body: JSON.stringify({ message: 'build a deck', chatId: 'c1' }),
+        signal: ac.signal,
+      }),
+      { params: Promise.resolve({ surfaceId: 'chat' }) },
+    ).then((r) => r.text().catch(() => ''));
+
+    expect(call, 'a second leg was started for a client that had disconnected').toBe(1);
+  });
+
+  /* The complement: a client still listening must still get its resume. */
+  it('still resumes for a client that is still there', async () => {
+    let call = 0;
+    mocks.queryMock.mockImplementation(async function* () {
+      const leg = call++;
+      yield { type: 'text', content: `leg${leg}`, provider: 'claude' };
+      if (leg === 0) {
+        yield { type: 'text', content: 'ran out', provider: 'claude', limitReason: 'max_turns' };
+      }
+    });
+    await post('chat', { message: 'build a deck', chatId: 'c1' });
+    expect(call).toBe(2);
+  });
+});

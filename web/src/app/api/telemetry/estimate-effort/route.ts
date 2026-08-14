@@ -96,7 +96,19 @@ export async function POST(req: NextRequest) {
 
   try {
     const client = new Anthropic({ apiKey: effectiveKey });
-    const haikuModel = 'claude-haiku-4-5';
+    /*
+     * The TURN's model, not a hardcoded Anthropic id.
+     *
+     * `new Anthropic()` picks up `ANTHROPIC_BASE_URL`, which this app points at
+     * its own llm-proxy — so for an OpenRouter user this went out as
+     * `claude-haiku-4-5` and came back `400: not a valid model ID`, on every
+     * completed turn, silently falling back to the heuristic. `extractMemories`
+     * was given a `model` parameter in this branch for exactly this reason; the
+     * effort estimator runs on the same `done` event and was missed.
+     *
+     * The request already carried `model`. It was simply not used.
+     */
+    const haikuModel = model;
 
     const toolSummary = (toolCalls as Array<{ name: string; count: number }>).map(t => `${t.name}: ${t.count}`).join(', ') || 'none';
     const durationMin = Math.round(durationMs / 60000);
