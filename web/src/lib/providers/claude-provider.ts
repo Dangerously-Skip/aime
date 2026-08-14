@@ -1,6 +1,7 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { resolveSearchRoute } from '../search/resolve';
 import { supportsNativeWebSearch } from '../search/native-search';
+import { validateServiceUrl } from '../mcp/url-guard';
 import { fetchUrl, describeFailure } from '../fetch-url';
 import { correctWebSearchSection, type SearchToolKind } from '../surfaces/shared/web-search-prompt';
 import { themeInstruction } from '../themes/resolve';
@@ -216,11 +217,32 @@ export class ClaudeProvider extends BaseProvider {
      * in-process SearchWeb tool. One resolution means the two cannot disagree
      * about whether search exists — which is exactly how the original bug got in.
      */
-    let searchRoute = resolveSearchRoute(searchSettings ?? null, process.env, {
+    /*
+     * The instance URL is caller-supplied and gets FETCHED server-side — by the
+     * in-process SearchWeb tool and by the searxng MCP subprocess mounted below.
+     * `/api/search-proxy` validates the identical value and this path did not,
+     * so two readers of one caller-controlled fetch target disagreed and only
+     * one was guarded: a request carrying
+     * `searchInstanceUrl: 'http://169.254.169.254/'` mounted searxng pointed at
+     * cloud metadata.
+     *
+     * Guarded HERE rather than in the route so every caller is covered, which is
+     * the same reasoning as the security toggles a few lines up.
+     */
+    const instanceUrl = (searchSettings as { searchInstanceUrl?: string } | undefined)?.searchInstanceUrl;
+    const safeSearchSettings =
+      instanceUrl?.trim() && !validateServiceUrl(instanceUrl).ok
+        ? ((() => {
+            console.warn('[SEARCH] Refusing a search instance URL that is not a usable service address');
+            return { ...(searchSettings ?? {}), searchInstanceUrl: undefined };
+          })() as typeof searchSettings)
+        : searchSettings;
+
+    let searchRoute = resolveSearchRoute(safeSearchSettings ?? null, process.env, {
       // Default-on: an OpenRouter key configured for models also serves search.
       // The provider list is client state, so the id arrives on the request.
       openrouterProviderId:
-        (searchSettings as { openrouterProviderId?: string | null } | undefined)
+        (safeSearchSettings as { openrouterProviderId?: string | null } | undefined)
           ?.openrouterProviderId ?? null,
     });
     if (searchRoute) {

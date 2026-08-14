@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { inspectCredentials, describeCredentialProblem } from '@/lib/icloud/config';
 import { ICLOUD_PROVIDER_ID } from '@/lib/icloud/credentials';
 import { getCredentialStore, CredentialStoreUnavailable } from '@/lib/models/credentials';
+import { isCrossOriginRequest } from '@/lib/security/same-origin';
 
 export const runtime = 'nodejs';
 
@@ -43,6 +44,19 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  /*
+   * A credential WRITE, and an IMAP login, from an app that loads untrusted web
+   * pages. A `text/plain` POST is CORS-simple — no preflight — and `req.json()`
+   * ignores the content type, so without this a page in the browser surface
+   * could overwrite the stored Apple ID (silently disconnecting mail, calendar
+   * and contacts) and use this endpoint as a login oracle against
+   * imap.mail.me.com. CLAUDE.md: "CSRF protection on all state-changing
+   * endpoints" — this is one.
+   */
+  if (isCrossOriginRequest(req)) {
+    return Response.json({ error: 'forbidden' }, { status: 403 });
+  }
+
   let body: { appleId?: string; appPassword?: string };
   try {
     body = await req.json();
@@ -80,7 +94,20 @@ export async function POST(req: NextRequest) {
   return Response.json({ ok: true, appleId: creds.appleId });
 }
 
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
+  /*
+   * A credential WRITE, and an IMAP login, from an app that loads untrusted web
+   * pages. A `text/plain` POST is CORS-simple — no preflight — and `req.json()`
+   * ignores the content type, so without this a page in the browser surface
+   * could overwrite the stored Apple ID (silently disconnecting mail, calendar
+   * and contacts) and use this endpoint as a login oracle against
+   * imap.mail.me.com. CLAUDE.md: "CSRF protection on all state-changing
+   * endpoints" — this is one.
+   */
+  if (isCrossOriginRequest(req)) {
+    return Response.json({ error: 'forbidden' }, { status: 403 });
+  }
+
   try {
     await getCredentialStore().delete(ICLOUD_PROVIDER_ID);
   } catch (err) {

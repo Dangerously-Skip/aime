@@ -530,6 +530,37 @@ describe('stream translation', () => {
     });
   });
 
+  /**
+   * The search instance URL is caller-supplied and gets FETCHED server-side —
+   * by the in-process SearchWeb tool and by the searxng MCP subprocess.
+   * `/api/search-proxy` validated it; this path did not, so one
+   * caller-controlled fetch target had two readers and only one guard.
+   */
+  describe('a search instance URL that is not a service address', () => {
+    it.each([
+      'http://169.254.169.254/',
+      'http://[::ffff:169.254.169.254]/',
+      'file:///etc/passwd',
+    ])('does not mount searxng at %s', async (searchInstanceUrl) => {
+      scriptChunks([]);
+      const { options } = await captureOptions(new ClaudeProvider(), {
+        searchSettings: { searchProvider: 'searxng', searchInstanceUrl },
+      });
+      const mounted = JSON.stringify(options.mcpServers ?? {});
+      expect(mounted, 'the metadata endpoint was mounted as a search engine').not.toContain('169.254');
+      expect(mounted).not.toContain('/etc/passwd');
+    });
+
+    /* A self-hosted SearXNG on a LAN address is a real setup and must survive. */
+    it('still mounts a LAN instance', async () => {
+      scriptChunks([]);
+      const { options } = await captureOptions(new ClaudeProvider(), {
+        searchSettings: { searchProvider: 'searxng', searchInstanceUrl: 'http://10.0.0.5:8080' },
+      });
+      expect(JSON.stringify(options.mcpServers ?? {})).toContain('10.0.0.5');
+    });
+  });
+
   it('always terminates the stream with a done event', async () => {
     scriptChunks([]);
     const chunks = await run(new ClaudeProvider(), {});

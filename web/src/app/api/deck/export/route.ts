@@ -10,9 +10,13 @@ export const runtime = 'nodejs';
  * Bundle a deck into one self-contained file the user can send someone.
  *
  * This reads whatever the deck references, driven by a caller-supplied path, so
- * it gets the same locks as `/api/deck/asset`: a same-origin check — the app
- * ships a browser surface, and a page the user is viewing must not be able to
- * drive local file reads — and containment to the deck's own directory.
+ * it gets a same-origin check — the app ships a browser surface, and a page the
+ * user is viewing must not be able to drive local file reads — plus containment
+ * to the deck's own directory.
+ *
+ * `/api/deck/asset` has the same two locks. This comment used to say it already
+ * did, as a statement of fact; it did not, and the claim went unchecked for a
+ * week. Both are now tested rather than cross-referenced.
  *
  * The vendored html-deck assets are the deliberate exception: they live under
  * `~/.claude/plugins/<plugin>/assets` rather than beside the deck, and the

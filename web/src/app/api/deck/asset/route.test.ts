@@ -5,16 +5,18 @@ import * as nodePath from 'path';
 import { NextRequest } from 'next/server';
 import { GET } from './route';
 
+
 /**
  * This route takes a filesystem path from the caller, so its whole job is to be
  * narrower than it looks. Two locks, both applied AFTER resolution rather than
  * by stripping characters: the target must land inside the deck's own
  * directory, and its extension must be on the image allowlist.
  */
-const get = (deck: string, file: string) =>
+const get = (deck: string, file: string, headers: Record<string, string> = {}) =>
   GET(
     new NextRequest(
       `http://localhost:3100/api/deck/asset?deck=${encodeURIComponent(deck)}&file=${encodeURIComponent(file)}`,
+      { headers: { host: 'localhost:3100', ...headers } },
     ),
   );
 
@@ -94,5 +96,50 @@ describe('it cannot be turned into a file reader', () => {
   it('still refuses a non-image even when the deck path is arbitrary', async () => {
     const res = await get('/etc/hosts', 'hosts');
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * The lock this route shipped without, while its sibling's comment claimed it
+ * had one.
+ *
+ * `deck` is caller-supplied AND was the containment root, so the root was "any
+ * directory the caller names" — and with no origin check a page in the browser
+ * surface could name one. `<img src="…?deck=/Users/you/Pictures/x.html
+ * &file=passport.png">` is a CORS-simple GET; nothing had to read the response
+ * for the file to be served.
+ */
+describe('a page in the browser surface cannot drive this route', () => {
+  it('refuses a cross-site request', async () => {
+    const res = await get(DECK, 'images/cover.png', { 'sec-fetch-site': 'cross-site' });
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses a request whose Origin is another host', async () => {
+    const res = await get(DECK, 'images/cover.png', { origin: 'https://evil.example' });
+    expect(res.status).toBe(403);
+  });
+
+  it('still serves the renderer', async () => {
+    const res = await get(DECK, 'images/cover.png', { 'sec-fetch-site': 'same-origin' });
+    expect(res.status).toBe(200);
+  });
+});
+
+/**
+ * The root is checked, not accepted. A deck is an HTML file that exists;
+ * pointing this at a photo directory must not make that directory readable.
+ */
+describe('the deck path has to be a deck', () => {
+  it('refuses a directory dressed up as a deck', async () => {
+    expect((await get(nodePath.join(dir, 'images'), 'cover.png')).status).toBe(404);
+  });
+
+  it('refuses a deck file that does not exist', async () => {
+    expect((await get(nodePath.join(dir, 'nope.html'), 'images/cover.png')).status).toBe(404);
+  });
+
+  it('refuses a non-HTML path used as the root', async () => {
+    expect((await get(nodePath.join(dir, 'images', 'cover.png'), 'cover.png')).status).toBe(404);
   });
 });

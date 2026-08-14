@@ -130,9 +130,16 @@ export async function POST(
     if (toolMsgs.length > 0) {
       const empty = toolMsgs.filter((m) => !String(m.content ?? '').trim()).length;
       console.log(
+        // Shape only, never content. This logged 120 characters of the first
+        // tool result, which was fine for the one debugging session it was
+        // written for and became a data leak the moment MailRead, ContactsSearch
+        // and Read of arbitrary files started flowing through here: an offer
+        // letter's salary line, a contact's address, a credentials file, all in
+        // the application log. The question it was added to answer — "do tool
+        // results reach the model" — is answered by the count and the empties.
         `[llm-proxy] → ${body.model}: ${msgs.length} msgs, ${toolMsgs.length} tool result(s)` +
           `${empty ? `, ${empty} EMPTY` : ''}` +
-          `, first result: ${JSON.stringify(String(toolMsgs[0].content ?? '').slice(0, 120))}`,
+          `, first result ${String(toolMsgs[0].content ?? '').length} chars`,
       );
     }
   }
