@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveWithinTree } from '@/lib/path-containment';
+import { isCrossOriginRequest } from '@/lib/security/same-origin';
 
 export const runtime = 'nodejs';
 
@@ -42,13 +43,42 @@ const TYPES: Record<string, string> = {
 };
 
 export async function GET(req: NextRequest) {
+  /*
+   * The lock this route shipped without.
+   *
+   * `/api/deck/export` and `/api/deck/publish` both check the origin, and
+   * export's own header claimed this one did too. It did not — so a page in the
+   * BROWSER SURFACE could render
+   * `<img src="…/api/deck/asset?deck=/Users/you/Pictures/x.html&file=passport.png">`
+   * and read it, because `deck` is caller-supplied and was also the containment
+   * root, making that root "any directory the caller names".
+   */
+  if (isCrossOriginRequest(req)) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+
   const deck = req.nextUrl.searchParams.get('deck') ?? '';
   const file = req.nextUrl.searchParams.get('file') ?? '';
   if (!deck || !file) {
     return NextResponse.json({ error: 'deck and file are required' }, { status: 400 });
   }
 
-  const contained = resolveWithinTree(path.dirname(path.resolve(deck)), file);
+  /*
+   * And the root itself is now checked rather than accepted. A deck is an HTML
+   * file that EXISTS; pointing this at a photo directory no longer turns that
+   * directory into a readable root.
+   */
+  const deckPath = path.resolve(deck);
+  if (!/\.html?$/i.test(deckPath)) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+  try {
+    if (!fs.statSync(deckPath).isFile()) throw new Error('not a file');
+  } catch {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
+  const contained = resolveWithinTree(path.dirname(deckPath), file);
   if (!contained.ok) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
