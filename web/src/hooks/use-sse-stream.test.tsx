@@ -677,3 +677,75 @@ describe('two conversations streaming at once', () => {
     expect(setIsStreaming).toHaveBeenCalledWith(false);
   });
 });
+
+/**
+ * `isStreaming` is per-surface, but `streamRegistry` is a module global keyed by
+ * chatId across EVERY surface. Gating the flag on `streamRegistry.any()` meant a
+ * long Cowork turn kept Chat's composer disabled and its Stop button showing
+ * until the app was reloaded.
+ */
+describe('one surface does not hold another surface open', () => {
+  function held() {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const body = new ReadableStream<Uint8Array>({
+      async start(c) {
+        c.enqueue(new TextEncoder().encode('data: {"type":"text","content":"x"}\n\n'));
+        await gate;
+        c.close();
+      },
+    });
+    return { release, response: new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }) };
+  }
+
+  it('unlocks its own composer while another surface is still streaming', async () => {
+    // Another surface's stream, registered globally and never finished here.
+    const other = new AbortController();
+    streamRegistry.set('cowork-chat', other);
+
+    const setIsStreaming = vi.fn();
+    const { result } = renderHook(() =>
+      useSSEStream({
+        onChunk: vi.fn(), onError: vi.fn(), onDone: vi.fn(),
+        onUsage: vi.fn(), setIsStreaming, chatId: 'chat-a',
+      }),
+    );
+
+    fetchMock.mockResolvedValueOnce(sseResponse(['data: {"type":"text","content":"done"}\n\n']));
+    await result.current.sendMessage('hi', 'chat-a', 'chat', null);
+
+    expect(
+      setIsStreaming.mock.calls.some(([v]) => v === false),
+      'Chat stayed locked because Cowork was still running',
+    ).toBe(true);
+
+    streamRegistry.abort('cowork-chat');
+  });
+
+  /* And the within-surface behaviour from before must survive. */
+  it('still keeps its composer locked while its OWN second stream runs', async () => {
+    const setIsStreaming = vi.fn();
+    const { result } = renderHook(() =>
+      useSSEStream({
+        onChunk: vi.fn(), onError: vi.fn(), onDone: vi.fn(),
+        onUsage: vi.fn(), setIsStreaming, chatId: 'chat-a',
+      }),
+    );
+
+    const slow = held();
+    fetchMock
+      .mockResolvedValueOnce(slow.response)
+      .mockResolvedValueOnce(sseResponse(['data: {"type":"text","content":"quick"}\n\n']));
+
+    const runB = result.current.sendMessage('slow', 'chat-b', 'chat', null);
+    await result.current.sendMessage('quick', 'chat-a', 'chat', null);
+
+    expect(
+      setIsStreaming.mock.calls.filter(([v]) => v === false),
+      'the finished stream unlocked the composer while its sibling ran',
+    ).toHaveLength(0);
+
+    slow.release();
+    await runB;
+  });
+});

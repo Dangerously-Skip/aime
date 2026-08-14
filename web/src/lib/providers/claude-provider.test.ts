@@ -561,6 +561,152 @@ describe('stream translation', () => {
     });
   });
 
+  /**
+   * Parallel tool calls arrive as ONE `user` message with one `tool_result`
+   * block each. `tool_use_result` sits on the message, so reading it per block
+   * gave every block the same payload — the search output under the Read card,
+   * and provenance recorded twice from one text while the other tool's URLs
+   * were never recorded at all.
+   */
+  describe('parallel tool results keep their own payloads', () => {
+    it('gives each block its own content', async () => {
+      scriptChunks([
+        {
+          type: 'user',
+          tool_use_result: 'MESSAGE-LEVEL',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 'a', content: 'search output' },
+              { type: 'tool_result', tool_use_id: 'b', content: 'file contents' },
+            ],
+          },
+        },
+      ]);
+      const chunks = await run(new ClaudeProvider(), {});
+      const results = chunks.filter((c) => c.type === 'tool_result');
+      expect(results.map((r) => [r.tool_use_id, r.result])).toEqual([
+        ['a', 'search output'],
+        ['b', 'file contents'],
+      ]);
+    });
+
+    it('records every parallel result for provenance, not just the first', async () => {
+      const A = 'https://a.example/one';
+      const B = 'https://b.example/two';
+      scriptChunks([
+        {
+          type: 'user',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 'a', content: `see ${A}` },
+              { type: 'tool_result', tool_use_id: 'b', content: `see ${B}` },
+            ],
+          },
+        },
+      ]);
+      const provider = new ClaudeProvider();
+      const { canUseTool } = await captureOptions(provider, { prompt: 'go' });
+      for (const url of [A, B]) {
+        const r = await canUseTool('mcp__aime__FetchUrl', { url }, { toolUseID: 'x' });
+        expect(r.behavior, `${url} was not recorded`).toBe('allow');
+      }
+    });
+
+    /* The single-block case still prefers the richer message-level payload. */
+    it('falls back to tool_use_result when there is one block', async () => {
+      scriptChunks([
+        {
+          type: 'user',
+          tool_use_result: { rich: true },
+          message: { content: [{ type: 'tool_result', tool_use_id: 'a' }] },
+        },
+      ]);
+      const chunks = await run(new ClaudeProvider(), {});
+      expect(chunks.find((c) => c.type === 'tool_result')?.result).toEqual({ rich: true });
+    });
+  });
+
+  /**
+   * The SDK's terminal `result` message must be CONSUMED. The branch that used
+   * to swallow it was replaced, so the whole object — final assistant text,
+   * session_id, permission_denials, modelUsage — was spread onto the stream
+   * every turn as an unrecognised chunk nobody renders.
+   */
+  it('does not leak the raw SDK result onto the stream', async () => {
+    scriptChunks([
+      { type: 'result', subtype: 'success', num_turns: 3, session_id: 's1', usage: {}, result: 'the whole reply' },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.map((c) => c.type)).not.toContain('result');
+    expect(JSON.stringify(chunks), 'session_id reached the client').not.toContain('s1');
+  });
+
+  it('still reports usage from that message', async () => {
+    scriptChunks([{ type: 'result', subtype: 'success', usage: { input_tokens: 5 }, total_cost_usd: 0.1 }]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.find((c) => c.type === 'usage')).toMatchObject({ inputTokens: 5, totalCostUsd: 0.1 });
+  });
+
+  /**
+   * Per-turn state on a module SINGLETON. Both maps were written on every query
+   * and never pruned, so a day of use retained a `UrlProvenance` per
+   * conversation — each holding every URL every tool result in that chat ever
+   * contained.
+   */
+  describe('per-turn state is bounded', () => {
+    it('does not grow without limit across many conversations', async () => {
+      const provider = new ClaudeProvider();
+      for (let i = 0; i < 80; i++) {
+        scriptChunks([]);
+        await captureOptions(provider, { chatId: `chat-${i}`, prompt: `see https://x.com/${i}` });
+      }
+      const held = (provider as unknown as { urlProvenanceByChat: Map<string, unknown> }).urlProvenanceByChat;
+      expect(held.size, 'the provenance map grew unbounded').toBeLessThanOrEqual(32);
+    });
+
+    it('keeps the most recent chats, which are the ones that can resume', async () => {
+      const provider = new ClaudeProvider();
+      for (let i = 0; i < 40; i++) {
+        scriptChunks([]);
+        await captureOptions(provider, { chatId: `chat-${i}`, prompt: 'hi' });
+      }
+      const held = (provider as unknown as { urlProvenanceByChat: Map<string, unknown> }).urlProvenanceByChat;
+      expect(held.has('chat-39')).toBe(true);
+      expect(held.has('chat-0'), 'the oldest entry survived eviction').toBe(false);
+    });
+  });
+
+  /**
+   * The image cap says "for this turn", and a turn is now up to four queries.
+   * As locals they bounded a LEG, so a deck hitting the ceiling three times
+   * could generate 64 images while reporting 16/16 at each cap.
+   */
+  describe('the image budget spans a resumed turn', () => {
+    const genImage = async (provider: ClaudeProvider, isResume: boolean) => {
+      scriptChunks([]);
+      const { options } = await captureOptions(provider, { chatId: 'deck', isResume });
+      return options;
+    };
+
+    it('does not reset the count on a resume leg', async () => {
+      const provider = new ClaudeProvider();
+      await genImage(provider, false);
+      const counts = (provider as unknown as { imagesThisTurn: Map<string, number> }).imagesThisTurn;
+      counts.set('deck', 16);
+      await genImage(provider, true);
+      expect(counts.get('deck'), 'the resume leg reset the turn’s image budget').toBe(16);
+    });
+
+    it('does reset on a genuinely new turn', async () => {
+      const provider = new ClaudeProvider();
+      await genImage(provider, false);
+      const counts = (provider as unknown as { imagesThisTurn: Map<string, number> }).imagesThisTurn;
+      counts.set('deck', 16);
+      await genImage(provider, false);
+      expect(counts.get('deck') ?? 0, 'a new turn inherited the previous turn’s count').toBe(0);
+    });
+  });
+
   it('always terminates the stream with a done event', async () => {
     scriptChunks([]);
     const chunks = await run(new ClaudeProvider(), {});

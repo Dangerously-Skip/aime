@@ -15,6 +15,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
+import { parseSearchWebResults, isParsableSearchTool } from "@/lib/search/parse-results";
 import { scheduleFromQuarryCron } from "@/lib/sse/quarry-cron";
 import { streamRegistry } from "@/lib/stream-registry";
 import { useProjectContext } from "@/hooks/use-project-context";
@@ -580,6 +581,16 @@ function SidebarPanel({
 }
 
 export function CoworkSurface() {
+  /*
+   * The tool name and query for an in-flight search, keyed by tool id.
+   *
+   * `tool_result` carries only the id, and the sidebar card needs the query it
+   * was for — refs rather than state because nothing renders from them and a
+   * re-render per tool call would be waste.
+   */
+  const toolNamesById = useRef<Map<string, string>>(new Map());
+  const searchQueriesById = useRef<Map<string, string>>(new Map());
+
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [pendingFolder, setPendingFolder] = useState<string | null>(null);
@@ -974,6 +985,16 @@ export function CoworkSurface() {
             toolInput.query
           ) {
             const searchQuery = String(toolInput.query);
+            /*
+             * Only the FREE backend is re-queried. The paid providers are read
+             * from their own tool result in the `tool_result` case below, which
+             * costs nothing and shows exactly what the model saw.
+             */
+            if (isParsableSearchTool(toolName)) {
+              toolNamesById.current.set(toolId, toolName);
+              searchQueriesById.current.set(toolId, searchQuery);
+              return;
+            }
             fetch("/api/search-proxy", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1043,8 +1064,30 @@ export function CoworkSurface() {
             const detected = detectServerUrl(result);
             if (detected) setPreviewUrl(detected.url);
           }
-          // (Search results are extracted in onDone after the stream completes,
-          // since the Claude Agent SDK doesn't emit tool_result events in the stream.)
+          /*
+           * Search results come from the tool's OWN output now.
+           *
+           * The sidebar used to re-run every query against `/api/search-proxy`,
+           * which was free against a self-hosted SearXNG and became a doubled
+           * bill once the gate covered `SearchWeb` — the Brave/Tavily/OpenRouter
+           * path. Twelve agent searches meant twenty-four billable queries, and
+           * the card could show a result set the model never saw.
+           *
+           * The comment this replaces said the SDK does not emit tool_result in
+           * the stream. That was true of the branch that read them: it tested
+           * `c.type === 'tool_result'`, a message type the SDK has never sent.
+           * They arrive inside `user` messages and now reach the client.
+           */
+          if (result && !event.is_error && chatId) {
+            const startedAs = toolNamesById.current.get(id);
+            if (isParsableSearchTool(startedAs)) {
+              const parsed = parseSearchWebResults(result);
+              const query = searchQueriesById.current.get(id);
+              if (parsed.length > 0 && query) {
+                addSearchGroup(chatId, { query, results: parsed });
+              }
+            }
+          }
           // Detect binary files mentioned in Bash output (e.g. python-pptx writing a .pptx)
           if (result && !event.is_error && chatId) {
             const allMsgs = useCoworkStore.getState().messages[chatId];

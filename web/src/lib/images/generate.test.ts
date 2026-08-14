@@ -241,7 +241,23 @@ describe('the tool is reachable and capped', () => {
     expect(
       provider,
       'the budget is declared but never checked — an uncapped loop spends real money',
-    ).toMatch(/imagesGenerated\s*>=\s*IMAGE_BUDGET/);
+    ).toMatch(/imagesUsed\(\)\s*>=\s*IMAGE_BUDGET/);
+  });
+
+  /*
+   * And the count spans the whole TURN, not one query. The counter used to be a
+   * local, which was right until the route learned to resume: a turn is up to
+   * four `query()` calls, each with a fresh closure, so the cap that says "for
+   * this turn" bounded 64 images while reporting 16/16 at each leg.
+   */
+  it('counts images per turn, so a resume cannot reset the cap', () => {
+    expect(provider, 'the count is a per-query local again').not.toMatch(
+      /let\s+imagesGenerated\s*=\s*0/,
+    );
+    expect(provider).toMatch(/imagesThisTurn/);
+    expect(provider, 'a resume leg clears the count').toMatch(
+      /if\s*\(!params\.isResume\)\s*this\.imagesThisTurn\.delete/,
+    );
   });
 
   it('borrows the credential server-side rather than taking one from the request', () => {

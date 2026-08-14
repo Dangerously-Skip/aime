@@ -161,6 +161,17 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
    */
   const inactivityTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
+  /**
+   * The chats THIS hook has in flight.
+   *
+   * `isStreaming` is per-surface state, but `streamRegistry` is a module global
+   * keyed by chatId across every surface — so gating the flag on
+   * `streamRegistry.any()` meant a long Cowork turn kept Chat's composer
+   * disabled and its Stop button showing until the app was reloaded, and vice
+   * versa. This set answers the question the flag is actually asking.
+   */
+  const ownStreamsRef = useRef<Set<string>>(new Set());
+
   const abort = useCallback(() => {
     /*
      * The VISIBLE chat, not the last one to start.
@@ -180,7 +191,9 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
     if (activeChatIdRef.current === id) activeChatIdRef.current = null;
     // Only when nothing else is running — another conversation's turn must not
     // have the composer unlocked out from under it.
-    if (!streamRegistry.any()) optionsRef.current.setIsStreaming(false);
+    ownStreamsRef.current.delete(id);
+    // This surface's own streams, not every surface's — see ownStreamsRef.
+    if (ownStreamsRef.current.size === 0) optionsRef.current.setIsStreaming(false);
   }, []);
 
   const sendMessage = useCallback(
@@ -241,6 +254,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         inactivityTimersRef.current.delete(chatId);
       };
       streamRegistry.set(chatId, controller);
+      ownStreamsRef.current.add(chatId);
       activeChatIdRef.current = chatId;
 
       // Snapshot the callbacks at send time so a conversation switch
@@ -420,12 +434,18 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
          * opened with a stray blank line. Here rather than on `done` precisely
          * because the aborted path is the one that leaks.
          */
-        resetTextBoundary(chatId);
-
         // Only the stream that still owns the chat may reset shared state: a
         // superseded stream settling late must not delete the live stream's
         // registry entry, drop its inactivity timer, or flip its flag off.
+        ownStreamsRef.current.delete(chatId);
         if (streamRegistry.release(chatId, controller)) {
+          /*
+           * Inside the ownership check, not before it. The turn is over however
+           * it ended — but a SUPERSEDED stream settling late would otherwise
+           * clear the live stream's paragraph-boundary flag and cost it the
+           * blank line after a tool call.
+           */
+          resetTextBoundary(chatId);
           clearInactivityTimer();
           // Only surrender the abort target if it is still pointing at us.
           if (activeChatIdRef.current === chatId) activeChatIdRef.current = null;
@@ -433,7 +453,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           // composer, so the FIRST concurrent stream to finish used to unlock it
           // while another was still running — turning a live turn's Stop button
           // back into Send.
-          if (!streamRegistry.any()) pinnedSetIsStreaming(false);
+          if (ownStreamsRef.current.size === 0) pinnedSetIsStreaming(false);
         }
       }
     },

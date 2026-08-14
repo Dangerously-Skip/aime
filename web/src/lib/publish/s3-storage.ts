@@ -133,8 +133,20 @@ export function s3Target(deps: S3Deps): PublishTarget {
         throw new PublishError(`That storage endpoint cannot be used: ${verdict.message}`, 'upstream');
       }
 
+      /*
+       * `encodeURIComponent` per segment, not `encodeURI` over the whole path.
+       *
+       * `encodeURI` leaves `#` and `?` alone, so a deck called `Q3 review #2`
+       * produced a URL whose `#2.share.html` parsed as a FRAGMENT: the signed
+       * path — and the object actually written — was truncated at the `#`,
+       * while the returned id and share link carried the full name. The link
+       * 404'd and `revoke(id)` could not find the object. The `publicBaseUrl`
+       * branch compounded it by interpolating the RAW key against an encoded
+       * upload path, so the two disagreed for any name with a space.
+       */
       const key = `${newKey()}/${input.fileName}`;
-      const url = new URL(`/${encodeURI(cfg.bucket)}/${encodeURI(key)}`, verdict.url);
+      const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+      const url = new URL(`/${encodeURIComponent(cfg.bucket)}/${encodedKey}`, verdict.url);
 
       let headers: Record<string, string>;
       try {
@@ -171,7 +183,9 @@ export function s3Target(deps: S3Deps): PublishTarget {
       // it 403s for everyone — including the person who just published.
       const base = cfg.publicBaseUrl?.trim();
       const publicUrl = base
-        ? `${base.replace(/\/+$/, '')}/${key}`
+        // The encoded key, so the share link addresses the object that was
+        // actually written rather than the name it was written from.
+        ? `${base.replace(/\/+$/, '')}/${encodedKey}`
         : url.toString();
 
       return {
@@ -187,7 +201,8 @@ export function s3Target(deps: S3Deps): PublishTarget {
     async revoke(key: string): Promise<void> {
       const verdict = validateServiceUrl(cfg.endpoint);
       if (!verdict.ok) throw new PublishError('That storage endpoint cannot be used.', 'upstream');
-      const url = new URL(`/${encodeURI(cfg.bucket)}/${encodeURI(key)}`, verdict.url);
+      const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+      const url = new URL(`/${encodeURIComponent(cfg.bucket)}/${encodedKey}`, verdict.url);
       const headers = await sign({ method: 'DELETE', url, headers: {} }, cfg);
       const res = await doFetch(url.toString(), { method: 'DELETE', headers });
       if (!res.ok && res.status !== 404) {

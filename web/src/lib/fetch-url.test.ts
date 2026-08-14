@@ -348,3 +348,65 @@ describe('redirects are validated hop by hop', () => {
     expect(r.ok === false && r.kind).not.toBe('refused');
   });
 });
+
+/**
+ * `response.text()` allocated the entire body before `MAX_TEXT_CHARS` applied,
+ * so a multi-gigabyte `text/plain` response — reachable the moment a search
+ * result points at one — was an OOM in the server process rather than a
+ * truncated page.
+ */
+describe('the body is read with a cap, not buffered whole', () => {
+  /** A stream that keeps producing until cancelled, counting what was pulled. */
+  function endless(chunkSize = 64 * 1024) {
+    const state = { pulled: 0, cancelled: false };
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        state.pulled += chunkSize;
+        // A real runaway: far more than any cap, and never done.
+        if (state.pulled > 200 * 1024 * 1024) return controller.close();
+        controller.enqueue(new TextEncoder().encode('a'.repeat(chunkSize)));
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    });
+    return { state, body };
+  }
+
+  it('stops reading once it has enough and cancels the rest', async () => {
+    const { state, body } = endless();
+    const impl = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: '',
+      headers: { get: (n: string) => (n.toLowerCase() === 'location' ? null : 'text/plain') },
+      body,
+      text: async () => { throw new Error('text() would buffer everything'); },
+    })) as unknown as typeof fetch;
+
+    const r = await fetchUrl('https://example.com/huge', { fetchImpl: impl, maxChars: 1_000 });
+
+    expect(r.ok).toBe(true);
+    expect(state.cancelled, 'the remote body was left streaming').toBe(true);
+    expect(
+      state.pulled,
+      `pulled ${state.pulled} bytes for a 1000-character budget — the read is unbounded`,
+    ).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it('still returns the capped text', async () => {
+    const { body } = endless(4096);
+    const impl = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: '',
+      headers: { get: (n: string) => (n.toLowerCase() === 'location' ? null : 'text/plain') },
+      body,
+      text: async () => { throw new Error('text() would buffer everything'); },
+    })) as unknown as typeof fetch;
+
+    const r = await fetchUrl('https://example.com/huge', { fetchImpl: impl, maxChars: 500 });
+    expect(r.ok === true && r.text.length).toBe(500);
+    expect(r.ok === true && r.truncated).toBe(true);
+  });
+});
