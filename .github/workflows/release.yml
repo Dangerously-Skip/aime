@@ -39,9 +39,14 @@ jobs:
         working-directory: web
         run: npx next build
 
-      - name: Clean broken symlinks from standalone
+      # See scripts/resolve-standalone-links.js. electron-builder stats every
+      # entry it copies and dies on any symlink it cannot follow. The shell
+      # one-liner this replaces deleted every `*-<10 hex>*` entry — including the
+      # LIVE aliases that server chunks resolve through at runtime. It never ran
+      # on a real macOS build, so that would have shipped as a runtime failure.
+      - name: Resolve symlinks in standalone output
         working-directory: web
-        run: find .next/standalone -type l ! -exec test -e {} \; -delete 2>/dev/null; find .next/standalone -name '*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*' -not -path '*/node_modules/.package-lock.json' -delete 2>/dev/null; true
+        run: node scripts/resolve-standalone-links.js
 
       - name: Build macOS artifacts
         working-directory: web
@@ -117,6 +122,13 @@ jobs:
       - name: Build Next.js
         working-directory: web
         run: npx next build
+
+      # The Windows job had no equivalent of the macOS step. `next build` writes
+      # the same aliases on every platform, so this was the identical failure
+      # waiting here.
+      - name: Resolve symlinks in standalone output
+        working-directory: web
+        run: node scripts/resolve-standalone-links.js
 
       - name: Build Windows artifacts
         working-directory: web
