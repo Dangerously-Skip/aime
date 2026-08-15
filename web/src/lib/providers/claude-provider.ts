@@ -917,6 +917,11 @@ export class ClaudeProvider extends BaseProvider {
               prompt: imgPrompt,
               apiKey: imageApiKey ?? null,
               themeId: deckTheme?.id ?? null,
+              // The user's choice from Settings. Undefined means they have not
+              // chosen; `resolveImageModel` supplies the fallback, in one place.
+              model:
+                (searchSettings as { imageModel?: string | null } | undefined)?.imageModel ??
+                undefined,
             });
             if (!result.ok) {
               return {

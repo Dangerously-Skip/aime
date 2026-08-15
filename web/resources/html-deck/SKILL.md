@@ -137,8 +137,21 @@ immediately.
 1. **Scaffold a new deck.** From the repo root:
    ```bash
    ./scripts/new-deck.sh my-talk
-   open examples/my-talk/index.html
    ```
+   **Open it through the preview server, not as a file path.** A deck opened as
+   `file://` has a NULL ORIGIN, and embeds refuse to load there — every YouTube
+   frame returns "Error 153 — video player configuration error", ES modules
+   resolve against the filesystem root, and `fetch` is blocked outright.
+
+   ```bash
+   URL=$(curl -sS -X POST http://127.0.0.1:$AIME_PORT/api/preview \
+     -H 'Content-Type: application/json' \
+     -d "{\"path\":\"$PWD/examples/my-talk/index.html\"}" \
+     | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
+   open "$URL"
+   ```
+   The deck is then served from `http://127.0.0.1`, read-only and confined to its
+   own folder.
 2. **Pick a theme.** Open the deck and press `T` to cycle. Or hard-code it:
    ```html
    <link rel="stylesheet" id="theme-link" href="../assets/themes/aurora.css">
@@ -147,6 +160,14 @@ immediately.
 3. **Pick layouts.** Copy `<section class="slide">...</section>` blocks out of
    files in `templates/single-page/` into your deck. Replace the demo data.
    Catalog in [references/layouts.md](references/layouts.md).
+
+   **Video goes in a video layout** — `templates/single-page/video.html` has
+   three: `.l-video` (video is the slide), `.video-stage.two` (a pair), and
+   `.l-video-split` (video beside text). Never append a player to a slide that
+   already has content: `.slide` is `position:absolute; inset:0; overflow:hidden`,
+   so an extra block pushes the real content out of frame and the player runs
+   past the slide edge. If a slide needs both an argument and footage, that is
+   two slides or the split layout.
 4. **Add animations.** Put `data-anim="fade-up"` (or `class="anim-fade-up"`) on
    any element. On `<ul>`/grids, use `anim-stagger-list` for sequenced reveals.
    For canvas FX, use `<div data-fx="knowledge-graph">...</div>` and include

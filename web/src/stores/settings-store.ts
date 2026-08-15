@@ -110,6 +110,12 @@ interface SettingsState {
   searchInstanceUrl: string | null;
   /** Model-provider id whose stored key search borrows. An id, never a secret. */
   searchCredentialProviderId: string | null;
+  /**
+   * Which model generates images. `null` means the user has not chosen, which is
+   * a distinct state from "the default": it is what makes a first-use prompt
+   * possible instead of silently pinning one model forever.
+   */
+  imageModel: string | null;
 
   /**
    * Default deck theme, applied silently to every deck unless a project or the
@@ -179,6 +185,7 @@ interface SettingsActions {
   setDeckStorage: (v: SettingsState['deckStorage']) => void;
   setSearchInstanceUrl: (url: string | null) => void;
   setSearchCredentialProviderId: (id: string | null) => void;
+  setImageModel: (id: string | null) => void;
   setDeckTheme: (id: string | null) => void;
   setAutoExtractMemories: (enabled: boolean) => void;
   setBlockDangerousCommands: (enabled: boolean) => void;
@@ -222,6 +229,7 @@ export const INITIAL_SETTINGS: SettingsState = {
   deckStorage: null,
   searchInstanceUrl: null,
   searchCredentialProviderId: null,
+  imageModel: null,
   deckTheme: null,
   autoExtractMemories: true,
   blockDangerousCommands: true,
@@ -279,6 +287,7 @@ export const PERSISTED_SETTINGS_KEYS = [
   'deckStorage',
   'searchInstanceUrl',
   'searchCredentialProviderId',
+  'imageModel',
   'deckTheme',
   'autoExtractMemories',
   'blockDangerousCommands',
@@ -367,6 +376,7 @@ export const useSettingsStore = create<SettingsStore>()(
       setDeckStorage: (deckStorage) => set({ deckStorage }),
       setSearchInstanceUrl: (searchInstanceUrl) => set({ searchInstanceUrl }),
       setSearchCredentialProviderId: (searchCredentialProviderId) => set({ searchCredentialProviderId }),
+      setImageModel: (imageModel) => set({ imageModel }),
       setDeckTheme: (deckTheme) => set({ deckTheme }),
 
       setAutoExtractMemories: (autoExtractMemories) => set({ autoExtractMemories }),

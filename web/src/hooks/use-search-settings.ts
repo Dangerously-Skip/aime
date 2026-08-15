@@ -25,6 +25,15 @@ export interface SearchSettingsPayload {
    * because the provider list is client state.
    */
   openrouterProviderId: string | null;
+  /**
+   * The user's image model, or null if they have not chosen one.
+   *
+   * Rides this payload because it is the settings channel a turn already has,
+   * and because image generation runs on the same OpenRouter credential the
+   * field above identifies. Null is passed through rather than defaulted here —
+   * the server decides the fallback, so there is one place that does.
+   */
+  imageModel: string | null;
 }
 
 export function useSearchSettings(): SearchSettingsPayload {
@@ -32,6 +41,8 @@ export function useSearchSettings(): SearchSettingsPayload {
   const searchApiKey = useSettingsStore((s) => s.searchApiKey);
   const searchInstanceUrl = useSettingsStore((s) => s.searchInstanceUrl);
   const searchCredentialProviderId = useSettingsStore((s) => s.searchCredentialProviderId);
+
+  const imageModel = useSettingsStore((s) => s.imageModel);
 
   const openrouterProviderId = useProviderStore(
     (s) =>
@@ -45,5 +56,6 @@ export function useSearchSettings(): SearchSettingsPayload {
     searchInstanceUrl,
     searchCredentialProviderId,
     openrouterProviderId,
+    imageModel,
   };
 }
