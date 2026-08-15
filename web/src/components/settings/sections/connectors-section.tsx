@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Eye, EyeOff, X, KeyRound } from 'lucide-react'
 import { ProviderManager } from './provider-manager'
 import { TierGrid } from './tier-grid'
+import { ImageModelChooser } from './image-model-chooser'
 
 /**
  * Settings → API Access. Inference-provider setup, in this order:
@@ -148,6 +149,7 @@ export function ConnectorsSection() {
       </div>
 
       <TierGrid />
+      <ImageModelChooser />
 
       <ProviderManager />
     </div>

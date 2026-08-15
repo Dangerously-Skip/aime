@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { baseToolLabel } from "@/lib/tool-activity";
 import { Wrench, ChevronDown, Loader2, Check, X, FileText, Globe, AlertTriangle, Square } from "lucide-react";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
+import { previewUrlFor } from "@/lib/preview/client";
 import { BASH_ARTIFACT_EXT } from "@/lib/artifact-tracker";
 
 const ARTIFACT_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
@@ -239,7 +240,7 @@ export function ToolCallCard({
               return (
                 <button
                   type="button"
-                  onClick={(e) => { e.stopPropagation(); onPreviewUrl(`file://${filePath}`); }}
+                  onClick={(e) => { e.stopPropagation(); void previewUrlFor(filePath).then(({ url }) => onPreviewUrl(url)); }}
                   className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:bg-primary/10 transition-colors"
                 >
                   <Globe className="h-3 w-3" />

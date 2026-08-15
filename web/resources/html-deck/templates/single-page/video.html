@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Video</title>
+<link rel="stylesheet" href="../../assets/fonts.css">
+<link rel="stylesheet" href="../../assets/base.css">
+<link rel="stylesheet" id="theme-link" href="../../assets/themes/minimal-white.css">
+<link rel="stylesheet" href="../../assets/animations/animations.css">
+</head><body class="single">
+<!--
+  VIDEO LAYOUTS
+
+  Do NOT append a video to a slide that already has content. `.slide` is
+  `position:absolute; inset:0; overflow:hidden` with its children centred, so an
+  extra block pushes the real content out of frame and the player runs past the
+  slide edge. A slide that needs both an argument and footage is either two
+  slides or the split layout below.
+
+  Embeds require an http(s) origin. A deck opened as a local file has a NULL
+  origin, and YouTube answers "Error 153 — video player configuration error" for
+  every frame. Open decks through the preview URL, never as a bare file path.
+-->
+<div class="deck">
+
+  <!-- 1. VIDEO — the slide's body is the video. -->
+  <section class="slide is-active l-video" data-title="Video">
+    <p class="kicker">Infinity Mirror Rooms</p>
+    <h2 class="h2">See it in motion</h2>
+    <div class="video-stage">
+      <div class="video-frame">
+        <iframe
+          src="https://www.youtube.com/embed/VIDEO_ID"
+          title="Descriptive title — screen readers announce this"
+          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowfullscreen
+          loading="lazy"></iframe>
+      </div>
+    </div>
+    <div class="video-caption">Tate Modern curator tour · 2:30</div>
+    <div class="notes">Presenter notes stay hidden in the audience view.</div>
+  </section>
+
+  <!-- 2. TWO VIDEOS — add `two` to the stage; the pair scales together. -->
+  <section class="slide l-video" data-title="Two videos">
+    <h2 class="h2">Two readings of the same room</h2>
+    <div class="video-stage two">
+      <div class="video-frame">
+        <iframe src="https://www.youtube.com/embed/VIDEO_ID_A" title="Curator tour"
+                allow="encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+      </div>
+      <div class="video-frame">
+        <iframe src="https://www.youtube.com/embed/VIDEO_ID_B" title="News segment"
+                allow="encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+      </div>
+    </div>
+    <div class="video-caption">Curator tour (2:30) · CBS segment (4:00)</div>
+  </section>
+
+  <!-- 3. VIDEO + TEXT — argument on one side, footage on the other. -->
+  <section class="slide l-video-split" data-title="Video and text">
+    <div>
+      <p class="kicker">1965–ongoing</p>
+      <h2 class="h2">The viewer completes the work</h2>
+      <ul class="grid g1" style="list-style:none;padding:0;margin:0;gap:12px">
+        <li class="card card-accent"><p>Mirrored chambers repeat a motif <strong>to infinity</strong>.</p></li>
+        <li class="card card-accent"><p>Entry is rationed to <strong>30–60 seconds</strong> per visitor.</p></li>
+      </ul>
+    </div>
+    <div class="video-stage">
+      <div class="video-frame">
+        <iframe src="https://www.youtube.com/embed/VIDEO_ID" title="Installation walkthrough"
+                allow="encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+      </div>
+    </div>
+  </section>
+
+</div>
+<!--
+  VIMEO uses the same frame; only the src changes:
+    https://player.vimeo.com/video/VIDEO_ID
+
+  If an embed may be unavailable, give the frame a fallback line so a failure
+  reads as a failure rather than a black rectangle:
+    <div class="video-frame" data-fallback="If this does not load, open on YouTube">
+-->
+<script src="../../assets/runtime.js"></script>
+</body></html>

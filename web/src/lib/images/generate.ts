@@ -1,4 +1,5 @@
 import { themeArtDirection } from './art-direction';
+import { resolveImageModel } from './catalog';
 
 /**
  * Generate an image through OpenRouter, for any surface that needs one.
@@ -20,11 +21,16 @@ import { themeArtDirection } from './art-direction';
 export const IMAGE_TIMEOUT_MS = 90_000;
 
 /**
- * Cheap, fast, and good enough for slide furniture. Callers may override; this
- * is the default because a 14-slide deck generating a picture per slide should
- * cost cents rather than dollars.
+ * Kept as a re-export so existing imports resolve, but this is no longer where
+ * the choice lives.
+ *
+ * It used to be a constant the only call site did not override, so every image
+ * AIME ever generated used one model and Settings had no say — the same defect
+ * `single-setup-point.test.ts` exists to stop for chat models. The menu is in
+ * `catalog.ts`, the user's pick is in settings, and this is only the fallback
+ * for before they have picked.
  */
-export const DEFAULT_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
+export { FALLBACK_IMAGE_MODEL as DEFAULT_IMAGE_MODEL } from './catalog';
 
 export type ImageFailure = 'not-configured' | 'timeout' | 'upstream' | 'no-image' | 'refused';
 
@@ -91,7 +97,7 @@ export async function generateImage(opts: GenerateOptions): Promise<ImageResult>
 
   const direction = themeArtDirection(opts.themeId);
   const prompt = direction ? `${opts.prompt}\n\n${direction.instruction}` : opts.prompt;
-  const model = opts.model ?? DEFAULT_IMAGE_MODEL;
+  const model = resolveImageModel(opts.model);
   const doFetch = opts.fetchImpl ?? fetch;
 
   let res: Response;

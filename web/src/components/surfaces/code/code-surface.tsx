@@ -61,6 +61,7 @@ import { ThinkingSection } from "@/components/shared/thinking-section";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
 import { detectServerUrl, isWebAsset, findHtmlEntryPoint } from "@/lib/artifacts/server-detector";
+import { previewUrlFor } from "@/lib/preview/client";
 import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import type { Message } from "@/stores/chat-store";
 import { ListChecks } from "lucide-react";
@@ -661,6 +662,15 @@ export function CodeSurface() {
   const allConversations = useConversationStore((s) => s.conversations);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  /*
+   * The LOCAL path behind the current preview.
+   *
+   * Auto-refresh used to derive this by string-slicing a `file://` URL. Previews
+   * are now served over http (see lib/preview/static-server.ts), so that slice
+   * matches nothing and refresh silently stops — the preview looks live and is
+   * stale. Track the path we opened instead of re-deriving it from the URL.
+   */
+  const previewPathRef = useRef<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
@@ -678,8 +688,9 @@ export function CodeSurface() {
 
   // Debounced refresh when non-HTML files are written alongside the current preview
   const triggerPreviewRefresh = useCallback((filePath: string) => {
-    if (!previewUrl || !previewUrl.startsWith("file://")) return;
-    const previewDir = previewUrl.replace("file://", "").substring(0, previewUrl.replace("file://", "").lastIndexOf("/"));
+    const previewPath = previewPathRef.current;
+    if (!previewUrl || !previewPath) return;
+    const previewDir = previewPath.substring(0, previewPath.lastIndexOf("/"));
     const fileDir = filePath.substring(0, filePath.lastIndexOf("/"));
     // Refresh if the written file is in the same directory (or a subdirectory) of the preview file
     if (fileDir.startsWith(previewDir)) {
@@ -697,7 +708,9 @@ export function CodeSurface() {
     const rootDir = folder || lastAsset.substring(0, lastAsset.lastIndexOf("/"));
     const htmlPath = await findHtmlEntryPoint(lastAsset, rootDir);
     if (htmlPath) {
-      setPreviewUrl(`file://${htmlPath}`);
+      previewPathRef.current = htmlPath;
+      const { url } = await previewUrlFor(htmlPath);
+      setPreviewUrl(url);
     }
     pendingWebAssets.current = [];
   }, [folder]);
@@ -893,7 +906,7 @@ export function CodeSurface() {
           updateToolResult(chatId, toolResultId, toolResult, event.is_error as boolean | undefined);
           if (toolResult && !event.is_error) {
             const detected = detectServerUrl(toolResult);
-            if (detected) setPreviewUrl(detected.url);
+            if (detected) { previewPathRef.current = null; setPreviewUrl(detected.url); }
           }
           break;
         }
@@ -952,7 +965,10 @@ export function CodeSurface() {
       // Set preview URL for any HTML files written in the last turn and auto-open preview
       if (pendingHtmlFiles.current.length > 0) {
         const lastHtml = pendingHtmlFiles.current[pendingHtmlFiles.current.length - 1];
-        setPreviewUrl(`file://${lastHtml}`);
+        // Served over http, not file:// — a null origin breaks embeds, ES
+        // modules and fetch. See lib/preview/static-server.ts.
+        previewPathRef.current = lastHtml;
+        void previewUrlFor(lastHtml).then(({ url }) => setPreviewUrl(url));
         setPreviewOpen(true);
         pendingHtmlFiles.current = [];
         pendingWebAssets.current = [];
