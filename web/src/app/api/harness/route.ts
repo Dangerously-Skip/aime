@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import path from 'node:path';
 import os from 'node:os';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
+import { resolveHarnessExecution } from '@/lib/harness/execution';
 import { getProvider } from '@/lib/providers';
 import { getSurfaceConfig } from '@/lib/surfaces';
 import { TURN_BACKSTOP } from '@/lib/surfaces/shared/limits';
@@ -79,6 +80,15 @@ export async function POST(request: NextRequest) {
   const conversationId = typeof body.conversationId === 'string' ? body.conversationId : '';
   const workingDir = typeof body.workingDir === 'string' ? body.workingDir : '';
   const surfaceId = typeof body.surfaceId === 'string' ? body.surfaceId : 'cowork';
+  /*
+   * The route the CLIENT already resolved via resolveSendRoute. Resolving a
+   * model here instead would resolve against the built-in Anthropic registry and
+   * demand an Anthropic key — dead for an OpenRouter-only user, which is the
+   * defect the browser surface shipped for months.
+   */
+  const routeModel = typeof body.model === 'string' ? body.model : null;
+  const providerConfig = (body.providerConfig ?? null) as Parameters<typeof resolveHarnessExecution>[0]['providerConfig'];
+  const requestApiKey = typeof body.apiKey === 'string' ? body.apiKey : null;
   if (!conversationId) return Response.json({ error: 'conversationId required' }, { status: 400 });
   if (!workingDir) return Response.json({ error: 'workingDir required' }, { status: 400 });
 
@@ -91,6 +101,12 @@ export async function POST(request: NextRequest) {
   const surfaceConfig = getSurfaceConfig(surfaceId);
   const provider = getProvider('claude');
   const mcpServers = await loadProvisionedMcpServers();
+
+  const exec = await resolveHarnessExecution(
+    { model: routeModel, providerConfig, apiKey: requestApiKey },
+    surfaceConfig.model,
+    new URL(request.url).origin,
+  );
 
   const runSession = createSessionRunner({
     chatId: `harness_${conversationId}`,
@@ -111,11 +127,14 @@ export async function POST(request: NextRequest) {
         chatId,
         userId: `harness_${conversationId}`,
         mcpServers,
-        model: surfaceConfig.model,
+        model: exec.model,
         surfaceId,
         allowedTools: surfaceConfig.allowedTools,
         maxTurns,
         systemPrompt: surfaceConfig.systemPrompt,
+        apiKey: exec.apiKey,
+        baseUrl: exec.baseUrl,
+        providerEnv: exec.providerEnv,
         cwd,
       }) as AsyncIterable<{ type: string; content?: unknown }>,
     estimateCostUsd: (inputTokens, outputTokens) => {
@@ -124,7 +143,7 @@ export async function POST(request: NextRequest) {
       const { estimateCostUsd } = require('@/lib/models/pricing') as {
         estimateCostUsd: (m: string, i: number, o: number) => number;
       };
-      return estimateCostUsd(surfaceConfig.model || 'claude-sonnet-4-6', inputTokens, outputTokens);
+      return estimateCostUsd(exec.model || 'claude-sonnet-4-6', inputTokens, outputTokens);
     },
   });
 
@@ -140,12 +159,15 @@ export async function POST(request: NextRequest) {
         // The SAME model as the executor. A cheaper verifier that misses things
         // is worse than none, because it turns an honest "unverified" into a
         // false "verified".
-        model: surfaceConfig.model,
+        model: exec.model,
         surfaceId,
         allowedTools: VERIFIER_TOOLS,
         deniedTools: VERIFIER_DENIED,
         maxTurns: TURN_BACKSTOP.unattended,
         systemPrompt: surfaceConfig.systemPrompt,
+        apiKey: exec.apiKey,
+        baseUrl: exec.baseUrl,
+        providerEnv: exec.providerEnv,
         cwd,
       }) as AsyncIterable<{ type: string; content?: unknown }>,
   });
