@@ -62,6 +62,7 @@ import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
 import { detectServerUrl, isWebAsset, findHtmlEntryPoint } from "@/lib/artifacts/server-detector";
 import { previewUrlFor } from "@/lib/preview/client";
+import { useGoalAutoOpen } from "@/components/harness/use-goal-autoopen";
 import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import type { Message } from "@/stores/chat-store";
 import { ListChecks } from "lucide-react";
@@ -715,6 +716,10 @@ export function CodeSurface() {
     pendingWebAssets.current = [];
   }, [folder]);
 
+  // Surfaces the goal panel when this conversation has a goal run.
+  useGoalAutoOpen(chatId, folder);
+
+
   const { projectId: currentProjectId } = useProjectContext(chatId, "code");
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
@@ -1258,6 +1263,7 @@ export function CodeSurface() {
         /* ── Active state: workspace layout (tree + viewer + chat slot) ── */
         <WorkspaceLayout
           workspace={folder}
+          chatId={chatId}
           slots={{
             chat: (
               <div className="flex flex-col h-full min-h-0">

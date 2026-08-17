@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { GoalPanel } from "@/components/harness/goal-panel";
 import {
   DockviewReact,
   DockviewDefaultTab,
@@ -53,6 +54,8 @@ interface WorkspaceContext {
   baseBranch: string | null;
   setBaseBranch: (b: string | null) => void;
   onFolderChange: (f: string | null) => void;
+  /** Identifies a long-running goal run. Runs are per-conversation. */
+  chatId: string;
   /** Slot overrides from the parent (e.g. real chat composer from code-surface). */
   slots: Partial<Record<"chat" | "tree" | "tabs" | "viewer" | "terminal" | "branch", ReactNode>>;
 }
@@ -71,6 +74,7 @@ function safeCtx(p: Partial<WorkspaceContext> | undefined): WorkspaceContext {
     baseBranch: p?.baseBranch ?? null,
     setBaseBranch: p?.setBaseBranch ?? (() => {}),
     onFolderChange: p?.onFolderChange ?? (() => {}),
+    chatId: p?.chatId ?? '',
     slots: p?.slots ?? {},
   };
 }
@@ -190,6 +194,25 @@ function DiffRegion(props: IDockviewPanelProps<DiffPanelParams>) {
   );
 }
 
+/**
+ * A long-running goal run.
+ *
+ * A DYNAMIC panel, like `file:` and `diff:`, rather than a `PanelSlot`. A slot
+ * would have to be added to `Record<PanelSlot, RegionId>` in the persisted
+ * layout, and that store's `migrate` discards `byWorkspace` wholesale — so
+ * adding a panel would reset every user's pane arrangement as a side effect.
+ * On-demand is also the better behaviour: the panel opens itself when a goal
+ * exists and is absent when there is nothing to show.
+ */
+function GoalRegion(props: IDockviewPanelProps<WorkspaceContext>) {
+  const { workspace, chatId } = safeCtx(props.params);
+  return (
+    <div className="dv-region-body overflow-auto">
+      <GoalPanel conversationId={chatId} workingDir={workspace} surfaceId="code" />
+    </div>
+  );
+}
+
 const COMPONENTS = {
   chat: ChatRegion,
   tree: TreeRegion,
@@ -197,6 +220,7 @@ const COMPONENTS = {
   terminal: TerminalRegion,
   diff: DiffRegion,
   file: FileRegion,
+  goal: GoalRegion,
 } as const;
 
 // Chat is always available — render its tab with the close action hidden.
@@ -214,6 +238,8 @@ const TAB_COMPONENTS = {
 
 interface WorkspaceLayoutProps {
   workspace: string | null;
+  /** Conversation the goal run belongs to. */
+  chatId: string;
   onFolderChange?: (folder: string | null) => void;
   slots?: Partial<{
     branch: ReactNode;
@@ -237,7 +263,7 @@ function useDockviewTheme(): DockviewTheme {
   return useIsDarkTheme() ? themeAbyssSpaced : themeLightSpaced;
 }
 
-export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: WorkspaceLayoutProps) {
+export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} }: WorkspaceLayoutProps) {
   const { layout, setDockviewLayout, setVisible } = useCodeWorkspace(workspace);
   const apiRef = useRef<DockviewApi | null>(null);
   const dockviewTheme = useDockviewTheme();
@@ -257,6 +283,7 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
     baseBranch,
     setBaseBranch,
     onFolderChange: onFolderChange ?? (() => {}),
+    chatId,
     slots,
   };
 
@@ -419,6 +446,28 @@ export function WorkspaceLayout({ workspace, onFolderChange, slots = {} }: Works
         component: "diff",
         title: filePath.split("/").pop() ?? filePath,
         params: { ...ctx, filePath, fromRef, toRef } as unknown as Record<string, unknown>,
+        position: ref ? { referencePanel: ref, direction: "within" } : undefined,
+      });
+    };
+
+    /*
+     * Open the goal panel. Same shape as the file and diff openers above, and
+     * idempotent — calling it while the panel is open just focuses it, which is
+     * what makes the auto-open effect safe to run on every status poll.
+     */
+    (window as unknown as Record<string, unknown>).__ideOpenGoal = () => {
+      const id = "goal";
+      const existing = event.api.getPanel(id);
+      if (existing) {
+        existing.api.setActive();
+        return;
+      }
+      const ref = editorRef();
+      event.api.addPanel({
+        id,
+        component: "goal",
+        title: "Goal",
+        params: { ...ctx } as unknown as Record<string, unknown>,
         position: ref ? { referencePanel: ref, direction: "within" } : undefined,
       });
     };
