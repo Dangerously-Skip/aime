@@ -36,6 +36,27 @@ describe('the goal panel is mounted on both surfaces', () => {
   });
 });
 
+describe('a run can actually be started', () => {
+  it('the panel offers a start form when there is no goal', () => {
+    /*
+     * Before this the panel could report a run and nothing could create one, so
+     * the whole feature was unreachable from the UI — a gap that only showed up
+     * when a real trial run was attempted.
+     */
+    const panel = read('components', 'harness', 'goal-panel.tsx');
+    expect(panel).toContain('StartGoal');
+  });
+
+  it('the start form resolves the route on the CLIENT', () => {
+    // A server-resolved model resolves against the built-in Anthropic registry
+    // and demands an Anthropic key — dead for an OpenRouter-only user.
+    const start = read('components', 'harness', 'start-goal.tsx');
+    expect(start).toContain('resolveSendRoute');
+    expect(start).toMatch(/model:\s*route\?\.model/);
+    expect(start).toMatch(/providerConfig:\s*route\?\.providerConfig/);
+  });
+});
+
 describe('mounting Code cost nobody their layout', () => {
   it('did NOT add a PanelSlot', () => {
     /*
