@@ -69,6 +69,7 @@ import {
   isSearchEntry,
 } from "@/lib/cowork/context-entry";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
+import { GoalPanel } from "@/components/harness/goal-panel";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
@@ -435,11 +436,14 @@ function SidebarPanel({
   previewUrl,
   onPreviewClick,
   taskMetrics,
+  chatId,
 }: {
   contextFiles: string[];
   artifactFiles: string[];
   canvasArtifacts: import("@/stores/cowork-store").CanvasArtifact[];
   folder: string | null;
+  /** Identifies the goal run; a run is per-conversation. */
+  chatId: string;
   open: boolean;
   onToggle: () => void;
   onContextClick?: (path: string) => void;
@@ -498,6 +502,13 @@ function SidebarPanel({
                 </div>
               </div>
             )}
+
+            {/*
+              A long-running goal run, when this conversation has one. Renders
+              nothing until a goal exists, so Chat-mode conversations are
+              unchanged.
+            */}
+            <GoalPanel conversationId={chatId} workingDir={folder} surfaceId="cowork" />
 
             <SidebarCard
               label="Context"
@@ -1835,6 +1846,7 @@ export function CoworkSurface() {
 
           {/* Sidebar: Context + Artifacts */}
           <SidebarPanel
+            chatId={chatId}
             contextFiles={contextFiles}
             artifactFiles={artifactFiles}
             canvasArtifacts={canvasArtifacts}
