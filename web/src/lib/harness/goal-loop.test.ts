@@ -6,6 +6,7 @@ import path from 'node:path';
 import { runGoalLoop, readRunState, type SessionRunner, type LoopEvent } from './goal-loop';
 import { writeGoalOnce, writeLedger, readLedger, PROGRESS_FILE, type Ledger, type Goal } from './ledger';
 import { DEFAULT_POLICY } from './stop';
+import type { Verifier } from './verifier';
 
 /**
  * The loop against a REAL directory, with only the model call faked.
@@ -306,5 +307,104 @@ describe('events', () => {
     expect(events.filter((e) => e.type === 'session-start')).toHaveLength(2);
     expect(events.filter((e) => e.type === 'session-end')).toHaveLength(2);
     expect(events.at(-1)?.type).toBe('stopped');
+  });
+});
+
+describe('the verifier gates the pass', () => {
+  const passing: Verifier = async () => ({
+    passed: true, missing: [], evidence: ['ran the check'], at: 'now',
+  });
+  const rejecting: Verifier = async () => ({
+    passed: false, missing: ['step 2 still fails'], evidence: ['ran it'], at: 'now',
+  });
+
+  it('a claim the verifier rejects does NOT pass the task', async () => {
+    /*
+     * The whole point of phase 2. Before this, a session saying it was done was
+     * the end of the matter — which is how "all 9 videos are properly embedded"
+     * would have become a passed task with nine broken embeds behind it.
+     */
+    await writeLedger(dir, ledger(1));
+    const { decision } = await runGoalLoop({ dir, runSession: winner, verify: rejecting });
+
+    const after = await readLedger(dir);
+    expect(after.ok).toBe(true);
+    if (after.ok) {
+      expect(after.value.tasks[0].status).not.toBe('passed');
+      expect(after.value.tasks[0].lastVerdict?.passed).toBe(false);
+    }
+    expect(decision.reason).toBe('no-progress');
+  });
+
+  it('a claim the verifier accepts passes, and records the verdict', async () => {
+    await writeLedger(dir, ledger(1));
+    const { decision } = await runGoalLoop({ dir, runSession: winner, verify: passing });
+    expect(decision.reason).toBe('complete');
+
+    const after = await readLedger(dir);
+    if (after.ok) {
+      expect(after.value.tasks[0].status).toBe('passed');
+      expect(after.value.tasks[0].lastVerdict?.evidence).toEqual(['ran the check']);
+    }
+    const record = JSON.parse(await fsp.readFile(path.join(dir, 'runs', '0001.json'), 'utf8'));
+    expect(record.verified).toBe(true);
+  });
+
+  it('feeds the rejection into the next attempt VERBATIM', async () => {
+    // Paraphrasing feedback is how a loop repeats the same failure in new words.
+    await writeLedger(dir, ledger(1));
+    const seen: string[][] = [];
+    await runGoalLoop({
+      dir,
+      runSession: async (i) => { seen.push(i.missing); return winner(i); },
+      verify: rejecting,
+    });
+    // First attempt has nothing; later ones carry the verifier's exact words.
+    expect(seen[0]).toEqual([]);
+    expect(seen.slice(1).some((m) => m.includes('step 2 still fails'))).toBe(true);
+  });
+
+  it('does not verify a session that did not claim completion', async () => {
+    // Checking work nobody says is finished costs a session to learn what we
+    // were already told.
+    await writeLedger(dir, ledger(1));
+    let verifierRuns = 0;
+    await runGoalLoop({
+      dir,
+      runSession: loser,
+      verify: async () => { verifierRuns++; return { passed: true, missing: [], evidence: ['x'], at: 'now' }; },
+    });
+    expect(verifierRuns).toBe(0);
+  });
+
+  it('a verifier that throws fails the task rather than passing it', async () => {
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({
+      dir,
+      runSession: winner,
+      verify: async () => { throw new Error('verifier crashed'); },
+    });
+    const after = await readLedger(dir);
+    if (after.ok) {
+      expect(after.value.tasks[0].status).not.toBe('passed');
+      expect(after.value.tasks[0].lastVerdict?.missing[0]).toMatch(/failed to run/i);
+    }
+  });
+
+  it('without a verifier the pass still happens, and is recorded as unverified', async () => {
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({ dir, runSession: winner });
+    const record = JSON.parse(await fsp.readFile(path.join(dir, 'runs', '0001.json'), 'utf8'));
+    expect(record.verified).toBe(false);
+    const progress = await fsp.readFile(path.join(dir, PROGRESS_FILE), 'utf8');
+    expect(progress).toContain('unverified');
+  });
+
+  it('says "verified" in the log when something checked it', async () => {
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({ dir, runSession: winner, verify: passing });
+    const progress = await fsp.readFile(path.join(dir, PROGRESS_FILE), 'utf8');
+    expect(progress).toContain('passed (verified)');
+    expect(progress).not.toContain('unverified');
   });
 });

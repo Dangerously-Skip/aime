@@ -8,7 +8,30 @@ import { TURN_BACKSTOP } from '@/lib/surfaces/shared/limits';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
 import { harnessDir, ensureGitignored } from '@/lib/harness/ledger';
 import { createSessionRunner } from '@/lib/harness/session';
+import { createVerifier, VERIFIER_TOOLS, VERIFIER_DENIED } from '@/lib/harness/verifier';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
 import { startRun, stopRun, runStatus } from '@/lib/harness/runner';
+
+const run = promisify(execFile);
+
+/**
+ * `git status --porcelain`, or an empty string outside a repo.
+ *
+ * Fingerprints the working tree either side of the verifier so a verdict from a
+ * run that CHANGED anything can be discarded — the rule that closes the hole
+ * left by giving the verifier Bash.
+ */
+async function treeFingerprint(cwd: string): Promise<string> {
+  try {
+    const { stdout } = await run('git', ['status', '--porcelain'], { cwd, timeout: 10_000 });
+    return stdout;
+  } catch {
+    return '';
+  }
+}
+
 
 export const runtime = 'nodejs';
 
@@ -105,7 +128,29 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  const started = startRun({ conversationId, dir: resolved.dir, runSession });
+  const cwd = path.resolve(workingDir);
+  const verify = createVerifier({
+    treeFingerprint: () => treeFingerprint(cwd),
+    query: (prompt) =>
+      provider.query({
+        prompt,
+        chatId: `harness_verify_${conversationId}`,
+        userId: `harness_${conversationId}`,
+        mcpServers,
+        // The SAME model as the executor. A cheaper verifier that misses things
+        // is worse than none, because it turns an honest "unverified" into a
+        // false "verified".
+        model: surfaceConfig.model,
+        surfaceId,
+        allowedTools: VERIFIER_TOOLS,
+        deniedTools: VERIFIER_DENIED,
+        maxTurns: TURN_BACKSTOP.unattended,
+        systemPrompt: surfaceConfig.systemPrompt,
+        cwd,
+      }) as AsyncIterable<{ type: string; content?: unknown }>,
+  });
+
+  const started = startRun({ conversationId, dir: resolved.dir, runSession, verify });
   if (!started.ok) return Response.json({ error: started.error }, { status: 409 });
 
   return Response.json({ ok: true, dir: resolved.dir });

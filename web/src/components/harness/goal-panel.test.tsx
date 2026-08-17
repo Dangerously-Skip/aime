@@ -142,3 +142,41 @@ describe('GoalPanel', () => {
     await waitFor(() => expect(screen.getByText(/No goal yet/i)).toBeTruthy());
   });
 });
+
+describe('GoalPanel — verification', () => {
+  it('labels a verified pass, and does not call it unverified', async () => {
+    const s = status();
+    s.ledger!.tasks[0].lastVerdict = { passed: true, missing: [], evidence: ['curl → 200'], at: 'now' };
+    global.fetch = mockFetch(s);
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('verified')).toBeTruthy());
+    expect(screen.queryByText('unverified')).toBeNull();
+  });
+
+  it('shows WHY a task keeps failing, in the verifier’s own words', async () => {
+    /*
+     * Without this a task grinding through attempts looks like bad luck rather
+     * than one specific, repeated, readable failure.
+     */
+    const s = status();
+    s.ledger!.tasks[1].lastVerdict = {
+      passed: false,
+      missing: ['step 2 fails: the iframe returns Error 153'],
+      evidence: ['opened slide 3'],
+      at: 'now',
+    };
+    global.fetch = mockFetch(s);
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText(/Error 153/)).toBeTruthy());
+  });
+
+  it('does not show a stale rejection on a task that has since passed', async () => {
+    const s = status();
+    s.ledger!.tasks[0].lastVerdict = { passed: false, missing: ['old failure'], evidence: [], at: 'now' };
+    s.ledger!.tasks[0].status = 'passed';
+    global.fetch = mockFetch(s);
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('Serve over http')).toBeTruthy());
+    expect(screen.queryByText('old failure')).toBeNull();
+  });
+});

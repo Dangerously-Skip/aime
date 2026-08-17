@@ -185,9 +185,24 @@ export function GoalPanel({
                     unverified
                   </span>
                 )}
+                {t.status === 'passed' && t.lastVerdict?.passed && (
+                  <span className="ml-1.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+                    verified
+                  </span>
+                )}
                 {t.attempts > 1 && (
                   <span className="ml-1.5 text-[10px] text-muted-foreground">
                     {t.attempts} attempts
+                  </span>
+                )}
+                {/*
+                  Why a task is not done, in the verifier's own words. Without
+                  this a task grinding through attempts looks like bad luck
+                  rather than a specific, repeated, readable failure.
+                */}
+                {t.status !== 'passed' && t.lastVerdict && !t.lastVerdict.passed && (
+                  <span className="mt-0.5 block text-[10px] text-amber-600 dark:text-amber-400">
+                    {t.lastVerdict.missing[0]}
                   </span>
                 )}
               </span>
