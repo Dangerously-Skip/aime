@@ -11,7 +11,9 @@ import {
   appendProgress,
   type Goal,
   type Task,
+  type TaskVerdict,
 } from './ledger';
+import type { Verifier } from './verifier';
 import {
   shouldStop,
   recordSession,
@@ -71,6 +73,8 @@ export interface LoopEvent {
   type:
     | 'session-start'
     | 'session-end'
+    | 'verify-start'
+    | 'verify-end'
     | 'tamper'
     | 'stopped';
   sessionIndex?: number;
@@ -90,6 +94,13 @@ export interface GoalLoopOptions {
   signal?: AbortSignal;
   /** Resume an interrupted run rather than starting a fresh one. */
   initialRun?: RunState;
+  /**
+   * The checker half of maker-checker.
+   *
+   * Optional so the loop still runs without one, but its absence is recorded:
+   * an unverified pass is a claim, and the run record and the panel both say so.
+   */
+  verify?: Verifier;
 }
 
 export interface LoopResult {
@@ -252,12 +263,45 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
       await writeLedger(dir, ledger);
     }
 
-    const succeeded = outcome.claimsComplete && !outcome.error && tampered.length === 0;
+    const claimed = outcome.claimsComplete && !outcome.error && tampered.length === 0;
+
+    /*
+     * The session's claim is not the verdict.
+     *
+     * Verification runs only when the session claims completion — checking work
+     * nobody says is finished costs a session to learn what we were already
+     * told. A verdict that fails carries its `missing` list into the next
+     * attempt verbatim, which is what stops the loop repeating the same failure
+     * in different words.
+     */
+    let verdict: TaskVerdict | null = null;
+    if (claimed && opts.verify) {
+      emit({ type: 'verify-start', sessionIndex, taskId: task.id });
+      try {
+        verdict = await opts.verify(goal, task, outcome.summary);
+      } catch (e) {
+        verdict = {
+          passed: false,
+          missing: [`The verifier failed to run: ${(e as Error).message}`],
+          evidence: [],
+          at: new Date(0).toISOString(),
+        };
+      }
+      emit({
+        type: 'verify-end',
+        sessionIndex,
+        taskId: task.id,
+        detail: verdict.passed ? 'passed' : verdict.missing[0],
+      });
+    }
+
+    const succeeded = opts.verify ? claimed && verdict?.passed === true : claimed;
     const applied = applySessionUpdate(ledger, [
       {
         id: task.id,
         status: succeeded ? 'passed' : 'todo',
         attempts: task.attempts + 1,
+        lastVerdict: verdict,
       },
     ]);
     if (applied.ok) {
@@ -275,7 +319,10 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         outcome.summary.trim(),
         tampered.length ? `**Rejected plan edits:** ${tampered.join('; ')}` : '',
         outcome.error ? `**Error:** ${outcome.error}` : '',
-        `_Cost $${outcome.costUsd.toFixed(4)} · status ${succeeded ? 'passed (unverified)' : 'not done'}_`,
+        verdict && !verdict.passed ? `**Verifier rejected it:** ${verdict.missing.join('; ')}` : '',
+        `_Cost $${outcome.costUsd.toFixed(4)} · status ${
+          succeeded ? (verdict ? 'passed (verified)' : 'passed (unverified)') : 'not done'
+        }_`,
       ]
         .filter(Boolean)
         .join('\n\n'),
@@ -286,9 +333,10 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
       taskId: task.id,
       costUsd: outcome.costUsd,
       claimsComplete: outcome.claimsComplete,
-      // Phase 1 has no verifier. Saying so in the record is the difference
-      // between "it works" and "the agent said so".
-      verified: false,
+      // Whether anything CHECKED the claim, which is the difference between
+      // "it works" and "the agent said so".
+      verified: verdict !== null,
+      verdict,
       tampered,
       error: outcome.error ?? null,
       stateHash: ledgerStateHash(ledger),

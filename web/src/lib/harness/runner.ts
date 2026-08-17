@@ -48,6 +48,8 @@ export interface StartOptions {
   conversationId: string;
   dir: string;
   runSession: SessionRunner;
+  /** The checker. Absent means passes are the session's own claim. */
+  verify?: import('./verifier').Verifier;
   policy?: StopPolicy;
   now?: () => number;
 }
@@ -86,6 +88,7 @@ export function startRun(opts: StartOptions): StartResult {
   live.promise = runGoalLoop({
     dir: opts.dir,
     runSession: opts.runSession,
+    verify: opts.verify,
     policy: opts.policy,
     now: opts.now,
     signal: controller.signal,
