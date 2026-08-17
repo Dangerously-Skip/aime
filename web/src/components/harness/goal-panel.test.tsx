@@ -136,10 +136,17 @@ describe('GoalPanel', () => {
     expect(screen.getByText(/Pick a folder/i)).toBeTruthy();
   });
 
-  it('says there is no goal rather than rendering an empty plan', async () => {
+  it('offers to START one rather than rendering an empty plan', async () => {
+    /*
+     * This used to assert the words "No goal yet", which described the gap
+     * rather than a feature: the panel could report a run and nothing in the UI
+     * could create one, so the whole thing was unreachable. Attempting a real
+     * trial run is what surfaced it.
+     */
     global.fetch = mockFetch(status({ goal: null, ledger: null, run: null }));
     render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
-    await waitFor(() => expect(screen.getByText(/No goal yet/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Pursue a goal/i)).toBeTruthy());
+    expect(screen.getByRole('button', { name: /Plan and start/i })).toBeTruthy();
   });
 });
 

@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { StartGoal } from './start-goal'
+import type { ModelOption } from '@/lib/models/client-options'
 import type { Goal, Ledger, Task } from '@/lib/harness/ledger'
 import type { RunState, StopDecision } from '@/lib/harness/stop'
 
@@ -56,10 +58,13 @@ export function GoalPanel({
   conversationId,
   workingDir,
   surfaceId,
+  modelRoute = null,
 }: {
   conversationId: string
   workingDir: string | null
   surfaceId: 'cowork' | 'code'
+  /** The surface's pinned model, if any. Null means follow Settings. */
+  modelRoute?: ModelOption | null
 }) {
   const [status, setStatus] = useState<HarnessStatus | null>(null)
   const [busy, setBusy] = useState(false)
@@ -112,10 +117,18 @@ export function GoalPanel({
   }
 
   if (!status?.goal) {
+    // No goal — offer to start one. Until this existed the panel could report a
+    // run and nothing could create one, so the feature was unreachable.
     return (
-      <p className="p-4 text-xs text-muted-foreground">
-        No goal yet. Describe what you want done and switch this conversation to Goal mode.
-      </p>
+      <div className="p-3">
+        <StartGoal
+          conversationId={conversationId}
+          workingDir={workingDir}
+          surfaceId={surfaceId}
+          modelRoute={modelRoute}
+          onStarted={refresh}
+        />
+      </div>
     )
   }
 
