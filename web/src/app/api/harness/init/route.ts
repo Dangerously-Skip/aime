@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import path from 'node:path';
 import os from 'node:os';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
+import { resolveHarnessExecution } from '@/lib/harness/execution';
 import { getProvider } from '@/lib/providers';
 import { getSurfaceConfig } from '@/lib/surfaces';
 import { harnessDir, ensureGitignored } from '@/lib/harness/ledger';
@@ -48,6 +49,15 @@ export async function POST(request: NextRequest) {
   const workingDir = typeof body.workingDir === 'string' ? body.workingDir : '';
   const objective = typeof body.objective === 'string' ? body.objective : '';
   const surfaceId = typeof body.surfaceId === 'string' ? body.surfaceId : 'cowork';
+  /*
+   * The route the CLIENT already resolved via resolveSendRoute. Resolving a
+   * model here instead would resolve against the built-in Anthropic registry and
+   * demand an Anthropic key — dead for an OpenRouter-only user, which is the
+   * defect the browser surface shipped for months.
+   */
+  const routeModel = typeof body.model === 'string' ? body.model : null;
+  const providerConfig = (body.providerConfig ?? null) as Parameters<typeof resolveHarnessExecution>[0]['providerConfig'];
+  const requestApiKey = typeof body.apiKey === 'string' ? body.apiKey : null;
   const budgetUsd = typeof body.budgetUsd === 'number' ? body.budgetUsd : null;
   const deadlineIso = typeof body.deadlineIso === 'string' ? body.deadlineIso : null;
   const sessionCap = typeof body.sessionCap === 'number' ? body.sessionCap : null;
@@ -75,6 +85,11 @@ export async function POST(request: NextRequest) {
   const dir = harnessDir(resolvedRoot);
   const surfaceConfig = getSurfaceConfig(surfaceId);
   const provider = getProvider('claude');
+  const exec = await resolveHarnessExecution(
+    { model: routeModel, providerConfig, apiKey: requestApiKey },
+    surfaceConfig.model,
+    new URL(request.url).origin,
+  );
 
   const result = await initializeGoal({
     dir,
@@ -89,7 +104,7 @@ export async function POST(request: NextRequest) {
         chatId: `harness_init_${conversationId}`,
         userId: `harness_${conversationId}`,
         mcpServers: {},
-        model: surfaceConfig.model,
+        model: exec.model,
         surfaceId,
         /*
          * READ-ONLY. The planner decides what "done" means, so letting it also
@@ -101,6 +116,9 @@ export async function POST(request: NextRequest) {
         deniedTools: PLANNER_DENIED,
         maxTurns: 20,
         systemPrompt: surfaceConfig.systemPrompt,
+        apiKey: exec.apiKey,
+        baseUrl: exec.baseUrl,
+        providerEnv: exec.providerEnv,
         cwd: resolvedRoot,
       }) as AsyncIterable<{ type: string; content?: unknown }>) {
         if (chunk.type === 'text' && typeof chunk.content === 'string') text += chunk.content;
