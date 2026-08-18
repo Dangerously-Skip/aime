@@ -1659,11 +1659,14 @@ export function CoworkSurface() {
       if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
       const objective = inputValue.trim();
       if (!objective) return;
+      setGoalPending(objective);
       void startGoal({ conversationId: chatId, workingDir: folder, objective, ...settings }).then(
         (ok) => {
+          setGoalPending(null);
           if (ok) {
             setInputValue("");
             setGoalMode(false);
+            setGoalNudge((n) => n + 1);
           }
         },
       );
@@ -1681,6 +1684,10 @@ export function CoworkSurface() {
   const { start: startGoal, phase: goalPhase, error: startError, setError: setGoalError } =
     useStartGoal("cowork", modelRoute ?? null);
   const goalBusy = goalPhase !== "idle";
+  // The objective is held while planning so the pending card can show it, and
+  // bumped on success so the panel appears at once rather than up to 3s later.
+  const [goalPending, setGoalPending] = useState<string | null>(null);
+  const [goalNudge, setGoalNudge] = useState(0);
 
   const attachmentChips = attachments.length > 0 && (
     <div className="flex flex-wrap gap-1.5 px-4 pt-2">
@@ -1807,7 +1814,17 @@ export function CoworkSurface() {
             )}
             {folder && (
               <div className="mx-auto mt-3 w-full max-w-[672px]">
-                <GoalRunStatus chatId={chatId} folder={folder} surfaceId="cowork" />
+                <GoalRunStatus
+                  chatId={chatId}
+                  folder={folder}
+                  surfaceId="cowork"
+                  nudge={goalNudge}
+                  starting={
+                    goalPending && goalPhase !== "idle"
+                      ? { objective: goalPending, phase: goalPhase }
+                      : null
+                  }
+                />
               </div>
             )}
           </div>
