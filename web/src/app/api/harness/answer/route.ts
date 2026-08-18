@@ -27,10 +27,12 @@ export async function POST(request: NextRequest) {
   }
 
   const workingDir = typeof body.workingDir === 'string' ? body.workingDir : '';
+  const conversationId = typeof body.conversationId === 'string' ? body.conversationId : '';
   const id = typeof body.id === 'string' ? body.id : '';
   const answer = typeof body.answer === 'string' ? body.answer : '';
   if (!workingDir) return Response.json({ error: 'workingDir required' }, { status: 400 });
   if (!id) return Response.json({ error: 'id required' }, { status: 400 });
+  if (!conversationId) return Response.json({ error: 'conversationId required' }, { status: 400 });
 
   if (!(await isAllowedWorkspaceRoot(workingDir))) {
     return Response.json(
@@ -39,7 +41,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const dir = harnessDir(path.resolve(workingDir));
+  const dir = harnessDir(path.resolve(workingDir), conversationId);
   const result = await answerQuestion(dir, id, answer);
   if (!result.ok) return Response.json({ error: result.error }, { status: 409 });
   return Response.json({ ok: true });
@@ -51,10 +53,11 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
   const workingDir = request.nextUrl.searchParams.get('workingDir') ?? '';
+  const conversationId = request.nextUrl.searchParams.get('conversationId') ?? '';
   if (!workingDir) return Response.json({ error: 'workingDir required' }, { status: 400 });
   if (!(await isAllowedWorkspaceRoot(workingDir))) {
     return Response.json({ error: 'That folder is outside your home and temp directories' }, { status: 403 });
   }
-  const q = await readQuestion(harnessDir(path.resolve(workingDir)));
+  const q = await readQuestion(harnessDir(path.resolve(workingDir), conversationId));
   return Response.json({ question: q && q.answer === null ? q : null });
 }

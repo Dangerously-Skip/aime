@@ -51,6 +51,7 @@ export const runtime = 'nodejs';
 
 async function resolveDir(
   workingDir: string,
+  conversationId: string,
 ): Promise<{ ok: true; dir: string } | { ok: false; error: string }> {
   // Real paths on both sides: on macOS `/tmp` is a symlink to `/private/tmp` and
   // the folder picker returns the resolved form, so a literal-prefix check
@@ -61,7 +62,7 @@ async function resolveDir(
     // one and cost an afternoon.
     return { ok: false, error: 'That folder is outside your home and temp directories' };
   }
-  return { ok: true, dir: harnessDir(path.resolve(workingDir)) };
+  return { ok: true, dir: harnessDir(path.resolve(workingDir), conversationId) };
 }
 
 export async function POST(request: NextRequest) {
@@ -94,7 +95,7 @@ export async function POST(request: NextRequest) {
   if (!conversationId) return Response.json({ error: 'conversationId required' }, { status: 400 });
   if (!workingDir) return Response.json({ error: 'workingDir required' }, { status: 400 });
 
-  const resolved = await resolveDir(workingDir);
+  const resolved = await resolveDir(workingDir, conversationId);
   if (!resolved.ok) return Response.json({ error: resolved.error }, { status: 403 });
 
   // Keep the run's state out of the user's commits.
@@ -189,7 +190,7 @@ export async function GET(request: NextRequest) {
   if (!conversationId || !workingDir) {
     return Response.json({ error: 'conversationId and workingDir required' }, { status: 400 });
   }
-  const resolved = await resolveDir(workingDir);
+  const resolved = await resolveDir(workingDir, conversationId);
   if (!resolved.ok) return Response.json({ error: resolved.error }, { status: 403 });
 
   return Response.json(await runStatus(conversationId, resolved.dir));
