@@ -70,7 +70,12 @@ import {
 } from "@/lib/cowork/context-entry";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { GoalPanel } from "@/components/harness/goal-panel";
-import { GoalEntry } from "@/components/harness/goal-entry";
+import {
+  GoalModeToggle, GoalModeBar, goalSettingsFrom,
+  DEFAULT_BUDGET_USD, DEFAULT_SESSION_CAP,
+} from "@/components/harness/goal-mode";
+import { useStartGoal } from "@/components/harness/use-start-goal";
+import { GoalRunStatus } from "@/components/harness/goal-run-status";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
@@ -1638,12 +1643,44 @@ export function CoworkSurface() {
   function handleButtonClick() {
     if (isStreaming) {
       abort();
-    } else {
-      handleSubmit(inputValue);
+      return;
     }
+    /*
+     * Goal mode is a property of the SEND, not a second composer.
+     *
+     * The first version put an entire second form under the chat box, so doing
+     * one thing meant typing the same sentence into two boxes and working out
+     * which was which. The text, the folder and the send button are already
+     * here; the toggle only changes what happens to them.
+     */
+    if (goalMode) {
+      const settings = goalSettingsFrom(goalBudget, goalCap);
+      if (typeof settings === "string") return setGoalError(settings);
+      if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
+      const objective = inputValue.trim();
+      if (!objective) return;
+      void startGoal({ conversationId: chatId, workingDir: folder, objective, ...settings }).then(
+        (ok) => {
+          if (ok) {
+            setInputValue("");
+            setGoalMode(false);
+          }
+        },
+      );
+      return;
+    }
+    handleSubmit(inputValue);
   }
 
   const hasMessages = messages.length > 0;
+
+  // Goal mode: a switch on the composer, not a separate surface.
+  const [goalMode, setGoalMode] = useState(false);
+  const [goalBudget, setGoalBudget] = useState(String(DEFAULT_BUDGET_USD));
+  const [goalCap, setGoalCap] = useState(String(DEFAULT_SESSION_CAP));
+  const { start: startGoal, phase: goalPhase, error: startError, setError: setGoalError } =
+    useStartGoal("cowork", modelRoute ?? null);
+  const goalBusy = goalPhase !== "idle";
 
   const attachmentChips = attachments.length > 0 && (
     <div className="flex flex-wrap gap-1.5 px-4 pt-2">
@@ -1717,6 +1754,7 @@ export function CoworkSurface() {
                   <VoiceButton onTranscript={handleVoiceTranscript} />
                   <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
                   <EditorPicker folder={folder} />
+                  <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
                   {planContent && (
                     <Button
                       variant="ghost"
@@ -1740,7 +1778,8 @@ export function CoworkSurface() {
                     size="icon"
                     className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/80"
                     onClick={handleButtonClick}
-                    disabled={!inputValue.trim()}
+                    disabled={!inputValue.trim() || goalBusy}
+                    title={goalMode ? "Plan and start the goal" : "Send"}
                   >
                     <ArrowUp className="h-4 w-4" />
                   </Button>
@@ -1749,15 +1788,28 @@ export function CoworkSurface() {
             </div>
 
             {/*
-              The other way to start.
+              Goal mode's numbers, and the status of a run already going.
               
-              This belongs HERE and not only in the sidebar: the sidebar does not
-              exist in the empty state, and an empty conversation with a folder
-              chosen is exactly when someone wants a long-running goal. Mounting
-              it only in the sidebar made the feature invisible at the one moment
-              it is wanted.
+              No second composer: the text and the send button above are the
+              ones that start it.
             */}
-            <GoalEntry chatId={chatId} folder={folder} surfaceId="cowork" />
+            {goalMode && (
+              <div className="mx-auto w-full max-w-[672px] rounded-xl border border-border/50 bg-card/50">
+                <GoalModeBar
+                  budget={goalBudget}
+                  cap={goalCap}
+                  onBudget={setGoalBudget}
+                  onCap={setGoalCap}
+                  disabled={goalBusy}
+                  error={startError}
+                />
+              </div>
+            )}
+            {folder && (
+              <div className="mx-auto mt-3 w-full max-w-[672px]">
+                <GoalRunStatus chatId={chatId} folder={folder} surfaceId="cowork" />
+              </div>
+            )}
           </div>
         </div>
       ) : (

@@ -136,17 +136,15 @@ describe('GoalPanel', () => {
     expect(screen.getByText(/Pick a folder/i)).toBeTruthy();
   });
 
-  it('offers to START one rather than rendering an empty plan', async () => {
+  it('renders NOTHING when there is no goal', async () => {
     /*
-     * This used to assert the words "No goal yet", which described the gap
-     * rather than a feature: the panel could report a run and nothing in the UI
-     * could create one, so the whole thing was unreachable. Attempting a real
-     * trial run is what surfaced it.
+     * It offered a start form once, which became a second composer under the
+     * real one — the same sentence typed into two boxes to do one thing.
+     * Starting is the composer's own toggle now; this only reports.
      */
     global.fetch = mockFetch(status({ goal: null, ledger: null, run: null }));
-    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
-    await waitFor(() => expect(screen.getByText(/Pursue a goal/i)).toBeTruthy());
-    expect(screen.getByRole('button', { name: /Plan and start/i })).toBeTruthy();
+    const { container } = render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(container.textContent).toBe(''));
   });
 });
 
