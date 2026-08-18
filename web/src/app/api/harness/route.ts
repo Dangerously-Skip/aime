@@ -28,9 +28,30 @@ const run = promisify(execFile);
 async function treeFingerprint(cwd: string): Promise<string> {
   try {
     const { stdout } = await run('git', ['status', '--porcelain'], { cwd, timeout: 10_000 });
-    return stdout;
+    return `git\n${stdout}`;
   } catch {
-    return '';
+    /*
+     * Not a repo, or git failed. Returning '' made both fingerprints equal, so
+     * `treeUnchanged` was always true and the guard was inert — a Bash-armed
+     * verifier could fix what it was checking and its verdict would stand.
+     *
+     * Fall back to a listing with sizes and mtimes. It is coarser than git but
+     * it MOVES when a file is written, which is the only property the guard
+     * needs.
+     */
+    try {
+      const { stdout } = await run(
+        'sh',
+        ['-c', 'find . -type f -not -path "*/.git/*" -not -path "*/node_modules/*" | head -2000 | xargs stat -f "%N %z %m" 2>/dev/null | sort'],
+        { cwd, timeout: 10_000, maxBuffer: 8 * 1024 * 1024 },
+      );
+      return `stat\n${stdout}`;
+    } catch {
+      // Nothing worked. A unique value on each call means the two fingerprints
+      // differ, so the verdict is DISCARDED — refusing is the safe reading of
+      // "we cannot tell".
+      return `unknown\n${Math.random()}`;
+    }
   }
 }
 
@@ -196,7 +217,8 @@ export async function GET(request: NextRequest) {
   const resolved = await resolveDir(workingDir, conversationId);
   if (!resolved.ok) return Response.json({ error: resolved.error }, { status: 403 });
 
-  return Response.json(await runStatus(conversationId, resolved.dir));
+  const idx = await currentRunIndex(path.resolve(workingDir), conversationId);
+  return Response.json(await runStatus(conversationId, resolved.dir, idx));
 }
 
 export async function DELETE(request: NextRequest) {

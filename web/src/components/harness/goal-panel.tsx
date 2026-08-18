@@ -77,6 +77,18 @@ export function GoalPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workingDir, conversationId, id: status.question.id, answer: text }),
       })
+      /*
+       * Restart the loop.
+       *
+       * Answering only wrote to disk — nothing re-entered runGoalLoop, so the
+       * panel promised "Answer, and it carries on" and the run sat there
+       * forever. The loop consumes the answer on its next pass.
+       */
+      await fetch('/api/harness', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId, workingDir, surfaceId }),
+      }).catch(() => {})
       setAnswer('')
       await refresh()
     } finally {

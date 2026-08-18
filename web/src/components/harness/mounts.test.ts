@@ -271,3 +271,58 @@ describe('the run narrates itself into the transcript', () => {
     }
   });
 });
+
+describe('regressions the review found — UI', () => {
+  const startHook = read('components', 'harness', 'use-start-goal.ts');
+  const panel = read('components', 'harness', 'goal-panel.tsx');
+  const autoopen = read('components', 'harness', 'use-goal-autoopen.ts');
+  const transcript = read('components', 'harness', 'use-goal-transcript.ts');
+  const route = read('app', 'api', 'harness', 'route.ts');
+
+  it('sends the user’s BYOK key, like every other surface', () => {
+    // Without it a Settings-only key user gets "Not logged in · Please run
+    // /login" — the same failure 335e0ca fixed one layer down.
+    expect(startHook).toContain('anthropicApiKey');
+    expect(startHook).toMatch(/apiKey:\s*anthropicApiKey/);
+  });
+
+  it('answering RESTARTS the run, not just records the answer', () => {
+    // The panel promises "Answer, and it carries on".
+    const send = /const send = async[\s\S]*?\n {2}\}/.exec(panel)?.[0] ?? '';
+    expect(send).toContain("'/api/harness/answer'");
+    expect(send).toMatch(/fetch\('\/api\/harness',\s*\{[\s\S]{0,200}?POST/);
+  });
+
+  it('the goal panel can be closed — it is opened once, not every poll', () => {
+    expect(autoopen).toContain('opened.current');
+  });
+
+  it('transcript keys include the run, so a second goal narrates', () => {
+    // Session indexes and task ids restart per run; keys built from them alone
+    // collide and every line of run 2 looks already-posted.
+    expect(transcript).toMatch(/const run = `r\$\{s\.runIndex/);
+    expect(transcript).toMatch(/\$\{run\}:start:/);
+  });
+
+  it('the tree guard is not inert outside a git repo', () => {
+    // Returning '' on failure made both fingerprints equal, so treeUnchanged was
+    // always true and a Bash-armed verifier could fix what it was checking.
+    const fp = /async function treeFingerprint[\s\S]*?\n\}/.exec(route)?.[0] ?? '';
+    expect(fp).not.toMatch(/catch\s*\{\s*return '';/);
+    expect(fp).toContain('stat');
+  });
+
+  it('goal mode refuses when there is no conversation yet', () => {
+    // The branch returned before the auto-create block, posting an empty id.
+    for (const src of [cowork, codeSurface]) {
+      expect(src).toMatch(/a goal needs a conversation to live in/);
+    }
+  });
+
+  it('Cowork shows the planning spinner in the ACTIVE state too', () => {
+    // It rendered only in the empty state, so a follow-up goal — the case the
+    // run sequence exists for — showed nothing for the whole planning call.
+    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
+    expect(active).toContain('<GoalRunStatus');
+  });
+});

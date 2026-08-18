@@ -606,3 +606,98 @@ describe('plan revision', () => {
     expect(progress).toContain('needed a fixture');
   });
 });
+
+describe('regressions the review found', () => {
+  it('a session with no verdict does not WIPE the last rejection', async () => {
+    // The missing list is what the next attempt reads; overwriting it with null
+    // loses the reason the previous attempt failed.
+    await writeLedger(dir, ledger(1));
+    const l = await readLedger(dir);
+    if (l.ok) {
+      l.value.tasks[0].lastVerdict = { passed: false, missing: ['still broken'], evidence: [], at: 'then' };
+      await writeLedger(dir, l.value);
+    }
+    await runGoalLoop({ dir, runSession: loser, policy: { idleLimit: 1, attemptLimit: 5 } });
+    const after = await readLedger(dir);
+    if (after.ok) expect(after.value.tasks[0].lastVerdict?.missing).toEqual(['still broken']);
+  });
+
+  it('counts revisions per RUN, surviving a park', async () => {
+    // A loop-local counter resets on every park or restart, so a run could
+    // revise indefinitely by pausing between edits.
+    await writeLedger(dir, ledger(1));
+    const adds: SessionRunner = async () => ({
+      costUsd: 0.01, summary: 'more', claimsComplete: true,
+      revision: { add: [{ title: 'Extra', verify: ['x'] }], remove: [], reason: 'r' },
+    });
+    const first = await runGoalLoop({ dir, runSession: adds });
+    expect(first.run.revisions).toBeGreaterThan(0);
+    const state = await readRunState(dir);
+    expect(state?.revisions).toBe(first.run.revisions);
+
+    /*
+     * And a SECOND invocation must not get a fresh allowance.
+     *
+     * Running the loop once proved nothing — a loop-local counter looks
+     * identical. The bug is that a run could revise indefinitely by pausing
+     * between edits, so the test has to resume after the cap is reached.
+     */
+    expect(first.run.revisions).toBe(MAX_REVISIONS);
+    const beforeCount = (await readLedger(dir)).ok
+      ? ((await readLedger(dir)) as { ok: true; value: Ledger }).value.tasks.length
+      : 0;
+
+    // Give it something to do, so the loop actually runs a session.
+    const l2 = await readLedger(dir);
+    if (l2.ok) {
+      l2.value.tasks.push({ id: 't-900', title: 'More', verify: ['x'], status: 'todo', attempts: 0, lastVerdict: null });
+      await writeLedger(dir, l2.value);
+    }
+
+    const second = await runGoalLoop({ dir, runSession: adds });
+    expect(second.run.revisions).toBe(MAX_REVISIONS); // no fresh allowance
+    const after = await readLedger(dir);
+    if (after.ok) {
+      // One task added by hand, none by a revision past the cap.
+      expect(after.value.tasks.length).toBe(beforeCount + 1);
+    }
+  });
+
+  it('applies an APPROVED removal when the run resumes', async () => {
+    /*
+     * "Allow" was a no-op: the answer was recorded and the removal never
+     * happened, so the run carried on with the task the user had agreed to drop.
+     */
+    await writeLedger(dir, ledger(2));
+    const proposes: SessionRunner = async () => ({
+      costUsd: 0.01, summary: 'drop it', claimsComplete: false,
+      revision: { add: [], remove: ['t-2'], reason: 'out of scope' },
+    });
+    await runGoalLoop({ dir, runSession: proposes });
+
+    const q = await readQuestion(dir);
+    expect(q?.revision).toBeTruthy();
+    await answerQuestion(dir, q!.id, 'Allow', () => 'now');
+
+    await runGoalLoop({ dir, runSession: winner });
+    const after = await readLedger(dir);
+    if (after.ok) {
+      expect(after.value.tasks.map((t) => t.id)).not.toContain('t-2');
+      expect(after.value.retiredIds).toContain('t-2');
+    }
+  });
+
+  it('does NOT remove when the user declines', async () => {
+    await writeLedger(dir, ledger(2));
+    const proposes: SessionRunner = async () => ({
+      costUsd: 0.01, summary: 'drop it', claimsComplete: false,
+      revision: { add: [], remove: ['t-2'], reason: 'r' },
+    });
+    await runGoalLoop({ dir, runSession: proposes });
+    const q = await readQuestion(dir);
+    await answerQuestion(dir, q!.id, 'Keep the plan as it is', () => 'now');
+    await runGoalLoop({ dir, runSession: winner });
+    const after = await readLedger(dir);
+    if (after.ok) expect(after.value.tasks.map((t) => t.id)).toContain('t-2');
+  });
+});

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
  * Open the Code surface's goal panel once a goal exists.
@@ -18,8 +18,18 @@ import { useEffect } from 'react';
  * idempotent, so re-firing is a focus rather than a duplicate panel.
  */
 export function useGoalAutoOpen(conversationId: string, workingDir: string | null): void {
+  /*
+   * Opened at most once per conversation.
+   *
+   * The poll re-added the panel every five seconds, so closing it was
+   * impossible for as long as a goal existed — the user's close was undone
+   * before they let go of the mouse.
+   */
+  const opened = useRef<string>('');
+
   useEffect(() => {
     if (!workingDir || !conversationId) return;
+    if (opened.current === conversationId) return;
     let cancelled = false;
 
     const check = async () => {
@@ -31,7 +41,10 @@ export function useGoalAutoOpen(conversationId: string, workingDir: string | nul
         const status = (await res.json()) as { goal?: unknown };
         if (cancelled || !status.goal) return;
         const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
-        if (typeof open === 'function') (open as () => void)();
+        if (typeof open === 'function') {
+          opened.current = conversationId;
+          (open as () => void)();
+        }
       } catch {
         // The panel is a convenience; a failed poll is not worth surfacing.
       }

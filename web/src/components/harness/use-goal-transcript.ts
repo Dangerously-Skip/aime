@@ -25,6 +25,14 @@ import type { Message } from '@/stores/chat-store';
 
 export interface TranscriptStatus {
   running: boolean;
+  /**
+   * Which run these events belong to.
+   *
+   * Session indexes and task ids restart at 1 and t-001 for every new goal, so
+   * keys built from them alone collide across runs — a second goal in the same
+   * chat narrated nothing, because every line looked already-posted.
+   */
+  runIndex?: number | null;
   goal: { objective: string } | null;
   ledger: { tasks: { id: string; title: string; status: string }[] } | null;
   run: { sessions: number; spentUsd: number } | null;
@@ -48,6 +56,7 @@ export function transcriptLines(
 ): { key: string; content: string }[] {
   const out: { key: string; content: string }[] = [];
   if (!s.goal) return out;
+  const run = `r${s.runIndex ?? 0}`;
 
   const tasks = s.ledger?.tasks ?? [];
   const byId = new Map(tasks.map((t) => [t.id, t.title]));
@@ -55,30 +64,30 @@ export function transcriptLines(
   for (const e of s.events) {
     if (e.type === 'session-start' && e.sessionIndex) {
       out.push({
-        key: `start:${e.sessionIndex}`,
+        key: `${run}:start:${e.sessionIndex}`,
         content: `**Session ${e.sessionIndex}** — working on _${byId.get(e.taskId ?? '') ?? e.taskId}_`,
       });
     }
     if (e.type === 'verify-end' && e.sessionIndex) {
       const passed = e.detail === 'passed';
       out.push({
-        key: `verify:${e.sessionIndex}:${e.taskId}`,
+        key: `${run}:verify:${e.sessionIndex}:${e.taskId}`,
         content: passed
           ? `✓ Checked and passed — _${byId.get(e.taskId ?? '') ?? e.taskId}_`
           : `✗ Checked and rejected — ${e.detail ?? 'no reason given'}`,
       });
     }
     if (e.type === 'tamper') {
-      out.push({ key: `tamper:${e.sessionIndex}`, content: `⚠ Rejected a plan edit — ${e.detail}` });
+      out.push({ key: `${run}:tamper:${e.sessionIndex}`, content: `⚠ Rejected a plan edit — ${e.detail}` });
     }
     if (e.type === 'revised') {
-      out.push({ key: `revised:${e.sessionIndex}`, content: `Plan changed — ${e.detail}` });
+      out.push({ key: `${run}:revised:${e.sessionIndex}`, content: `Plan changed — ${e.detail}` });
     }
   }
 
   if (s.question) {
     out.push({
-      key: `question:${s.question.id}`,
+      key: `${run}:question:${s.question.id}`,
       content: `**It needs a decision from you.** ${s.question.question}\n\nAnswer in the Goal panel and it carries on.`,
     });
   }
@@ -86,7 +95,7 @@ export function transcriptLines(
   if (!s.running && s.decision?.stop) {
     const spend = s.run ? ` · $${s.run.spentUsd.toFixed(2)} over ${s.run.sessions} session${s.run.sessions === 1 ? '' : 's'}` : '';
     out.push({
-      key: `stopped:${s.decision.reason}:${s.run?.sessions ?? 0}`,
+      key: `${run}:stopped:${s.decision.reason}:${s.run?.sessions ?? 0}`,
       content: `**Goal ${s.decision.reason === 'complete' ? 'complete' : 'stopped'}** — ${s.decision.detail ?? ''}${spend}`,
     });
   }

@@ -36,6 +36,8 @@ export interface ParkedQuestion {
   askedAt: string;
   answer: string | null;
   answeredAt: string | null;
+  /** The plan change this question is gating, if it is gating one. */
+  revision?: unknown;
 }
 
 export const QUESTION_FILE = 'question.json';
@@ -63,6 +65,7 @@ export async function readQuestion(dir: string): Promise<ParkedQuestion | null> 
       askedAt: typeof o.askedAt === 'string' ? o.askedAt : '',
       answer: typeof o.answer === 'string' ? o.answer : null,
       answeredAt: typeof o.answeredAt === 'string' ? o.answeredAt : null,
+      revision: o.revision,
     };
   } catch {
     // A corrupt question file must not read as "no question" — that would
@@ -88,6 +91,14 @@ export async function isWaiting(dir: string): Promise<boolean> {
 
 export interface ParkInput {
   taskId?: string | null;
+  /**
+   * A plan change waiting on this answer.
+   *
+   * Stored WITH the question so the decision and the thing it decides cannot
+   * drift apart across a restart — approving on resume has to apply the same
+   * revision the user was shown, not one reconstructed later.
+   */
+  revision?: unknown;
   question: string;
   options?: string[];
   context?: string;
@@ -117,6 +128,7 @@ export async function parkQuestion(dir: string, input: ParkInput): Promise<ParkR
     askedAt: (input.nowIso ?? (() => new Date().toISOString()))(),
     answer: null,
     answeredAt: null,
+    ...(input.revision !== undefined ? { revision: input.revision } : {}),
   };
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(file(dir), JSON.stringify(q, null, 2) + '\n', 'utf8');
@@ -152,6 +164,11 @@ export async function answerQuestion(
  * leaving it in place would make the next session read a decision that had
  * already been acted on.
  */
+/** Did the user say yes? Anything else — including silence — is no. */
+export function isApproval(answer: string | null): boolean {
+  return !!answer && /^\s*(allow|yes|ok(ay)?|approve[d]?|go ahead)\b/i.test(answer);
+}
+
 export async function consumeAnswer(dir: string): Promise<ParkedQuestion | null> {
   const q = await readQuestion(dir);
   if (!q || q.answer === null) return null;
