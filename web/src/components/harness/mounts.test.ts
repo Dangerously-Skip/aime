@@ -184,3 +184,46 @@ describe('a goal run names its chat, and can be followed by another', () => {
     }
   });
 });
+
+describe('goal mode reaches every composer', () => {
+  const codeComposerSlots = () => codeSurface;
+
+  it('Cowork offers it in BOTH the empty and the active composer', () => {
+    /*
+     * It was only in the empty state, so a conversation that had already said
+     * something — exactly where a follow-up goal starts — could not begin one.
+     */
+    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
+    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
+    expect(empty).toContain('<GoalModeToggle');
+    expect(active).toContain('<GoalModeToggle');
+    expect(active).toContain('<GoalModeBar');
+  });
+
+  it('Code offers it too — it was left out of the first pass entirely', () => {
+    // The surface that benefits most: tests are a real gate here, so the
+    // verifier has something concrete to run.
+    expect(codeComposerSlots()).toContain('GoalModeToggle');
+    expect(codeComposerSlots()).toContain('GoalModeBar');
+    expect(codeComposerSlots()).toContain('useStartGoal');
+    /*
+     * And the composer must RENDER the slots, not merely be handed them.
+     * Checking the file contained the component name was satisfied by the call
+     * site alone, so deleting `{goalToggle}` from the composer body left it
+     * green — a toggle passed to a component that never renders it.
+     */
+    expect(codeSurface).toContain('{goalToggle}');
+    expect(codeSurface).toContain('{goalBar}');
+  });
+
+  it('Code’s send branches on the mode rather than always chatting', () => {
+    expect(codeSurface).toMatch(/if \(goalMode\)/);
+    expect(codeSurface).toMatch(/startGoal\(\{/);
+  });
+
+  it('Code names its chat from the objective too', () => {
+    const naming = /const untitled[\s\S]{0,400}?\}\)/.exec(codeSurface)?.[0] ?? '';
+    expect(naming).toMatch(/if \(untitled\)/);
+    expect(naming).toContain('title:');
+  });
+});

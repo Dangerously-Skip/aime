@@ -1886,6 +1886,16 @@ export function CoworkSurface() {
                     style={{ opacity: isStreaming ? 0.6 : 1 }}
                   />
                   {attachmentChips}
+                  {goalMode && (
+                    <GoalModeBar
+                      budget={goalBudget}
+                      cap={goalCap}
+                      onBudget={setGoalBudget}
+                      onCap={setGoalCap}
+                      disabled={goalBusy}
+                      error={startError}
+                    />
+                  )}
                   <div className="flex items-center justify-between px-4 py-2.5">
                     <div className="flex items-center gap-1">
                       <AttachmentMenu
@@ -1900,6 +1910,13 @@ export function CoworkSurface() {
                       <VoiceButton onTranscript={handleVoiceTranscript} />
                       <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
                       <EditorPicker folder={folder} />
+                      {/*
+                        The same toggle as the empty state. A conversation that
+                        has already said something is exactly where a follow-up
+                        goal starts, and it was reachable only before the first
+                        message.
+                      */}
+                      <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
                       {planContent && (
                         <Button
                           variant="ghost"
