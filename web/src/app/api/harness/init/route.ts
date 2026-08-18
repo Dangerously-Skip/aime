@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
 
   await ensureGitignored(resolvedRoot).catch(() => false);
 
-  const dir = harnessDir(resolvedRoot);
+  const dir = harnessDir(resolvedRoot, conversationId);
   const surfaceConfig = getSurfaceConfig(surfaceId);
   const provider = getProvider('claude');
   const exec = await resolveHarnessExecution(

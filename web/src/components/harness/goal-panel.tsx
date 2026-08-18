@@ -80,7 +80,7 @@ export function GoalPanel({
       await fetch('/api/harness/answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workingDir, id: status.question.id, answer: text }),
+        body: JSON.stringify({ workingDir, conversationId, id: status.question.id, answer: text }),
       })
       setAnswer('')
       await refresh()
@@ -156,6 +156,7 @@ export function GoalPanel({
   const passed = ledger?.tasks.filter((t) => t.status === 'passed').length ?? 0
   const total = ledger?.tasks.length ?? 0
   const tone = toneFor(decision)
+  const isComplete = total > 0 && passed === total
 
   return (
     <div className="flex flex-col gap-4 p-4 text-sm">
@@ -308,6 +309,21 @@ export function GoalPanel({
         <Button size="sm" variant="outline" onClick={stop} disabled={busy}>
           {busy ? 'Stopping…' : 'Stop after this session'}
         </Button>
+      )}
+
+      {/*
+        A finished run should not occupy the surface forever.
+        
+        A goal is per CONVERSATION now, so the honest answer to "how do I start
+        another" is a new chat — and saying so beats a button that would have to
+        discard this run's ledger and progress log to make room.
+      */}
+      {!status.running && !status.question && (
+        <p className="text-[11px] text-muted-foreground">
+          {isComplete
+            ? 'Done. Start a new chat on this folder to pursue another goal — this one keeps its plan and progress log.'
+            : 'Start a new chat on this folder to pursue another goal.'}
+        </p>
       )}
     </div>
   )

@@ -342,3 +342,30 @@ describe('ensureGitignored', () => {
     expect(lines).toContain('.aime/');
   });
 });
+
+describe('harnessDir is per conversation', () => {
+  it('gives two conversations on ONE folder separate state', () => {
+    /*
+     * Keying on the folder alone meant one goal per project forever — a finished
+     * run occupied every new chat on that folder and there was no way to start
+     * another. It was also a correctness problem: the registry refuses a second
+     * run by CONVERSATION id, so two conversations on one folder would both
+     * believe they owned the run and interleave ledger writes.
+     */
+    const a = harnessDir('/tmp/proj', 'conv-a');
+    const b = harnessDir('/tmp/proj', 'conv-b');
+    expect(a).not.toBe(b);
+    expect(a).toContain('conv-a');
+  });
+
+  it('falls back to the folder path when there is no conversation', () => {
+    expect(harnessDir('/tmp/proj')).toBe(path.join('/tmp/proj', '.aime', 'harness'));
+  });
+
+  it('cannot be made to climb out of the harness directory', () => {
+    // A conversation id is one of our own uuids, but it lands in a path.
+    const escaped = harnessDir('/tmp/proj', '../../../etc');
+    expect(escaped.includes('..')).toBe(false);
+    expect(escaped.startsWith(path.join('/tmp/proj', '.aime', 'harness'))).toBe(true);
+  });
+});

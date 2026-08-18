@@ -243,3 +243,39 @@ describe('GoalPanel — a parked question', () => {
     expect(screen.queryByText(/needs a decision from you/i)).toBeNull();
   });
 });
+
+describe('GoalPanel — starting another', () => {
+  it('says how to start another once a run has finished', async () => {
+    /*
+     * "How do I add a new goal?" had no answer on screen: a finished run
+     * occupied the panel and there was no affordance at all. A goal is per
+     * conversation, so a new chat is the answer — and saying so beats a button
+     * that would have to discard this run's ledger and progress log.
+     */
+    global.fetch = mockFetch(
+      status({ running: false, decision: { stop: true, reason: 'complete', detail: 'All done.' } }),
+    );
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText(/Start a new chat on this folder/i)).toBeTruthy());
+  });
+
+  it('does not suggest it while the run is still going', async () => {
+    global.fetch = mockFetch(status({ running: true }));
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('Make every embed play')).toBeTruthy());
+    expect(screen.queryByText(/Start a new chat/i)).toBeNull();
+  });
+
+  it('does not suggest it while a question is waiting', async () => {
+    // The question is the only thing to act on; anything else is a distraction.
+    global.fetch = mockFetch(
+      status({
+        running: false,
+        question: { id: 'q1', taskId: null, question: 'Which?', options: [], context: '', askedAt: '', answer: null, answeredAt: null },
+      }),
+    );
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('Which?')).toBeTruthy());
+    expect(screen.queryByText(/Start a new chat/i)).toBeNull();
+  });
+});

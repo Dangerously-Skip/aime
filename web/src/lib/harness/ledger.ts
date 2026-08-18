@@ -94,9 +94,26 @@ export type LedgerResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
 
-/** Where the run's state lives, given the surface's working directory. */
-export function harnessDir(workingDir: string): string {
-  return path.join(workingDir, DATA_DIR_NAME, 'harness');
+/**
+ * Where a run's state lives.
+ *
+ * PER CONVERSATION, not per folder. Keying on the folder alone meant one goal
+ * per project forever: a finished run occupied every new chat on that folder and
+ * there was no way to start another. It was also a correctness problem — the
+ * registry refuses a second run by CONVERSATION id, so two conversations on one
+ * folder would both believe they owned the run and interleave ledger writes,
+ * each reading the other's work as tampering.
+ *
+ * A missing conversation id falls back to the folder-level path, so a caller
+ * that has not got one still resolves somewhere sane rather than throwing.
+ */
+export function harnessDir(workingDir: string, conversationId?: string | null): string {
+  const base = path.join(workingDir, DATA_DIR_NAME, 'harness');
+  if (!conversationId) return base;
+  // A conversation id is a uuid from our own store, but it lands in a path — so
+  // keep it to characters that cannot climb out of the directory.
+  const safe = conversationId.replace(/[^A-Za-z0-9_-]/g, '');
+  return safe ? path.join(base, safe) : base;
 }
 
 export const GOAL_FILE = 'goal.json';
