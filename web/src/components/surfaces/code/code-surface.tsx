@@ -63,6 +63,11 @@ import { EditorPicker } from "@/components/shared/editor-picker";
 import { detectServerUrl, isWebAsset, findHtmlEntryPoint } from "@/lib/artifacts/server-detector";
 import { previewUrlFor } from "@/lib/preview/client";
 import { useGoalAutoOpen } from "@/components/harness/use-goal-autoopen";
+import {
+  GoalModeToggle, GoalModeBar, goalSettingsFrom,
+  DEFAULT_BUDGET_USD, DEFAULT_SESSION_CAP,
+} from "@/components/harness/goal-mode";
+import { useStartGoal } from "@/components/harness/use-start-goal";
 import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import type { Message } from "@/stores/chat-store";
 import { ListChecks } from "lucide-react";
@@ -323,6 +328,8 @@ function CodeInput({
   projects,
   onVoiceTranscript,
   planButton,
+  goalToggle,
+  goalBar,
   cwd,
   onSlashCommand,
 }: {
@@ -351,6 +358,9 @@ function CodeInput({
   projects?: { id: string; name: string; icon: string }[];
   onVoiceTranscript?: (text: string) => void;
   planButton?: React.ReactNode;
+  /** Goal-mode controls, following the planButton slot pattern. */
+  goalToggle?: React.ReactNode;
+  goalBar?: React.ReactNode;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Held as the config object (not a bare component) so the icon renders through
@@ -468,6 +478,7 @@ function CodeInput({
       onSelectedIndexChange={setSelectedSuggestionIdx}
     />
     <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
+      {goalBar}
       <Textarea
         ref={textareaRef}
         value={value}
@@ -514,6 +525,7 @@ function CodeInput({
           />
           {onVoiceTranscript && <VoiceButton onTranscript={onVoiceTranscript} />}
           {planButton}
+          {goalToggle}
 
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -718,6 +730,19 @@ export function CodeSurface() {
 
   // Surfaces the goal panel when this conversation has a goal run.
   useGoalAutoOpen(chatId, folder);
+
+  /*
+   * Goal mode, same as Cowork.
+   *
+   * This surface benefits most: tests are a real gate here, so the verifier has
+   * something concrete to run. It was left out of the first pass entirely.
+   */
+  const [goalMode, setGoalMode] = useState(false);
+  const [goalBudget, setGoalBudget] = useState(String(DEFAULT_BUDGET_USD));
+  const [goalCap, setGoalCap] = useState(String(DEFAULT_SESSION_CAP));
+  const { start: startGoal, phase: goalPhase, error: goalStartError, setError: setGoalError } =
+    useStartGoal("code", modelRoute ?? null);
+  const goalBusy = goalPhase !== "idle";
 
 
   const { projectId: currentProjectId } = useProjectContext(chatId, "code");
@@ -1028,6 +1053,35 @@ export function CodeSurface() {
       if (!text.trim()) return;
       const trimmed = text.trim();
 
+      // Goal mode is a property of the send, not a second composer.
+      if (goalMode) {
+        const settings = goalSettingsFrom(goalBudget, goalCap);
+        if (typeof settings === "string") return setGoalError(settings);
+        if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
+        const ok = await startGoal({
+          conversationId: chatId,
+          workingDir: folder,
+          objective: trimmed,
+          ...settings,
+        });
+        if (ok) {
+          setInputValue("");
+          setGoalMode(false);
+          if (chatId) {
+            const existing = allConversations.find((c) => c.id === chatId);
+            const untitled = !existing?.title || /^new chat$/i.test(existing.title);
+            if (untitled) {
+              updateConversation(chatId, {
+                title: trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed,
+              });
+            }
+          }
+          (window as unknown as Record<string, unknown>).__ideOpenGoal instanceof Function &&
+            ((window as unknown as Record<string, () => void>).__ideOpenGoal());
+        }
+        return;
+      }
+
       // Auto-create conversation if none active
       let id = chatId;
       if (!id) {
@@ -1197,6 +1251,18 @@ export function CodeSurface() {
                   value={inputValue}
                   onChange={setInputValue}
                   onSubmit={handleSubmit}
+                  goalToggle={
+                    <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
+                  }
+                  goalBar={
+                    goalMode ? (
+                      <GoalModeBar
+                        budget={goalBudget} cap={goalCap}
+                        onBudget={setGoalBudget} onCap={setGoalCap}
+                        disabled={goalBusy} error={goalStartError}
+                      />
+                    ) : null
+                  }
                   onAbort={abort}
                   isStreaming={isStreaming}
                   permissionMode={permissionMode}
@@ -1336,6 +1402,18 @@ export function CodeSurface() {
                           value={inputValue}
                           onChange={setInputValue}
                           onSubmit={handleSubmit}
+                          goalToggle={
+                            <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
+                          }
+                          goalBar={
+                            goalMode ? (
+                              <GoalModeBar
+                                budget={goalBudget} cap={goalCap}
+                                onBudget={setGoalBudget} onCap={setGoalCap}
+                                disabled={goalBusy} error={goalStartError}
+                              />
+                            ) : null
+                          }
                           onAbort={abort}
                           isStreaming={isStreaming}
                           permissionMode={permissionMode}
