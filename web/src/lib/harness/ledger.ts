@@ -60,6 +60,15 @@ export interface Task {
 export interface Ledger {
   version: 1;
   tasks: Task[];
+  /**
+   * Ids of tasks removed by an approved plan revision.
+   *
+   * Kept because a shrunk ledger cannot tell you the highest id it ever issued —
+   * so numbering from what remains hands a new task the id of a retired one, and
+   * ids key every patch, run record and verdict. Optional, so a ledger written
+   * before this existed still parses.
+   */
+  retiredIds?: string[];
 }
 
 export interface Goal {
@@ -171,7 +180,10 @@ export function parseLedger(raw: string): LedgerResult<Ledger> {
       lastVerdict: parseVerdict(r.lastVerdict),
     });
   }
-  return { ok: true, value: { version: 1, tasks } };
+  const retiredIds = Array.isArray(o.retiredIds)
+    ? o.retiredIds.filter((x): x is string => typeof x === 'string')
+    : [];
+  return { ok: true, value: { version: 1, tasks, ...(retiredIds.length ? { retiredIds } : {}) } };
 }
 
 export function parseGoal(raw: string): LedgerResult<Goal> {
@@ -264,6 +276,7 @@ export function applySessionUpdate(
     ok: true,
     value: {
       version: 1,
+      ...(ledger.retiredIds?.length ? { retiredIds: ledger.retiredIds } : {}),
       tasks: ledger.tasks.map((t) => {
         const p = patched.get(t.id);
         if (!p) return t;
@@ -298,7 +311,11 @@ export function illegalChanges(before: Ledger, after: Ledger): string[] {
   for (const [id, b] of beforeById) {
     const a = afterById.get(id);
     if (!a) {
-      problems.push(`task ${id} ("${b.title}") was removed`);
+      // An approved revision records the id as retired; that is a plan change,
+      // not a session quietly deleting work it found hard.
+      if (!after.retiredIds?.includes(id)) {
+        problems.push(`task ${id} ("${b.title}") was removed`);
+      }
       continue;
     }
     if (a.title !== b.title) {
