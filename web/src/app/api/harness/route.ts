@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import path from 'node:path';
 import os from 'node:os';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
+import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';
 import { resolveHarnessExecution } from '@/lib/harness/execution';
 import { getProvider } from '@/lib/providers';
 import { getSurfaceConfig } from '@/lib/surfaces';
@@ -48,18 +49,19 @@ export const runtime = 'nodejs';
  * `DELETE` { conversationId }                        → stop after this session
  */
 
-function resolveDir(workingDir: string): { ok: true; dir: string } | { ok: false; error: string } {
-  const resolved = path.resolve(workingDir);
-  // The same coarse gate `/api/files/read` and `/api/preview` use. It does not
-  // replace the ledger's own containment; it stops a run being rooted at `/`.
-  const home = os.homedir();
-  const allowed =
-    resolved === home ||
-    resolved.startsWith(home + path.sep) ||
-    resolved.startsWith('/tmp' + path.sep) ||
-    resolved.startsWith(os.tmpdir() + path.sep);
-  if (!allowed) return { ok: false, error: 'Forbidden' };
-  return { ok: true, dir: harnessDir(resolved) };
+async function resolveDir(
+  workingDir: string,
+): Promise<{ ok: true; dir: string } | { ok: false; error: string }> {
+  // Real paths on both sides: on macOS `/tmp` is a symlink to `/private/tmp` and
+  // the folder picker returns the resolved form, so a literal-prefix check
+  // refused every folder under /tmp. See lib/security/workspace-root.ts.
+  if (!(await isAllowedWorkspaceRoot(workingDir))) {
+    // A distinct message from the cross-origin refusal. Both used to say
+    // "Forbidden", which made a real failure indistinguishable from a security
+    // one and cost an afternoon.
+    return { ok: false, error: 'That folder is outside your home and temp directories' };
+  }
+  return { ok: true, dir: harnessDir(path.resolve(workingDir)) };
 }
 
 export async function POST(request: NextRequest) {
@@ -92,7 +94,7 @@ export async function POST(request: NextRequest) {
   if (!conversationId) return Response.json({ error: 'conversationId required' }, { status: 400 });
   if (!workingDir) return Response.json({ error: 'workingDir required' }, { status: 400 });
 
-  const resolved = resolveDir(workingDir);
+  const resolved = await resolveDir(workingDir);
   if (!resolved.ok) return Response.json({ error: resolved.error }, { status: 403 });
 
   // Keep the run's state out of the user's commits.
@@ -187,7 +189,7 @@ export async function GET(request: NextRequest) {
   if (!conversationId || !workingDir) {
     return Response.json({ error: 'conversationId and workingDir required' }, { status: 400 });
   }
-  const resolved = resolveDir(workingDir);
+  const resolved = await resolveDir(workingDir);
   if (!resolved.ok) return Response.json({ error: resolved.error }, { status: 403 });
 
   return Response.json(await runStatus(conversationId, resolved.dir));

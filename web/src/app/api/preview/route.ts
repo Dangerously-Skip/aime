@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { serverForRoot } from '@/lib/preview/manager';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
+import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';
 
 /**
  * Hand out an `http://127.0.0.1` URL for a local file, so it can be previewed
@@ -49,14 +50,8 @@ export async function POST(request: NextRequest) {
    * given. What this stops is that root being chosen as `/` or `/etc` in the
    * first place, which no containment below could recover from.
    */
-  const home = os.homedir();
-  const inAllowedTree =
-    resolved === home ||
-    resolved.startsWith(home + path.sep) ||
-    resolved.startsWith('/tmp' + path.sep) ||
-    resolved.startsWith(os.tmpdir() + path.sep);
-  if (!inAllowedTree) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
+  if (!(await isAllowedWorkspaceRoot(resolved))) {
+    return Response.json({ error: 'That path is outside your home and temp directories' }, { status: 403 });
   }
 
   let stat;

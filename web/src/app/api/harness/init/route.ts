@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import path from 'node:path';
 import os from 'node:os';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
+import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';
 import { resolveHarnessExecution } from '@/lib/harness/execution';
 import { getProvider } from '@/lib/providers';
 import { getSurfaceConfig } from '@/lib/surfaces';
@@ -67,13 +68,14 @@ export async function POST(request: NextRequest) {
   if (!objective.trim()) return Response.json({ error: 'objective required' }, { status: 400 });
 
   const resolvedRoot = path.resolve(workingDir);
-  const home = os.homedir();
-  const allowed =
-    resolvedRoot === home ||
-    resolvedRoot.startsWith(home + path.sep) ||
-    resolvedRoot.startsWith('/tmp' + path.sep) ||
-    resolvedRoot.startsWith(os.tmpdir() + path.sep);
-  if (!allowed) return Response.json({ error: 'Forbidden' }, { status: 403 });
+  if (!(await isAllowedWorkspaceRoot(resolvedRoot))) {
+    // Distinct from the cross-origin refusal above: both said "Forbidden", which
+    // made a legitimate folder failure look like a security block.
+    return Response.json(
+      { error: 'That folder is outside your home and temp directories' },
+      { status: 403 },
+    );
+  }
 
   // Re-planning under a live run would orphan the ledger it is mid-way through.
   if (isRunning(conversationId)) {
