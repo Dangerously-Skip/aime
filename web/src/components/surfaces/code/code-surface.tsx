@@ -68,6 +68,7 @@ import {
   DEFAULT_BUDGET_USD, DEFAULT_SESSION_CAP,
 } from "@/components/harness/goal-mode";
 import { useStartGoal } from "@/components/harness/use-start-goal";
+import { GoalRunStatus } from "@/components/harness/goal-run-status";
 import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import type { Message } from "@/stores/chat-store";
 import { ListChecks } from "lucide-react";
@@ -330,6 +331,7 @@ function CodeInput({
   planButton,
   goalToggle,
   goalBar,
+  goalStatus,
   cwd,
   onSlashCommand,
 }: {
@@ -361,6 +363,14 @@ function CodeInput({
   /** Goal-mode controls, following the planButton slot pattern. */
   goalToggle?: React.ReactNode;
   goalBar?: React.ReactNode;
+  /**
+   * Run status, under the composer.
+   *
+   * Not in the dockview panel, because that panel can fail to open — it threw
+   * `invalid location` on a real run and took the surface down with it. Feedback
+   * that a goal has started must not depend on a panel being placeable.
+   */
+  goalStatus?: React.ReactNode;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Held as the config object (not a bare component) so the icon renders through
@@ -586,6 +596,7 @@ function CodeInput({
         </div>
       </div>
     </div>
+    {goalStatus}
     </div>
   );
 }
@@ -743,6 +754,8 @@ export function CodeSurface() {
   const { start: startGoal, phase: goalPhase, error: goalStartError, setError: setGoalError } =
     useStartGoal("code", modelRoute ?? null);
   const goalBusy = goalPhase !== "idle";
+  const [goalPending, setGoalPending] = useState<string | null>(null);
+  const [goalNudge, setGoalNudge] = useState(0);
 
 
   const { projectId: currentProjectId } = useProjectContext(chatId, "code");
@@ -1058,13 +1071,16 @@ export function CodeSurface() {
         const settings = goalSettingsFrom(goalBudget, goalCap);
         if (typeof settings === "string") return setGoalError(settings);
         if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
+        setGoalPending(trimmed);
         const ok = await startGoal({
           conversationId: chatId,
           workingDir: folder,
           objective: trimmed,
           ...settings,
         });
+        setGoalPending(null);
         if (ok) {
+          setGoalNudge((n) => n + 1);
           setInputValue("");
           setGoalMode(false);
           if (chatId) {
@@ -1076,8 +1092,15 @@ export function CodeSurface() {
               });
             }
           }
-          (window as unknown as Record<string, unknown>).__ideOpenGoal instanceof Function &&
-            ((window as unknown as Record<string, () => void>).__ideOpenGoal());
+          // Best effort. The run lives on the server and is unaffected if the
+          // panel cannot be placed; the inline status below the composer is the
+          // feedback that must not depend on dockview.
+          try {
+            const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
+            if (typeof open === "function") (open as () => void)();
+          } catch {
+            /* the panel is a convenience, not the run */
+          }
         }
         return;
       }
@@ -1253,6 +1276,17 @@ export function CodeSurface() {
                   onSubmit={handleSubmit}
                   goalToggle={
                     <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
+                  }
+                  goalStatus={
+                    <GoalRunStatus
+                      chatId={chatId} folder={folder} surfaceId="code"
+                      nudge={goalNudge}
+                      starting={
+                        goalPending && goalPhase !== "idle"
+                          ? { objective: goalPending, phase: goalPhase }
+                          : null
+                      }
+                    />
                   }
                   goalBar={
                     goalMode ? (

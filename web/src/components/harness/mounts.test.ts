@@ -227,3 +227,33 @@ describe('goal mode reaches every composer', () => {
     expect(naming).toContain('title:');
   });
 });
+
+describe('the goal panel cannot take the surface down', () => {
+  it('addPanel is guarded, because dockview threw "invalid location" on a real run', () => {
+    /*
+     * `editorRef()` returns a panel it believes exists, and dockview still
+     * refused the location — a floating group, or one mid-teardown, is enough.
+     * The file and diff openers get away with it because they fire on a tree
+     * click, when the editor group is settled; this one fires straight after a
+     * send, and the throw took down the whole surface.
+     */
+    const opener = /__ideOpenGoal[\s\S]*?\n {4}\};/.exec(layout)?.[0] ?? '';
+    expect(opener).toContain('try {');
+    expect(opener).toContain('catch');
+    // And a fallback that asks for no position at all.
+    expect(opener).toMatch(/addPanel\(spec\)/);
+  });
+
+  it('the caller does not depend on the panel opening either', () => {
+    const call = /const open = \(window[\s\S]{0,300}?\}/.exec(codeSurface)?.[0] ?? '';
+    expect(call).toContain('typeof open === "function"');
+  });
+
+  it('Code shows status under the COMPOSER, not only in the panel', () => {
+    // Feedback that a goal has started must not depend on a panel being
+    // placeable — that is what left the last run with no indication at all.
+    expect(codeSurface).toContain('goalStatus=');
+    expect(codeSurface).toContain('GoalRunStatus');
+    expect(codeSurface).toContain('{goalStatus}');
+  });
+});

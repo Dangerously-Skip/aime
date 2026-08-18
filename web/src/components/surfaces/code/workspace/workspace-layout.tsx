@@ -462,14 +462,39 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
         existing.api.setActive();
         return;
       }
-      const ref = editorRef();
-      event.api.addPanel({
+      /*
+       * Placed defensively.
+       *
+       * dockview threw `invalid location` here on a real run: a reference panel
+       * that `editorRef()` believes exists is not always somewhere dockview will
+       * accept a panel — a floating group, or one mid-teardown, is enough. The
+       * file and diff openers get away with it because they are called from a
+       * click on the tree, when the editor group is definitely settled; this one
+       * fires straight after a send.
+       *
+       * A panel placed in the wrong group is a cosmetic problem. A throw here
+       * takes down the whole surface, which is what happened.
+       */
+      const spec = {
         id,
         component: "goal",
         title: "Goal",
         params: { ...ctx } as unknown as Record<string, unknown>,
-        position: ref ? { referencePanel: ref, direction: "within" } : undefined,
-      });
+      };
+      const ref = editorRef();
+      try {
+        event.api.addPanel(
+          ref ? { ...spec, position: { referencePanel: ref, direction: "within" as const } } : spec,
+        );
+      } catch {
+        try {
+          event.api.addPanel(spec);
+        } catch (e) {
+          // Nothing left to try. The run is unaffected — it lives on the server —
+          // so log and let the inline status carry the news instead.
+          console.warn("[harness] could not open the goal panel:", e);
+        }
+      }
     };
 
     (window as unknown as Record<string, unknown>).__ideOpenFile = (filePath: string) => {
