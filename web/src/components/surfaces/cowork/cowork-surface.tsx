@@ -77,6 +77,7 @@ import {
 import { useStartGoal } from "@/components/harness/use-start-goal";
 import { useGoalTranscript } from "@/components/harness/use-goal-transcript";
 import { GoalRunStatus } from "@/components/harness/goal-run-status";
+import { GoalQuestion } from "@/components/harness/goal-question";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
@@ -1786,6 +1787,8 @@ export function CoworkSurface() {
               onSelect={handleSelectSuggestion}
               onSelectedIndexChange={setSelectedSuggestionIdx}
             />
+            {/* The run's question belongs where the conversation is, not in a rail. */}
+            <GoalQuestion chatId={chatId} folder={folder} surfaceId="cowork" />
             <div
               className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden"
             >
@@ -1899,6 +1902,8 @@ export function CoworkSurface() {
                   onSelect={handleSelectSuggestion}
                   onSelectedIndexChange={setSelectedSuggestionIdx}
                 />
+                {/* The run's question belongs where the conversation is, not in a rail. */}
+                <GoalQuestion chatId={chatId} folder={folder} surfaceId="cowork" />
                 <div
                   className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden"
                 >
