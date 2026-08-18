@@ -67,10 +67,21 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
 
   // FeedlyBackly widget — loads with hidden launcher, triggered via sidebar Flag button.
   // Note: their API may return 500s intermittently (server-side issue on their end).
+  //
+  // The key was hardcoded here and in the proxy route, which put it in 575 commits
+  // and in every shipped client bundle. A widget key reaching the browser is
+  // inherent — the widget calls the API from the page — so this env var does not
+  // make it secret. What it does is keep it out of a public git history, where it
+  // is grep-able rather than merely extractable.
+  //
+  // Unset means NO widget rather than a widget that 401s on every call: a build
+  // without the key is the normal case for anyone who is not us.
   useEffect(() => {
+    const apiKey = process.env.NEXT_PUBLIC_FEEDLYBACKLY_API_KEY;
+    if (!apiKey) return;
     if (document.getElementById('feedlybackly-script')) return;
     window.feedlybacklySettings = {
-      apiKey: 'REDACTED-FEEDBACK-KEY',
+      apiKey,
       apiUrl: 'https://feedlybackly-api.apps.dangerouslyskip.com',
       hideLauncher: true,
       guestEnabled: true,
