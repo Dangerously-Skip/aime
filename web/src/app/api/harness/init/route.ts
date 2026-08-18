@@ -6,7 +6,7 @@ import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';
 import { resolveHarnessExecution } from '@/lib/harness/execution';
 import { getProvider } from '@/lib/providers';
 import { getSurfaceConfig } from '@/lib/surfaces';
-import { harnessDir, ensureGitignored } from '@/lib/harness/ledger';
+import { harnessDir, ensureGitignored, nextRunIndex } from '@/lib/harness/ledger';
 import { initializeGoal } from '@/lib/harness/initializer';
 import { isRunning } from '@/lib/harness/runner';
 
@@ -84,7 +84,16 @@ export async function POST(request: NextRequest) {
 
   await ensureGitignored(resolvedRoot).catch(() => false);
 
-  const dir = harnessDir(resolvedRoot, conversationId);
+  /*
+   * A NEW numbered run each time, rather than one goal per chat forever.
+   *
+   * Finishing something and then wanting the next thing done is how work goes;
+   * forcing a new conversation for it throws away the context of what just
+   * happened. Numbers are never reused, so each run keeps its own ledger,
+   * progress log and verdicts.
+   */
+  const runIndex = await nextRunIndex(resolvedRoot, conversationId);
+  const dir = harnessDir(resolvedRoot, conversationId, runIndex);
   const surfaceConfig = getSurfaceConfig(surfaceId);
   const provider = getProvider('claude');
   const exec = await resolveHarnessExecution(
@@ -130,5 +139,5 @@ export async function POST(request: NextRequest) {
   });
 
   if (!result.ok) return Response.json({ error: result.error }, { status: 422 });
-  return Response.json({ ok: true, goal: result.goal, ledger: result.ledger, dir });
+  return Response.json({ ok: true, goal: result.goal, ledger: result.ledger, dir, runIndex });
 }

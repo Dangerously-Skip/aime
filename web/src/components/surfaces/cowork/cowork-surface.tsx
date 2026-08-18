@@ -1659,6 +1659,23 @@ export function CoworkSurface() {
       if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
       const objective = inputValue.trim();
       if (!objective) return;
+      /*
+       * Name the chat.
+       *
+       * A goal run never sent a chat message, so the ordinary titling path never
+       * fired and every goal conversation stayed "New Chat" — indistinguishable
+       * from every other one in the sidebar. The objective is the best title
+       * there is: it is exactly what the run is for.
+       */
+      if (chatId) {
+        const existing = conversations.find((c) => c.id === chatId);
+        const untitled = !existing?.title || /^new chat$/i.test(existing.title);
+        if (untitled) {
+          updateConversation(chatId, {
+            title: objective.length > 60 ? `${objective.slice(0, 57)}…` : objective,
+          });
+        }
+      }
       setGoalPending(objective);
       void startGoal({ conversationId: chatId, workingDir: folder, objective, ...settings }).then(
         (ok) => {

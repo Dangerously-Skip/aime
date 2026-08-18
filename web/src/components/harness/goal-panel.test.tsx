@@ -243,7 +243,7 @@ describe('GoalPanel — a parked question', () => {
 });
 
 describe('GoalPanel — starting another', () => {
-  it('says how to start another once a run has finished', async () => {
+  it('says how to run a FOLLOW-UP goal in the same chat', async () => {
     /*
      * "How do I add a new goal?" had no answer on screen: a finished run
      * occupied the panel and there was no affordance at all. A goal is per
@@ -254,14 +254,14 @@ describe('GoalPanel — starting another', () => {
       status({ running: false, decision: { stop: true, reason: 'complete', detail: 'All done.' } }),
     );
     render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
-    await waitFor(() => expect(screen.getByText(/Start a new chat on this folder/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/run another in this chat/i)).toBeTruthy());
   });
 
   it('does not suggest it while the run is still going', async () => {
     global.fetch = mockFetch(status({ running: true }));
     render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
     await waitFor(() => expect(screen.getByText('Make every embed play')).toBeTruthy());
-    expect(screen.queryByText(/Start a new chat/i)).toBeNull();
+    expect(screen.queryByText(/run another in this chat/i)).toBeNull();
   });
 
   it('does not suggest it while a question is waiting', async () => {
@@ -274,6 +274,6 @@ describe('GoalPanel — starting another', () => {
     );
     render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
     await waitFor(() => expect(screen.getByText('Which?')).toBeTruthy());
-    expect(screen.queryByText(/Start a new chat/i)).toBeNull();
+    expect(screen.queryByText(/run another in this chat/i)).toBeNull();
   });
 });

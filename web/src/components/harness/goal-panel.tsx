@@ -309,9 +309,9 @@ export function GoalPanel({
       */}
       {!status.running && !status.question && (
         <p className="text-[11px] text-muted-foreground">
-          {isComplete
-            ? 'Done. Start a new chat on this folder to pursue another goal — this one keeps its plan and progress log.'
-            : 'Start a new chat on this folder to pursue another goal.'}
+          {isComplete ? 'Done.' : 'Stopped.'} Toggle{' '}
+          <span className="font-medium">Pursue goal</span> above to run another in this chat — this
+          one keeps its plan and progress log.
         </p>
       )}
     </div>
