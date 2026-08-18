@@ -18,9 +18,23 @@ const layout = read('components', 'surfaces', 'code', 'workspace', 'workspace-la
 const slotTypes = read('lib', 'code-workspace', 'types.ts');
 
 describe('the goal panel is mounted on both surfaces', () => {
-  it('Cowork renders it', () => {
-    expect(cowork).toContain('GoalPanel');
+  it('Cowork renders it EXACTLY ONCE', () => {
+    /*
+     * It rendered twice — once in the main column under the composer and once
+     * in the sidebar — so the same card sat on screen side by side with itself.
+     * The main column is the right home: it is where the transcript is.
+     */
+    expect(cowork).toContain('GoalRunStatus');
     expect(cowork).toMatch(/surfaceId="cowork"/);
+    // The sidebar rail is for Context and Artifacts, not a second copy.
+    expect(cowork).not.toContain('<GoalPanel');
+  });
+
+  it('no state shows two goal cards at once', () => {
+    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
+    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
+    expect((empty.match(/<GoalRunStatus/g) ?? []).length).toBe(1);
+    expect((active.match(/<GoalRunStatus/g) ?? []).length).toBe(1);
   });
 
   it('Code registers it as a dockview component', () => {

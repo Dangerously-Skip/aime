@@ -511,11 +511,13 @@ function SidebarPanel({
             )}
 
             {/*
-              A long-running goal run, when this conversation has one. Renders
-              nothing until a goal exists, so Chat-mode conversations are
-              unchanged.
+              No goal card here.
+              
+              The run already renders in the main column, under the composer,
+              and narrates itself into the transcript — so a copy in the sidebar
+              was the same card twice on screen at once. The transcript is the
+              interface; this rail is for Context and Artifacts.
             */}
-            <GoalPanel conversationId={chatId} workingDir={folder} surfaceId="cowork" />
 
             <SidebarCard
               label="Context"
