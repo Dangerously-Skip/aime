@@ -69,6 +69,7 @@ import {
 } from "@/components/harness/goal-mode";
 import { useStartGoal } from "@/components/harness/use-start-goal";
 import { GoalRunStatus } from "@/components/harness/goal-run-status";
+import { GoalQuestion } from "@/components/harness/goal-question";
 import { useGoalTranscript } from "@/components/harness/use-goal-transcript";
 import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import type { Message } from "@/stores/chat-store";
@@ -333,6 +334,7 @@ function CodeInput({
   goalToggle,
   goalBar,
   goalStatus,
+  goalQuestion,
   cwd,
   onSlashCommand,
 }: {
@@ -372,6 +374,8 @@ function CodeInput({
    * that a goal has started must not depend on a panel being placeable.
    */
   goalStatus?: React.ReactNode;
+  /** The run's parked question, above the composer where the user is. */
+  goalQuestion?: React.ReactNode;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Held as the config object (not a bare component) so the icon renders through
@@ -488,6 +492,7 @@ function CodeInput({
       onSelect={handleSelectSuggestion}
       onSelectedIndexChange={setSelectedSuggestionIdx}
     />
+    {goalQuestion}
     <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
       {goalBar}
       <Textarea
@@ -1286,6 +1291,9 @@ export function CodeSurface() {
                   onSubmit={handleSubmit}
                   goalToggle={
                     <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
+                  }
+                  goalQuestion={
+                    <GoalQuestion chatId={chatId} folder={folder} surfaceId="code" />
                   }
                   goalStatus={
                     <GoalRunStatus

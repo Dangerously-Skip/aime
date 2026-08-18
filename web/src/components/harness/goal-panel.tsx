@@ -170,20 +170,28 @@ export function GoalPanel({
     <div className="flex flex-col gap-4 p-4 text-sm">
       <div className="space-y-1">
         <div className="flex items-center gap-2">
+          {/*
+            The same header shape as Task Metrics and the Context/Artifacts
+            cards in this rail: full-width, chevron on the right. A card that
+            collapses differently from its neighbours reads as a different kind
+            of thing.
+          */}
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
-            className="flex items-center gap-2 text-left"
+            className="flex flex-1 items-center gap-2 text-left"
           >
-            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? '' : '-rotate-90'}`} />
-            <h3 className="font-medium">Goal</h3>
+            <h3 className="flex-1 font-medium">Goal</h3>
           </button>
           {status.running ? (
             <Badge variant="secondary" className="text-[10px]">running</Badge>
           ) : (
             <Badge variant="outline" className="text-[10px]">idle</Badge>
           )}
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? '' : '-rotate-90'}`}
+          />
         </div>
         <p className="text-xs text-muted-foreground">{goal.objective}</p>
       </div>

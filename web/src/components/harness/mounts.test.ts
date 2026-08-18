@@ -377,3 +377,28 @@ describe('resuming a run carries credentials', () => {
     expect(hook).toMatch(/apiKey:\s*anthropicApiKey/);
   });
 });
+
+describe('the question is answerable from the conversation', () => {
+  it('both surfaces render it above the composer', () => {
+    /*
+     * The transcript announced a parked question and pointed at the rail, which
+     * is a hop — the user is already at the composer and the thing blocking the
+     * run is a sentence away.
+     */
+    expect(cowork).toContain('<GoalQuestion');
+    expect(codeSurface).toContain('<GoalQuestion');
+  });
+
+  it('Cowork has it in BOTH composer states', () => {
+    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
+    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
+    expect(empty).toContain('<GoalQuestion');
+    expect(active).toContain('<GoalQuestion');
+  });
+
+  it('Code renders the slot, not merely receives it', () => {
+    // A control handed to a component that never renders it is the recurring
+    // shape of this whole feature's bugs.
+    expect(codeSurface).toContain('{goalQuestion}');
+  });
+});
