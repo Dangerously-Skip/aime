@@ -6,6 +6,7 @@ import path from 'node:path';
 import { runGoalLoop, readRunState, type SessionRunner, type LoopEvent } from './goal-loop';
 import { writeGoalOnce, writeLedger, readLedger, PROGRESS_FILE, type Ledger, type Goal } from './ledger';
 import { DEFAULT_POLICY } from './stop';
+import { MAX_REVISIONS } from './goal-loop';
 import type { Verifier } from './verifier';
 import { readQuestion, answerQuestion } from './question';
 
@@ -492,5 +493,116 @@ describe('parking on a question', () => {
     ac.abort();
     const { decision } = await runGoalLoop({ dir, runSession: winner, signal: ac.signal });
     expect(decision.reason).toBe('user');
+  });
+});
+
+describe('plan revision', () => {
+  const proposes = (revision: import('./revision').Revision): SessionRunner => async () => ({
+    costUsd: 0.1, summary: 'found the plan wrong', claimsComplete: false, revision,
+  });
+
+  it('ADDS work immediately — finding more to do can only lengthen a run', async () => {
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({
+      dir,
+      runSession: proposes({ add: [{ title: 'Write a fixture', verify: ['fixture.json exists'] }], remove: [], reason: 'the test needs one' }),
+      policy: { idleLimit: 1, attemptLimit: 5 },
+    });
+    const after = await readLedger(dir);
+    expect(after.ok).toBe(true);
+    if (after.ok) {
+      expect(after.value.tasks.map((t) => t.title)).toContain('Write a fixture');
+      // A fresh id past the highest used, never a reused one.
+      expect(after.value.tasks[1].id).toBe('t-002');
+    }
+  });
+
+  it('REMOVING stops the run and asks, rather than just happening', async () => {
+    /*
+     * Dropping work shrinks what "done" means — the move reward hacking makes.
+     * Phase 3's parking is what makes asking possible without a timeout.
+     */
+    await writeLedger(dir, ledger(2));
+    const { decision } = await runGoalLoop({
+      dir,
+      runSession: proposes({ add: [], remove: ['t-2'], reason: 'out of scope' }),
+    });
+    expect(decision).toMatchObject({ stop: true, reason: 'awaiting-answer' });
+    expect(decision.detail).toContain('Task 2');
+
+    // Nothing was dropped while waiting.
+    const after = await readLedger(dir);
+    if (after.ok) expect(after.value.tasks.map((t) => t.id)).toEqual(['t-1', 't-2']);
+
+    const q = await readQuestion(dir);
+    expect(q?.options).toContain('Allow');
+  });
+
+  it('applies additions even when the same proposal has a removal to approve', async () => {
+    await writeLedger(dir, ledger(2));
+    await runGoalLoop({
+      dir,
+      runSession: proposes({ add: [{ title: 'Extra', verify: ['x'] }], remove: ['t-2'], reason: 'r' }),
+    });
+    const after = await readLedger(dir);
+    if (after.ok) {
+      expect(after.value.tasks.map((t) => t.title)).toContain('Extra');
+      expect(after.value.tasks.map((t) => t.id)).toContain('t-2'); // still waiting
+    }
+  });
+
+  it('REFUSES to remove a task that already passed, without asking', async () => {
+    // Approval is for changing the plan, not for erasing evidence.
+    const l = ledger(2);
+    l.tasks[0].status = 'passed';
+    await writeLedger(dir, l);
+    const { decision } = await runGoalLoop({
+      dir,
+      runSession: proposes({ add: [], remove: ['t-1'], reason: 'tidier' }),
+      policy: { idleLimit: 1, attemptLimit: 5 },
+    });
+    expect(decision.reason).not.toBe('awaiting-answer');
+    const after = await readLedger(dir);
+    if (after.ok) expect(after.value.tasks.map((t) => t.id)).toContain('t-1');
+  });
+
+  it('CAPS how many times one run may revise its plan', async () => {
+    /*
+     * Found by a test, not by reasoning. Adding a task changes the ledger's
+     * state hash, so the idle counter resets — a session that proposes an
+     * addition every time never trips the no-progress detector and can look busy
+     * until the budget runs out.
+     */
+    await writeLedger(dir, ledger(1));
+    /*
+     * The session must SUCCEED as well as revise. A failing one trips the
+     * stuck-task limit after five attempts, so the cap is never reached and the
+     * test proves nothing — which is exactly what the first version did.
+     */
+    const succeedsAndAdds: SessionRunner = async () => ({
+      costUsd: 0.01,
+      summary: 'done, and found more',
+      claimsComplete: true,
+      revision: { add: [{ title: 'Another', verify: ['x'] }], remove: [], reason: 'more work' },
+    });
+    const { run } = await runGoalLoop({ dir, runSession: succeedsAndAdds });
+    const after = await readLedger(dir);
+    if (after.ok) {
+      const added = after.value.tasks.filter((t) => t.title === 'Another').length;
+      expect(added).toBeLessThanOrEqual(MAX_REVISIONS);
+    }
+    expect(run.sessions).toBeLessThan(30);
+  });
+
+  it('records the plan change in the progress log', async () => {
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({
+      dir,
+      runSession: proposes({ add: [{ title: 'Extra', verify: ['x'] }], remove: [], reason: 'needed a fixture' }),
+      policy: { idleLimit: 1, attemptLimit: 5 },
+    });
+    const progress = await fsp.readFile(path.join(dir, PROGRESS_FILE), 'utf8');
+    expect(progress).toMatch(/\*\*Plan:\*\*/);
+    expect(progress).toContain('needed a fixture');
   });
 });

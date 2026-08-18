@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { PROGRESS_FILE, type Goal, type Task } from './ledger';
+import { parseRevision, REVISION_MARKER, type Revision } from './revision';
 import type { SessionInput, SessionOutcome, SessionRunner } from './goal-loop';
 
 /**
@@ -258,6 +259,7 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
 
     return {
       question: asked,
+      revision: parseRevision(text),
       costUsd,
       // The summary is what a human reads later, so keep the model's own words
       // rather than a template. Trimmed because the whole transcript is not a

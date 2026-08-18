@@ -15,6 +15,7 @@ import {
 } from './ledger';
 import type { Verifier } from './verifier';
 import { parkQuestion, isWaiting, consumeAnswer } from './question';
+import { classifyRevision, applyRevision } from './revision';
 import {
   shouldStop,
   recordSession,
@@ -74,6 +75,8 @@ export interface SessionOutcome {
    * done, and retrying a question is how a loop burns a budget learning nothing.
    */
   question?: string | null;
+  /** A proposed change to the plan, if the session found the plan wrong. */
+  revision?: import('./revision').Revision | null;
   error?: string;
 }
 
@@ -87,6 +90,7 @@ export interface LoopEvent {
     | 'verify-end'
     | 'parked'
     | 'resumed'
+    | 'revised'
     | 'tamper'
     | 'stopped';
   sessionIndex?: number;
@@ -121,6 +125,19 @@ export interface LoopResult {
 }
 
 const STATE_FILE = 'state.json';
+
+/**
+ * How many times one run may change its own plan.
+ *
+ * Found by a test rather than by reasoning. A session that proposes an addition
+ * every time never trips the no-progress detector, because the idle counter keys
+ * on the ledger's state hash and adding a task CHANGES it. So "keep adding work"
+ * is a way to look busy forever — the run only stops when it runs out of money.
+ *
+ * Six is loose enough that honest re-planning is never blocked and tight enough
+ * that a loop cannot hide behind it.
+ */
+export const MAX_REVISIONS = 6;
 
 export async function readRunState(dir: string): Promise<RunState | null> {
   try {
@@ -170,6 +187,7 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
   const goal = goalRead.value;
 
   let run = opts.initialRun ?? (await readRunState(dir)) ?? newRunState(now());
+  let revisions = 0;
 
   for (;;) {
     const ledgerRead = await readLedger(dir);
@@ -301,6 +319,51 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
     }
 
     /*
+     * The plan changed.
+     *
+     * Additions land immediately — discovering more work is honest and can only
+     * make the run longer. Removals stop the run and ask, because dropping work
+     * shrinks what "done" means, which is exactly the move reward hacking makes.
+     */
+    let revisionNote = '';
+    if (outcome.revision && revisions >= MAX_REVISIONS) {
+      revisionNote = `Refused plan change: this run has already revised its plan ${revisions} times.`;
+      emit({ type: 'revised', sessionIndex, taskId: task.id, detail: revisionNote });
+    } else if (outcome.revision) {
+      const classified = classifyRevision(ledger, outcome.revision);
+      if (classified.kind === 'auto') {
+        ledger = applyRevision(ledger, outcome.revision, false);
+        await writeLedger(dir, ledger);
+        revisions++;
+        revisionNote = `Added ${outcome.revision.add.length} task(s): ${outcome.revision.reason}`;
+        emit({ type: 'revised', sessionIndex, taskId: task.id, detail: revisionNote });
+      } else if (classified.kind === 'needs-approval') {
+        // Additions in the same proposal still land; only the removals wait.
+        if (outcome.revision.add.length > 0) {
+          ledger = applyRevision(ledger, { ...outcome.revision, remove: [] }, false);
+          await writeLedger(dir, ledger);
+        }
+        const parked = await parkQuestion(dir, {
+          taskId: task.id,
+          question: classified.approvalPrompt ?? 'The run wants to change the plan. Allow it?',
+          options: ['Allow', 'Keep the plan as it is'],
+          context: classified.refusals.join(' '),
+        });
+        if (parked.ok) {
+          await appendProgress(dir, `## Session ${sessionIndex} — proposed a plan change\n\n${classified.approvalPrompt}`);
+          run = recordSession(run, { costUsd: outcome.costUsd, stateHash: ledgerStateHash(ledger) });
+          await writeRunState(dir, run);
+          const waiting: StopDecision = { stop: true, reason: 'awaiting-answer', detail: classified.approvalPrompt };
+          emit({ type: 'parked', sessionIndex, taskId: task.id, detail: classified.approvalPrompt, run });
+          return { decision: waiting, run };
+        }
+      } else if (classified.refusals.length > 0) {
+        revisionNote = `Refused plan change: ${classified.refusals.join(' ')}`;
+        emit({ type: 'revised', sessionIndex, taskId: task.id, detail: revisionNote });
+      }
+    }
+
+    /*
      * A session that ASKED did not fail — it stopped for a reason retrying
      * cannot resolve. Parking here, before the attempt counter moves, keeps a
      * question from burning through the stuck-task limit.
@@ -383,6 +446,7 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         `## Session ${sessionIndex} — ${task.id} ${task.title}`,
         outcome.summary.trim(),
         tampered.length ? `**Rejected plan edits:** ${tampered.join('; ')}` : '',
+        revisionNote ? `**Plan:** ${revisionNote}` : '',
         outcome.error ? `**Error:** ${outcome.error}` : '',
         verdict && !verdict.passed ? `**Verifier rejected it:** ${verdict.missing.join('; ')}` : '',
         `_Cost $${outcome.costUsd.toFixed(4)} · status ${
