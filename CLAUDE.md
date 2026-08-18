@@ -93,7 +93,34 @@ again. Look for these shapes before calling it a flake.
 
 ### What gates a push
 
-`test` (typecheck → lint → unit → **build**) and `e2e` on every push and PR.
+**Run `npm run hooks:install` once per clone.** Nothing else here is a gate.
+
+CI is advisory in the strict sense — it reports, and nothing stops a red run
+from reaching `main`. Not a policy choice: this repo is private in a Free org,
+where both enforcement mechanisms are refused outright.
+
+```
+GET /repos/Dangerously-Skip/aime/rulesets                  -> 403
+GET /repos/Dangerously-Skip/aime/branches/main/protection  -> 403
+"Upgrade to GitHub Pro or make this repository public to enable this feature."
+```
+
+So `.githooks/pre-push` (opt-in, tracked, `npm run verify` — typecheck → lint →
+unit → build, ~70s) is the ONLY thing that can stop broken work. It is opt-in on
+purpose: a hook that installs itself breeds reflexive `--no-verify`, which is
+worse than no hook. `SKIP_VERIFY=1 git push` and `--no-verify` both work and
+neither is silent.
+
+`ci-structure.test.ts` derives CI's `test` job steps from `ci.yml` and fails if
+`verify` does not cover all of them, so a new CI step cannot silently stop being
+gated locally. It also fails if the hook loses its execute bit — git skips a
+non-executable hook in total silence, so the failure mode is no output at all.
+
+**The way out is to make the repo public** (rulesets become free, and the
+open-source rename is already the plan) or GitHub Team at $4/user/mo. Either one
+turns the advisory checks into real ones; until then the hook is the story.
+
+`test` (typecheck → lint → unit → **build**) and `e2e` run on every push and PR.
 `mutation` runs weekly and on `workflow_dispatch` only — a slow check on every
 push is a check people learn to skip.
 
