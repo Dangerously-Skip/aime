@@ -88,7 +88,9 @@ export function transcriptLines(
   if (s.question) {
     out.push({
       key: `${run}:question:${s.question.id}`,
-      content: `**It needs a decision from you.** ${s.question.question}\n\nAnswer in the Goal panel and it carries on.`,
+      // Not "in the Goal panel" any more — the answer control sits directly
+      // above the composer, which is where the reader already is.
+      content: `**It needs a decision from you.** ${s.question.question}\n\nAnswer just above the composer and it carries on.`,
     });
   }
 

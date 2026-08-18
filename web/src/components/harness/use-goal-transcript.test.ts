@@ -50,7 +50,7 @@ describe('transcriptLines', () => {
     const out = transcriptLines(status({ question: { id: 'q1', question: 'Throw or return null?' } }));
     expect(out[0].content).toContain('needs a decision from you');
     expect(out[0].content).toContain('Throw or return null?');
-    expect(out[0].content).toMatch(/Goal panel/);
+    expect(out[0].content).toMatch(/above the composer/);
   });
 
   it('reports the ending WITH the spend, which is the number that was invisible', () => {
