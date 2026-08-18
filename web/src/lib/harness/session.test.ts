@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   parseSessionStatus,
+  parseSessionQuestion,
+  QUESTION_MARKER,
   buildSessionPrompt,
   progressTail,
   createSessionRunner,
@@ -243,5 +245,36 @@ describe('createSessionRunner', () => {
     await run({ ...input(), missing: ['still returns 153'] });
     expect(seen).toContain(task.title);
     expect(seen).toContain('still returns 153');
+  });
+});
+
+describe('a question offers its own options', () => {
+  it('splits question from clickable alternatives', () => {
+    /*
+     * A question that arrives as free text makes the user type an answer they
+     * could have clicked — and invented wording risks an answer the run does not
+     * recognise. The session knows the alternatives; it should offer them.
+     */
+    const q = parseSessionQuestion(`${QUESTION_MARKER} Which total? || gross | net`);
+    expect(q?.question).toBe('Which total?');
+    expect(q?.options).toEqual(['gross', 'net']);
+  });
+
+  it('still works with no options — typing is the fallback, not the failure', () => {
+    const q = parseSessionQuestion(`${QUESTION_MARKER} Which total?`);
+    expect(q?.question).toBe('Which total?');
+    expect(q?.options).toEqual([]);
+  });
+
+  it('drops blank options and caps the list', () => {
+    const q = parseSessionQuestion(`${QUESTION_MARKER} Pick || a | | b |  | c | d | e | f | g`);
+    expect(q?.options).not.toContain('');
+    expect(q?.options.length).toBeLessThanOrEqual(5);
+  });
+
+  it('the prompt shows the option syntax with a worked example', () => {
+    const p = buildSessionPrompt({ goal, task, sessionIndex: 1, missing: [], progress: '' });
+    expect(p).toContain('||');
+    expect(p.replace(/\s+/g, ' ')).toMatch(/gross \| net/);
   });
 });

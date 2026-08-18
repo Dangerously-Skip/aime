@@ -277,3 +277,48 @@ describe('GoalPanel — starting another', () => {
     expect(screen.queryByText(/run another in this chat/i)).toBeNull();
   });
 });
+
+describe('GoalPanel — answering and collapsing', () => {
+  const parked = {
+    id: 'q1', taskId: null, question: 'Which total?', options: ['gross', 'net'],
+    context: '', askedAt: '', answer: null, answeredAt: null,
+  };
+
+  it('offers the options as buttons, and hides the text box behind "Other…"', async () => {
+    // Typing an answer you could have clicked risks wording the run does not
+    // recognise.
+    global.fetch = mockFetch(status({ running: false, question: parked }));
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'gross' })).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'net' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Other/i })).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Answer, and it carries on/i).closest('div')?.className)
+      .toContain('hidden');
+  });
+
+  it('reveals the text box when Other is chosen', async () => {
+    global.fetch = mockFetch(status({ running: false, question: parked }));
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Other/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Other/i }));
+    expect(screen.getByPlaceholderText(/Answer, and it carries on/i).closest('div')?.className)
+      .not.toContain('hidden');
+  });
+
+  it('shows the text box straight away when there are NO options', async () => {
+    global.fetch = mockFetch(status({ running: false, question: { ...parked, options: [] } }));
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Answer, and it carries on/i)).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /Other/i })).toBeNull();
+  });
+
+  it('collapses, like the other cards in the rail', async () => {
+    global.fetch = mockFetch(status());
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText(/1 of 3 passed/)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { expanded: true }));
+    expect(screen.queryByText(/1 of 3 passed/)).toBeNull();
+    // The heading stays, so it can be reopened.
+    expect(screen.getByText('Goal')).toBeTruthy();
+  });
+});

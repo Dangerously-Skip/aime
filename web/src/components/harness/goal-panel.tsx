@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { useHarnessRoute } from './use-start-goal'
 import type { ParkedQuestion } from '@/lib/harness/question'
@@ -68,6 +69,9 @@ export function GoalPanel({
   const [status, setStatus] = useState<HarnessStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [answer, setAnswer] = useState('')
+  const [showOther, setShowOther] = useState(false)
+  // Collapsible, like Context and Artifacts in the same rail.
+  const [open, setOpen] = useState(true)
   // The resumed run needs the same credentials the first one had.
   const harnessRoute = useHarnessRoute(null)
 
@@ -166,7 +170,15 @@ export function GoalPanel({
     <div className="flex flex-col gap-4 p-4 text-sm">
       <div className="space-y-1">
         <div className="flex items-center gap-2">
-          <h3 className="font-medium">Goal</h3>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="flex items-center gap-2 text-left"
+          >
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? '' : '-rotate-90'}`} />
+            <h3 className="font-medium">Goal</h3>
+          </button>
           {status.running ? (
             <Badge variant="secondary" className="text-[10px]">running</Badge>
           ) : (
@@ -176,6 +188,7 @@ export function GoalPanel({
         <p className="text-xs text-muted-foreground">{goal.objective}</p>
       </div>
 
+      {!open ? null : <>
       {/*
         A parked question comes FIRST and is the only thing the user can act on.
         A run waiting on a decision is not broken and not finished; showing it
@@ -195,9 +208,21 @@ export function GoalPanel({
                   {o}
                 </Button>
               ))}
+              {/*
+                Typing is the fallback, not the default. When the run has offered
+                the alternatives, clicking one is both faster and safer — invented
+                wording risks an answer the run does not recognise.
+              */}
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setShowOther((v) => !v)}>
+                Other…
+              </Button>
             </div>
           )}
-          <div className="flex items-center gap-1.5">
+          <div
+            className={`items-center gap-1.5 ${
+              status.question.options.length > 0 && !showOther ? 'hidden' : 'flex'
+            }`}
+          >
             <Input
               value={answer}
               onChange={(e) => setAnswer(e.target.value)}
@@ -329,6 +354,7 @@ export function GoalPanel({
           one keeps its plan and progress log.
         </p>
       )}
+    </>}
     </div>
   )
 }
