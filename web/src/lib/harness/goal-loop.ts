@@ -16,6 +16,18 @@ import {
 import type { Verifier } from './verifier';
 import { parkQuestion, isWaiting, consumeAnswer, isApproval } from './question';
 import { classifyRevision, applyRevision } from './revision';
+import { QUESTION_MARKER } from './session';
+import { REVISION_MARKER } from './revision';
+
+/** Everything before the protocol markers — the part written for a human. */
+function stripMarker(text: string): string {
+  let out = text;
+  for (const marker of [QUESTION_MARKER, REVISION_MARKER]) {
+    const at = out.indexOf(marker);
+    if (at !== -1) out = out.slice(0, at);
+  }
+  return out.trim();
+}
 import {
   shouldStop,
   recordSession,
@@ -267,6 +279,43 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
           emit({ type: 'revised', taskId: answered.taskId ?? undefined, detail: 'Plan change approved.' });
         }
       }
+      /*
+       * A task that exists to ASK is finished by the answer.
+       *
+       * You were asked twice. The planner made "Ask the user whether to compute
+       * gross or net" a task of its own — reasonably — but no amount of further
+       * work can complete it, so the resumed session read the answer as context,
+       * found the task still open, and asked again. It would have asked until
+       * the attempt limit killed it.
+       *
+       * The answer IS the deliverable, and it is recorded as the evidence.
+       */
+      if (answered.taskId && !answered.revision) {
+        const fresh = await readLedger(dir);
+        if (fresh.ok) {
+          const resolved = applySessionUpdate(fresh.value, [
+            {
+              id: answered.taskId,
+              status: 'passed',
+              lastVerdict: {
+                passed: true,
+                missing: [],
+                evidence: [`Answered by the user: "${answered.answer}"`],
+                at: new Date(0).toISOString(),
+              },
+            },
+          ]);
+          if (resolved.ok) {
+            ledger = resolved.value;
+            await writeLedger(dir, ledger);
+            emit({
+              type: 'verify-end',
+              taskId: answered.taskId,
+              detail: 'passed',
+            });
+          }
+        }
+      }
       emit({ type: 'resumed', taskId: answered.taskId ?? undefined, detail: answered.answer ?? '' });
     }
 
@@ -412,7 +461,15 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         taskId: task.id,
         question: outcome.question,
         options: outcome.questionOptions ?? [],
-        context: outcome.summary.slice(-500),
+        /*
+         * The summary UP TO the marker.
+         *
+         * Slicing the tail dragged the raw protocol into the user's face:
+         * "…STATUS: QUESTION Which total should I compute? || gross | net".
+         * The syntax is how the session talks to the loop; it is not something
+         * to show someone being asked a question.
+         */
+        context: stripMarker(outcome.summary).slice(-400),
       });
       if (parked.ok) {
         await appendProgress(

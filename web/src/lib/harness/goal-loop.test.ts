@@ -457,7 +457,9 @@ describe('parking on a question', () => {
   });
 
   it('resumes once answered, and hands the answer to the next session', async () => {
-    await writeLedger(dir, ledger(1));
+    // TWO tasks: answering now CLOSES the asking task, so a single-task ledger
+    // would be complete and no session would run to receive the answer.
+    await writeLedger(dir, ledger(2));
     await runGoalLoop({ dir, runSession: asks });
 
     const q = await readQuestion(dir);
@@ -734,5 +736,87 @@ describe('an unreachable model is not a failed attempt', () => {
     await runGoalLoop({ dir, runSession: failing, policy: { idleLimit: 2, attemptLimit: 5 } });
     const after = await readLedger(dir);
     if (after.ok) expect(after.value.tasks[0].attempts).toBeGreaterThan(0);
+  });
+});
+
+describe('the question the user sees', () => {
+  it('does not leak the protocol markers into its context', async () => {
+    /*
+     * Slicing the summary's tail dragged the raw syntax into the user's face:
+     * "…STATUS: QUESTION Which total should I compute? || gross | net". That is
+     * how the session talks to the loop, not something to show someone being
+     * asked a question.
+     */
+    await writeLedger(dir, ledger(1));
+    const asks: SessionRunner = async () => ({
+      costUsd: 0.01,
+      summary: 'I need your answer to proceed. STATUS: QUESTION Which total? || gross | net',
+      claimsComplete: false,
+      question: 'Which total?',
+      questionOptions: ['gross', 'net'],
+    });
+    await runGoalLoop({ dir, runSession: asks });
+    const q = await readQuestion(dir);
+    expect(q?.context).not.toMatch(/STATUS: QUESTION/);
+    expect(q?.context).not.toContain('||');
+    expect(q?.context).toContain('I need your answer to proceed.');
+    expect(q?.options).toEqual(['gross', 'net']);
+  });
+});
+
+describe('a task whose job is to ASK', () => {
+  it('is finished by the answer, not by more work', async () => {
+    /*
+     * A real run asked twice. The planner made "Ask the user whether to compute
+     * gross or net" a task of its own — reasonably — but no amount of further
+     * work can complete it, so the resumed session read the answer as context,
+     * found the task still open, and asked again. It would have asked until the
+     * attempt limit killed it.
+     */
+    await writeLedger(dir, ledger(2));
+    const asks: SessionRunner = async () => ({
+      costUsd: 0.01, summary: 'need a decision', claimsComplete: false,
+      question: 'gross or net?', questionOptions: ['gross', 'net'],
+    });
+    await runGoalLoop({ dir, runSession: asks });
+
+    const q = await readQuestion(dir);
+    expect(q?.taskId).toBe('t-1');
+    await answerQuestion(dir, q!.id, 'net', () => 'now');
+
+    // The next session must be given the SECOND task, not the answered one.
+    const worked: string[] = [];
+    await runGoalLoop({
+      dir,
+      runSession: async (i) => { worked.push(i.task.id); return winner(i); },
+    });
+    expect(worked).not.toContain('t-1');
+
+    const after = await readLedger(dir);
+    if (after.ok) {
+      const asked = after.value.tasks.find((t) => t.id === 't-1')!;
+      expect(asked.status).toBe('passed');
+      // And the answer is the evidence, so the record says why it passed.
+      expect(asked.lastVerdict?.evidence.join(' ')).toContain('net');
+    }
+  });
+
+  it('does not close a task when the answer was a plan APPROVAL', async () => {
+    // Those questions are about the plan, not about a task's own work.
+    await writeLedger(dir, ledger(2));
+    const proposes: SessionRunner = async () => ({
+      costUsd: 0.01, summary: 'drop it', claimsComplete: false,
+      revision: { add: [], remove: ['t-2'], reason: 'out of scope' },
+    });
+    await runGoalLoop({ dir, runSession: proposes });
+    const q = await readQuestion(dir);
+    await answerQuestion(dir, q!.id, 'Allow', () => 'now');
+    await runGoalLoop({ dir, runSession: winner });
+    const after = await readLedger(dir);
+    if (after.ok) {
+      // t-1 raised the question but was not itself answered-away.
+      expect(after.value.tasks.find((t) => t.id === 't-1')?.lastVerdict?.evidence.join(' ') ?? '')
+        .not.toContain('Answered by the user');
+    }
   });
 });
