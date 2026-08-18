@@ -18,6 +18,9 @@ import {
   isComplete,
   appendProgress,
   ensureGitignored,
+  listRuns,
+  currentRunIndex,
+  nextRunIndex,
   LEDGER_FILE,
   PROGRESS_FILE,
   type Ledger,
@@ -367,5 +370,42 @@ describe('harnessDir is per conversation', () => {
     const escaped = harnessDir('/tmp/proj', '../../../etc');
     expect(escaped.includes('..')).toBe(false);
     expect(escaped.startsWith(path.join('/tmp/proj', '.aime', 'harness'))).toBe(true);
+  });
+});
+
+describe('a conversation can run more than one goal', () => {
+  it('numbers runs, and never reuses a number', async () => {
+    /*
+     * One goal per chat was the wrong shape. Finishing something and wanting the
+     * next thing done is how work goes, and forcing a new conversation for it
+     * throws away the context of what just happened.
+     */
+    expect(await nextRunIndex(dir, 'conv-a')).toBe(1);
+    await fsp.mkdir(harnessDir(dir, 'conv-a', 1), { recursive: true });
+    expect(await currentRunIndex(dir, 'conv-a')).toBe(1);
+    expect(await nextRunIndex(dir, 'conv-a')).toBe(2);
+
+    await fsp.mkdir(harnessDir(dir, 'conv-a', 2), { recursive: true });
+    expect(await listRuns(dir, 'conv-a')).toEqual([1, 2]);
+    expect(await currentRunIndex(dir, 'conv-a')).toBe(2);
+  });
+
+  it('keeps each run’s state apart', async () => {
+    // The second goal must not inherit the first one's ledger.
+    await writeLedger(harnessDir(dir, 'conv-a', 1), ledger());
+    const second = harnessDir(dir, 'conv-a', 2);
+    await fsp.mkdir(second, { recursive: true });
+    expect((await readLedger(second)).ok).toBe(false);
+    expect((await readLedger(harnessDir(dir, 'conv-a', 1))).ok).toBe(true);
+  });
+
+  it('two conversations number independently', async () => {
+    await fsp.mkdir(harnessDir(dir, 'conv-a', 1), { recursive: true });
+    expect(await nextRunIndex(dir, 'conv-b')).toBe(1);
+  });
+
+  it('reports no runs for a conversation that has none', async () => {
+    expect(await listRuns(dir, 'nobody')).toEqual([]);
+    expect(await currentRunIndex(dir, 'nobody')).toBeNull();
   });
 });

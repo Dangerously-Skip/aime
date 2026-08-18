@@ -8,7 +8,7 @@ import { getProvider } from '@/lib/providers';
 import { getSurfaceConfig } from '@/lib/surfaces';
 import { TURN_BACKSTOP } from '@/lib/surfaces/shared/limits';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
-import { harnessDir, ensureGitignored } from '@/lib/harness/ledger';
+import { harnessDir, ensureGitignored, currentRunIndex } from '@/lib/harness/ledger';
 import { createSessionRunner } from '@/lib/harness/session';
 import { createVerifier, VERIFIER_TOOLS, VERIFIER_DENIED } from '@/lib/harness/verifier';
 import { execFile } from 'node:child_process';
@@ -62,7 +62,10 @@ async function resolveDir(
     // one and cost an afternoon.
     return { ok: false, error: 'That folder is outside your home and temp directories' };
   }
-  return { ok: true, dir: harnessDir(path.resolve(workingDir), conversationId) };
+  const root = path.resolve(workingDir);
+  // The newest run is the one in play. Older ones keep their records.
+  const runIndex = await currentRunIndex(root, conversationId);
+  return { ok: true, dir: harnessDir(root, conversationId, runIndex ?? undefined) };
 }
 
 export async function POST(request: NextRequest) {

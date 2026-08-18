@@ -107,13 +107,61 @@ export type LedgerResult<T> =
  * A missing conversation id falls back to the folder-level path, so a caller
  * that has not got one still resolves somewhere sane rather than throwing.
  */
-export function harnessDir(workingDir: string, conversationId?: string | null): string {
+export function harnessDir(
+  workingDir: string,
+  conversationId?: string | null,
+  runIndex?: number,
+): string {
   const base = path.join(workingDir, DATA_DIR_NAME, 'harness');
   if (!conversationId) return base;
   // A conversation id is a uuid from our own store, but it lands in a path — so
   // keep it to characters that cannot climb out of the directory.
   const safe = conversationId.replace(/[^A-Za-z0-9_-]/g, '');
-  return safe ? path.join(base, safe) : base;
+  if (!safe) return base;
+  const forConversation = path.join(base, safe);
+  if (runIndex === undefined) return forConversation;
+  return path.join(forConversation, String(runIndex).padStart(3, '0'));
+}
+
+/**
+ * Every goal this conversation has run, oldest first.
+ *
+ * One goal per chat was the wrong shape: finishing something and then wanting
+ * the next thing done is the normal way work goes, and forcing a new chat for it
+ * throws away the context of what just happened.
+ */
+export async function listRuns(
+  workingDir: string,
+  conversationId: string,
+): Promise<number[]> {
+  const forConversation = harnessDir(workingDir, conversationId);
+  try {
+    const entries = await fs.readdir(forConversation, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isDirectory() && /^\d+$/.test(e.name))
+      .map((e) => Number(e.name))
+      .sort((a, b) => a - b);
+  } catch {
+    return [];
+  }
+}
+
+/** The run in play — the newest one, or none yet. */
+export async function currentRunIndex(
+  workingDir: string,
+  conversationId: string,
+): Promise<number | null> {
+  const runs = await listRuns(workingDir, conversationId);
+  return runs.length ? runs[runs.length - 1] : null;
+}
+
+/** The index a NEW goal should use. Never reuses a number. */
+export async function nextRunIndex(
+  workingDir: string,
+  conversationId: string,
+): Promise<number> {
+  const current = await currentRunIndex(workingDir, conversationId);
+  return current === null ? 1 : current + 1;
 }
 
 export const GOAL_FILE = 'goal.json';

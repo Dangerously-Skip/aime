@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import path from 'node:path';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
 import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';
-import { harnessDir } from '@/lib/harness/ledger';
+import { harnessDir, currentRunIndex } from '@/lib/harness/ledger';
 import { readQuestion, answerQuestion } from '@/lib/harness/question';
 
 export const runtime = 'nodejs';
@@ -41,7 +41,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const dir = harnessDir(path.resolve(workingDir), conversationId);
+  const root = path.resolve(workingDir);
+  const dir = harnessDir(root, conversationId, (await currentRunIndex(root, conversationId)) ?? undefined);
   const result = await answerQuestion(dir, id, answer);
   if (!result.ok) return Response.json({ error: result.error }, { status: 409 });
   return Response.json({ ok: true });
@@ -58,6 +59,7 @@ export async function GET(request: NextRequest) {
   if (!(await isAllowedWorkspaceRoot(workingDir))) {
     return Response.json({ error: 'That folder is outside your home and temp directories' }, { status: 403 });
   }
-  const q = await readQuestion(harnessDir(path.resolve(workingDir), conversationId));
+  const root2 = path.resolve(workingDir);
+  const q = await readQuestion(harnessDir(root2, conversationId, (await currentRunIndex(root2, conversationId)) ?? undefined));
   return Response.json({ question: q && q.answer === null ? q : null });
 }

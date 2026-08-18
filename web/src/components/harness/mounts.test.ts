@@ -136,3 +136,51 @@ describe('the entry point is where the user actually is', () => {
     expect(mount).toContain('nudge=');
   });
 });
+
+describe('a goal run names its chat, and can be followed by another', () => {
+  it('titles the conversation from the objective', () => {
+    /*
+     * A goal run never sends a chat message, so the ordinary titling path never
+     * fires and every goal conversation stayed "New Chat" — indistinguishable
+     * from every other one in the sidebar.
+     */
+    // Anchored on the naming block itself — `if (chatId)` appears elsewhere in
+    // this file and the first match was a different one entirely.
+    const naming = /const untitled[\s\S]{0,400}?\}\)/.exec(cowork)?.[0] ?? '';
+    expect(naming).toContain('updateConversation');
+    expect(naming).toContain('title:');
+    expect(naming).toContain('objective');
+  });
+
+  it('only titles an UNTITLED chat, so it never overwrites yours', () => {
+    const naming = /const untitled[\s\S]{0,400}?\}\)/.exec(cowork)?.[0] ?? '';
+    /*
+     * The GUARD, not just the word. Asserting that "untitled" appeared was
+     * satisfied by the variable's declaration alone, so replacing the condition
+     * with `if (false)` left it green.
+     *
+     * These are structural checks on source, not behavioural ones — this naming
+     * lives inside a 1900-line surface component that no test renders. They
+     * catch a deletion; they cannot prove the title reaches the store.
+     */
+    expect(naming).toMatch(/if \(untitled\)/);
+    expect(naming).toMatch(/new chat/i);
+  });
+
+  it('the init route allocates a NEW run index rather than one goal per chat', () => {
+    const init = read('app', 'api', 'harness', 'init', 'route.ts');
+    // The CALL, not the import — importing it and then hardcoding 1 would
+    // otherwise pass, and that is exactly one-goal-per-chat again.
+    expect(init).toMatch(/runIndex = await nextRunIndex\(/);
+    expect(init).toMatch(/harnessDir\([^)]*runIndex\)/);
+  });
+
+  it('status and answer operate on the CURRENT run', () => {
+    for (const f of [
+      read('app', 'api', 'harness', 'route.ts'),
+      read('app', 'api', 'harness', 'answer', 'route.ts'),
+    ]) {
+      expect(f).toContain('currentRunIndex');
+    }
+  });
+});
