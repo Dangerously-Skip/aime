@@ -33,7 +33,7 @@ account payments have failed" message suggested: the org's 2,000 free minutes
 were exhausted, **1,912 of them by one repo's per-PR macOS jobs at a 10× quota
 multiplier**, after which every hosted job org-wide failed at ASSIGNMENT — zero
 steps, no log. The fix was an org-wide sweep onto `[self-hosted, linux]`, three
-runners on the Contabo box (`redacted-host`).
+runners on a self-hosted box that also serves production.
 
 That traded *never runs* for *runs and fails*, on the box that serves production.
 24 of the following 25 runs failed, neither cause this repo's code:

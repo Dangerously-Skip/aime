@@ -3,6 +3,7 @@
   "version": "1.7.1",
   "productName": "AIME",
   "private": true,
+  "license": "MIT",
   "main": "main-web.js",
   "scripts": {
     "dev": "next dev",
