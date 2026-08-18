@@ -42,14 +42,32 @@ export const QUESTION_MARKER = 'STATUS: QUESTION';
  * expensive mistake is reading "no answer" as "yes".
  */
 /** The question a session ended on, if it ended on one. */
-export function parseSessionQuestion(text: string): string | null {
+export function parseSessionQuestion(text: string): { question: string; options: string[] } | null {
   const tail = text.slice(-2000);
   const at = tail.lastIndexOf(QUESTION_MARKER);
   if (at === -1) return null;
   const asked = tail.slice(at + QUESTION_MARKER.length).replace(/^[:\s]+/, '').trim();
   // A marker with nothing after it is not a question; treating it as one would
   // park the run on a blank prompt.
-  return asked ? asked.split('\n')[0].slice(0, 500) : null;
+  if (!asked) return null;
+  const line = asked.split('\n')[0].slice(0, 700);
+
+  /*
+   * `question || option | option` — options are the point.
+   *
+   * A question that arrives as free text makes the user type an answer they
+   * could have clicked, and inventing the wording risks an answer the run does
+   * not recognise. The session knows the alternatives; it should offer them.
+   */
+  const [q, opts] = line.split('||');
+  return {
+    question: q.trim().slice(0, 500),
+    options: (opts ?? '')
+      .split('|')
+      .map((o) => o.trim())
+      .filter((o) => o !== '')
+      .slice(0, 5),
+  };
 }
 
 export function parseSessionStatus(text: string): boolean {
@@ -150,9 +168,12 @@ export function buildSessionPrompt(parts: PromptParts): string {
     '',
     `${COMPLETE_MARKER}    — you tested it and every verification step holds`,
     `${INCOMPLETE_MARKER}  — anything else, including "nearly"`,
-    `${QUESTION_MARKER} <your question>  — ONLY when a decision is genuinely the`,
-    `  user's to make and no amount of investigation would settle it. This stops`,
-    `  the run until they answer, so do not use it to check work you could do.`,
+    `${QUESTION_MARKER} <your question> || <option> | <option>`,
+    `  ONLY when a decision is genuinely the user's to make and no amount of`,
+    `  investigation would settle it. This stops the run until they answer, so do`,
+    `  not use it to check work you could do. ALWAYS offer the alternatives after`,
+    `  \`||\` so they can be clicked — for example:`,
+    `  ${QUESTION_MARKER} Which total should this compute? || gross | net`,
     '',
     `Saying neither counts as ${INCOMPLETE_MARKER}.`,
     '',
@@ -271,7 +292,8 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
     const asked = parseSessionQuestion(text);
 
     return {
-      question: asked,
+      question: asked?.question ?? null,
+      questionOptions: asked?.options ?? [],
       revision: parseRevision(text),
       costUsd,
       // The summary is what a human reads later, so keep the model's own words

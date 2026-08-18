@@ -75,6 +75,8 @@ export interface SessionOutcome {
    * done, and retrying a question is how a loop burns a budget learning nothing.
    */
   question?: string | null;
+  /** Clickable alternatives the session offered with its question. */
+  questionOptions?: string[];
   /** A proposed change to the plan, if the session found the plan wrong. */
   revision?: import('./revision').Revision | null;
   error?: string;
@@ -409,6 +411,7 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
       const parked = await parkQuestion(dir, {
         taskId: task.id,
         question: outcome.question,
+        options: outcome.questionOptions ?? [],
         context: outcome.summary.slice(-500),
       });
       if (parked.ok) {
