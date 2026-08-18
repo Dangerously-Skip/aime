@@ -137,6 +137,8 @@ export interface RunStatus {
   events: LoopEvent[];
   /** Set when the run is parked. The one halt a user can undo by answering. */
   question: ParkedQuestion | null;
+  /** Which numbered run this is. Transcript keys need it to stay unique. */
+  runIndex: number | null;
 }
 
 /**
@@ -147,7 +149,11 @@ export interface RunStatus {
  * The registry only supplies what disk cannot: whether it is running right now,
  * and the recent event stream.
  */
-export async function runStatus(conversationId: string, dir: string): Promise<RunStatus> {
+export async function runStatus(
+  conversationId: string,
+  dir: string,
+  runIndex: number | null = null,
+): Promise<RunStatus> {
   const live = registry().get(conversationId);
   const [goal, ledger, persisted, question] = await Promise.all([
     readGoal(dir),
@@ -163,6 +169,7 @@ export async function runStatus(conversationId: string, dir: string): Promise<Ru
     decision: live?.decision ?? null,
     events: live?.events ?? [],
     question: question && question.answer === null ? question : null,
+    runIndex,
   };
 }
 

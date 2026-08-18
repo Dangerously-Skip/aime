@@ -47,6 +47,8 @@ export interface RunState {
   lastStateHash: string | null;
   /** Set when the user presses stop. Checked first among the halting reasons. */
   cancelled?: boolean;
+  /** Plan revisions this RUN has made. Persisted so a park does not reset it. */
+  revisions?: number;
 }
 
 export interface StopPolicy {

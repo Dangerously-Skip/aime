@@ -409,3 +409,23 @@ describe('a conversation can run more than one goal', () => {
     expect(await currentRunIndex(dir, 'nobody')).toBeNull();
   });
 });
+
+describe('the tamper check cannot be excused by the session', () => {
+  it('rejects a deletion the session justified in the SAME edit', () => {
+    /*
+     * `after` is the file the untrusted session just wrote. Reading the
+     * retirement exemption from it let a session delete a task and excuse itself
+     * in one go: add `"retiredIds": ["t-2"]`, drop t-2, pass the check. The
+     * exemption has to come from the ledger WE wrote before the session ran.
+     */
+    const after: Ledger = { version: 1, tasks: [ledger().tasks[0]], retiredIds: ['t-2'] };
+    const problems = illegalChanges(ledger(), after);
+    expect(problems.some((p) => p.includes('t-2'))).toBe(true);
+  });
+
+  it('allows a deletion an APPROVED revision already recorded', () => {
+    const before: Ledger = { ...ledger(), retiredIds: ['t-2'] };
+    const after: Ledger = { version: 1, tasks: [ledger().tasks[0]], retiredIds: ['t-2'] };
+    expect(illegalChanges(before, after)).toEqual([]);
+  });
+});

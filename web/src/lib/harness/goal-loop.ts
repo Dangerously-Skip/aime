@@ -14,7 +14,7 @@ import {
   type TaskVerdict,
 } from './ledger';
 import type { Verifier } from './verifier';
-import { parkQuestion, isWaiting, consumeAnswer } from './question';
+import { parkQuestion, isWaiting, consumeAnswer, isApproval } from './question';
 import { classifyRevision, applyRevision } from './revision';
 import {
   shouldStop,
@@ -150,6 +150,7 @@ export async function readRunState(dir: string): Promise<RunState | null> {
       startedAtMs: typeof o.startedAtMs === 'number' ? o.startedAtMs : 0,
       idleSessions: typeof o.idleSessions === 'number' ? o.idleSessions : 0,
       lastStateHash: typeof o.lastStateHash === 'string' ? o.lastStateHash : null,
+      revisions: typeof o.revisions === 'number' ? o.revisions : 0,
       cancelled: o.cancelled === true,
     };
   } catch {
@@ -187,7 +188,9 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
   const goal = goalRead.value;
 
   let run = opts.initialRun ?? (await readRunState(dir)) ?? newRunState(now());
-  let revisions = 0;
+  // Per RUN, not per loop invocation: a loop-local counter resets on every park
+  // or restart, so a run could revise indefinitely by pausing between edits.
+  let revisions = run.revisions ?? 0;
 
   for (;;) {
     const ledgerRead = await readLedger(dir);
@@ -233,7 +236,37 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
     // An answer that arrived is consumed exactly once, and reaches the session
     // as context rather than being silently dropped.
     const answered = await consumeAnswer(dir);
-    if (answered) emit({ type: 'resumed', taskId: answered.taskId ?? undefined, detail: answered.answer ?? '' });
+    if (answered) {
+      /*
+       * An approved plan change is applied HERE, on resume.
+       *
+       * Without this the "Allow" button did nothing: the answer was recorded and
+       * the removal never happened, so the run carried on with the task the user
+       * had just agreed to drop.
+       */
+      if (answered.revision && isApproval(answered.answer)) {
+        const fresh = await readLedger(dir);
+        if (fresh.ok) {
+          const applied = applyRevision(
+            fresh.value,
+            answered.revision as import('./revision').Revision,
+            true,
+          );
+          await writeLedger(dir, applied);
+          /*
+           * And to the copy this iteration is holding.
+           *
+           * The ledger was read at the top of the loop, before the answer was
+           * consumed. Writing the revision to disk without updating `ledger`
+           * meant the next `applySessionUpdate` wrote the stale one straight
+           * back over it — the removal happened and was immediately undone.
+           */
+          ledger = applied;
+          emit({ type: 'revised', taskId: answered.taskId ?? undefined, detail: 'Plan change approved.' });
+        }
+      }
+      emit({ type: 'resumed', taskId: answered.taskId ?? undefined, detail: answered.answer ?? '' });
+    }
 
     const decision = shouldStop({ goal, ledger, run, policy: opts.policy, nowMs: now() });
     if (decision.stop) {
@@ -335,6 +368,7 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         ledger = applyRevision(ledger, outcome.revision, false);
         await writeLedger(dir, ledger);
         revisions++;
+        run = { ...run, revisions };
         revisionNote = `Added ${outcome.revision.add.length} task(s): ${outcome.revision.reason}`;
         emit({ type: 'revised', sessionIndex, taskId: task.id, detail: revisionNote });
       } else if (classified.kind === 'needs-approval') {
@@ -348,6 +382,9 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
           question: classified.approvalPrompt ?? 'The run wants to change the plan. Allow it?',
           options: ['Allow', 'Keep the plan as it is'],
           context: classified.refusals.join(' '),
+          // Stored WITH the question so approving on resume applies the change
+          // the user was actually shown.
+          revision: outcome.revision,
         });
         if (parked.ok) {
           await appendProgress(dir, `## Session ${sessionIndex} — proposed a plan change\n\n${classified.approvalPrompt}`);
@@ -429,7 +466,13 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         id: task.id,
         status: succeeded ? 'passed' : 'todo',
         attempts: task.attempts + 1,
-        lastVerdict: verdict,
+        /*
+         * Only when there IS one. Writing `null` over a stored rejection loses
+         * the verifier's `missing` list, which is exactly what the next attempt
+         * is supposed to read — so an unverified session would silently erase
+         * the reason the last one failed.
+         */
+        ...(verdict ? { lastVerdict: verdict } : {}),
       },
     ]);
     if (applied.ok) {

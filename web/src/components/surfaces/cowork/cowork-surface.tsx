@@ -1661,6 +1661,17 @@ export function CoworkSurface() {
       const objective = inputValue.trim();
       if (!objective) return;
       /*
+       * A conversation has to exist first.
+       *
+       * The goal branch returned before the auto-create block below, so a brand
+       * new chat posted conversationId: "" and the route answered 400 — goal
+       * mode simply did not work until you had already sent a normal message.
+       */
+      if (!chatId) {
+        setGoalError("Send a message first, or pick an existing chat — a goal needs a conversation to live in.");
+        return;
+      }
+      /*
        * Name the chat.
        *
        * A goal run never sent a chat message, so the ordinary titling path never
@@ -1958,6 +1969,29 @@ export function CoworkSurface() {
               </div>
             </div>
           </div>
+
+          {/*
+            The planning spinner and live status, in the ACTIVE state too.
+            
+            It rendered only in the empty state, so a FOLLOW-UP goal — the case
+            the run sequence was built for — showed nothing at all for the thirty
+            seconds or more that planning takes.
+          */}
+          {folder && (
+            <div className="mx-auto w-full max-w-[672px] px-4 pb-3">
+              <GoalRunStatus
+                chatId={chatId}
+                folder={folder}
+                surfaceId="cowork"
+                nudge={goalNudge}
+                starting={
+                  goalPending && goalPhase !== "idle"
+                    ? { objective: goalPending, phase: goalPhase }
+                    : null
+                }
+              />
+            </div>
+          )}
 
           {/* Sidebar: Context + Artifacts */}
           <SidebarPanel

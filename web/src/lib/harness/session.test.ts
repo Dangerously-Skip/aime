@@ -103,8 +103,19 @@ describe('buildSessionPrompt', () => {
     expect(prompt()).toMatch(/TEST YOUR WORK END TO END/i);
   });
 
-  it('forbids editing the plan', () => {
-    expect(prompt()).toMatch(/not edit the goal or the task list/i);
+  it('forbids editing the plan FILES, while offering the sanctioned route', () => {
+    /*
+     * The blanket ban was the bug: it forbade exactly what plan revision exists
+     * to allow, so STATUS: REVISE was unreachable at runtime — phase 4 shipped
+     * with no way for a session to use it.
+     */
+    const p = prompt();
+    expect(p).toMatch(/not edit the goal or task list FILES/i);
+    expect(p).toContain('STATUS: REVISE');
+    // Whitespace-normalised: the prompt wraps these lines.
+    const flat = p.replace(/\s+/g, ' ');
+    expect(flat).toMatch(/Adding work is applied straight away/i);
+    expect(flat).toMatch(/REMOVING a task stops the run to ask/i);
   });
 
   it('states both markers and that silence means incomplete', () => {

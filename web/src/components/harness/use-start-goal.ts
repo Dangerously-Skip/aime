@@ -30,6 +30,14 @@ export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOpti
 
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
+  /*
+   * The BYOK key from Settings.
+   *
+   * Every other surface sends it and this one did not, so a user whose key lives
+   * only in Settings hit "Not logged in · Please run /login" — the same failure
+   * 335e0ca fixed for the provider routes, reintroduced one layer up.
+   */
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const { hasAnthropicKey, hasBedrock, known } = useBuiltinAccess();
 
   const start = useCallback(
@@ -55,6 +63,7 @@ export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOpti
         surfaceId,
         model: route?.model ?? null,
         providerConfig: route?.providerConfig ?? null,
+        apiKey: anthropicApiKey || null,
       };
 
       setPhase('planning');
@@ -98,7 +107,7 @@ export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOpti
         return false;
       }
     },
-    [surfaceId, modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, known],
+    [surfaceId, modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, known, anthropicApiKey],
   );
 
   return { start, phase, error, setError };

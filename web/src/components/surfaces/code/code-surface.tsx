@@ -1075,6 +1075,12 @@ export function CodeSurface() {
         const settings = goalSettingsFrom(goalBudget, goalCap);
         if (typeof settings === "string") return setGoalError(settings);
         if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
+        // A goal needs a conversation; the branch returns before the auto-create
+        // below, so a brand new chat would post conversationId: "" and 400.
+        if (!chatId) {
+          setGoalError("Send a message first, or pick an existing chat — a goal needs a conversation to live in.");
+          return;
+        }
         setGoalPending(trimmed);
         const ok = await startGoal({
           conversationId: chatId,

@@ -376,9 +376,16 @@ export function illegalChanges(before: Ledger, after: Ledger): string[] {
   for (const [id, b] of beforeById) {
     const a = afterById.get(id);
     if (!a) {
-      // An approved revision records the id as retired; that is a plan change,
-      // not a session quietly deleting work it found hard.
-      if (!after.retiredIds?.includes(id)) {
+      /*
+       * BEFORE, not after.
+       *
+       * `after` is the file the untrusted session just wrote, so reading the
+       * exemption from it let a session delete a task and excuse itself in the
+       * same edit: add `"retiredIds": ["t-002"]`, drop t-002, pass the check.
+       * The retirement has to have been recorded by an APPROVED revision, which
+       * means it is already in the ledger we wrote before the session ran.
+       */
+      if (!before.retiredIds?.includes(id)) {
         problems.push(`task ${id} ("${b.title}") was removed`);
       }
       continue;
