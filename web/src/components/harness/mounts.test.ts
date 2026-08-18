@@ -115,4 +115,24 @@ describe('the entry point is where the user actually is', () => {
   it('shows a run’s status without asking to start another', () => {
     expect(cowork).toContain('GoalRunStatus');
   });
+
+  it('feeds the PLANNING phase through, or the gap is silent again', () => {
+    /*
+     * Planning is a full model call — thirty seconds or more. Passing
+     * `starting` is what puts anything on screen during it; without it the send
+     * button goes quiet and the panel appears a minute later, which reads as
+     * nothing having happened.
+     */
+    const mount = /<GoalRunStatus[\s\S]*?\/>/.exec(cowork)?.[0] ?? '';
+    expect(mount).toContain('starting=');
+    /*
+     * The VALUE, not just the names. Asserting that `goalPhase` appears was
+     * satisfied by the surrounding condition alone, so replacing the whole
+     * object with `null` left this green.
+     */
+    expect(mount).toMatch(/objective:\s*goalPending/);
+    expect(mount).toMatch(/phase:\s*goalPhase/);
+    // And nudged, so the real panel replaces the card at once.
+    expect(mount).toContain('nudge=');
+  });
 });

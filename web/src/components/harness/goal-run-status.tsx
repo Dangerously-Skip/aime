@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { GoalPanel } from './goal-panel';
 
 /**
@@ -16,10 +17,23 @@ export function GoalRunStatus({
   chatId,
   folder,
   surfaceId,
+  starting = null,
+  nudge = 0,
 }: {
   chatId: string;
   folder: string | null;
   surfaceId: 'cowork' | 'code';
+  /**
+   * What the run is doing before it exists.
+   *
+   * Planning is a full model call — thirty seconds or more — and until this
+   * existed the screen showed nothing at all during it. The send button went
+   * quiet and the panel appeared a minute later, which reads as nothing having
+   * happened.
+   */
+  starting?: { objective: string; phase: 'planning' | 'starting' } | null;
+  /** Bumped by the caller to force an immediate re-check rather than waiting. */
+  nudge?: number;
 }) {
   const [hasGoal, setHasGoal] = useState(false);
 
@@ -44,9 +58,29 @@ export function GoalRunStatus({
       cancelled = true;
       clearInterval(id);
     };
-  }, [chatId, folder]);
+  }, [chatId, folder, nudge]);
 
-  if (!folder || !hasGoal) return null;
+  if (!folder) return null;
+
+  // Planning, before there is anything to report.
+  if (starting && !hasGoal) {
+    return (
+      <div className="rounded-xl border border-primary/40 bg-primary/5 p-4">
+        <div className="flex items-center gap-2">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+          <span className="text-sm font-medium">
+            {starting.phase === 'planning' ? 'Working out a plan…' : 'Starting…'}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">{starting.objective}</p>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          Reading the folder and breaking this into checkable steps. Takes a moment.
+        </p>
+      </div>
+    );
+  }
+
+  if (!hasGoal) return null;
 
   return (
     <div className="rounded-xl border border-border/50 bg-card/50">
