@@ -7,6 +7,7 @@ import { runGoalLoop, readRunState, type SessionRunner, type LoopEvent } from '.
 import { writeGoalOnce, writeLedger, readLedger, PROGRESS_FILE, type Ledger, type Goal } from './ledger';
 import { DEFAULT_POLICY } from './stop';
 import type { Verifier } from './verifier';
+import { readQuestion, answerQuestion } from './question';
 
 /**
  * The loop against a REAL directory, with only the model call faked.
@@ -406,5 +407,90 @@ describe('the verifier gates the pass', () => {
     const progress = await fsp.readFile(path.join(dir, PROGRESS_FILE), 'utf8');
     expect(progress).toContain('passed (verified)');
     expect(progress).not.toContain('unverified');
+  });
+});
+
+describe('parking on a question', () => {
+  const asks: SessionRunner = async () => ({
+    costUsd: 0.1,
+    summary: 'I need to know which database.',
+    claimsComplete: false,
+    question: 'Postgres or SQLite?',
+  });
+
+  it('a session that ASKS halts the run instead of failing the task', async () => {
+    /*
+     * The distinction the whole phase turns on. "I did not finish" gets retried;
+     * "which database do you want" retried forty times is the runaway this
+     * design exists to prevent, and no amount of retrying produces the answer.
+     */
+    await writeLedger(dir, ledger(1));
+    const { decision, run } = await runGoalLoop({ dir, runSession: asks });
+    expect(decision).toMatchObject({ stop: true, reason: 'awaiting-answer' });
+    expect(decision.detail).toContain('Postgres or SQLite?');
+    expect(run.sessions).toBe(1); // it stopped, it did not retry
+  });
+
+  it('does not burn an attempt on a question', async () => {
+    // Otherwise a question would eat through the stuck-task limit.
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({ dir, runSession: asks });
+    const after = await readLedger(dir);
+    if (after.ok) expect(after.value.tasks[0].attempts).toBe(0);
+  });
+
+  it('stays parked across restarts until answered — no timer', async () => {
+    /*
+     * The reason pending-questions could not be reused: it gives five minutes
+     * and treats silence as a refusal. A run continuing overnight would have the
+     * question expire and the task fail for a reason that was never a reason.
+     */
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({ dir, runSession: asks });
+
+    // A completely fresh loop, as after an app restart.
+    const second = await runGoalLoop({ dir, runSession: winner });
+    expect(second.decision.reason).toBe('awaiting-answer');
+    const third = await runGoalLoop({ dir, runSession: winner });
+    expect(third.decision.reason).toBe('awaiting-answer');
+  });
+
+  it('resumes once answered, and hands the answer to the next session', async () => {
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({ dir, runSession: asks });
+
+    const q = await readQuestion(dir);
+    expect(q).not.toBeNull();
+    await answerQuestion(dir, q!.id, 'Postgres', () => 'now');
+
+    const seen: (string | null | undefined)[] = [];
+    const { decision } = await runGoalLoop({
+      dir,
+      runSession: async (i) => { seen.push(i.answer); return winner(i); },
+    });
+    expect(decision.reason).toBe('complete');
+    expect(seen[0]).toBe('Postgres');
+  });
+
+  it('consumes the answer exactly once', async () => {
+    // Leaving it would make a later session act on a decision already applied.
+    await writeLedger(dir, ledger(3));
+    await runGoalLoop({ dir, runSession: asks });
+    const q = await readQuestion(dir);
+    await answerQuestion(dir, q!.id, 'Postgres', () => 'now');
+
+    const seen: (string | null | undefined)[] = [];
+    await runGoalLoop({ dir, runSession: async (i) => { seen.push(i.answer); return winner(i); } });
+    expect(seen[0]).toBe('Postgres');
+    expect(seen.slice(1).every((a) => !a)).toBe(true);
+  });
+
+  it('the user’s stop still wins over a parked question', async () => {
+    await writeLedger(dir, ledger(1));
+    await runGoalLoop({ dir, runSession: asks });
+    const ac = new AbortController();
+    ac.abort();
+    const { decision } = await runGoalLoop({ dir, runSession: winner, signal: ac.signal });
+    expect(decision.reason).toBe('user');
   });
 });

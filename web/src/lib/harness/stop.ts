@@ -25,6 +25,8 @@ export type StopReason =
   | 'no-progress'
   | 'stuck-task'
   | 'user'
+  /** Parked on a question. The only halt that resumes by answering. */
+  | 'awaiting-answer'
   | 'error';
 
 export interface StopDecision {
@@ -190,5 +192,10 @@ export function newRunState(nowMs: number): RunState {
 
 /** Did the run end in a way the user should look at? */
 export function needsAttention(reason: StopReason | undefined): boolean {
-  return reason === 'no-progress' || reason === 'stuck-task' || reason === 'error';
+  return (
+    reason === 'no-progress' ||
+    reason === 'stuck-task' ||
+    reason === 'error' ||
+    reason === 'awaiting-answer'
+  );
 }

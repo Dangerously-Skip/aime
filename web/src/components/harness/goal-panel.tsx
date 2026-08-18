@@ -5,6 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { StartGoal } from './start-goal'
 import type { ModelOption } from '@/lib/models/client-options'
+import { Input } from '@/components/ui/input'
+import type { ParkedQuestion } from '@/lib/harness/question'
 import type { Goal, Ledger, Task } from '@/lib/harness/ledger'
 import type { RunState, StopDecision } from '@/lib/harness/stop'
 
@@ -28,6 +30,7 @@ export interface HarnessStatus {
   run: RunState | null
   decision: StopDecision | null
   events: { type: string; sessionIndex?: number; taskId?: string; detail?: string }[]
+  question?: ParkedQuestion | null
 }
 
 const STATUS_STYLE: Record<Task['status'], string> = {
@@ -68,6 +71,23 @@ export function GoalPanel({
 }) {
   const [status, setStatus] = useState<HarnessStatus | null>(null)
   const [busy, setBusy] = useState(false)
+  const [answer, setAnswer] = useState('')
+
+  const send = async (text: string) => {
+    if (!workingDir || !status?.question || !text.trim()) return
+    setBusy(true)
+    try {
+      await fetch('/api/harness/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir, id: status.question.id, answer: text }),
+      })
+      setAnswer('')
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const refresh = useCallback(async () => {
     if (!workingDir) return
@@ -151,7 +171,44 @@ export function GoalPanel({
         <p className="text-xs text-muted-foreground">{goal.objective}</p>
       </div>
 
-      {decision?.stop && decision.detail && (
+      {/*
+        A parked question comes FIRST and is the only thing the user can act on.
+        A run waiting on a decision is not broken and not finished; showing it
+        among the stop reasons would bury the one thing that unblocks it.
+      */}
+      {status.question && (
+        <div className="space-y-2 rounded-md border border-primary/40 bg-primary/5 px-3 py-2.5">
+          <p className="text-xs font-medium">It needs a decision from you</p>
+          <p className="text-xs">{status.question.question}</p>
+          {status.question.context && (
+            <p className="text-[11px] text-muted-foreground">{status.question.context}</p>
+          )}
+          {status.question.options.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {status.question.options.map((o) => (
+                <Button key={o} size="sm" variant="outline" disabled={busy} onClick={() => send(o)}>
+                  {o}
+                </Button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-1.5">
+            <Input
+              value={answer}
+              onChange={(e) => setAnswer(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void send(answer) }}
+              placeholder="Answer, and it carries on"
+              disabled={busy}
+              className="h-7 text-xs"
+            />
+            <Button size="sm" disabled={busy || !answer.trim()} onClick={() => void send(answer)}>
+              Send
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {!status.question && decision?.stop && decision.detail && (
         <div
           className={`rounded-md border px-3 py-2 text-xs ${
             tone === 'attention'

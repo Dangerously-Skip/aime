@@ -14,6 +14,7 @@ import {
   type TaskVerdict,
 } from './ledger';
 import type { Verifier } from './verifier';
+import { parkQuestion, isWaiting, consumeAnswer } from './question';
 import {
   shouldStop,
   recordSession,
@@ -48,6 +49,8 @@ export interface SessionInput {
   sessionIndex: number;
   /** Verifier feedback from the last failed attempt, verbatim. */
   missing: string[];
+  /** The user's answer to a question this run parked on, if there was one. */
+  answer?: string | null;
 }
 
 export interface SessionOutcome {
@@ -64,6 +67,13 @@ export interface SessionOutcome {
    * embedded videos when every one was broken.
    */
   claimsComplete: boolean;
+  /**
+   * A decision only the user can make.
+   *
+   * Distinct from "not complete": retrying an unfinished task is how work gets
+   * done, and retrying a question is how a loop burns a budget learning nothing.
+   */
+  question?: string | null;
   error?: string;
 }
 
@@ -75,6 +85,8 @@ export interface LoopEvent {
     | 'session-end'
     | 'verify-start'
     | 'verify-end'
+    | 'parked'
+    | 'resumed'
     | 'tamper'
     | 'stopped';
   sessionIndex?: number;
@@ -181,6 +193,30 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
 
     if (opts.signal?.aborted) run = { ...run, cancelled: true };
 
+    /*
+     * A question outranks everything except the user's own stop.
+     *
+     * Checked before `shouldStop` so a parked run reports what it is waiting FOR
+     * rather than the next limit it happens to trip. Unlike every other halt,
+     * this one is resumable by answering — nothing about it is on a timer, so it
+     * survives a night, a restart, and a week.
+     */
+    if (!run.cancelled && (await isWaiting(dir))) {
+      const waiting: StopDecision = {
+        stop: true,
+        reason: 'awaiting-answer',
+        detail: 'Waiting on your answer before it can continue.',
+      };
+      await writeRunState(dir, run);
+      emit({ type: 'parked', detail: waiting.detail, run });
+      return { decision: waiting, run };
+    }
+
+    // An answer that arrived is consumed exactly once, and reaches the session
+    // as context rather than being silently dropped.
+    const answered = await consumeAnswer(dir);
+    if (answered) emit({ type: 'resumed', taskId: answered.taskId ?? undefined, detail: answered.answer ?? '' });
+
     const decision = shouldStop({ goal, ledger, run, policy: opts.policy, nowMs: now() });
     if (decision.stop) {
       await writeRunState(dir, run);
@@ -225,6 +261,7 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         dir,
         sessionIndex,
         missing: task.lastVerdict?.missing ?? [],
+        answer: answered?.answer ?? null,
       });
     } catch (e) {
       outcome = {
@@ -261,6 +298,34 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
       // next iteration's read decide whether to halt.
       ledger = beforeSession;
       await writeLedger(dir, ledger);
+    }
+
+    /*
+     * A session that ASKED did not fail — it stopped for a reason retrying
+     * cannot resolve. Parking here, before the attempt counter moves, keeps a
+     * question from burning through the stuck-task limit.
+     */
+    if (outcome.question) {
+      const parked = await parkQuestion(dir, {
+        taskId: task.id,
+        question: outcome.question,
+        context: outcome.summary.slice(-500),
+      });
+      if (parked.ok) {
+        await appendProgress(
+          dir,
+          `## Session ${sessionIndex} — ${task.id} asked a question\n\n${outcome.question}`,
+        );
+        run = recordSession(run, { costUsd: outcome.costUsd, stateHash: ledgerStateHash(ledger) });
+        await writeRunState(dir, run);
+        const waiting: StopDecision = {
+          stop: true,
+          reason: 'awaiting-answer',
+          detail: outcome.question,
+        };
+        emit({ type: 'parked', sessionIndex, taskId: task.id, detail: outcome.question, run });
+        return { decision: waiting, run };
+      }
     }
 
     const claimed = outcome.claimsComplete && !outcome.error && tampered.length === 0;

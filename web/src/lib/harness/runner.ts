@@ -1,5 +1,6 @@
 import { runGoalLoop, readRunState, type SessionRunner, type LoopEvent } from './goal-loop';
 import { readGoal, readLedger, type Ledger, type Goal } from './ledger';
+import { readQuestion, type ParkedQuestion } from './question';
 import { newRunState, type RunState, type StopDecision, type StopPolicy } from './stop';
 
 /**
@@ -134,6 +135,8 @@ export interface RunStatus {
   run: RunState | null;
   decision: StopDecision | null;
   events: LoopEvent[];
+  /** Set when the run is parked. The one halt a user can undo by answering. */
+  question: ParkedQuestion | null;
 }
 
 /**
@@ -146,10 +149,11 @@ export interface RunStatus {
  */
 export async function runStatus(conversationId: string, dir: string): Promise<RunStatus> {
   const live = registry().get(conversationId);
-  const [goal, ledger, persisted] = await Promise.all([
+  const [goal, ledger, persisted, question] = await Promise.all([
     readGoal(dir),
     readLedger(dir),
     readRunState(dir),
+    readQuestion(dir),
   ]);
   return {
     running: !!live && !live.finished,
@@ -158,6 +162,7 @@ export async function runStatus(conversationId: string, dir: string): Promise<Ru
     run: live?.run ?? persisted,
     decision: live?.decision ?? null,
     events: live?.events ?? [],
+    question: question && question.answer === null ? question : null,
   };
 }
 

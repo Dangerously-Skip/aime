@@ -23,6 +23,16 @@ export const COMPLETE_MARKER = 'STATUS: COMPLETE';
 export const INCOMPLETE_MARKER = 'STATUS: INCOMPLETE';
 
 /**
+ * The third ending: the session cannot proceed without a decision only the user
+ * can make.
+ *
+ * Distinct from INCOMPLETE on purpose. "I did not finish" gets retried; "I need
+ * to know which database you want" retried forty times is the runaway this whole
+ * design exists to avoid, and no amount of retrying produces the answer.
+ */
+export const QUESTION_MARKER = 'STATUS: QUESTION';
+
+/**
  * Did the session claim completion?
  *
  * ABSENCE IS NOT SUCCESS. A run that ended without saying either — because it hit
@@ -30,6 +40,17 @@ export const INCOMPLETE_MARKER = 'STATUS: INCOMPLETE';
  * pending-questions bridge applies to silence, and for the same reason: the
  * expensive mistake is reading "no answer" as "yes".
  */
+/** The question a session ended on, if it ended on one. */
+export function parseSessionQuestion(text: string): string | null {
+  const tail = text.slice(-2000);
+  const at = tail.lastIndexOf(QUESTION_MARKER);
+  if (at === -1) return null;
+  const asked = tail.slice(at + QUESTION_MARKER.length).replace(/^[:\s]+/, '').trim();
+  // A marker with nothing after it is not a question; treating it as one would
+  // park the run on a blank prompt.
+  return asked ? asked.split('\n')[0].slice(0, 500) : null;
+}
+
 export function parseSessionStatus(text: string): boolean {
   // Search the tail only. A session that quotes the instructions early on, or
   // reasons aloud about what completion would mean, must not trip this.
@@ -59,6 +80,7 @@ export interface PromptParts {
   sessionIndex: number;
   missing: string[];
   progress: string;
+  answer?: string | null;
 }
 
 /**
@@ -97,6 +119,10 @@ export function buildSessionPrompt(parts: PromptParts): string {
     lines.push('');
   }
 
+  if (parts.answer) {
+    lines.push(`# You asked a question and were answered`, '', parts.answer.trim(), '');
+  }
+
   if (missing.length) {
     lines.push(`## The last attempt was rejected for these reasons`, '');
     for (const m of missing) lines.push(`- ${m}`);
@@ -123,6 +149,9 @@ export function buildSessionPrompt(parts: PromptParts): string {
     '',
     `${COMPLETE_MARKER}    — you tested it and every verification step holds`,
     `${INCOMPLETE_MARKER}  — anything else, including "nearly"`,
+    `${QUESTION_MARKER} <your question>  — ONLY when a decision is genuinely the`,
+    `  user's to make and no amount of investigation would settle it. This stops`,
+    `  the run until they answer, so do not use it to check work you could do.`,
     '',
     `Saying neither counts as ${INCOMPLETE_MARKER}.`,
   );
@@ -164,6 +193,7 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
       sessionIndex: input.sessionIndex,
       missing: input.missing,
       progress,
+      answer: input.answer ?? null,
     });
 
     let text = '';
@@ -224,7 +254,10 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
       costUsd = deps.estimateCostUsd(inputTokens, outputTokens);
     }
 
+    const asked = parseSessionQuestion(text);
+
     return {
+      question: asked,
       costUsd,
       // The summary is what a human reads later, so keep the model's own words
       // rather than a template. Trimmed because the whole transcript is not a
