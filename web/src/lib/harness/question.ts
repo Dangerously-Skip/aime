@@ -42,6 +42,52 @@ export interface ParkedQuestion {
 
 export const QUESTION_FILE = 'question.json';
 
+/**
+ * Decisions the user has made, kept after the question is consumed.
+ *
+ * `consumeAnswer` deletes the question so a session cannot act on a decision
+ * twice — which also deleted the only record that the decision existed. The
+ * VERIFIER then had no way to see it: it reads the working tree and runs
+ * commands, and an answer that lives only in one session's prompt is invisible
+ * to it. So it twice rejected a correctly finished task with "the conversation
+ * does not contain an unambiguous user answer", which was scepticism doing its
+ * job against evidence it had not been shown. Two wasted sessions, about half
+ * the run's cost.
+ */
+export const DECISIONS_FILE = 'decisions.json';
+
+export interface Decision {
+  question: string;
+  answer: string;
+  taskId: string | null;
+  at: string;
+}
+
+export async function readDecisions(dir: string): Promise<Decision[]> {
+  try {
+    const raw = await fs.readFile(path.join(dir, DECISIONS_FILE), 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (d): d is Decision =>
+        typeof d === 'object' && d !== null &&
+        typeof (d as Decision).question === 'string' &&
+        typeof (d as Decision).answer === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Append-only: a decision is a fact about the run, not a mutable field. */
+export async function recordDecision(dir: string, q: ParkedQuestion): Promise<void> {
+  if (!q.answer) return;
+  const all = await readDecisions(dir);
+  all.push({ question: q.question, answer: q.answer, taskId: q.taskId, at: q.answeredAt ?? '' });
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, DECISIONS_FILE), JSON.stringify(all, null, 2) + '\n', 'utf8');
+}
+
 function file(dir: string): string {
   return path.join(dir, QUESTION_FILE);
 }
@@ -172,6 +218,8 @@ export function isApproval(answer: string | null): boolean {
 export async function consumeAnswer(dir: string): Promise<ParkedQuestion | null> {
   const q = await readQuestion(dir);
   if (!q || q.answer === null) return null;
+  // Kept before the question is destroyed — the decision outlives the asking.
+  await recordDecision(dir, q);
   await fs.rm(file(dir), { force: true });
   return q;
 }

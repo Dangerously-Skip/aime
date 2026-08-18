@@ -4,7 +4,7 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  parkQuestion, readQuestion, answerQuestion, consumeAnswer, isWaiting, QUESTION_FILE,
+  parkQuestion, readQuestion, answerQuestion, consumeAnswer, isWaiting, QUESTION_FILE, readDecisions,
 } from './question';
 
 /**
@@ -143,5 +143,43 @@ describe('a corrupt question file', () => {
     await fsp.writeFile(path.join(dir, QUESTION_FILE), '{ truncated');
     expect(await isWaiting(dir)).toBe(true);
     expect((await readQuestion(dir))?.question).toMatch(/could not be read/i);
+  });
+});
+
+describe('decisions outlive the question', () => {
+  it('records the answer before the question is destroyed', async () => {
+    /*
+     * consumeAnswer deletes the question so a session cannot act on a decision
+     * twice — which also deleted the only record it existed. The verifier reads
+     * the working tree, not a conversation, so it then rejected a correctly
+     * finished task twice with "the conversation does not contain an
+     * unambiguous user answer". Two wasted sessions.
+     */
+    const r = await parkQuestion(dir, { question: 'gross or net?', taskId: 't-1', nowIso: NOW });
+    if (!r.ok) throw new Error(r.error);
+    await answerQuestion(dir, r.question.id, 'net', NOW);
+
+    expect(await readDecisions(dir)).toEqual([]);
+    await consumeAnswer(dir);
+
+    const decisions = await readDecisions(dir);
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]).toMatchObject({ question: 'gross or net?', answer: 'net', taskId: 't-1' });
+    // And the question itself is gone, so it cannot be acted on twice.
+    expect(await readQuestion(dir)).toBeNull();
+  });
+
+  it('accumulates, so a later session sees an earlier decision', async () => {
+    for (const [q, a] of [['first?', 'A'], ['second?', 'B']]) {
+      const r = await parkQuestion(dir, { question: q, nowIso: NOW });
+      if (!r.ok) throw new Error(r.error);
+      await answerQuestion(dir, r.question.id, a, NOW);
+      await consumeAnswer(dir);
+    }
+    expect((await readDecisions(dir)).map((d) => d.answer)).toEqual(['A', 'B']);
+  });
+
+  it('reports none when there are none, rather than throwing', async () => {
+    expect(await readDecisions(dir)).toEqual([]);
   });
 });

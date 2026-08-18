@@ -267,3 +267,46 @@ describe('createVerifier', () => {
     expect(v.missing[0]).toContain('Error 153');
   });
 });
+
+describe('the verifier is told what the user decided', () => {
+  const decisions = [
+    { question: 'gross or net?', answer: 'net', taskId: 't-001', at: 'now' },
+  ];
+
+  it('puts the decision in the prompt, verbatim', () => {
+    /*
+     * The verifier reads the working tree and runs commands — it cannot see a
+     * conversation. Without this it rejected a correctly finished task twice
+     * with "the conversation does not contain an unambiguous user answer",
+     * which was scepticism working exactly as designed against evidence it had
+     * never been shown. Two wasted sessions, about half the run's cost.
+     */
+    const p = buildVerifierPrompt(goal, task, 'did it', decisions);
+    expect(p).toContain('gross or net?');
+    expect(p).toContain('net');
+    expect(p).toMatch(/Decisions the user has already made/i);
+  });
+
+  it('tells it those are settled, and that an asking task is done once answered', () => {
+    const p = buildVerifierPrompt(goal, task, 'did it', decisions).replace(/\s+/g, ' ');
+    expect(p).toMatch(/These are settled/i);
+    expect(p).toMatch(/complete once the answer above exists/i);
+  });
+
+  it('omits the section entirely when nothing has been decided', () => {
+    // An empty header would invite the model to wonder what is missing.
+    expect(buildVerifierPrompt(goal, task, 'did it', [])).not.toMatch(/Decisions the user/i);
+  });
+
+  it('passes decisions through createVerifier to the prompt', () => {
+    let seen = '';
+    const verify = createVerifier({
+      query: (prompt) => { seen = prompt; return (async function* () {})(); },
+      treeFingerprint: async () => 'x',
+      nowIso: () => AT,
+    });
+    return verify(goal, task, 'did it', decisions).then(() => {
+      expect(seen).toContain('gross or net?');
+    });
+  });
+});

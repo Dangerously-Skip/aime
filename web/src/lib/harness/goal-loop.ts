@@ -14,7 +14,7 @@ import {
   type TaskVerdict,
 } from './ledger';
 import type { Verifier } from './verifier';
-import { parkQuestion, isWaiting, consumeAnswer, isApproval } from './question';
+import { parkQuestion, isWaiting, consumeAnswer, isApproval, readDecisions } from './question';
 import { classifyRevision, applyRevision } from './revision';
 import { QUESTION_MARKER } from './session';
 import { REVISION_MARKER } from './revision';
@@ -363,7 +363,14 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         dir,
         sessionIndex,
         missing: task.lastVerdict?.missing ?? [],
-        answer: answered?.answer ?? null,
+        /*
+         * EVERY decision, not only the one just consumed. A session that starts
+         * two tasks later still needs to know which total the user chose.
+         */
+        answer:
+          (await readDecisions(dir))
+            .map((d) => `${d.question} → ${d.answer}`)
+            .join('\n') || null,
       });
     } catch (e) {
       outcome = {
@@ -530,7 +537,7 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
     if (claimed && opts.verify) {
       emit({ type: 'verify-start', sessionIndex, taskId: task.id });
       try {
-        verdict = await opts.verify(goal, task, outcome.summary);
+        verdict = await opts.verify(goal, task, outcome.summary, await readDecisions(dir));
       } catch (e) {
         verdict = {
           passed: false,

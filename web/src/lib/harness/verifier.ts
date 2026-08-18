@@ -1,4 +1,5 @@
 import type { Goal, Task, TaskVerdict } from './ledger';
+import type { Decision } from './question';
 
 /**
  * The checker half of maker-checker.
@@ -44,7 +45,12 @@ export const VERIFIER_DENIED = [
 /** What the verifier may reach for. */
 export const VERIFIER_TOOLS = ['Read', 'Glob', 'Grep', 'Bash', 'mcp__aime__FetchUrl'];
 
-export function buildVerifierPrompt(goal: Goal, task: Task, summary: string): string {
+export function buildVerifierPrompt(
+  goal: Goal,
+  task: Task,
+  summary: string,
+  decisions: Decision[] = [],
+): string {
   return [
     `You are checking someone else's work. You did not do it and you have no stake in it.`,
     ``,
@@ -56,6 +62,25 @@ export function buildVerifierPrompt(goal: Goal, task: Task, summary: string): st
     ``,
     `**${task.title}**`,
     ``,
+    ...(decisions.length
+      ? [
+          `# Decisions the user has already made`,
+          ``,
+          /*
+           * The verifier reads the working tree and runs commands; it cannot see
+           * a conversation. Without this it rejected a correctly finished task
+           * twice — "the conversation does not contain an unambiguous user
+           * answer" — which was scepticism working exactly as designed against
+           * evidence it had never been shown.
+           */
+          ...decisions.map((d) => `- Asked: ${d.question}\n  Answered: **${d.answer}**`),
+          ``,
+          `These are settled. Treat them as given, and check the work against`,
+          `them — a task that exists to obtain a decision is complete once the`,
+          `answer above exists.`,
+          ``,
+        ]
+      : []),
     `# It is done only if ALL of these hold`,
     ``,
     ...task.verify.map((v, i) => `${i + 1}. ${v}`),
@@ -177,16 +202,21 @@ export interface VerifierDeps {
   nowIso?: () => string;
 }
 
-export type Verifier = (goal: Goal, task: Task, summary: string) => Promise<TaskVerdict>;
+export type Verifier = (
+  goal: Goal,
+  task: Task,
+  summary: string,
+  decisions?: Decision[],
+) => Promise<TaskVerdict>;
 
 export function createVerifier(deps: VerifierDeps): Verifier {
-  return async (goal, task, summary) => {
+  return async (goal, task, summary, decisions = []) => {
     const at = (deps.nowIso ?? (() => new Date().toISOString()))();
     const before = await deps.treeFingerprint().catch(() => '');
 
     let text = '';
     try {
-      for await (const chunk of deps.query(buildVerifierPrompt(goal, task, summary))) {
+      for await (const chunk of deps.query(buildVerifierPrompt(goal, task, summary, decisions))) {
         if (chunk.type === 'text' && typeof chunk.content === 'string') text += chunk.content;
         else if (chunk.type === 'error') {
           return {
