@@ -472,10 +472,16 @@ describe('parking on a question', () => {
       runSession: async (i) => { seen.push(i.answer); return winner(i); },
     });
     expect(decision.reason).toBe('complete');
-    expect(seen[0]).toBe('Postgres');
+    /*
+     * The question WITH its answer, and every decision so far — not the bare
+     * word. A session two tasks later still needs to know which total was
+     * chosen, and "Postgres" alone does not say what it answered.
+     */
+    expect(seen[0]).toContain('Postgres');
+    expect(seen[0]).toContain('Postgres or SQLite?');
   });
 
-  it('consumes the answer exactly once', async () => {
+  it('keeps the decision available to every later session', async () => {
     // Leaving it would make a later session act on a decision already applied.
     await writeLedger(dir, ledger(3));
     await runGoalLoop({ dir, runSession: asks });
@@ -484,8 +490,13 @@ describe('parking on a question', () => {
 
     const seen: (string | null | undefined)[] = [];
     await runGoalLoop({ dir, runSession: async (i) => { seen.push(i.answer); return winner(i); } });
-    expect(seen[0]).toBe('Postgres');
-    expect(seen.slice(1).every((a) => !a)).toBe(true);
+    expect(seen[0]).toContain('Postgres');
+    /*
+     * Later sessions still see it. The answer used to be consumed once and
+     * handed to exactly one session; a decision is a fact about the run, so it
+     * now persists for every session after it.
+     */
+    expect(seen.slice(1).every((a) => a?.includes('Postgres'))).toBe(true);
   });
 
   it('the user’s stop still wins over a parked question', async () => {
@@ -818,5 +829,40 @@ describe('a task whose job is to ASK', () => {
       expect(after.value.tasks.find((t) => t.id === 't-1')?.lastVerdict?.evidence.join(' ') ?? '')
         .not.toContain('Answered by the user');
     }
+  });
+});
+
+describe('the verifier is given the decisions', () => {
+  it('receives every answer the user has made', async () => {
+    /*
+     * The gap this closes cost two sessions in a real run. The verifier reads
+     * the working tree and runs commands — it cannot see a conversation — so it
+     * twice rejected a correctly finished task with "the conversation does not
+     * contain an unambiguous user answer". Scepticism working as designed
+     * against evidence it had never been shown.
+     */
+    await writeLedger(dir, ledger(2));
+    const asks: SessionRunner = async () => ({
+      costUsd: 0.01, summary: 'need a decision', claimsComplete: false,
+      question: 'gross or net?', questionOptions: ['gross', 'net'],
+    });
+    await runGoalLoop({ dir, runSession: asks });
+    const q = await readQuestion(dir);
+    await answerQuestion(dir, q!.id, 'net', () => 'now');
+
+    const seen: unknown[][] = [];
+    await runGoalLoop({
+      dir,
+      runSession: winner,
+      verify: async (_g, _t, _s, decisions) => {
+        seen.push(decisions ?? []);
+        return { passed: true, missing: [], evidence: ['ran it'], at: 'now' };
+      },
+    });
+
+    expect(seen.length).toBeGreaterThan(0);
+    const flat = JSON.stringify(seen[0]);
+    expect(flat).toContain('gross or net?');
+    expect(flat).toContain('net');
   });
 });
