@@ -75,6 +75,7 @@ import {
   DEFAULT_BUDGET_USD, DEFAULT_SESSION_CAP,
 } from "@/components/harness/goal-mode";
 import { useStartGoal } from "@/components/harness/use-start-goal";
+import { useGoalTranscript } from "@/components/harness/use-goal-transcript";
 import { GoalRunStatus } from "@/components/harness/goal-run-status";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
@@ -1701,6 +1702,14 @@ export function CoworkSurface() {
   const { start: startGoal, phase: goalPhase, error: startError, setError: setGoalError } =
     useStartGoal("cowork", modelRoute ?? null);
   const goalBusy = goalPhase !== "idle";
+  /*
+   * The run narrates itself into the transcript.
+   *
+   * Everything a goal did used to live in a side panel while the centre of the
+   * screen showed something else — a run that changed real code still read as
+   * "I'm not sure it even ran". In a chat app the transcript is the interface.
+   */
+  useGoalTranscript(chatId, folder, addMessage);
   // The objective is held while planning so the pending card can show it, and
   // bumped on success so the panel appears at once rather than up to 3s later.
   const [goalPending, setGoalPending] = useState<string | null>(null);
@@ -1763,6 +1772,15 @@ export function CoworkSurface() {
                 className="min-h-[120px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
               />
               {attachmentChips}
+              {/* Attached to the composer, not a box under a box — the numbers
+                  belong to the send button they change the meaning of. */}
+              {goalMode && (
+                <GoalModeBar
+                  budget={goalBudget} cap={goalCap}
+                  onBudget={setGoalBudget} onCap={setGoalCap}
+                  disabled={goalBusy} error={startError}
+                />
+              )}
               <div className="flex items-center justify-between px-4 py-2.5">
                 <div className="flex items-center gap-1">
                   <AttachmentMenu
@@ -1811,24 +1829,6 @@ export function CoworkSurface() {
               </div>
             </div>
 
-            {/*
-              Goal mode's numbers, and the status of a run already going.
-              
-              No second composer: the text and the send button above are the
-              ones that start it.
-            */}
-            {goalMode && (
-              <div className="mx-auto w-full max-w-[672px] rounded-xl border border-border/50 bg-card/50">
-                <GoalModeBar
-                  budget={goalBudget}
-                  cap={goalCap}
-                  onBudget={setGoalBudget}
-                  onCap={setGoalCap}
-                  disabled={goalBusy}
-                  error={startError}
-                />
-              </div>
-            )}
             {folder && (
               <div className="mx-auto mt-3 w-full max-w-[672px]">
                 <GoalRunStatus

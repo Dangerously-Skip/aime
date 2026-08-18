@@ -69,6 +69,7 @@ import {
 } from "@/components/harness/goal-mode";
 import { useStartGoal } from "@/components/harness/use-start-goal";
 import { GoalRunStatus } from "@/components/harness/goal-run-status";
+import { useGoalTranscript } from "@/components/harness/use-goal-transcript";
 import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import type { Message } from "@/stores/chat-store";
 import { ListChecks } from "lucide-react";
@@ -756,6 +757,9 @@ export function CodeSurface() {
   const goalBusy = goalPhase !== "idle";
   const [goalPending, setGoalPending] = useState<string | null>(null);
   const [goalNudge, setGoalNudge] = useState(0);
+  // The run narrates itself into the transcript here too — the Goal panel is a
+  // dockview tab that may not even be open.
+  useGoalTranscript(chatId, folder, addMessage);
 
 
   const { projectId: currentProjectId } = useProjectContext(chatId, "code");

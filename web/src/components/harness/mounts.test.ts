@@ -257,3 +257,17 @@ describe('the goal panel cannot take the surface down', () => {
     expect(codeSurface).toContain('{goalStatus}');
   });
 });
+
+describe('the run narrates itself into the transcript', () => {
+  it('both surfaces subscribe', () => {
+    /*
+     * A run completed two tasks, changed real code and reported its spend in
+     * green — and still read as "I'm not sure it even ran", because all of it
+     * happened in a side panel while the transcript showed something else.
+     */
+    for (const [name, src] of [['cowork', cowork], ['code', codeSurface]] as const) {
+      expect(src, `${name} does not narrate`).toContain('useGoalTranscript');
+      expect(src).toMatch(/useGoalTranscript\([^)]*addMessage\)/);
+    }
+  });
+});
