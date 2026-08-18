@@ -90,3 +90,22 @@ describe('mounting Code cost nobody their layout', () => {
     expect(codeSurface).toMatch(/useGoalAutoOpen\([^)]*chatId[^)]*\)/);
   });
 });
+
+describe('the entry point is where the user actually is', () => {
+  it('Cowork offers it in the EMPTY state, not only in the sidebar', () => {
+    /*
+     * The sidebar does not render when a conversation has no messages — that
+     * branch is a separate one entirely. Mounting the start form only there made
+     * the feature invisible at the one moment it is wanted: folder chosen,
+     * nothing typed. Every test passed; the screenshot found it.
+     */
+    const cowork = read('components', 'surfaces', 'cowork', 'cowork-surface.tsx');
+    expect(cowork).toContain('GoalEntry');
+    // It must sit inside the `!hasMessages` branch, before the active-state one.
+    const emptyBranch = cowork.slice(
+      cowork.indexOf('{!hasMessages ? ('),
+      cowork.indexOf('/* ── Active state'),
+    );
+    expect(emptyBranch).toContain('<GoalEntry');
+  });
+});
