@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useHarnessRoute } from './use-start-goal'
 import type { ParkedQuestion } from '@/lib/harness/question'
 import type { Goal, Ledger, Task } from '@/lib/harness/ledger'
 import type { RunState, StopDecision } from '@/lib/harness/stop'
@@ -67,6 +68,8 @@ export function GoalPanel({
   const [status, setStatus] = useState<HarnessStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [answer, setAnswer] = useState('')
+  // The resumed run needs the same credentials the first one had.
+  const harnessRoute = useHarnessRoute(null)
 
   const send = async (text: string) => {
     if (!workingDir || !status?.question || !text.trim()) return
@@ -87,7 +90,7 @@ export function GoalPanel({
       await fetch('/api/harness', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId, workingDir, surfaceId }),
+        body: JSON.stringify({ conversationId, workingDir, surfaceId, ...harnessRoute() }),
       }).catch(() => {})
       setAnswer('')
       await refresh()

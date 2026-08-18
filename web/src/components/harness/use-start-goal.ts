@@ -24,6 +24,40 @@ const CAPABILITY = 'code' as const;
 
 export type StartPhase = 'idle' | 'planning' | 'starting';
 
+/**
+ * The `{model, providerConfig, apiKey}` every harness request needs.
+ *
+ * Extracted because it was built in exactly one place and the RESUME path — the
+ * POST that restarts a loop after a parked question is answered — was written
+ * without it. Those sessions ran with no credentials, failed instantly with
+ * "Not logged in · Please run /login", and burned the task's attempts until the
+ * stuck-task limit killed the run. Same defect as the routes had, one layer up,
+ * for the third time.
+ *
+ * Anything that starts or resumes a run must use this.
+ */
+export function useHarnessRoute(modelRoute: ModelOption | null) {
+  const tierModels = useSettingsStore((s) => s.tierModels);
+  const providers = useProviderStore((s) => s.providers);
+  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  const { hasAnthropicKey, hasBedrock, known } = useBuiltinAccess();
+
+  return useCallback(() => {
+    const route = resolveSendRoute(modelRoute, providers, {
+      capability: CAPABILITY,
+      tierModels,
+      hasAnthropicKey,
+      hasBedrock,
+      known,
+    });
+    return {
+      model: route?.model ?? null,
+      providerConfig: route?.providerConfig ?? null,
+      apiKey: anthropicApiKey || null,
+    };
+  }, [modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, known, anthropicApiKey]);
+}
+
 export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOption | null) {
   const [phase, setPhase] = useState<StartPhase>('idle');
   const [error, setError] = useState<string | null>(null);

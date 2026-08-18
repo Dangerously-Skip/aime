@@ -701,3 +701,38 @@ describe('regressions the review found', () => {
     if (after.ok) expect(after.value.tasks.map((t) => t.id)).toContain('t-2');
   });
 });
+
+describe('an unreachable model is not a failed attempt', () => {
+  it('halts instead of burning the task through the stuck limit', async () => {
+    /*
+     * A real run died six times on "Not logged in · Please run /login" — the
+     * resume path had no credentials — and every one counted against the task
+     * until stuck-task killed a run that had never actually tried. Attempts
+     * measure whether the WORK is converging; a session that could not start
+     * has said nothing about that.
+     */
+    await writeLedger(dir, ledger(1));
+    let sessions = 0;
+    const unauthorised: SessionRunner = async () => {
+      sessions++;
+      return { costUsd: 0, summary: 'x', claimsComplete: false, error: 'Not logged in · Please run /login' };
+    };
+    const { decision } = await runGoalLoop({ dir, runSession: unauthorised });
+
+    expect(decision.reason).toBe('error');
+    expect(decision.detail).toMatch(/could not reach the model/i);
+    expect(sessions).toBe(1); // stopped at once, not five times
+    const after = await readLedger(dir);
+    if (after.ok) expect(after.value.tasks[0].attempts).toBe(0);
+  });
+
+  it('an ordinary failure still counts', async () => {
+    await writeLedger(dir, ledger(1));
+    const failing: SessionRunner = async () => ({
+      costUsd: 0.01, summary: 'tried', claimsComplete: false, error: 'the build failed',
+    });
+    await runGoalLoop({ dir, runSession: failing, policy: { idleLimit: 2, attemptLimit: 5 } });
+    const after = await readLedger(dir);
+    if (after.ok) expect(after.value.tasks[0].attempts).toBeGreaterThan(0);
+  });
+});
