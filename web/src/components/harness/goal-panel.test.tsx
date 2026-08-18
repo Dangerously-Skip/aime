@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { GoalPanel, type HarnessStatus } from './goal-panel';
 
 /**
@@ -185,5 +185,61 @@ describe('GoalPanel — verification', () => {
     render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
     await waitFor(() => expect(screen.getByText('Serve over http')).toBeTruthy());
     expect(screen.queryByText('old failure')).toBeNull();
+  });
+});
+
+describe('GoalPanel — a parked question', () => {
+  const parked = {
+    id: 'q1', taskId: 't-2', question: 'Postgres or SQLite?',
+    options: ['Postgres', 'SQLite'], context: 'The schema differs.',
+    askedAt: 'now', answer: null, answeredAt: null,
+  };
+
+  it('shows the question and how to answer it', async () => {
+    global.fetch = mockFetch(status({ running: false, question: parked }));
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('Postgres or SQLite?')).toBeTruthy());
+    expect(screen.getByText(/needs a decision from you/i)).toBeTruthy();
+    expect(screen.getByText('The schema differs.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Postgres' })).toBeTruthy();
+  });
+
+  it('shows the question INSTEAD of the stop reason', async () => {
+    /*
+     * A run waiting on a decision is neither broken nor finished. Burying the
+     * question among stop reasons would hide the one thing that unblocks it.
+     */
+    global.fetch = mockFetch(
+      status({
+        running: false,
+        question: parked,
+        decision: { stop: true, reason: 'awaiting-answer', detail: 'Waiting on your answer.' },
+      }),
+    );
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('Postgres or SQLite?')).toBeTruthy());
+    expect(screen.queryByText(/Waiting on your answer\./)).toBeNull();
+  });
+
+  it('POSTs the answer with the question id', async () => {
+    // The id is what stops a stale panel answering a question the user never saw.
+    const posted: Record<string, unknown>[] = [];
+    global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') { posted.push(JSON.parse(String(init.body))); return { ok: true, json: async () => ({ ok: true }) }; }
+      return { ok: true, json: async () => status({ running: false, question: parked }) };
+    }) as unknown as typeof fetch;
+
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'SQLite' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'SQLite' }));
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0]).toMatchObject({ id: 'q1', answer: 'SQLite' });
+  });
+
+  it('shows no question box when there is none', async () => {
+    global.fetch = mockFetch(status());
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('Make every embed play')).toBeTruthy());
+    expect(screen.queryByText(/needs a decision from you/i)).toBeNull();
   });
 });
