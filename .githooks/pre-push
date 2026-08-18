@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# AIME pre-push gate: typecheck + lint + unit + build, before anything leaves
+# this machine. ~70s.
+#
+# WHY THIS EXISTS AT ALL — read this before deciding it is bureaucracy.
+#
+# This repo has NO server-side enforcement and cannot have any. It is private on
+# a Free org, where both mechanisms are refused outright:
+#
+#   GET /repos/Dangerously-Skip/aime/rulesets              -> 403
+#   GET /repos/Dangerously-Skip/aime/branches/main/protection -> 403
+#   "Upgrade to GitHub Pro or make this repository public to enable this feature."
+#
+# So CI is advisory here in the strict sense: it reports, and nothing anywhere
+# stops a red run from being merged or pushed straight to main. That is not a
+# hypothetical. 30 commits reached main having been checked only because someone
+# happened to run the suite by hand first.
+#
+# This hook is therefore not the FIRST gate. It is the ONLY one. Two ways out of
+# that, both better than this file, neither free:
+#   - make the repo public (rulesets become available, and the open-source
+#     rename is already the plan), or
+#   - GitHub Team, $4/user/mo.
+# Until one of those happens, this is the whole enforcement story.
+#
+# WHY PRE-PUSH AND NOT PRE-COMMIT
+# Commits are cheap and frequent; a gate there gets bypassed within a day. A push
+# is the moment work becomes someone else's problem.
+#
+# WHY OPT-IN (`npm run hooks:install`) AND NOT AUTOMATIC
+# A hook that installs itself behind your back is the fastest route to a
+# reflexive `--no-verify` habit, which is strictly worse than no hook. This one
+# is tracked in git so it can be reviewed, enabled with one command, disabled
+# with one.
+#
+# ESCAPE HATCHES (both are fine; neither is silent)
+#   git push --no-verify        # skip all hooks
+#   SKIP_VERIFY=1 git push      # skip just this check
+#
+set -euo pipefail
+
+if [ "${SKIP_VERIFY:-}" = "1" ]; then
+  echo "pre-push: SKIP_VERIFY=1 — skipping verify. Nothing else will check this."
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root/web"
+
+echo "pre-push: running 'npm run verify' (~70s; skip with SKIP_VERIFY=1 or --no-verify)"
+start=$SECONDS
+
+if ! npm run --silent verify; then
+  cat <<'EOF'
+
+pre-push: verify FAILED — push aborted.
+
+  Nothing downstream will catch this: rulesets and branch protection are both
+  403 on this plan, so a red CI run does not block a merge.
+
+  Run the pieces:  cd web && npm run typecheck | npm run lint | npm test | npm run build
+  Push anyway:     SKIP_VERIFY=1 git push
+EOF
+  exit 1
+fi
+
+echo "pre-push: verify passed in $((SECONDS - start))s"

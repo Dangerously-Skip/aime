@@ -24,7 +24,10 @@
     "lint:strict": "eslint --max-warnings 30",
     "eval:baseline": "vitest run --config vitest.eval.config.ts src/lib/craft/baseline.eval.ts",
     "eval:compare": "vitest run --config vitest.eval.config.ts src/lib/craft/compare.eval.ts",
-    "test:mutation:logic": "stryker run stryker.logic.mjs"
+    "test:mutation:logic": "stryker run stryker.logic.mjs",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run build",
+    "hooks:install": "git config core.hooksPath .githooks && echo \"pre-push hook installed (runs 'npm run verify'). Remove with: npm run hooks:uninstall\"",
+    "hooks:uninstall": "git config --unset core.hooksPath && echo 'pre-push hook removed'"
   },
   "build": {
     "appId": "com.aime.app",
