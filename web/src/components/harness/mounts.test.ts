@@ -18,23 +18,35 @@ const layout = read('components', 'surfaces', 'code', 'workspace', 'workspace-la
 const slotTypes = read('lib', 'code-workspace', 'types.ts');
 
 describe('the goal panel is mounted on both surfaces', () => {
-  it('Cowork renders it EXACTLY ONCE', () => {
+  it('Cowork renders it EXACTLY ONCE per state', () => {
     /*
-     * It rendered twice — once in the main column under the composer and once
-     * in the sidebar — so the same card sat on screen side by side with itself.
-     * The main column is the right home: it is where the transcript is.
+     * It rendered twice at once — main column and sidebar — the same card side
+     * by side with itself. The rail is the home: the transcript narrates what
+     * happened, and this is the reference view, beside Context and Artifacts.
      */
     expect(cowork).toContain('GoalRunStatus');
     expect(cowork).toMatch(/surfaceId="cowork"/);
-    // The sidebar rail is for Context and Artifacts, not a second copy.
     expect(cowork).not.toContain('<GoalPanel');
   });
 
-  it('no state shows two goal cards at once', () => {
-    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
+  it('the ACTIVE state shows it in the rail, and nowhere else', () => {
     const active = cowork.slice(cowork.indexOf('/* ── Active state'));
+    // Only the SidebarPanel mount, which lives above the active branch.
+    expect((active.match(/<GoalRunStatus/g) ?? []).length).toBe(0);
+    const sidebar = cowork.slice(0, cowork.indexOf('{!hasMessages ? ('));
+    expect((sidebar.match(/<GoalRunStatus/g) ?? []).length).toBe(1);
+  });
+
+  it('the EMPTY state keeps its own, because there is no rail there', () => {
+    // The empty branch renders no sidebar at all, so without this a first goal
+    // would show nothing while it planned.
+    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
     expect((empty.match(/<GoalRunStatus/g) ?? []).length).toBe(1);
-    expect((active.match(/<GoalRunStatus/g) ?? []).length).toBe(1);
+  });
+
+  it('the rail gets the planning state, or a follow-up goal shows nothing', () => {
+    expect(cowork).toMatch(/goalStarting=\{/);
+    expect(cowork).toMatch(/goalNudge=\{goalNudge\}/);
   });
 
   it('Code registers it as a dockview component', () => {
@@ -137,8 +149,9 @@ describe('the entry point is where the user actually is', () => {
      * button goes quiet and the panel appears a minute later, which reads as
      * nothing having happened.
      */
-    const mount = /<GoalRunStatus[\s\S]*?\/>/.exec(cowork)?.[0] ?? '';
-    expect(mount).toContain('starting=');
+    // In the ACTIVE state this travels via the SidebarPanel prop, so match the
+    // call site that builds it rather than the GoalRunStatus mount.
+    const mount = /goalStarting=\{[\s\S]{0,300}?\}/.exec(cowork)?.[0] ?? '';
     /*
      * The VALUE, not just the names. Asserting that `goalPhase` appears was
      * satisfied by the surrounding condition alone, so replacing the whole
@@ -146,8 +159,9 @@ describe('the entry point is where the user actually is', () => {
      */
     expect(mount).toMatch(/objective:\s*goalPending/);
     expect(mount).toMatch(/phase:\s*goalPhase/);
-    // And nudged, so the real panel replaces the card at once.
-    expect(mount).toContain('nudge=');
+    // And nudged, so the real panel replaces the pending card at once rather
+    // than up to 3s later on the next poll.
+    expect(cowork).toMatch(/goalNudge=\{goalNudge\}/);
   });
 });
 
@@ -333,10 +347,13 @@ describe('regressions the review found — UI', () => {
     }
   });
 
-  it('Cowork shows the planning spinner in the ACTIVE state too', () => {
-    // It rendered only in the empty state, so a follow-up goal — the case the
-    // run sequence exists for — showed nothing for the whole planning call.
-    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
-    expect(active).toContain('<GoalRunStatus');
+  it('the active state gets the planning spinner, via the rail', () => {
+    /*
+     * It rendered only in the empty state, so a follow-up goal — the case the
+     * run sequence exists for — showed nothing for the whole planning call. It
+     * now reaches the rail's card through goalStarting.
+     */
+    expect(cowork).toMatch(/goalStarting=\{/);
+    expect(cowork).toMatch(/starting=\{goalStarting\}/);
   });
 });

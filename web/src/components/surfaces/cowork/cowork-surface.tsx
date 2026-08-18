@@ -444,6 +444,8 @@ function SidebarPanel({
   onPreviewClick,
   taskMetrics,
   chatId,
+  goalNudge,
+  goalStarting,
 }: {
   contextFiles: string[];
   artifactFiles: string[];
@@ -451,6 +453,10 @@ function SidebarPanel({
   folder: string | null;
   /** Identifies the goal run; a run is per-conversation. */
   chatId: string;
+  /** Bumped when a run starts, so the rail updates at once. */
+  goalNudge: number;
+  /** Planning state, before there is a run to report. */
+  goalStarting: { objective: string; phase: 'planning' | 'starting' } | null;
   open: boolean;
   onToggle: () => void;
   onContextClick?: (path: string) => void;
@@ -511,13 +517,20 @@ function SidebarPanel({
             )}
 
             {/*
-              No goal card here.
+              The run's dashboard lives HERE, in the rail.
               
-              The run already renders in the main column, under the composer,
-              and narrates itself into the transcript — so a copy in the sidebar
-              was the same card twice on screen at once. The transcript is the
-              interface; this rail is for Context and Artifacts.
+              The transcript narrates what happened; this is the reference view —
+              the plan, the spend, the question to answer — and it belongs beside
+              Context and Artifacts rather than in the conversation. It renders
+              nothing when there is no goal.
             */}
+            <GoalRunStatus
+              chatId={chatId}
+              folder={folder}
+              surfaceId="cowork"
+              nudge={goalNudge}
+              starting={goalStarting}
+            />
 
             <SidebarCard
               label="Context"
@@ -1972,32 +1985,15 @@ export function CoworkSurface() {
             </div>
           </div>
 
-          {/*
-            The planning spinner and live status, in the ACTIVE state too.
-            
-            It rendered only in the empty state, so a FOLLOW-UP goal — the case
-            the run sequence was built for — showed nothing at all for the thirty
-            seconds or more that planning takes.
-          */}
-          {folder && (
-            <div className="mx-auto w-full max-w-[672px] px-4 pb-3">
-              <GoalRunStatus
-                chatId={chatId}
-                folder={folder}
-                surfaceId="cowork"
-                nudge={goalNudge}
-                starting={
-                  goalPending && goalPhase !== "idle"
-                    ? { objective: goalPending, phase: goalPhase }
-                    : null
-                }
-              />
-            </div>
-          )}
-
           {/* Sidebar: Context + Artifacts */}
           <SidebarPanel
             chatId={chatId}
+            goalNudge={goalNudge}
+            goalStarting={
+              goalPending && goalPhase !== "idle"
+                ? { objective: goalPending, phase: goalPhase }
+                : null
+            }
             contextFiles={contextFiles}
             artifactFiles={artifactFiles}
             canvasArtifacts={canvasArtifacts}
