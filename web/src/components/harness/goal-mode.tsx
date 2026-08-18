@@ -80,7 +80,7 @@ export function GoalModeBar({
   const [explain, setExplain] = useState(false)
 
   return (
-    <div className="space-y-1.5 border-t border-border/50 px-4 py-2">
+    <div className="space-y-1.5 border-t border-border/50 bg-primary/[0.03] px-4 py-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Target className="h-3.5 w-3.5 text-primary" />
         <span>Runs on its own until done, checking its own work.</span>
@@ -113,13 +113,23 @@ export function GoalModeBar({
       </div>
 
       {explain && (
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          <strong>Budget</strong> is the most it may spend before stopping — this is the one thing in
-          the app that spends money with nobody watching, so keep it a number you would not mind
-          losing. <strong>Sessions</strong> caps how many separate goes it gets; each one works a
-          single task and is checked before it counts. It also stops on its own if three sessions in
-          a row make no progress.
-        </p>
+        <div className="space-y-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          <p>
+            <strong className="text-foreground">How this differs from a normal message.</strong> An
+            ordinary send is one turn: it answers, and stops when it runs out of things to say. A
+            goal is many turns. It plans the work into checkable steps first, then does one step per
+            session, and a <em>separate</em> agent that cannot edit anything re-runs your checks
+            before any step counts as done. It keeps going without you until it finishes, runs out
+            of budget, or hits something only you can decide — and then it waits, however long that
+            takes.
+          </p>
+          <p>
+            <strong>Budget</strong> is the most it may spend before stopping. This is the one thing
+            in the app that spends money with nobody watching, so keep it a number you would not
+            mind losing. <strong>Sessions</strong> caps how many separate goes it gets. It also
+            stops on its own if three sessions in a row make no progress.
+          </p>
+        </div>
       )}
 
       {error && <p className="text-[11px] text-amber-600 dark:text-amber-400">{error}</p>}
