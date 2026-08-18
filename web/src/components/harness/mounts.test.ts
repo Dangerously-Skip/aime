@@ -357,3 +357,23 @@ describe('regressions the review found — UI', () => {
     expect(cowork).toMatch(/starting=\{goalStarting\}/);
   });
 });
+
+describe('resuming a run carries credentials', () => {
+  it('the panel sends the resolved route when it restarts the loop', () => {
+    /*
+     * The resume POST sent only {conversationId, workingDir, surfaceId}, so the
+     * restarted sessions had no key, died on "Not logged in", and burned the
+     * task's attempts until stuck-task killed the run. Third time this defect
+     * has appeared, one layer up each time.
+     */
+    const panel = read('components', 'harness', 'goal-panel.tsx');
+    expect(panel).toContain('useHarnessRoute');
+    expect(panel).toMatch(/\.\.\.harnessRoute\(\)/);
+  });
+
+  it('start and resume share ONE route builder, so they cannot diverge again', () => {
+    const hook = read('components', 'harness', 'use-start-goal.ts');
+    expect(hook).toContain('export function useHarnessRoute');
+    expect(hook).toMatch(/apiKey:\s*anthropicApiKey/);
+  });
+});

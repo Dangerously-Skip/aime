@@ -428,6 +428,33 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
       }
     }
 
+    /*
+     * An INFRASTRUCTURE failure is not a failed attempt.
+     *
+     * Six sessions died on "Not logged in · Please run /login" and each one
+     * counted against the task, so the stuck-task limit killed a run that had
+     * never actually tried. Attempts measure whether the WORK is converging;
+     * a session that could not start has said nothing about that.
+     */
+    const infrastructureFailure =
+      !!outcome.error && /not logged in|no api key|unauthor|401|invalid api key/i.test(outcome.error);
+    if (infrastructureFailure) {
+      await appendProgress(
+        dir,
+        `## Session ${sessionIndex} — ${task.id} could not start\n\n${outcome.error}\n\n` +
+          `_Not counted as an attempt._`,
+      );
+      run = recordSession(run, { costUsd: outcome.costUsd, stateHash: ledgerStateHash(ledger) });
+      await writeRunState(dir, run);
+      const halted: StopDecision = {
+        stop: true,
+        reason: 'error',
+        detail: `The run could not reach the model: ${outcome.error}`,
+      };
+      emit({ type: 'stopped', sessionIndex, taskId: task.id, detail: halted.detail, run });
+      return { decision: halted, run };
+    }
+
     const claimed = outcome.claimsComplete && !outcome.error && tampered.length === 0;
 
     /*
