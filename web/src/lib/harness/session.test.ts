@@ -173,7 +173,7 @@ describe('createSessionRunner', () => {
 
   it('takes the reported cost when the backend gives one', async () => {
     const run = createSessionRunner({
-      query: () => chunks({ type: 'text', content: 'x' }, { type: 'done', totalCostUsd: 0.42 }),
+      query: () => chunks({ type: 'text', content: 'x' }, { type: 'usage', totalCostUsd: 0.42 }),
       chatId: 'c1', cwd: dir, maxTurns: 30,
     });
     expect((await run(input())).costUsd).toBeCloseTo(0.42);
@@ -187,7 +187,7 @@ describe('createSessionRunner', () => {
      * mis-set ceiling costs real money.
      */
     const run = createSessionRunner({
-      query: () => chunks({ type: 'done', inputTokens: 1000, cacheReadInputTokens: 500, outputTokens: 200 }),
+      query: () => chunks({ type: 'usage', inputTokens: 1000, cacheReadInputTokens: 500, outputTokens: 200 }),
       chatId: 'c1', cwd: dir, maxTurns: 30,
       estimateCostUsd: (i, o) => i * 0.000001 + o * 0.000005,
     });

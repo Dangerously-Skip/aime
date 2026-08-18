@@ -183,7 +183,21 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
           text += chunk.content;
         } else if (chunk.type === 'error') {
           error = typeof chunk.content === 'string' ? chunk.content : 'provider error';
-        } else if (chunk.type === 'done') {
+        } else if (chunk.type === 'usage') {
+          /*
+           * `usage`, not `done`.
+           *
+           * This listened for a chunk type that does not exist. The provider
+           * emits `type: 'usage'` (claude-provider.ts) and nothing else carries
+           * the token counts, so cost was always 0 and the budget stop condition
+           * — the one limit that maps onto what a user actually cares about —
+           * was inert. A real run finished two sessions with spentUsd: 0.
+           *
+           * The unit tests did not catch it because the fake provider in them
+           * emitted the chunk type I had invented rather than the one the
+           * provider sends. See session-chunk-types.test.ts, which derives the
+           * name from the provider source.
+           */
           const usage = chunk as {
             totalCostUsd?: number;
             inputTokens?: number;

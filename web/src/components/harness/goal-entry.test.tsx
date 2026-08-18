@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { GoalEntry } from './goal-entry';
 
 /**
@@ -15,7 +15,8 @@ vi.mock('./start-goal', () => ({
   StartGoal: () => <div>START FORM</div>,
 }));
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ goal: null }) })) as unknown as typeof fetch;
 
 describe('GoalEntry', () => {
   it('offers the option once a folder is chosen', () => {
@@ -41,5 +42,29 @@ describe('GoalEntry', () => {
     render(<GoalEntry chatId="c1" folder="/tmp/p" surfaceId="cowork" />);
     fireEvent.click(screen.getByRole('button', { name: /pursue a goal/i }));
     expect(screen.getByText('START FORM')).toBeTruthy();
+  });
+});
+
+vi.mock('./goal-panel', () => ({ GoalPanel: () => <div>STATUS PANEL</div> }));
+
+describe('GoalEntry — an existing run', () => {
+  it('shows STATUS, not a start form, once a goal exists', async () => {
+    /*
+     * The failure this fixes: a goal ran to completion and fixed the code, and
+     * the only thing on screen was a start form erroring "this conversation
+     * already has a goal". The status panel lives in the sidebar, which the
+     * empty state does not render — so a working run was invisible.
+     */
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ goal: { objective: 'x' } }) })) as unknown as typeof fetch;
+    render(<GoalEntry chatId="c1" folder="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('STATUS PANEL')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: /pursue a goal/i })).toBeNull();
+  });
+
+  it('still offers to start when there is no goal', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, json: async () => ({ goal: null }) })) as unknown as typeof fetch;
+    render(<GoalEntry chatId="c1" folder="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /pursue a goal/i })).toBeTruthy());
+    expect(screen.queryByText('STATUS PANEL')).toBeNull();
   });
 });
