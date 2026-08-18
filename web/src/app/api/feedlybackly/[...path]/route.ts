@@ -2,7 +2,10 @@ export const runtime = 'nodejs';
 
 // No /api/v1 here — the widget appends that itself to whatever apiUrl is set to.
 const FEEDLYBACKLY_BASE = 'https://feedlybackly-api.apps.dangerouslyskip.com';
-const FEEDLYBACKLY_API_KEY = 'REDACTED-FEEDBACK-KEY';
+// Was a literal here. That put a live credential in 575 commits, and this repo is
+// going public. Unset is not an error worth crashing a build over — it is what a
+// fork looks like — so the route refuses at request time instead.
+const FEEDLYBACKLY_API_KEY = process.env.FEEDLYBACKLY_API_KEY;
 
 // Headers that must not be forwarded to upstream (hop-by-hop)
 const HOP_BY_HOP = new Set(['host', 'connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'proxy-authorization', 'proxy-authenticate', 'upgrade']);
@@ -12,6 +15,12 @@ const HOP_BY_HOP = new Set(['host', 'connection', 'keep-alive', 'transfer-encodi
  * Forwards all requests to the upstream API server-to-server.
  */
 async function proxy(req: Request, path: string[]): Promise<Response> {
+  if (!FEEDLYBACKLY_API_KEY) {
+    return new Response(JSON.stringify({ error: 'Feedback is not configured on this build.' }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
   const upstream = `${FEEDLYBACKLY_BASE}/${path.join('/')}`;
   const { searchParams } = new URL(req.url);
   const qs = searchParams.toString();
