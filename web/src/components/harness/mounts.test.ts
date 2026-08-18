@@ -37,23 +37,30 @@ describe('the goal panel is mounted on both surfaces', () => {
 });
 
 describe('a run can actually be started', () => {
-  it('the panel offers a start form when there is no goal', () => {
+  it('the COMPOSER starts a run — there is no second composer', () => {
     /*
-     * Before this the panel could report a run and nothing could create one, so
-     * the whole feature was unreachable from the UI — a gap that only showed up
-     * when a real trial run was attempted.
+     * The start form used to be a whole second box under the chat composer, so
+     * doing one thing meant typing the same sentence twice and working out which
+     * box was which. Goal mode is a switch on the send now.
      */
-    const panel = read('components', 'harness', 'goal-panel.tsx');
-    expect(panel).toContain('StartGoal');
+    expect(cowork).toContain('GoalModeToggle');
+    expect(cowork).toContain('useStartGoal');
+    // The one send handler branches on the mode rather than a second one existing.
+    expect(cowork).toMatch(/if \(goalMode\)/);
   });
 
-  it('the start form resolves the route on the CLIENT', () => {
+  it('the panel REPORTS, and no longer offers to start', () => {
+    const panel = read('components', 'harness', 'goal-panel.tsx');
+    expect(panel).not.toContain('StartGoal');
+  });
+
+  it('the route is still resolved on the CLIENT', () => {
     // A server-resolved model resolves against the built-in Anthropic registry
     // and demands an Anthropic key — dead for an OpenRouter-only user.
-    const start = read('components', 'harness', 'start-goal.tsx');
-    expect(start).toContain('resolveSendRoute');
-    expect(start).toMatch(/model:\s*route\?\.model/);
-    expect(start).toMatch(/providerConfig:\s*route\?\.providerConfig/);
+    const hook = read('components', 'harness', 'use-start-goal.ts');
+    expect(hook).toContain('resolveSendRoute');
+    expect(hook).toMatch(/model:\s*route\?\.model/);
+    expect(hook).toMatch(/providerConfig:\s*route\?\.providerConfig/);
   });
 });
 
@@ -92,20 +99,20 @@ describe('mounting Code cost nobody their layout', () => {
 });
 
 describe('the entry point is where the user actually is', () => {
-  it('Cowork offers it in the EMPTY state, not only in the sidebar', () => {
+  it('the toggle sits in the composer row of the EMPTY state', () => {
     /*
-     * The sidebar does not render when a conversation has no messages — that
-     * branch is a separate one entirely. Mounting the start form only there made
-     * the feature invisible at the one moment it is wanted: folder chosen,
-     * nothing typed. Every test passed; the screenshot found it.
+     * The sidebar does not render when a conversation has no messages, so
+     * anything mounted only there is invisible at the one moment it is wanted:
+     * folder chosen, nothing typed.
      */
-    const cowork = read('components', 'surfaces', 'cowork', 'cowork-surface.tsx');
-    expect(cowork).toContain('GoalEntry');
-    // It must sit inside the `!hasMessages` branch, before the active-state one.
     const emptyBranch = cowork.slice(
       cowork.indexOf('{!hasMessages ? ('),
       cowork.indexOf('/* ── Active state'),
     );
-    expect(emptyBranch).toContain('<GoalEntry');
+    expect(emptyBranch).toContain('<GoalModeToggle');
+  });
+
+  it('shows a run’s status without asking to start another', () => {
+    expect(cowork).toContain('GoalRunStatus');
   });
 });
