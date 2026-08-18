@@ -70,6 +70,7 @@ import {
 } from "@/lib/cowork/context-entry";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { GoalPanel } from "@/components/harness/goal-panel";
+import { GoalEntry } from "@/components/harness/goal-entry";
 import { useElectron } from "@/hooks/use-electron";
 import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
@@ -1746,6 +1747,17 @@ export function CoworkSurface() {
                 </div>
               </div>
             </div>
+
+            {/*
+              The other way to start.
+              
+              This belongs HERE and not only in the sidebar: the sidebar does not
+              exist in the empty state, and an empty conversation with a folder
+              chosen is exactly when someone wants a long-running goal. Mounting
+              it only in the sidebar made the feature invisible at the one moment
+              it is wanted.
+            */}
+            <GoalEntry chatId={chatId} folder={folder} surfaceId="cowork" />
           </div>
         </div>
       ) : (
