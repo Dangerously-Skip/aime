@@ -93,32 +93,39 @@ again. Look for these shapes before calling it a flake.
 
 ### What gates a push
 
-**Run `npm run hooks:install` once per clone.** Nothing else here is a gate.
+Two gates now, and only one of them can be skipped.
 
-CI is advisory in the strict sense — it reports, and nothing stops a red run
-from reaching `main`. Not a policy choice: this repo is private in a Free org,
-where both enforcement mechanisms are refused outright.
+**Server-side (the real one).** A ruleset on `main` requires a pull request,
+requires `test` and `e2e` to pass, and blocks force-pushes and deletion. A direct
+push is refused by GitHub, not by convention:
 
 ```
-GET /repos/Dangerously-Skip/aime/rulesets                  -> 403
-GET /repos/Dangerously-Skip/aime/branches/main/protection  -> 403
-"Upgrade to GitHub Pro or make this repository public to enable this feature."
+remote: error: GH013: Repository rule violations found for refs/heads/main.
+remote: - Changes must be made through a pull request.
 ```
 
-So `.githooks/pre-push` (opt-in, tracked, `npm run verify` — typecheck → lint →
-unit → build, ~70s) is the ONLY thing that can stop broken work. It is opt-in on
-purpose: a hook that installs itself breeds reflexive `--no-verify`, which is
-worse than no hook. `SKIP_VERIFY=1 git push` and `--no-verify` both work and
-neither is silent.
+This became possible only when the repo went public on 2026-08-19 — rulesets and
+branch protection are both 403 on a private repo in a Free org, which is why
+every note here written before that date says CI is advisory. It no longer is.
+
+**Local (`npm run hooks:install`, once per clone).** `.githooks/pre-push` runs
+`npm run verify` — typecheck → lint → unit → build, ~70s idle and roughly double
+that on a loaded machine. It is no longer the only thing standing between a
+mistake and `main`, so its job has changed: it turns a ten-minute round trip
+through CI into a seventy-second one. Still opt-in, because a hook that installs
+itself breeds reflexive `--no-verify`. `SKIP_VERIFY=1 git push` and `--no-verify`
+both work and neither is silent.
 
 `ci-structure.test.ts` derives CI's `test` job steps from `ci.yml` and fails if
 `verify` does not cover all of them, so a new CI step cannot silently stop being
-gated locally. It also fails if the hook loses its execute bit — git skips a
+checked locally. It also fails if the hook loses its execute bit — git skips a
 non-executable hook in total silence, so the failure mode is no output at all.
 
-**The way out is to make the repo public** (rulesets become free, and the
-open-source rename is already the plan) or GitHub Team at $4/user/mo. Either one
-turns the advisory checks into real ones; until then the hook is the story.
+**Secret scanning with push protection is on**, which is the gate that would have
+caught the credential that sat in `sidebar.tsx` for 575 commits. Prefer it to
+remembering: `no-hardcoded-secrets.test.ts` catches the same class locally, and
+the two disagree in useful ways — GitHub knows vendor formats, the test knows the
+`NAME_KEY = '<literal>'` shape that no prefix list covers.
 
 `test` (typecheck → lint → unit → **build**) and `e2e` run on every push and PR.
 `mutation` runs weekly and on `workflow_dispatch` only — a slow check on every
