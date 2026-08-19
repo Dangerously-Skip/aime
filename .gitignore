@@ -150,3 +150,6 @@ temp/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+
+# Design docs and eval artifacts — private, see the aime-planning repo
+.planning/
