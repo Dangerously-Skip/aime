@@ -5,24 +5,20 @@
 #
 # WHY THIS EXISTS AT ALL — read this before deciding it is bureaucracy.
 #
-# This repo has NO server-side enforcement and cannot have any. It is private on
-# a Free org, where both mechanisms are refused outright:
+# It is no longer the only gate, and the earlier version of this comment said it
+# was. When it was written the repo was private on a Free org, where rulesets and
+# branch protection are both refused with 403, so CI reported and nothing stopped
+# a red run from reaching main. 30 commits landed that way, checked only because
+# someone happened to run the suite by hand.
 #
-#   GET /repos/Dangerously-Skip/aime/rulesets              -> 403
-#   GET /repos/Dangerously-Skip/aime/branches/main/protection -> 403
-#   "Upgrade to GitHub Pro or make this repository public to enable this feature."
+# Since 2026-08-19 the repo is public and a ruleset enforces main server-side: a
+# pull request, passing `test` and `e2e`, no force-push, no deletion. GitHub
+# refuses a direct push outright.
 #
-# So CI is advisory here in the strict sense: it reports, and nothing anywhere
-# stops a red run from being merged or pushed straight to main. That is not a
-# hypothetical. 30 commits reached main having been checked only because someone
-# happened to run the suite by hand first.
-#
-# This hook is therefore not the FIRST gate. It is the ONLY one. Two ways out of
-# that, both better than this file, neither free:
-#   - make the repo public (rulesets become available, and the open-source
-#     rename is already the plan), or
-#   - GitHub Team, $4/user/mo.
-# Until one of those happens, this is the whole enforcement story.
+# So this hook's job changed rather than ended. It is the fast half of the loop —
+# ~70s here against a ten-minute round trip through CI to learn the same thing.
+# Skipping it is now merely slow, not dangerous, which is the right trade for
+# something you might legitimately want to skip.
 #
 # WHY PRE-PUSH AND NOT PRE-COMMIT
 # Commits are cheap and frequent; a gate there gets bypassed within a day. A push

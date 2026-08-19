@@ -3,14 +3,15 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /*
- * This repo cannot enforce anything server-side. Rulesets and branch protection
- * are both 403 on a private repo in a Free org:
+ * A ruleset on `main` now requires a pull request with `test` and `e2e` green,
+ * so a red CI run genuinely blocks a merge. That was impossible while the repo
+ * was private on a Free org — rulesets 403 there — and the hook was the only
+ * gate in the interim.
  *
- *   "Upgrade to GitHub Pro or make this repository public to enable this feature."
- *
- * So a red CI run blocks nothing, and the pre-push hook is not the first gate —
- * it is the only one. That makes two silent failures expensive, and neither is
- * visible by reading either file on its own:
+ * The drift this file catches survived that change. Server-side enforcement
+ * checks that CI passed; it has no opinion on whether the local hook still runs
+ * the same things CI does. Two silent failures, neither visible by reading
+ * either file on its own:
  *
  *   1. CI grows a step the hook does not run. The hook then passes on work CI
  *      would have failed, which is the whole point of the hook inverted.
