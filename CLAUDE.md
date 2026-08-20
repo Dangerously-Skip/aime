@@ -137,6 +137,38 @@ module that reaches `fs` fails only in `next build`. That shipped once —
 `provider-manager.tsx` → `lib/models/credentials` → `app-paths` → `fs` — with
 typecheck and 2777 tests green.
 
+### The local API is authenticated, and it fails closed
+
+Every `/api` route requires a credential. `src/proxy.ts` (Next 16's rename of
+the `middleware` convention) checks each request; `lib/auth/local-token.ts` holds
+the decision as a pure function.
+
+**Why, when it only binds to 127.0.0.1:** loopback stops the internet reaching
+the API. It does nothing about the other tab you have open. Any page on any site
+can `fetch('http://localhost:<port>/api/...')`, which is why `SameSite=Strict`
+plus an Origin check sit alongside the token.
+
+**Why a cookie and not a header:** there are 95 `fetch('/api/...')` call sites
+across 54 files and no wrapper. Anything requiring each of them to attach a
+header would be wrong in 95 places immediately and wrong again at every new call
+site. The browser attaches a same-origin cookie by itself, so call sites need no
+changes and a new one is covered without knowing any of this exists.
+
+**The token** is `AIME_API_TOKEN`, minted per launch — by `main-web.js` when
+packaged, by `dev-with-port.js` in development, never written to disk. The
+window receives it once as `?t=` on the initial load; the proxy exchanges it for
+an HttpOnly cookie and redirects to strip it from the URL.
+
+**No token configured means everything is refused (503), not allowed.** A dev
+bypass here is the shape of the four security toggles that shipped doing
+nothing, except it is the one that would survive into a build on a shared
+machine. If you are running `next dev` directly, set `AIME_API_TOKEN` yourself —
+`playwright.config.ts` does exactly that.
+
+`api-auth-coverage.test.ts` enumerates every route under `app/api` from the
+filesystem and asserts the proxy matcher covers it and the real proxy refuses it
+unauthenticated. A new route cannot land outside the gate.
+
 ### Testing
 
 Unit tests use Vitest (`web/vitest.config.ts`, node environment by default, `@/` alias). Test files live next to the code they test (`*.test.ts`); React hook/component tests use jsdom via a `// @vitest-environment jsdom` pragma and Testing Library. E2E smoke tests use Playwright (`web/playwright.config.ts`, specs in `web/e2e/`, boots `next dev` on port 3100): `npm run test:e2e`.
