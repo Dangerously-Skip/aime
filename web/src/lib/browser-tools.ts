@@ -371,6 +371,30 @@ export const DOM_EXTRACTION_SCRIPT = `
     const text = (el.textContent || '').trim().substring(0, 100);
     const info = { index, tag };
 
+    /*
+     * Which landmark this element sits in.
+     *
+     * The model is shown a bounded number of elements and they were collected in
+     * DOM order, so page furniture won the budget: on a listings page the
+     * masthead, category tabs and a sidebar of filters can be sixty to eighty
+     * elements before the first result. The agent was asked to compare listings
+     * and shown mostly navigation.
+     *
+     * Ranking needs to know what is chrome, and the page already says so — that
+     * is what landmarks are for. Walk up to the nearest one.
+     */
+    let region = 'content';
+    for (let p = el.parentElement, hops = 0; p && hops < 12; p = p.parentElement, hops++) {
+      const t = p.tagName.toLowerCase();
+      const r = (p.getAttribute('role') || '').toLowerCase();
+      if (t === 'nav' || r === 'navigation') { region = 'nav'; break; }
+      if (t === 'header' || r === 'banner') { region = 'header'; break; }
+      if (t === 'footer' || r === 'contentinfo') { region = 'footer'; break; }
+      if (t === 'aside' || r === 'complementary') { region = 'aside'; break; }
+      if (t === 'main' || t === 'article' || r === 'main') { region = 'main'; break; }
+    }
+    info.region = region;
+
     if (tag === 'a') info.href = el.getAttribute('href') || '';
     if (tag === 'input' || tag === 'textarea') {
       info.type = el.getAttribute('type') || 'text';
@@ -416,6 +440,8 @@ export interface PageState {
     placeholder?: string;
     role?: string;
     options?: string[];
+    /** Nearest landmark: 'main' | 'content' | 'nav' | 'header' | 'footer' | 'aside'. */
+    region?: string;
   }>;
   elementCount: number;
 }
@@ -739,17 +765,65 @@ export function formatTabListForModel(tabs: TabInfo[]): string {
 
 // ── Page state formatter ─────────────────────────────────────────────────────
 
+/**
+ * How many elements the model is shown.
+ *
+ * Raised from 100. A structured row costs a handful of tokens — far less than
+ * the 3,000 characters of page text sent alongside it — and a listings page
+ * routinely has more than a hundred interactive elements before it has said
+ * anything useful.
+ */
+export const ELEMENT_BUDGET = 220;
+
+/** Landmarks that hold the page's actual content, best first. */
+const REGION_RANK: Record<string, number> = {
+  main: 0,
+  content: 1,
+  aside: 2,
+  header: 3,
+  nav: 4,
+  footer: 5,
+};
+
 export function formatPageStateForModel(pageState: PageState): string {
   const lines = [
     `## Current Page`,
     `URL: ${pageState.url}`,
     `Title: ${pageState.title}`,
     '',
-    `## Interactive Elements (${pageState.elementCount} total)`,
   ];
 
-  for (const el of pageState.elements.slice(0, 100)) {
+  /*
+   * RANK BEFORE TRUNCATING.
+   *
+   * Elements arrive in DOM order and used to be cut at the first 100. On a
+   * listings page the masthead, category tabs and a filter sidebar consume most
+   * of that before the first result, so an agent asked to compare listings was
+   * shown mostly navigation and then "... and N more elements".
+   *
+   * Sorting by landmark puts content first when the budget binds. Within a
+   * region the original DOM order is kept — reading order is meaningful, and
+   * shuffling it would cost more than the truncation does. `index` is untouched
+   * either way: it is the click handle, and reordering the display must never
+   * renumber it.
+   */
+  const ranked = pageState.elements
+    .map((el, i) => ({ el, i }))
+    .sort((a, b) => {
+      const ra = REGION_RANK[a.el.region ?? 'content'] ?? 1;
+      const rb = REGION_RANK[b.el.region ?? 'content'] ?? 1;
+      return ra === rb ? a.i - b.i : ra - rb;
+    })
+    .map((x) => x.el);
+
+  const shown = ranked.slice(0, ELEMENT_BUDGET);
+  const dropped = ranked.slice(ELEMENT_BUDGET);
+
+  lines.push(`## Interactive Elements (${pageState.elementCount} total, showing ${shown.length})`);
+
+  for (const el of shown) {
     const parts = [`[${el.index}]`, el.tag];
+    if (el.region && el.region !== 'content') parts.push(`in=${el.region}`);
     if (el.role) parts.push(`role=${el.role}`);
     if (el.type) parts.push(`type=${el.type}`);
     if (el.text) parts.push(`"${el.text}"`);
@@ -759,8 +833,29 @@ export function formatPageStateForModel(pageState: PageState): string {
     lines.push(parts.join(' '));
   }
 
-  if (pageState.elementCount > 100) {
-    lines.push(`... and ${pageState.elementCount - 100} more elements`);
+  if (dropped.length > 0) {
+    /*
+     * Say WHAT was dropped, not just how many.
+     *
+     * "... and 137 more elements" reads as incidental, so a model asked to be
+     * exhaustive will answer from what it can see and stop. Naming the regions
+     * makes the omission legible — and if content was dropped, says plainly that
+     * the page is not fully visible and scrolling or paging is required.
+     */
+    const byRegion = new Map<string, number>();
+    for (const el of dropped) {
+      const r = el.region ?? 'content';
+      byRegion.set(r, (byRegion.get(r) ?? 0) + 1);
+    }
+    const summary = [...byRegion.entries()].map(([r, n]) => `${n} in ${r}`).join(', ');
+    lines.push('', `## Omitted (${dropped.length}): ${summary}`);
+    const contentDropped = (byRegion.get('main') ?? 0) + (byRegion.get('content') ?? 0);
+    if (contentDropped > 0) {
+      lines.push(
+        `${contentDropped} of these are CONTENT elements — this page is not fully visible. ` +
+          `Scroll or use pagination before concluding you have seen everything.`,
+      );
+    }
   }
 
   lines.push('', '## Page Text (truncated)', pageState.text.substring(0, 3000));
