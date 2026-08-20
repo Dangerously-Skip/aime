@@ -1,7 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { PANELS, panelsForSurface, isPanelAllowed, panelTitle, type SurfaceId } from './registry';
+import {
+  PANELS,
+  panelsForSurface,
+  isPanelAllowed,
+  panelTitle,
+  railPanels,
+  type SurfaceId,
+} from './registry';
 
 /*
  * The registry is a claim. This checks it against the source.
@@ -165,5 +172,52 @@ describe('the registry OWNS panel titles', () => {
     // index; those are not registry concerns and must not be flattened.
     expect(SURFACE_SOURCE.code).toMatch(/title: filePath/);
     expect(SURFACE_SOURCE.code).toMatch(/title: `Terminal \$\{/);
+  });
+});
+
+describe('the rail is enumerable, in BOTH directions', () => {
+  /*
+   * This is the hole the first version of this file left open, and it was not
+   * hypothetical: the registry was written from a read of cowork-surface.tsx
+   * and caught THREE OF SEVEN cards. Canvases, Task metrics and Preview were
+   * missed outright, and nothing failed — because the drift check only walked
+   * dockview's component map, so rail cards could appear and vanish unobserved.
+   *
+   * `<RailSlot id="...">` makes each card declare itself, which turns "what is
+   * in the rail" from a question you answer by reading 2,000 lines into one the
+   * parser answers.
+   */
+  const railIdsInSource = () =>
+    [...SURFACE_SOURCE.cowork.matchAll(/<RailSlot surface="cowork" id="([a-z-]+)"/g)]
+      .map((m) => m[1])
+      .sort();
+
+  it('found the slots', () => {
+    // Guards the regex: a parser matching nothing makes both directions pass.
+    expect(railIdsInSource().length).toBeGreaterThanOrEqual(7);
+  });
+
+  it('every card in source is declared in the registry', () => {
+    const declared = new Set(railPanels('cowork').map((p) => p.id));
+    const undeclared = railIdsInSource().filter((id) => !declared.has(id));
+    expect(undeclared, 'rail cards with no registry entry — the drift that shipped once').toEqual([]);
+  });
+
+  it('every rail panel in the registry has a card in source', () => {
+    // The other direction: an entry with nothing rendering it is the
+    // unreachable-panel bug wearing a registry hat.
+    const inSource = new Set(railIdsInSource());
+    const missing = railPanels('cowork')
+      .map((p) => p.id)
+      .filter((id) => !inSource.has(id));
+    expect(missing, 'registry entries nothing renders').toEqual([]);
+  });
+
+  it('canvases is declared for cowork and not for code', () => {
+    // NOTE: this asserts the registry only. That RailSlot actually CONSULTS it
+    // is proven by rendering, in rail-slot.test.tsx — the version of this
+    // assertion that lived here passed with the guard deleted.
+    expect(isPanelAllowed('canvases', 'cowork')).toBe(true);
+    expect(isPanelAllowed('canvases', 'code')).toBe(false);
   });
 });

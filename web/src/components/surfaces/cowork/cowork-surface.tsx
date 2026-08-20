@@ -70,6 +70,7 @@ import {
 } from "@/lib/cowork/context-entry";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { GoalPanel } from "@/components/harness/goal-panel";
+import { RailSlot } from "@/lib/panels/rail-slot";
 import {
   GoalModeToggle, GoalModeBar, goalSettingsFrom,
   DEFAULT_BUDGET_USD, DEFAULT_SESSION_CAP,
@@ -525,88 +526,102 @@ function SidebarPanel({
               Context and Artifacts rather than in the conversation. It renders
               nothing when there is no goal.
             */}
-            <GoalRunStatus
-              chatId={chatId}
-              folder={folder}
-              surfaceId="cowork"
-              nudge={goalNudge}
-              starting={goalStarting}
-            />
+            <RailSlot surface="cowork" id="goal-status">
+              <GoalRunStatus
+                chatId={chatId}
+                folder={folder}
+                surfaceId="cowork"
+                nudge={goalNudge}
+                starting={goalStarting}
+              />
+            </RailSlot>
 
-            <SidebarCard
-              label="Context"
-              icon={FileText}
-              items={contextFiles}
-              emptyText="Files read during this session will appear here."
-              onItemClick={onContextClick}
-              onItemRemove={onContextRemove}
-            />
+            <RailSlot surface="cowork" id="context">
+              <SidebarCard
+                label="Context"
+                icon={FileText}
+                items={contextFiles}
+                emptyText="Files read during this session will appear here."
+                onItemClick={onContextClick}
+                onItemRemove={onContextRemove}
+              />
+            </RailSlot>
 
-            {searchGroups && searchGroups.length > 0 && (
-              <SearchResultsCard groups={searchGroups} onClear={onClearSearch || (() => {})} />
-            )}
+            <RailSlot surface="cowork" id="search-results">
+              {searchGroups && searchGroups.length > 0 && (
+                <SearchResultsCard groups={searchGroups} onClear={onClearSearch || (() => {})} />
+              )}
+            </RailSlot>
 
-            <SidebarCard
-              label="Artifacts"
-              icon={FilePen}
-              items={artifactFiles}
-              emptyText="Files created or edited will appear here."
-              onItemClick={onArtifactClick}
-              onItemRemove={onArtifactRemove}
-            />
+            <RailSlot surface="cowork" id="artifacts">
+              <SidebarCard
+                label="Artifacts"
+                icon={FilePen}
+                items={artifactFiles}
+                emptyText="Files created or edited will appear here."
+                onItemClick={onArtifactClick}
+                onItemRemove={onArtifactRemove}
+              />
+            </RailSlot>
 
-            {canvasArtifacts.length > 0 && (
-              <div className="rounded-xl border border-border/50 bg-card/50 overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-3">
-                  <LayoutDashboard className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="flex-1 text-sm font-semibold">Canvases</span>
-                  <span className="text-xs text-muted-foreground">{canvasArtifacts.length}</span>
-                  <CoworkCanvasToggle />
+            <RailSlot surface="cowork" id="canvases">
+  {canvasArtifacts.length > 0 && (
+                <div className="rounded-xl border border-border/50 bg-card/50 overflow-hidden">
+                  <div className="flex items-center gap-2 px-4 py-3">
+                    <LayoutDashboard className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="flex-1 text-sm font-semibold">Canvases</span>
+                    <span className="text-xs text-muted-foreground">{canvasArtifacts.length}</span>
+                    <CoworkCanvasToggle />
+                  </div>
+                  <div className="px-2 pb-2 space-y-1">
+                    {canvasArtifacts.map((c) => (
+                      <div key={c.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors group">
+                        <button
+                          type="button"
+                          onClick={() => onCanvasClick?.(c)}
+                          className="flex-1 min-w-0 text-left flex items-center gap-2"
+                        >
+                          <LayoutDashboard className="h-3 w-3 text-primary shrink-0" />
+                          <span className="truncate text-xs text-foreground">{c.title}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onCanvasRemove?.(c.id)}
+                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="px-2 pb-2 space-y-1">
-                  {canvasArtifacts.map((c) => (
-                    <div key={c.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50 transition-colors group">
-                      <button
-                        type="button"
-                        onClick={() => onCanvasClick?.(c)}
-                        className="flex-1 min-w-0 text-left flex items-center gap-2"
-                      >
-                        <LayoutDashboard className="h-3 w-3 text-primary shrink-0" />
-                        <span className="truncate text-xs text-foreground">{c.title}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onCanvasRemove?.(c.id)}
-                        className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
-                        title="Remove"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+              )}
+            </RailSlot>
 
             {/* Task Metrics panel */}
-            {taskMetrics && <TaskMetricsCard metrics={taskMetrics} />}
+            <RailSlot surface="cowork" id="task-metrics">
+              {taskMetrics && <TaskMetricsCard metrics={taskMetrics} />}
+            </RailSlot>
 
             {/* Dev server preview chip */}
-            {previewUrl && onPreviewClick && (
-              <div className="rounded-xl border border-primary/30 bg-primary/5">
-                <button
-                  type="button"
-                  onClick={onPreviewClick}
-                  className="flex w-full items-center gap-2 px-4 py-3 text-sm font-semibold text-primary hover:bg-primary/10 transition-colors rounded-xl"
-                >
-                  <Globe className="h-4 w-4" />
-                  <span className="flex-1 text-left">Preview</span>
-                  <span className="text-xs font-normal text-primary/70 truncate max-w-[140px]">
-                    {previewUrl.replace(/^https?:\/\//, "")}
-                  </span>
-                </button>
-              </div>
-            )}
+            <RailSlot surface="cowork" id="preview">
+  {previewUrl && onPreviewClick && (
+                <div className="rounded-xl border border-primary/30 bg-primary/5">
+                  <button
+                    type="button"
+                    onClick={onPreviewClick}
+                    className="flex w-full items-center gap-2 px-4 py-3 text-sm font-semibold text-primary hover:bg-primary/10 transition-colors rounded-xl"
+                  >
+                    <Globe className="h-4 w-4" />
+                    <span className="flex-1 text-left">Preview</span>
+                    <span className="text-xs font-normal text-primary/70 truncate max-w-[140px]">
+                      {previewUrl.replace(/^https?:\/\//, "")}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </RailSlot>
           </div>
         </ScrollArea>
       )}
