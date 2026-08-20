@@ -322,3 +322,69 @@ describe('GoalPanel — answering and collapsing', () => {
     expect(screen.getByText('Goal')).toBeTruthy();
   });
 });
+
+describe('the collapse control is the whole header, arrow included', () => {
+  /*
+   * Reported: "goal doesn't close when clicking on the arrow."
+   *
+   * The button wrapped only the <h3>; the badge and chevron were siblings
+   * OUTSIDE it. So the one control that looks like a disclosure control did
+   * nothing, and only the word "Goal" worked.
+   *
+   * The comment above that markup claimed it matched the Context and Artifacts
+   * cards, and it read as true because those neighbours DO put the chevron
+   * inside the button. A claim checked against the neighbour instead of against
+   * the markup — which is why this is a click test rather than a longer comment.
+   */
+  const openPanel = async () => {
+    global.fetch = mockFetch(status());
+    render(<GoalPanel conversationId="c1" workingDir="/tmp/p" surfaceId="cowork" />);
+    await waitFor(() => expect(screen.getByText('Make every embed play')).toBeTruthy());
+  };
+
+  it('collapses when the ARROW is clicked', async () => {
+    await openPanel();
+    const header = screen.getByRole('button', { expanded: true });
+    // The arrow is an svg inside the header; clicking it must reach the toggle
+    // rather than land on dead space.
+    const arrow = header.querySelector('svg');
+    expect(arrow, 'no chevron inside the header button — it is outside again').toBeTruthy();
+
+    fireEvent.click(arrow!);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { expanded: false })).toBeTruthy(),
+    );
+    // Body is gone, not merely hidden.
+    expect(screen.queryByText(/1 of 3 passed/)).toBeNull();
+  });
+
+  it('collapses when the TITLE is clicked, as it always did', async () => {
+    await openPanel();
+    fireEvent.click(screen.getByText('Goal'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { expanded: false })).toBeTruthy(),
+    );
+  });
+
+  it('re-opens, so the arrow is a toggle and not a one-way trip', async () => {
+    await openPanel();
+    // Scope by aria-expanded rather than "the button": an open panel has
+    // several (answer options, nudge), and `getByRole('button')` is ambiguous.
+    const arrowIn = (expanded: boolean) =>
+      screen.getByRole('button', { expanded }).querySelector('svg')!;
+
+    fireEvent.click(arrowIn(true));
+    await waitFor(() => expect(screen.queryByText(/1 of 3 passed/)).toBeNull());
+    fireEvent.click(arrowIn(false));
+    await waitFor(() => expect(screen.getByText(/1 of 3 passed/)).toBeTruthy());
+  });
+
+  it('the status badge sits inside the hit area too', async () => {
+    // It is between the title and the arrow; leaving it out puts dead space in
+    // the middle of a control that looks continuous.
+    await openPanel();
+    const header = screen.getByRole('button', { expanded: true });
+    expect(header.textContent).toContain('Goal');
+    expect(header.textContent).toMatch(/running|idle/);
+  });
+});
