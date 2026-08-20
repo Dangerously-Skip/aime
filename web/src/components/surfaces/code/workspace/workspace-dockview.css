@@ -60,10 +60,12 @@
  * Derived from `--background` rather than hardcoded so it tracks the theme:
  * 70% of #262624 lands around #1B1B19. */
 .dv-workspace {
-  --dv-panel-surface: var(--card);
-}
-.dark .dv-workspace {
-  --dv-panel-surface: color-mix(in srgb, var(--background) 70%, #000);
+  /*
+   * Promoted to `--panel-surface` in globals.css (DR-20 D-4) so Chat, Browser
+   * and Assistant share it rather than each inventing a panel colour. Kept as
+   * an alias because every dockview variable below reads this name.
+   */
+  --dv-panel-surface: var(--panel-surface);
 }
 
 .dv-workspace,

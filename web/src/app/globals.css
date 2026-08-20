@@ -56,6 +56,16 @@
   --background: #F0F0EE;
   --foreground: #1C1C1A;
   --card: #FAFAF8;
+  /*
+   * The recessed panel well — see `.surface-well` below.
+   *
+   * DERIVED from each theme's own --background rather than hand-picked, so a
+   * new theme gets a coherent panel colour by defining one variable instead of
+   * guessing a hex. Light themes mix toward white (a panel darker than a
+   * near-white page reads as a hole); dark themes mix toward black, so the
+   * panel recedes and the chrome holds it.
+   */
+  --panel-surface: color-mix(in srgb, var(--background) 55%, #fff);
   --card-foreground: #1C1C1A;
   --popover: #FAFAF8;
   --popover-foreground: #1C1C1A;
@@ -101,6 +111,8 @@
   --background: #262624;
   --foreground: #EAE5DF;
   --card: #303032;
+  /* Dark: recede. #262624 -> #1B1B19. */
+  --panel-surface: color-mix(in srgb, var(--background) 70%, #000);
   --card-foreground: #EAE5DF;
   --popover: #303032;
   --popover-foreground: #EAE5DF;
@@ -153,6 +165,8 @@
   --background: #10192c;
   --foreground: #E4E8F2;
   --card: #16213a;
+  /* Dark: recede. */
+  --panel-surface: color-mix(in srgb, var(--background) 70%, #000);
   --card-foreground: #E4E8F2;
   --popover: #16213a;
   --popover-foreground: #E4E8F2;
@@ -197,6 +211,8 @@
   --background: #FFF0F5;
   --foreground: #4A1942;
   --card: #FFFFFF;
+  /* Light: rise. */
+  --panel-surface: color-mix(in srgb, var(--background) 55%, #fff);
   --card-foreground: #4A1942;
   --popover: #FFFFFF;
   --popover-foreground: #4A1942;
@@ -643,4 +659,49 @@ code {
    * crowds them, which undoes most of what the face is for. */
   line-height: 1.7;
   letter-spacing: 0.01em;
+}
+
+/*
+ * SURFACE WELL — the shared panel chrome.
+ *
+ * Cowork and Code were rebuilt around panels as recessed wells: rounded, inset,
+ * separated by GAPS. Chat, Browser and Assistant still divided their columns
+ * with `border-l border-border` — full-bleed slabs ruled off from each other,
+ * which is the older idiom and now reads as dated beside the other two.
+ *
+ * That is the inconsistency inverted rather than removed: `workspace-dockview.
+ * css` opens by noting the Code surface "looked like a different product", and
+ * after fixing it, it looked BETTER than its neighbours. Same problem, other
+ * direction. DR-20 D-4 is the decision to promote these values here so there is
+ * one answer rather than five.
+ *
+ * The rule the whole language rests on: A SEAM IS A GAP, NOT A STROKE. A 1px
+ * rule between two panels draws a grid over the layout; a gap lets the panels
+ * sit in it. Contrast defines the edge, which is why the well has a surface of
+ * its own and no border at all.
+ *
+ * AND THE RULE FOR APPLYING IT, learned by getting it wrong: A WELL IS FOR
+ * CONTENT, NOT FOR A CONTAINER.
+ *
+ * The first attempt put `.surface-well` on the rails and columns themselves.
+ * Every one came out worse: Chat's rail became a full-height slab with a header
+ * floating in it, and Assistant's column read as a panel bolted to the side of
+ * the app. Look at what Cowork actually does — the rail is TRANSPARENT, sits on
+ * the page background, and the cards inside it are the wells.
+ *
+ * So: containers get padding and gaps. The cards inside them get the well.
+ */
+.surface-well {
+  background: var(--panel-surface);
+  border-radius: 0.75rem;
+  border: none;
+  overflow: hidden;
+}
+
+/*
+ * Inside a well, sections separate by spacing rather than rules. Provided so
+ * the header underlines these panels currently carry have something to become.
+ */
+.surface-well-section + .surface-well-section {
+  margin-top: 0.5rem;
 }

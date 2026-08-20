@@ -912,10 +912,10 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
         {/* Agent sidebar */}
         {agentVisible && (
           <div
-            className="flex flex-col bg-surface border-l border-border shrink-0"
+            className="flex flex-col surface-well m-2 shrink-0"
             style={{ width: panelWidth }}
           >
-            <div className="px-3 py-2 border-b border-border flex items-center gap-2">
+            <div className="px-3 py-2 flex items-center gap-2">
               <span className="text-xs font-semibold">Agent</span>
               {phaseInfo && (
                 <span className="flex items-center gap-1 text-xs text-muted-foreground animate-pulse">
