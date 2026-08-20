@@ -71,6 +71,12 @@ function ConsoleLogLine({ entry }: { entry: ConsoleEntry }) {
 
 export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, onConsoleMessage }: PreviewPanelProps) {
   const [currentUrl, setCurrentUrl] = useState(url);
+  /*
+   * What the user is typing, separate from where the page actually is. Bound
+   * directly to `currentUrl` the field would be rewritten mid-edit every time
+   * the page fired a navigation event.
+   */
+  const [urlDraft, setUrlDraft] = useState(url);
   const webviewRef = useRef<WebviewNode | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<ConsoleEntry[]>([]);
   const [devToolsOpen, setDevToolsOpen] = useState(false);
@@ -97,6 +103,7 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
   // Update URL when prop changes
   useEffect(() => {
     setCurrentUrl(url);
+    setUrlDraft(url);
     if (webviewRef.current) {
       try {
         const current = webviewRef.current.getURL();
@@ -136,6 +143,7 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
   function handleNav(e: Event & { url?: string }) {
     if (e.url) {
       setCurrentUrl(e.url);
+      setUrlDraft(e.url);
       // Clear console on navigation
       setConsoleLogs([]);
       setHasErrors(false);
@@ -193,9 +201,37 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border">
         <Globe className="h-3.5 w-3.5 text-primary shrink-0" />
-        <div className="flex-1 min-w-0 rounded-md bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground truncate font-mono">
-          {currentUrl}
-        </div>
+        {/*
+          AN ADDRESS BAR, not a label.
+          
+          This was a read-only div showing wherever the agent had navigated. That
+          was fine while the panel only ever appeared as a side effect of the
+          agent writing an HTML file or starting a dev server — but it meant a
+          user could not point the preview anywhere, and browser tools are only
+          offered to the agent when this webview is live. So the most capable
+          agent in the app could drive a browser, and nobody could give it a page
+          to start from.
+        */}
+        <input
+          value={urlDraft}
+          onChange={(e) => setUrlDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              const next = normaliseUrl(urlDraft);
+              if (next) {
+                setCurrentUrl(next);
+                webviewRef.current?.loadURL(next);
+              }
+            }
+            if (e.key === 'Escape') setUrlDraft(currentUrl);
+          }}
+          onFocus={(e) => e.currentTarget.select()}
+          spellCheck={false}
+          placeholder="Enter a URL"
+          aria-label="Preview address"
+          className="flex-1 min-w-0 rounded-md bg-muted/50 px-2.5 py-1 text-xs text-muted-foreground font-mono outline-none focus:text-foreground focus:ring-1 focus:ring-primary/40"
+        />
         <Button
           variant="ghost"
           size="icon"
@@ -315,4 +351,24 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
       </div>
     </div>
   );
+}
+
+/**
+ * Turn what someone typed into something loadable.
+ *
+ * `http(s)` only, deliberately: this webview is handed to an agent, and a
+ * preview that will load `file://` on request is a way to read the disk through
+ * a text box. Bare hostnames get https rather than being treated as a search —
+ * the address bar of a preview panel is not a search engine.
+ */
+export function normaliseUrl(raw: string): string | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`;
+  try {
+    const u = new URL(withScheme);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.toString() : null;
+  } catch {
+    return null;
+  }
 }
