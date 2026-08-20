@@ -15,7 +15,9 @@ import { getSurfaceConfig } from '../surfaces';
 import { internalAuthEnv } from '../auth/internal-credential';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { waitForAnswer } from '../pending-questions';
+import { randomUUID } from 'node:crypto';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
+import { buildIfServable } from '../mcp/browser-tool-bridge';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
 import { waitForConnector } from '../pending-connectors';
 import { waitForDocumentPrint } from '../pending-documents';
@@ -207,6 +209,7 @@ export class ClaudeProvider extends BaseProvider {
       sessionControls,
       onInputRequest,
       onBrowserToolUse,
+      browserToolsAvailable,
       onConnectorRequest,
       onDocumentPrint,
     } = params;
@@ -729,10 +732,33 @@ export class ClaudeProvider extends BaseProvider {
       `[Claude] aime tools: icloud=${icloudCreds ? 'yes' : 'NO'} search=${searchRoute ? searchRoute.providerId : 'none'}`,
     );
 
+    /*
+     * Browser tools, when the client has a webview to run them against.
+     *
+     * These schemas reached exactly one model before this — the hand-rolled loop
+     * in `use-browser-agent.ts` — so `canUseTool`'s BROWSER_TOOL_NAMES branch,
+     * the SSE event and the relay were a delivery system with nothing upstream.
+     * The model had never been told the tools existed.
+     *
+     * Gated on the CLIENT's declaration rather than the surface, because Code's
+     * preview panel can be closed and `onBrowserToolUse` is built for every
+     * surface. A tool the model can call but nothing can execute is DR-21's
+     * infinite loop; absence is expressed by the tool not existing.
+     */
+    const browserTools = buildIfServable({
+      hasWebview: browserToolsAvailable === true && !!onBrowserToolUse,
+      tool: tool as never,
+      emit: async (toolUseId, name, input) => {
+        await onBrowserToolUse?.(toolUseId, name, input);
+      },
+      newId: () => `btu_${randomUUID()}`,
+    }) as never[];
+
     const aimeMcpServer = createSdkMcpServer({
       name: 'aime',
       version: '1.0.0',
       tools: [
+        ...browserTools,
         ...searchTools,
         /**
          * The bounded replacement for the built-in `WebFetch`, which is denied

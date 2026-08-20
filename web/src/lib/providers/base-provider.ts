@@ -201,6 +201,14 @@ export interface QueryParams {
   /** Callback to send a browser_tool_use event to the client during streaming. */
   onBrowserToolUse?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => Promise<void>;
   /**
+   * The client has a live webview and can execute browser tools.
+   *
+   * Declared by the renderer rather than inferred: `onBrowserToolUse` is built
+   * for every surface, and Code's preview panel can be closed. Registering
+   * tools nothing can run is the DR-21 loop.
+   */
+  browserToolsAvailable?: boolean;
+  /**
    * Approval policy for this run (P6/C3). Unset ⇒ the provider infers:
    * unattended runs gate consequential actions, interactive sessions don't.
    */

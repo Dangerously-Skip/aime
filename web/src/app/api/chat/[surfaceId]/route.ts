@@ -183,6 +183,15 @@ export async function POST(
     displayName = null,
     attachments = null,
     webSearch = false,
+    /*
+     * The CLIENT asserts it has a live webview to run browser tools against.
+     *
+     * Not inferred from the surface: Code's preview panel can be closed, and
+     * `onBrowserToolUse` is built unconditionally here, so keying off either
+     * would register tools nothing can execute — the DR-21 infinite loop, one
+     * layer down. Only the renderer knows, so only the renderer says.
+     */
+    browserToolsAvailable = false,
     projectInstructions = null,
     projectKnowledge = null,
     apiKey = null,
@@ -282,6 +291,14 @@ export async function POST(
      * pass these callbacks at all, which is why the fallbacks already work there.
      */
     canRelayToClient?: boolean;
+    /**
+     * The client has a live WEBVIEW, not merely a live stream.
+     *
+     * Narrower than `canRelayToClient` and genuinely different: a surface can be
+     * listening and still have nothing to navigate — Chat and Cowork always, and
+     * Code whenever its preview panel is closed. Browser tools need both.
+     */
+    browserToolsAvailable?: boolean;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -1109,6 +1126,7 @@ export async function POST(
           sessionControls: sessionControls || undefined,
           onInputRequest,
           onBrowserToolUse,
+          browserToolsAvailable: browserToolsAvailable === true && canRelayToClient !== false,
           onConnectorRequest,
           onDocumentPrint,
         };
