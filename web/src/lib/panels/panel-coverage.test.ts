@@ -187,8 +187,17 @@ describe('the rail is enumerable, in BOTH directions', () => {
    * in the rail" from a question you answer by reading 2,000 lines into one the
    * parser answers.
    */
+  /*
+   * Attribute-order independent, because it already broke once: adding an
+   * `active` prop turned `<RailSlot surface=... id=...>` into
+   * `<RailSlot active=... surface=... id=...>` and a positional regex matched
+   * nothing. The "found the slots" guard below is what caught it — without that
+   * guard, zero matches would have made every assertion here pass while
+   * checking nothing at all, which is the precise failure this file exists to
+   * prevent happening to somebody else.
+   */
   const railIdsInSource = () =>
-    [...SURFACE_SOURCE.cowork.matchAll(/<RailSlot surface="cowork" id="([a-z-]+)"/g)]
+    [...SURFACE_SOURCE.cowork.matchAll(/<RailSlot\b[^>]*\bid="([a-z-]+)"/g)]
       .map((m) => m[1])
       .sort();
 
