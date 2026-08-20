@@ -187,6 +187,35 @@ export const BROWSER_TOOL_SCHEMAS = [
   },
   {
     /*
+     * VISION, DELIBERATELY A LAST RESORT.
+     *
+     * The agent reads pages through a structured element list and the
+     * accessibility tree, which is where the field has settled: an a11y
+     * snapshot is a few hundred tokens where a screenshot is thousands, and
+     * screenshots are read less reliably on dense layouts. Best practice is
+     * a11y-primary with vision used SELECTIVELY — so the description steers
+     * away from it, because a model given a camera will reach for it.
+     *
+     * It earns its place where text genuinely cannot answer: a canvas, an
+     * image-only chart, a layout that renders nothing accessible, or "is this
+     * actually visible".
+     */
+    name: 'screenshot',
+    description:
+      'Capture what the page LOOKS like, as an image. Expensive and slow — prefer the element list you already receive, or the `snapshot` tool for structure. Use this only when the text representation cannot answer the question: canvas or image-only content, a visual layout problem, or checking whether something is actually visible on screen.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'Why the text representation is insufficient here. Required, to keep this from becoming the default.',
+        },
+      },
+      required: ['reason'],
+    },
+  },
+  {
+    /*
      * The tool whose absence caused an infinite loop.
      *
      * A user asked the agent to "open them in new tabs". Sixteen tools existed
@@ -460,6 +489,14 @@ export interface ToolResult {
   success: boolean;
   message: string;
   isDone?: boolean;
+  /**
+   * An optional image to hand the model alongside the message.
+   *
+   * Only `screenshot` sets it. Kept out of the message string because an image
+   * has to travel as its own content block, and base64 in a text field would be
+   * both useless and enormous.
+   */
+  image?: { mediaType: 'image/png'; data: string };
 }
 
 // ── Tool executor ────────────────────────────────────────────────────────────
@@ -709,6 +746,31 @@ export async function executeToolInWebview(
       }
     }
 
+    case 'screenshot': {
+      try {
+        const img = await webview.capturePage();
+        const dataUrl = img.toDataURL();
+        // `data:image/png;base64,<payload>` — the API wants the payload alone.
+        // Sending the prefix fails the REQUEST rather than the tool, which reads
+        // to the model as the page being broken.
+        const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+        if (!base64) return { success: false, message: 'Screenshot came back empty.' };
+        if (base64.length > 8_000_000) {
+          return {
+            success: false,
+            message: 'Screenshot too large to send. Scroll to the region you care about and try again.',
+          };
+        }
+        return {
+          success: true,
+          message: `Screenshot of ${webview.getURL()}`,
+          image: { mediaType: 'image/png', data: base64 },
+        };
+      } catch (e) {
+        return { success: false, message: `Screenshot failed: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    }
+
     case 'snapshot': {
       try {
         const tree = await webview.executeJavaScript(ARIA_SNAPSHOT_SCRIPT);
@@ -903,4 +965,33 @@ export function formatPageChangeForModel(
     return '## Change\nNothing changed on the page after that action. If you expected it to, the action did not do what you intended.';
   }
   return ['## Change', ...changes].join('\n');
+}
+
+/** A block in a tool result's content array. */
+export type ToolResultBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: 'image/png'; data: string } };
+
+/**
+ * Pack a tool result into what the Messages API expects.
+ *
+ * A FUNCTION rather than an inline ternary in the loop, because the first
+ * version of the test for this scanned the hook's source for `result.image` and
+ * `type: 'image'` — and those strings survive a sabotage that drops the image on
+ * the floor. The test passed while the feature was broken, which is the exact
+ * shape this repo keeps getting caught by. Behaviour has to be callable to be
+ * checked.
+ *
+ * A string when there is no image, because that is the common case and an array
+ * of one text block is noise on every single tool call.
+ */
+export function toolResultContent(result: ToolResult): string | ToolResultBlock[] {
+  if (!result.image) return result.message;
+  return [
+    { type: 'text', text: result.message },
+    {
+      type: 'image',
+      source: { type: 'base64', media_type: result.image.mediaType, data: result.image.data },
+    },
+  ];
 }
