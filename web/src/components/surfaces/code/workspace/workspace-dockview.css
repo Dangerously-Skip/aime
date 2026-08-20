@@ -30,27 +30,59 @@
 /* Override dockview's own abyss/light palette FIRST — these variables are
    the source of the purple/blue accent (rgb(91,30,207) was the original
    `--dv-color-abyss-accent`). All downstream theme variables resolve
-   against these, so killing them at the source is the cleanest fix. */
-.dockview-theme-abyss-spaced.dv-workspace,
-.dockview-theme-light-spaced.dv-workspace,
-.dv-workspace.dockview-theme-abyss-spaced,
-.dv-workspace.dockview-theme-light-spaced,
+   against these, so killing them at the source is the cleanest fix.
+ *
+ * THE SELECTOR MATTERS, AND THE FIRST VERSION OF IT MATCHED NOTHING.
+ *
+ * `.dockview-theme-abyss-spaced.dv-workspace` is a COMPOUND selector — one
+ * element carrying both classes. No such element exists. `dv-workspace` is on
+ * our own wrapper div (workspace-layout.tsx); the theme class is put on a shell
+ * element that dockview creates INSIDE it
+ * (`dockviewComponent.js` → `_shellThemeClassnames.setClassNames`).
+ *
+ * That is not merely a dead selector, it is the reason the panels stayed navy
+ * after the `hsl()` fix above. Custom properties inherit, but a declaration ON
+ * an element always beats one inherited from an ancestor — so dockview's
+ * `.dockview-theme-abyss-spaced { --dv-color-abyss: #10192c }` won for the whole
+ * subtree while our values sat one level up doing nothing. Sampled from a
+ * screenshot the panel body was #15121E, which is not in our palette at all.
+ *
+ * Hence the DESCENDANT selector: the variables have to be declared on the same
+ * element dockview declares them on, or lower.
+ */
+/* The panel surface, as one value used everywhere a panel is painted.
+ *
+ * Light theme keeps `--card`. Dark theme goes well BELOW the surrounding chrome
+ * so panels read as recessed wells rather than raised cards — at `--card` they
+ * were #303032 against #262624 chrome, i.e. lighter than the frame holding
+ * them, which is what made the surface feel inflated.
+ *
+ * Derived from `--background` rather than hardcoded so it tracks the theme:
+ * 70% of #262624 lands around #1B1B19. */
 .dv-workspace {
+  --dv-panel-surface: var(--card);
+}
+.dark .dv-workspace {
+  --dv-panel-surface: color-mix(in srgb, var(--background) 70%, #000);
+}
+
+.dv-workspace,
+.dv-workspace [class*='dockview-theme-'] {
   /* Dockview palette overrides (force `accent` to Quarry's amber). */
-  --dv-color-abyss-dark: var(--card);
-  --dv-color-abyss: var(--card);
+  --dv-color-abyss-dark: var(--dv-panel-surface);
+  --dv-color-abyss: var(--dv-panel-surface);
   --dv-color-abyss-light: var(--muted);
   --dv-color-abyss-lighter: var(--background);
   --dv-color-abyss-accent: var(--primary);
   --dv-color-abyss-primary-text: var(--foreground);
   --dv-color-abyss-secondary-text: var(--muted-foreground);
-  --dv-color-gh-light-canvas-subtle: var(--card);
+  --dv-color-gh-light-canvas-subtle: var(--dv-panel-surface);
 
   /* Panel surface */
-  --dv-tabs-and-actions-container-background-color: var(--card);
-  --dv-group-view-background-color: var(--card);
+  --dv-tabs-and-actions-container-background-color: var(--dv-panel-surface);
+  --dv-group-view-background-color: var(--dv-panel-surface);
   --dv-tabs-container-scrollbar-color: var(--border);
-  --dv-separator-border: var(--border);
+  --dv-separator-border: var(--background);
   --dv-paneview-active-outline-color: var(--primary);
 
   /* Active tab background → clean pill */
@@ -58,7 +90,7 @@
   --dv-activegroup-visiblepanel-tab-color: var(--foreground);
   --dv-activegroup-hiddenpanel-tab-background-color: transparent;
   --dv-activegroup-hiddenpanel-tab-color: var(--muted-foreground);
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--card);
+  --dv-inactivegroup-visiblepanel-tab-background-color: color-mix(in srgb, var(--dv-panel-surface) 92%, var(--foreground));
   --dv-inactivegroup-visiblepanel-tab-color: var(--muted-foreground);
   --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
   --dv-inactivegroup-hiddenpanel-tab-color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
@@ -85,6 +117,17 @@
   --dv-inactivegroup-action-hover-color: var(--foreground);
 
   --dv-background-color: var(--background);
+
+  /* One source of spacing, not two.
+   *
+   * The `-spaced` theme variants ship `--dv-spacing-padding: 10px`, and we then
+   * added another 6px of padding and gap below. 16px of frame around every
+   * panel is what read as a heavy gutter — and while the palette was leaking it
+   * was 16px of someone else's navy, which is why it looked like a border
+   * rather than breathing room.
+   *
+   * Zero here, and the 6px below is the whole frame. */
+  --dv-spacing-padding: 0px;
 }
 
 /* Outer dockview surface — give the whole IDE column a hint of inset. */
@@ -96,22 +139,32 @@
 
 /* Each panel group becomes a rounded "widget". This is the main visual
    shift from a typical IDE — boundaries feel like cards, not walls. */
+/* The panel edge is the SURFACE CHANGE, not a stroke.
+ *
+ * These borders were `--border` (#413A34) and, with a `0 1px 0` shadow in the
+ * same family, drew a visible hairline around every panel. Tiled three-up they
+ * read as column and row rules across the surface — a grid laid over the
+ * layout rather than panels sitting in it.
+ *
+ * The border stays at 1px so nothing reflows; it is just painted the gutter
+ * colour, so it merges with the gap instead of outlining against it. With the
+ * panels now well below the chrome, contrast alone defines the edge and the
+ * stroke has no work left to do. */
 .dv-workspace .groupview {
   border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  background: var(--card);
-  box-shadow:
-    0 1px 0 color-mix(in srgb, var(--border) 30%, transparent),
-    0 1px 3px color-mix(in srgb, var(--foreground) 4%, transparent);
+  border: 1px solid var(--background);
+  background: var(--dv-panel-surface);
   overflow: hidden;
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
+/* The focused group carries the accent, because a group is a rectangle and a
+ * 1px ring around a rectangle is a ring — no curve to fight. This is the other
+ * half of what the tab underline was trying to say, moved somewhere the shape
+ * works. Kept low-contrast: it should answer "where is focus" at a glance and
+ * otherwise stay out of the way. */
 .dv-workspace .groupview.dv-active-group {
-  border-color: var(--border);
-  box-shadow:
-    0 1px 0 color-mix(in srgb, var(--border) 50%, transparent),
-    0 2px 6px color-mix(in srgb, var(--foreground) 6%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--background));
 }
 
 /* Tabs bar — pill-style. Less chrome, more breathing room. */
@@ -132,10 +185,21 @@
   user-select: none;
 }
 
+/* The pill IS the indicator. A raised surface against transparent siblings
+ * reads unambiguously without any stroke, which is what lets the curved
+ * underline go (see the note further down). */
 .dv-workspace .tab.dv-active-tab {
-  border-color: color-mix(in srgb, var(--border) 60%, transparent);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
   background: var(--background);
   color: var(--foreground);
+  font-weight: 600;
+}
+
+/* Inactive tabs recede rather than compete — the contrast between this and the
+ * rule above is doing the work the accent stroke used to do badly. */
+.dv-workspace .tab:not(.dv-active-tab) {
+  background: transparent;
+  color: var(--muted-foreground);
 }
 
 .dv-workspace .tab:hover:not(.dv-active-tab) {
@@ -199,12 +263,21 @@
   box-shadow: 0 18px 48px color-mix(in srgb, var(--foreground) 18%, transparent);
 }
 
-/* Anywhere dockview uses its built-in blue/purple accent — convert to
-   Quarry primary. Includes drop-line indicator and tab-bar underline. */
-.dv-workspace .dv-active-tab,
-.dv-workspace .tab.dv-active-tab {
-  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--primary) 85%, transparent);
-}
+/* THE ACTIVE TAB IS A PILL, SO IT CANNOT WEAR AN UNDERLINE.
+ *
+ * This used to be `box-shadow: inset 0 -2px 0 <primary>`. An inset shadow
+ * follows the border radius, so on a 6px-rounded tab it renders as a curved
+ * stroke hugging the bottom corners — a smile under the label, not an
+ * indicator. Any bottom-edge treatment on a rounded pill has this problem;
+ * the geometry is the bug, not the colour.
+ *
+ * So the two pieces of information get two places that suit their shapes:
+ *
+ *   which tab is visible in its group -> the filled pill itself, below
+ *   which group has keyboard focus    -> an accent ring on the GROUP, further
+ *                                        down, where a rectangle is a rectangle
+ *
+ * Nothing here draws a partial stroke around a curve. */
 .dv-workspace .dv-drop-target-line,
 .dv-workspace .dv-drop-target-indicator-active {
   background: var(--primary) !important;
