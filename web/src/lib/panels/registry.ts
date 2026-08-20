@@ -163,13 +163,49 @@ export const PANELS: readonly PanelDef[] = [
     host: 'rail',
     mount: 'SearchResultsCard',
     /*
-     * Appears only when a search has happened — the one surviving heuristic,
-     * and DR-20 D-3 argues it should become explicit. Left as-is here because
+     * Appears only when a search has happened — a surviving heuristic, and
+     * DR-20 D-3 argues these should become explicit. Left as-is here because
      * this step moves the declaration, not the behaviour.
      */
     defaultOpen: false,
   },
+  {
+    id: 'canvases',
+    title: 'Canvases',
+    surfaces: ['cowork'],
+    host: 'rail',
+    mount: 'CoworkCanvasToggle',
+    defaultOpen: false,
+  },
+  {
+    id: 'task-metrics',
+    title: 'Task metrics',
+    surfaces: ['cowork'],
+    host: 'rail',
+    mount: 'TaskMetricsCard',
+    defaultOpen: false,
+  },
+  {
+    id: 'preview',
+    title: 'Preview',
+    surfaces: ['cowork'],
+    host: 'rail',
+    mount: 'onPreviewClick',
+    defaultOpen: false,
+  },
 ] as const;
+
+/**
+ * The rail's contents for a surface, IN RENDER ORDER.
+ *
+ * Order lives here rather than in JSX because it is a product decision — the
+ * goal dashboard above Context and Artifacts, spend and preview at the bottom —
+ * and a decision buried in a 2,000-line component is a decision nobody can find
+ * to change.
+ */
+export function railPanels(surface: SurfaceId): PanelDef[] {
+  return panelsForSurface(surface).filter((p) => p.host === 'rail');
+}
 
 /** Panels a surface is allowed to host. */
 export function panelsForSurface(surface: SurfaceId): PanelDef[] {
