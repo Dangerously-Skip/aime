@@ -8,6 +8,7 @@ import {
   executeToolInWebview,
   formatPageStateForModel,
   formatPageChangeForModel,
+  toolResultContent,
   formatTabListForModel,
   type ConsoleLogBuffer,
   type PageState,
@@ -205,7 +206,20 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
           // 3. Act — execute tool calls
           optionsRef.current.onPhaseChange('acting');
 
-          const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }> = [];
+          /*
+           * `content` is a string OR an array of blocks. The array form is only
+           * used by `screenshot`: an image has to travel as its own block, and
+           * base64 stuffed into the text field would be useless and enormous.
+           */
+          type ResultBlock =
+            | { type: 'text'; text: string }
+            | { type: 'image'; source: { type: 'base64'; media_type: 'image/png'; data: string } };
+          const toolResults: Array<{
+            type: 'tool_result';
+            tool_use_id: string;
+            content: string | ResultBlock[];
+            is_error?: boolean;
+          }> = [];
           let isDone = false;
 
           for (const block of assistantBlocks) {
@@ -255,7 +269,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
             toolResults.push({
               type: 'tool_result',
               tool_use_id: toolBlock.id,
-              content: result.message,
+              content: toolResultContent(result),
               is_error: !result.success,
             });
 
