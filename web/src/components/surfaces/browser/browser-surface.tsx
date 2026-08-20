@@ -317,6 +317,39 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
   }, [memories]);
 
   // ── Browser agent hook ──────────────────────────────────────────────────
+  /**
+   * Open a URL in a BACKGROUND tab and report its index.
+   *
+   * Background is the point: the asking task is "open these several so I can
+   * look at them", and stealing focus per tab would leave the agent observing a
+   * page other than the one it is reasoning about — which is the drift that
+   * produced the failure this tool exists to fix.
+   */
+  const handleNewTab = useCallback(async (url: string): Promise<number | null> => {
+    /*
+     * Reads currentChatId rather than calling ensureBrowserConversation, which
+     * is declared further down the file. The agent only runs while a browser
+     * conversation exists, so the null branch is a genuine "cannot" rather than
+     * a case worth manufacturing state for.
+     */
+    const cid = useBrowserStore.getState().currentChatId;
+    if (!cid) return null;
+    const id = crypto.randomUUID();
+    addTab({ id, url, title: url, isActive: false }, cid);
+    const tabs = useBrowserStore.getState().tabSessions[cid] ?? [];
+    const index = tabs.findIndex((t) => t.id === id);
+    return index >= 0 ? index : null;
+  }, [addTab]);
+
+  const handleCloseTab = useCallback(async (tabId: string): Promise<boolean> => {
+    const state = useBrowserStore.getState();
+    const cid = state.currentChatId;
+    if (!cid) return false;
+    const before = (state.tabSessions[cid] ?? []).length;
+    state.removeTab(tabId, cid);
+    return (useBrowserStore.getState().tabSessions[cid] ?? []).length < before;
+  }, []);
+
   const handleSwitchTab = useCallback(async (tabId: string): Promise<(HTMLElement & import("@/lib/browser-tools").WebviewRef) | null> => {
     const state = useBrowserStore.getState();
     const cid = state.currentChatId;
@@ -402,6 +435,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
       }));
     },
     onSwitchTab: handleSwitchTab,
+    onNewTab: handleNewTab,
+    onCloseTab: handleCloseTab,
   });
 
   // Ensure a browser conversation exists for tab management.

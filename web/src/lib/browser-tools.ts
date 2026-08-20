@@ -186,6 +186,39 @@ export const BROWSER_TOOL_SCHEMAS = [
     },
   },
   {
+    /*
+     * The tool whose absence caused an infinite loop.
+     *
+     * A user asked the agent to "open them in new tabs". Sixteen tools existed
+     * and `switch_tab` only switches to a tab that ALREADY exists, so the
+     * instruction was not executable — and nothing in the agent loop can notice
+     * a plan step no tool satisfies. It restated the same intent four times and
+     * drifted onto another page.
+     */
+    name: 'new_tab',
+    description:
+      'Open a URL in a NEW background tab and stay on the current page. Use this to collect several pages for comparison — it is the right tool when asked to "open these in tabs". Returns the new tab index; use switch_tab to go to it.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'The absolute URL to open in a new tab' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'close_tab',
+    description:
+      'Close a tab by its 0-based index from the open tabs list. Use to tidy up after comparing pages so the tab list stays legible.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        tab_index: { type: 'number', description: 'The 0-based index of the tab to close' },
+      },
+      required: ['tab_index'],
+    },
+  },
+  {
     name: 'switch_tab',
     description: 'Switch to a different browser tab by its index (0-based) from the open tabs list. After switching, the page state will be re-observed automatically. Use this to work across multiple tabs.',
     input_schema: {
@@ -700,7 +733,7 @@ export function formatTabListForModel(tabs: TabInfo[]): string {
     const url = tab.url || '(empty)';
     lines.push(`[${i}] ${tab.title || 'New Tab'}${marker} — ${url}`);
   }
-  lines.push('', 'Use the switch_tab tool to navigate between tabs.');
+  lines.push('', 'Use new_tab to open a URL in the background, switch_tab to move between them, close_tab to tidy up.');
   return lines.join('\n');
 }
 
@@ -733,4 +766,46 @@ export function formatPageStateForModel(pageState: PageState): string {
   lines.push('', '## Page Text (truncated)', pageState.text.substring(0, 3000));
 
   return lines.join('\n');
+}
+
+/**
+ * What CHANGED since the last observation.
+ *
+ * Agent-E ("change observation", arXiv 2407.13032) names this as one of three
+ * mechanisms behind a 10–30% gain over prior SOTA on WebVoyager, and its
+ * absence is visible in our own failure: the agent navigated off the camera
+ * results onto the site's advanced search and never registered that it had.
+ * Every step it received a fresh, complete page state with nothing marking it
+ * as a different page, so drift was indistinguishable from staying put.
+ *
+ * Deliberately terse — URL, title, element count. A second full snapshot per
+ * step would double the token cost to say something a diff says in a line.
+ * Returns '' when nothing moved, so a settled page adds no noise.
+ */
+export function formatPageChangeForModel(
+  before: Pick<PageState, 'url' | 'title' | 'elementCount'> | null,
+  after: Pick<PageState, 'url' | 'title' | 'elementCount'>,
+): string {
+  if (!before) return '';
+
+  const changes: string[] = [];
+  if (before.url !== after.url) {
+    changes.push(`URL changed: ${before.url} -> ${after.url}`);
+  }
+  if (before.title !== after.title) {
+    changes.push(`Title changed: "${before.title}" -> "${after.title}"`);
+  }
+  if (before.elementCount !== after.elementCount) {
+    changes.push(`Interactive elements: ${before.elementCount} -> ${after.elementCount}`);
+  }
+
+  if (changes.length === 0) {
+    /*
+     * Saying "nothing changed" is the useful half. An action that alters
+     * nothing is the signature of a click that missed, and silence reads to the
+     * model as success — which is how four identical attempts happen.
+     */
+    return '## Change\nNothing changed on the page after that action. If you expected it to, the action did not do what you intended.';
+  }
+  return ['## Change', ...changes].join('\n');
 }
