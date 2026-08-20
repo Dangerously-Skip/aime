@@ -6,6 +6,7 @@ import {
   Eye,
   GitCompare,
   Terminal as TerminalIcon,
+  Globe,
   FolderTree,
   MessageSquare,
   FileText,
@@ -86,6 +87,14 @@ export function PanelToolbar({ workspace }: PanelToolbarProps) {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "?" }));
   }
 
+  function openPreview() {
+    if (typeof window === "undefined") return;
+    const open = (window as unknown as Record<string, unknown>).__ideOpenPreview as
+      | (() => void)
+      | undefined;
+    open?.();
+  }
+
   function newTerminal() {
     if (typeof window === "undefined") return;
     const open = (window as unknown as Record<string, unknown>).__ideOpenTerminal as
@@ -133,6 +142,24 @@ export function PanelToolbar({ workspace }: PanelToolbarProps) {
             );
           })}
           <div className="-mx-1 my-1 h-px bg-border" />
+          {/*
+            Preview sits beside "New terminal" rather than in the toggle list
+            above: those four are persisted layout slots, and adding a fifth
+            rewrites `Record<PanelSlot, RegionId>` whose migration discards what
+            it does not recognise — costing every user their workspace. Same
+            reason the goal panel opens on demand instead of becoming a slot.
+          */}
+          <button
+            type="button"
+            onClick={() => {
+              openPreview();
+              setOpen(false);
+            }}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent transition-colors text-left"
+          >
+            <Globe className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={1.75} />
+            <span className="flex-1">Preview</span>
+          </button>
           <button
             type="button"
             onClick={() => {

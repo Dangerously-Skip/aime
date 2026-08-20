@@ -702,6 +702,27 @@ export function CodeSurface() {
    */
   const previewPathRef = useRef<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  /*
+   * Let the USER open the preview.
+   *
+   * `previewUrl` gates whether the panel mounts, and nothing user-initiated set
+   * it: the panel appeared only when the agent wrote an HTML file or started a
+   * dev server. Browser tools are offered to the agent only while this webview
+   * is live, so the most capable agent in the app could drive a browser and
+   * nobody could give it a page to start from — a capability wired but
+   * unreachable, which is the failure this whole line of work exists to fix.
+   *
+   * about:blank rather than a home page: the address bar is right there, and
+   * picking a destination on the user's behalf is a decision nobody asked for.
+   */
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__ideOpenPreview = () => {
+      setPreviewUrl((current) => current ?? 'about:blank');
+      setPreviewOpen(true);
+    };
+    return () => { delete (window as unknown as Record<string, unknown>).__ideOpenPreview; };
+  }, []);
   const [refreshKey, setRefreshKey] = useState(0);
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
   const githubConnected = useConnectorStore(
