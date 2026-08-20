@@ -1,11 +1,13 @@
 'use client';
 
+import { recordAndDetect, type LoopCall } from '@/lib/agent/loop-detector';
 import { useCallback, useRef } from 'react';
 import {
   BROWSER_TOOL_SCHEMAS,
   DOM_EXTRACTION_SCRIPT,
   executeToolInWebview,
   formatPageStateForModel,
+  formatPageChangeForModel,
   formatTabListForModel,
   type ConsoleLogBuffer,
   type PageState,
@@ -70,10 +72,23 @@ interface UseBrowserAgentOptions {
   getTabs?: () => TabInfo[];
   /** Switch to a different tab by its tab ID. Returns the new webview ref after load. */
   onSwitchTab?: (tabId: string) => Promise<WebviewRef | null>;
+  /** Open a URL in a NEW background tab. Returns the new tab's index. */
+  onNewTab?: (url: string) => Promise<number | null>;
+  /** Close a tab by id. */
+  onCloseTab?: (tabId: string) => Promise<boolean>;
 }
 
 export function useBrowserAgent(options: UseBrowserAgentOptions) {
   const abortRef = useRef<AbortController | null>(null);
+  /*
+   * The previous observation, so each new one can say what moved. Agent-E calls
+   * this "change observation"; without it the agent got a fresh complete page
+   * every step with nothing marking it as a DIFFERENT page, and navigating away
+   * from its own results was invisible.
+   */
+  const prevObservedRef = useRef<{ url: string; title: string; elementCount: number } | null>(null);
+  /* Per-run window for the shared loop detector (lib/agent/loop-detector). */
+  const loopWindowRef = useRef<LoopCall[]>([]);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
@@ -103,7 +118,15 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
       try {
         // 1. Observe — extract current page state
         optionsRef.current.onPhaseChange('observing');
+        // A fresh run gets a fresh window; a loop from last time is not this one's.
+        loopWindowRef.current = [];
         const pageState = await extractPageState(webview);
+        // Seed the change baseline; the first observation has nothing to differ from.
+        // Null means extraction failed — leave the baseline unset rather than
+        // inventing one, so the next diff reports honestly.
+        prevObservedRef.current = pageState
+          ? { url: pageState.url, title: pageState.title, elementCount: pageState.elementCount }
+          : null;
 
         // Build initial user message with page context
         const userContent: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
@@ -192,7 +215,31 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
             const toolBlock = block as { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
 
             let result;
-            if (toolBlock.name === 'switch_tab') {
+            /*
+             * Loop check BEFORE dispatch. Denying after the side effect would
+             * still burn the action; the point is to stop the fifth identical
+             * click, not to report it.
+             */
+            const loop = recordAndDetect(loopWindowRef.current, toolBlock.name, toolBlock.input);
+            if (loop.action === 'deny') {
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: toolBlock.id,
+                content: loop.message,
+                is_error: true,
+              });
+              optionsRef.current.onToolResult(toolBlock.id, loop.message, true);
+              continue;
+            }
+            if (loop.action === 'warn') {
+              console.warn('[browser-agent] repeated call', toolBlock.name, `x${loop.count}`);
+            }
+
+            if (toolBlock.name === 'new_tab') {
+              result = await handleNewTab(toolBlock.input, optionsRef.current);
+            } else if (toolBlock.name === 'close_tab') {
+              result = await handleCloseTab(toolBlock.input, optionsRef.current);
+            } else if (toolBlock.name === 'switch_tab') {
               // Handle switch_tab specially — manipulates tabs, not the current webview
               result = await handleSwitchTab(toolBlock.input, optionsRef.current, (newWv) => { webview = newWv; });
             } else {
@@ -223,6 +270,16 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
           // Re-observe page state after actions
           optionsRef.current.onPhaseChange('observing');
           const newPageState = await extractPageState(webview);
+          const changeSummary = newPageState
+            ? formatPageChangeForModel(prevObservedRef.current, newPageState)
+            : '';
+          if (newPageState) {
+            prevObservedRef.current = {
+              url: newPageState.url,
+              title: newPageState.title,
+              elementCount: newPageState.elementCount,
+            };
+          }
 
           // Build tool results + updated page/tab state as user message
           const userBlocks: Array<{ type: string; [key: string]: unknown }> = [
@@ -241,7 +298,10 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
           if (newPageState) {
             userBlocks.push({
               type: 'text',
-              text: `<page_state>\n${formatPageStateForModel(newPageState)}\n</page_state>`,
+              text: [
+                changeSummary,
+                `<page_state>\n${formatPageStateForModel(newPageState)}\n</page_state>`,
+              ].filter(Boolean).join('\n\n'),
             });
           }
 
@@ -402,3 +462,64 @@ async function sendTurn(
   return { assistantBlocks, stopReason };
 }
 
+/**
+ * Open a URL in a background tab.
+ *
+ * Background rather than foreground on purpose: the asking task is "open these
+ * several for me to look at", and stealing focus on each one would leave the
+ * agent observing a different page than the one it is reasoning about — the
+ * drift that caused the original failure, self-inflicted.
+ */
+async function handleNewTab(
+  input: Record<string, unknown>,
+  options: UseBrowserAgentOptions,
+): Promise<ToolResult> {
+  const url = typeof input.url === 'string' ? input.url.trim() : '';
+  if (!url) return { success: false, message: 'new_tab needs a url.' };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { success: false, message: `Not an absolute URL: "${url}". Include the scheme, e.g. https://…` };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    // A tool that will open any scheme is a tool that will open file:// on request.
+    return { success: false, message: `Refused ${parsed.protocol} — new_tab opens http and https only.` };
+  }
+
+  if (!options.onNewTab) {
+    /*
+     * Say so plainly rather than failing vaguely. The whole reason this tool
+     * exists is that an agent which cannot tell "impossible" from "not yet"
+     * loops instead of reporting.
+     */
+    return { success: false, message: 'Opening tabs is not available in this build.' };
+  }
+
+  const index = await options.onNewTab(parsed.toString());
+  if (index === null) return { success: false, message: `Could not open a tab for ${parsed.toString()}.` };
+  return {
+    success: true,
+    message: `Opened ${parsed.toString()} in background tab [${index}]. You are still on the current page; use switch_tab to go there.`,
+  };
+}
+
+async function handleCloseTab(
+  input: Record<string, unknown>,
+  options: UseBrowserAgentOptions,
+): Promise<ToolResult> {
+  const idx = input.tab_index as number;
+  const tabs = options.getTabs?.() ?? [];
+  if (typeof idx !== 'number' || idx < 0 || idx >= tabs.length) {
+    return { success: false, message: `Invalid tab index ${idx}. There are ${tabs.length} tabs (0-${tabs.length - 1}).` };
+  }
+  if (tabs.length === 1) {
+    return { success: false, message: 'Refusing to close the only tab.' };
+  }
+  if (!options.onCloseTab) return { success: false, message: 'Closing tabs is not available in this build.' };
+  const ok = await options.onCloseTab(tabs[idx].id);
+  return ok
+    ? { success: true, message: `Closed tab [${idx}] "${tabs[idx].title}".` }
+    : { success: false, message: `Could not close tab [${idx}].` };
+}
