@@ -131,6 +131,15 @@ interface UseSSEStreamReturn {
         modelOverride?: string | null
       }
       toolProfile?: string;
+      /**
+       * This client has a live webview and can execute browser tools.
+       *
+       * Client-declared because only the renderer knows: Code's preview panel
+       * can be closed, and the server builds `onBrowserToolUse` for every
+       * surface regardless. Registering tools nothing can run is DR-21's
+       * infinite loop.
+       */
+      browserToolsAvailable?: boolean;
       contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
       capability?: string
       tier?: string
@@ -235,6 +244,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           modelOverride?: string | null
         }
         toolProfile?: string;
+        browserToolsAvailable?: boolean;
         capability?: string
         tier?: string
         providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
@@ -298,6 +308,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.deckTheme ? { deckTheme: extra.deckTheme } : {}),
             ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
             ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
+            ...(extra?.browserToolsAvailable ? { browserToolsAvailable: true } : {}),
             ...(extra?.capability ? { capability: extra.capability } : {}),
             ...(extra?.tier ? { tier: extra.tier } : {}),
             ...(extra?.providerConfig ? { providerConfig: extra.providerConfig } : {}),

@@ -1206,6 +1206,13 @@ export function CodeSurface() {
       // still attributed rather than lost.
       runRecorder.begin({ trigger: "manual", model: route?.model ?? undefined });
       await sendMessage(trimmed, id, "code", route?.model ?? null, {
+        /*
+         * Only when the preview panel is actually open. The webview ref is null
+         * when it is closed, and offering `navigate` with nothing to navigate is
+         * DR-21's loop: the agent cannot discover that a step is impossible, so
+         * it repeats it until the turn dies.
+         */
+        browserToolsAvailable: !!previewWebviewRef.current,
         apiKey: anthropicApiKey || undefined,
         providerConfig: route?.providerConfig,
         cwd: folder || undefined,
