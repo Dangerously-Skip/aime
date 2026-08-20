@@ -30,6 +30,7 @@ import 'server-only';
  * that could disagree with it.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { internalAuthHeaders } from '@/lib/auth/internal-credential';
 import { AnthropicBedrockMantle } from '@anthropic-ai/bedrock-sdk';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 import type { ResolvedExecution } from './execution';
@@ -121,6 +122,13 @@ export function createTurnClient(opts: CreateTurnClientOptions): TurnTarget {
     client: new Anthropic({
       apiKey: opts.apiKey ?? '',
       ...(opts.exec.baseUrl ? { baseURL: opts.exec.baseUrl } : {}),
+      /*
+       * When the base URL is this app's own llm-proxy, the request has to carry
+       * the local API credential or `src/proxy.ts` refuses it — which is how a
+       * browser task came back empty with a 401 nobody saw. Empty for a real
+       * provider: sending our local token to Anthropic would be a leak.
+       */
+      defaultHeaders: internalAuthHeaders(opts.exec.baseUrl),
     }),
   };
 }
