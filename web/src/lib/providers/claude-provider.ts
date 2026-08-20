@@ -12,6 +12,7 @@ import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { getSurfaceConfig } from '../surfaces';
+import { internalAuthEnv } from '../auth/internal-credential';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { waitForAnswer } from '../pending-questions';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
@@ -2125,6 +2126,14 @@ export class ClaudeProvider extends BaseProvider {
       queryOptions.env = {
         ...(queryOptions.env as Record<string, string> || {}),
         ANTHROPIC_BASE_URL: baseUrl,
+        /*
+         * If that base URL is our own llm-proxy, the subprocess must present the
+         * local API credential too — we cannot add a header to a client we do
+         * not construct, so it goes in as ANTHROPIC_AUTH_TOKEN, which the SDK
+         * sends as `Authorization: Bearer`. Harmless to override: the proxy
+         * authenticates upstream with the provider key it already holds.
+         */
+        ...internalAuthEnv(baseUrl),
       };
       console.log('[Claude] Custom Anthropic-compatible base URL configured');
     }
