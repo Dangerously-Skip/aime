@@ -29,6 +29,24 @@ const overrideCss = readFileSync(
   'src/components/surfaces/code/workspace/workspace-dockview.css',
   'utf8',
 );
+/*
+ * globals.css IS PART OF THE CASCADE AND LEAVING IT OUT MADE THIS FILE LIE.
+ *
+ * The harness used to declare a handful of tokens inline and load only
+ * dockview's stylesheet and ours. That was fine until `--panel-surface` moved
+ * into globals.css (DR-20 D-4). After that, `var(--panel-surface)` resolved to
+ * nothing here, `.groupview`'s background became `rgba(0, 0, 0, 0)`, and the
+ * "panels are darker than the chrome" test PASSED — because transparent has a
+ * luminance of 0, and 0 is less than anything.
+ *
+ * So the test was green precisely when the panels were invisible. Sampled from
+ * a screenshot of that state, every pixel of the Code surface was #262624: the
+ * app background, showing through panels that were not painting at all.
+ *
+ * Loading the real stylesheet is the fix; the explicit transparency assertion
+ * below is the belt.
+ */
+const globalsCss = readFileSync('src/app/globals.css', 'utf8');
 
 /** dockview's own abyss palette — the colours that must NOT survive. */
 const ABYSS = ['#10192c', '#000c18', '#1c1c2a', '#2b2b4a'];
@@ -42,6 +60,7 @@ const TOKENS = {
 };
 
 const harness = `<!doctype html><html class="dark"><head>
+<style>${globalsCss}</style>
 <style>:root{
   --background:${TOKENS.background};--card:${TOKENS.card};--muted:#332E2B;
   --border:${TOKENS.border};--primary:${TOKENS.primary};
@@ -175,5 +194,22 @@ test.describe('Code surface dockview theme', () => {
         .trim(),
     );
     expect(spacing).toBe('0px');
+  });
+
+  test('the panel is PAINTED — not transparent', async ({ page }) => {
+    /*
+     * The assertion the luminance check could not make. A transparent panel is
+     * "darker than the chrome" by every numeric test and completely invisible
+     * on screen, which is exactly the state that shipped and had to be caught
+     * from a screenshot instead.
+     */
+    await page.setContent(harness);
+    const bg = await page.evaluate(
+      () => getComputedStyle(document.getElementById('group')!).backgroundColor,
+    );
+    expect(bg, 'the panel has no background — --panel-surface is not resolving').not.toBe(
+      'rgba(0, 0, 0, 0)',
+    );
+    expect(bg).not.toBe('transparent');
   });
 });
