@@ -169,21 +169,27 @@ export function GoalPanel({
   return (
     <div className="flex flex-col gap-4 p-4 text-sm">
       <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          {/*
-            The same header shape as Task Metrics and the Context/Artifacts
-            cards in this rail: full-width, chevron on the right. A card that
-            collapses differently from its neighbours reads as a different kind
-            of thing.
-          */}
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            className="flex flex-1 items-center gap-2 text-left"
-          >
-            <h3 className="flex-1 font-medium">Goal</h3>
-          </button>
+        {/*
+          The WHOLE header toggles, chevron included.
+
+          The comment that used to sit here claimed this matched the
+          Context/Artifacts cards. It did not: the button wrapped only the
+          <h3>, and the badge and chevron were siblings outside it. So the arrow
+          was decorative — clicking the one control that looks like the collapse
+          control did nothing, and only the word "Goal" worked.
+
+          A disclosure arrow is where everybody clicks, so the hit area has to
+          include it. `SidebarCard` gets this right, which is why the claim read
+          as true to anyone checking it against the neighbour rather than
+          against this markup.
+        */}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex w-full items-center gap-2 text-left"
+        >
+          <h3 className="flex-1 font-medium">Goal</h3>
           {status.running ? (
             <Badge variant="secondary" className="text-[10px]">running</Badge>
           ) : (
@@ -192,7 +198,7 @@ export function GoalPanel({
           <ChevronDown
             className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? '' : '-rotate-90'}`}
           />
-        </div>
+        </button>
         <p className="text-xs text-muted-foreground">{goal.objective}</p>
       </div>
 
