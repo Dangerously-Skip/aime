@@ -6,9 +6,11 @@ import { withCorrelation, type CorrelationContext } from "../lib/logger";
  * AsyncLocalStorage scope. Any `getLogger()` calls inside the handler (or
  * anything it awaits) will inherit the correlation/request IDs.
  *
- * This pattern is used here instead of a top-level `src/middleware.ts` because
- * Next.js middleware runs in the Edge runtime by default and does not
- * propagate Node's AsyncLocalStorage into the Node.js API route runtime.
+ * This is a per-route wrapper rather than the top-level hook (`src/proxy.ts`,
+ * which authenticates the API) because that hook runs in the Edge runtime and
+ * does not propagate Node's AsyncLocalStorage into the Node.js route runtime.
+ * The two coexist deliberately: the proxy decides whether a request is allowed
+ * at all, this decides what its logs are tagged with.
  *
  * Usage in a route file:
  *

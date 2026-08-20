@@ -49,6 +49,26 @@ const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB — rotate when exceeded
 // renderer never sees the key. Falls back to a 0600 plaintext file only when no
 // OS keyring is available (headless Linux) — logged so it's not silent.
 let cachedCredentialKeyHex = null;
+
+/**
+ * The local API's launch token.
+ *
+ * Minted here, per launch, and never written to disk. It reaches the Next server
+ * as AIME_API_TOKEN and the renderer as a one-time `?t=` on the initial load,
+ * which the middleware exchanges for an HttpOnly SameSite=Strict cookie and then
+ * strips from the URL.
+ *
+ * `process.env.AIME_API_TOKEN` wins when already set, because in development
+ * `dev-with-port.js` starts the Next server and therefore mints it first — both
+ * halves have to agree on the same value or the window can never authenticate.
+ *
+ * Loopback binding was never sufficient on its own: any page in any browser on
+ * this machine can fetch `http://localhost:<port>/api/...`. See
+ * `src/lib/auth/local-token.ts`.
+ */
+const API_TOKEN =
+  process.env.AIME_API_TOKEN || require("crypto").randomBytes(32).toString("hex");
+process.env.AIME_API_TOKEN = API_TOKEN;
 function getCredentialKeyHex() {
   if (cachedCredentialKeyHex) return cachedCredentialKeyHex;
   try {
@@ -410,7 +430,9 @@ function createWindow(port) {
     },
   });
 
-  mainWindow.loadURL(`http://localhost:${port}`);
+  // `?t=` is exchanged by the middleware for an HttpOnly cookie and then
+  // redirected away, so the token does not linger in window.location.
+  mainWindow.loadURL(`http://localhost:${port}/?t=${API_TOKEN}`);
 
   // External http(s) links (target=_blank, window.open, shell.openExternal) open
   // in the user's default browser rather than a detached Electron BrowserWindow.
@@ -911,6 +933,7 @@ app.whenReady().then(async () => {
         ...(analyticsConf.region || process.env.ANALYTICS_AWS_REGION
           ? { ANALYTICS_AWS_REGION: analyticsConf.region || process.env.ANALYTICS_AWS_REGION }
           : {}),
+        AIME_API_TOKEN: API_TOKEN,
         AIME_RESOURCES_PATH: process.resourcesPath,
         AIME_USER_DATA_DIR: app.getPath('userData'),
         ...(getCredentialKeyHex() ? { AIME_CRED_KEY: getCredentialKeyHex() } : {}),

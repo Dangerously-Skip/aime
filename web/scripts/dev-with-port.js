@@ -144,9 +144,18 @@ function mintCredentialKey(webDir) {
     console.warn('[dev-with-port] Could not mint the credential master key — saving API keys will fail');
   }
 
+  // The local API's launch token. Minted here rather than in main-web.js
+  // because in dev THIS process starts the Next server, and both halves must
+  // agree on one value or the Electron window can never authenticate. Exported
+  // into our own env so the electron child inherits the same token.
+  const apiToken =
+    process.env.AIME_API_TOKEN || require('crypto').randomBytes(32).toString('hex');
+  process.env.AIME_API_TOKEN = apiToken;
+
   const env = {
     ...process.env,
     PORT: String(port),
+    AIME_API_TOKEN: apiToken,
     ...(credKey ? { AIME_CRED_KEY: credKey } : {}),
   };
   const nextBin = path.join(webDir, 'node_modules', 'next', 'dist', 'bin', 'next');

@@ -178,8 +178,18 @@ describe('status reads from disk, not just memory', () => {
         return runner(i);
       },
     });
-    // Let the first session begin.
-    await new Promise((r) => setTimeout(r, 20));
+    /*
+     * Poll for the first session rather than sleeping a fixed 20ms and hoping.
+     * The sleep was a fast-laptop assumption: it failed once in a full-suite run
+     * on a loaded machine and passed alone every time, which is the signature of
+     * a timing assumption rather than a bug. Same class as the 30s testTimeout
+     * in vitest.config.ts, and the fix is the same shape — wait for the
+     * condition, not for the clock.
+     */
+    const deadline = Date.now() + 5_000;
+    while (started === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
     const s = await runStatus('c1', dir);
     expect(s.running).toBe(true);
     expect(started).toBe(1);
