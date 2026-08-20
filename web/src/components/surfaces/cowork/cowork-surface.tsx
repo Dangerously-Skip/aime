@@ -71,6 +71,7 @@ import {
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
 import { GoalPanel } from "@/components/harness/goal-panel";
 import { RailSlot } from "@/lib/panels/rail-slot";
+import { railPanels } from "@/lib/panels/registry";
 import {
   GoalModeToggle, GoalModeBar, goalSettingsFrom,
   DEFAULT_BUDGET_USD, DEFAULT_SESSION_CAP,
@@ -427,6 +428,69 @@ function TaskMetricsCard({ metrics }: {
   );
 }
 
+/**
+ * The rail's tab strip.
+ *
+ * WHY TABS WITH COUNTS RATHER THAN PLAIN TABS. Cowork's rail is a monitoring
+ * surface — the point is watching context files get read and artifacts get
+ * written while the agent works. Plain tabs would give each panel its full
+ * height and take that away, which trades one complaint for a worse one. The
+ * count rides on the label, so accumulation stays visible while you read
+ * something else.
+ *
+ * Membership and order come from the registry (DR-20). A panel with nothing in
+ * it yet gets no tab — except the three that are always meaningful, which keep
+ * theirs so the strip does not reshuffle under the pointer as a run proceeds.
+ */
+const ALWAYS_TABBED = new Set(['goal-status', 'context', 'artifacts']);
+
+function RailTabs({
+  active,
+  onSelect,
+  counts,
+}: {
+  active: string;
+  onSelect: (id: string) => void;
+  counts: Record<string, number>;
+}) {
+  const tabs = railPanels('cowork').filter(
+    (p) => ALWAYS_TABBED.has(p.id) || (counts[p.id] ?? 0) > 0,
+  );
+  if (tabs.length < 2) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1 px-3 pb-2">
+      {tabs.map((p) => {
+        const n = counts[p.id] ?? 0;
+        const isActive = p.id === active;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => onSelect(p.id)}
+            aria-pressed={isActive}
+            className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors ${
+              isActive
+                ? "bg-background font-semibold text-foreground"
+                : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+            }`}
+          >
+            {p.title}
+            {/*
+              The count is the whole reason these are tabs rather than a
+              switcher: it is what keeps accumulation visible while you are
+              reading something else. Shown whenever there is something to
+              count — the first version of this line had a nested ternary that
+              suppressed it on exactly the panels people watch.
+            */}
+            {n > 0 ? <span className="text-[10px] text-muted-foreground">{n}</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function SidebarPanel({
   contextFiles,
   artifactFiles,
@@ -482,6 +546,13 @@ function SidebarPanel({
     ttftMs?: number;
   };
 }) {
+  /*
+    Which rail panel is showing. The rail used to stack all seven, so three open
+    cards squashed each other and the tall one — the goal dashboard — pushed the
+    rest off-screen.
+  */
+  const [activeTab, setActiveTab] = useState('goal-status');
+
   return (
     <div className={`flex flex-col h-full overflow-hidden shrink-0 transition-all duration-200 ${open ? "w-[300px]" : "w-10"}`}>
       {/* Toggle button */}
@@ -497,6 +568,19 @@ function SidebarPanel({
       </div>
 
       {open && (
+        <>
+        <RailTabs
+          active={activeTab}
+          onSelect={setActiveTab}
+          counts={{
+            context: contextFiles.length,
+            artifacts: artifactFiles.length,
+            canvases: canvasArtifacts.length,
+            'search-results': searchGroups?.length ?? 0,
+            'task-metrics': taskMetrics ? 1 : 0,
+            preview: previewUrl && onPreviewClick ? 1 : 0,
+          }}
+        />
         <ScrollArea className="flex-1 min-h-0 px-3 pb-3">
           <div className="space-y-3">
             {/* Working folder */}
@@ -526,7 +610,7 @@ function SidebarPanel({
               Context and Artifacts rather than in the conversation. It renders
               nothing when there is no goal.
             */}
-            <RailSlot surface="cowork" id="goal-status">
+            <RailSlot active={activeTab} surface="cowork" id="goal-status">
               <GoalRunStatus
                 chatId={chatId}
                 folder={folder}
@@ -536,7 +620,7 @@ function SidebarPanel({
               />
             </RailSlot>
 
-            <RailSlot surface="cowork" id="context">
+            <RailSlot active={activeTab} surface="cowork" id="context">
               <SidebarCard
                 label="Context"
                 icon={FileText}
@@ -547,13 +631,13 @@ function SidebarPanel({
               />
             </RailSlot>
 
-            <RailSlot surface="cowork" id="search-results">
+            <RailSlot active={activeTab} surface="cowork" id="search-results">
               {searchGroups && searchGroups.length > 0 && (
                 <SearchResultsCard groups={searchGroups} onClear={onClearSearch || (() => {})} />
               )}
             </RailSlot>
 
-            <RailSlot surface="cowork" id="artifacts">
+            <RailSlot active={activeTab} surface="cowork" id="artifacts">
               <SidebarCard
                 label="Artifacts"
                 icon={FilePen}
@@ -564,7 +648,7 @@ function SidebarPanel({
               />
             </RailSlot>
 
-            <RailSlot surface="cowork" id="canvases">
+            <RailSlot active={activeTab} surface="cowork" id="canvases">
   {canvasArtifacts.length > 0 && (
                 <div className="rounded-xl border border-border/50 bg-card/50 overflow-hidden">
                   <div className="flex items-center gap-2 px-4 py-3">
@@ -600,12 +684,12 @@ function SidebarPanel({
             </RailSlot>
 
             {/* Task Metrics panel */}
-            <RailSlot surface="cowork" id="task-metrics">
+            <RailSlot active={activeTab} surface="cowork" id="task-metrics">
               {taskMetrics && <TaskMetricsCard metrics={taskMetrics} />}
             </RailSlot>
 
             {/* Dev server preview chip */}
-            <RailSlot surface="cowork" id="preview">
+            <RailSlot active={activeTab} surface="cowork" id="preview">
   {previewUrl && onPreviewClick && (
                 <div className="rounded-xl border border-primary/30 bg-primary/5">
                   <button
@@ -624,6 +708,7 @@ function SidebarPanel({
             </RailSlot>
           </div>
         </ScrollArea>
+        </>
       )}
     </div>
   );

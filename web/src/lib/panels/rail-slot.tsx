@@ -31,12 +31,22 @@ import { isPanelAllowed, type SurfaceId } from './registry';
 export function RailSlot({
   surface,
   id,
+  active,
   children,
 }: {
   surface: SurfaceId;
   id: string;
+  /**
+   * The rail's selected tab. Omit for a rail that stacks everything.
+   *
+   * Passing it here rather than moving the cards into a data structure is the
+   * same trade as above: the JSX stays put and one prop decides whether it
+   * renders. The alternative was a rewrite that produced seven type errors.
+   */
+  active?: string;
   children: ReactNode;
 }) {
   if (!isPanelAllowed(id, surface)) return null;
+  if (active !== undefined && active !== id) return null;
   return <>{children}</>;
 }

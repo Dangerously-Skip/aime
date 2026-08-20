@@ -68,3 +68,49 @@ describe('RailSlot consults the registry', () => {
     expect(code.container.textContent).toBe('');
   });
 });
+
+describe('RailSlot honours the selected tab', () => {
+  /*
+   * The rail stacked all seven cards, so three open ones squashed each other
+   * and the goal dashboard pushed the rest off-screen. One tab shows at a time
+   * now, and this is the prop that decides.
+   */
+  it('renders the selected panel', () => {
+    const { container } = render(
+      <RailSlot surface="cowork" id="context" active="context">
+        <p>ctx</p>
+      </RailSlot>,
+    );
+    expect(container.textContent).toBe('ctx');
+  });
+
+  it('renders nothing for a panel that is not selected', () => {
+    const { container } = render(
+      <RailSlot surface="cowork" id="context" active="artifacts">
+        <p>ctx</p>
+      </RailSlot>,
+    );
+    expect(container.textContent).toBe('');
+  });
+
+  it('omitting `active` stacks everything, so a rail without tabs still works', () => {
+    // The prop is optional on purpose: a surface that has not adopted tabs
+    // should not silently render an empty rail.
+    const { container } = render(
+      <RailSlot surface="cowork" id="context">
+        <p>ctx</p>
+      </RailSlot>,
+    );
+    expect(container.textContent).toBe('ctx');
+  });
+
+  it('the registry still wins over the selected tab', () => {
+    // Selecting a panel this surface may not host must not smuggle it in.
+    const { container } = render(
+      <RailSlot surface="cowork" id="terminal" active="terminal">
+        <p>nope</p>
+      </RailSlot>,
+    );
+    expect(container.textContent).toBe('');
+  });
+});
