@@ -104,7 +104,7 @@ function OrdersSidebar({
 
   if (collapsed) {
     return (
-      <div className="w-10 border-r border-border flex flex-col items-center pt-2">
+      <div className="w-12 p-2 flex flex-col items-center">
         <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Expand sidebar">
           <PanelLeft className="h-4 w-4" />
         </Button>
@@ -161,8 +161,9 @@ function OrdersSidebar({
   };
 
   return (
-    <div className="w-[220px] border-r border-border flex flex-col shrink-0">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+    <div className="w-[220px] p-2 flex flex-col shrink-0">
+      <div className="surface-well flex flex-1 min-h-0 flex-col">
+      <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Standing Orders</span>
         <div className="flex items-center gap-0.5">
           <Button
@@ -204,7 +205,7 @@ function OrdersSidebar({
           )}
 
           {/* Templates */}
-          <div className="border-t border-border mt-2 pt-2">
+          <div className="mt-4 pt-1">
             <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-3 mb-1">Quick Start</div>
             {STANDING_ORDER_TEMPLATES.slice(0, 4).map((tpl) => (
               <button
@@ -222,6 +223,7 @@ function OrdersSidebar({
           </div>
         </div>
       </ScrollArea>
+      </div>
     </div>
   );
 }

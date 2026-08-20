@@ -948,7 +948,7 @@ export function ChatSurface() {
 
             {/* Artifacts sidebar — collapsible. When collapsed, a 40px-wide
                 strip with just an expand button so canvases stay findable. */}
-            <div className={`shrink-0 border-l border-border bg-card/50 flex flex-col transition-all duration-200 ${artifactsSidebarOpen ? 'w-64' : 'w-10'}`}>
+            <div className={`shrink-0 p-2 flex flex-col transition-all duration-200 ${artifactsSidebarOpen ? 'w-64' : 'w-12'}`}>
               {!artifactsSidebarOpen ? (
                 <button
                   type="button"
@@ -959,7 +959,14 @@ export function ChatSurface() {
                   <PanelRight className="h-4 w-4" />
                 </button>
               ) : (
-                <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/50">
+                /*
+                  ONE card, header and list together — the shape Cowork's
+                  Artifacts card already has. These were two sibling
+                  conditionals, so making the RAIL the well produced a slab with
+                  a header floating in it rather than a card sitting in a rail.
+                */
+                <div className="surface-well flex flex-1 min-h-0 flex-col">
+                <div className="flex items-center gap-2 px-3 py-2.5">
                   <FilePen className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-xs font-medium text-muted-foreground">Artifacts</span>
                   <span className="text-[10px] text-muted-foreground/60 ml-auto">{artifactFiles.length + canvasArtifacts.length}</span>
@@ -972,8 +979,6 @@ export function ChatSurface() {
                     <PanelRightClose className="h-3.5 w-3.5" />
                   </button>
                 </div>
-              )}
-              {artifactsSidebarOpen && (
               <div className="flex-1 overflow-auto p-1.5 space-y-0.5">
                 {canvasArtifacts.length === 0 && artifactFiles.length === 0 && (
                   <div className="text-[11px] text-muted-foreground px-2.5 py-3 text-center leading-relaxed">
@@ -1006,6 +1011,7 @@ export function ChatSurface() {
                   );
                 })}
               </div>
+                </div>
               )}
             </div>
 
