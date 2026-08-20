@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { PANELS, panelsForSurface, isPanelAllowed, type SurfaceId } from './registry';
+import { PANELS, panelsForSurface, isPanelAllowed, panelTitle, type SurfaceId } from './registry';
 
 /*
  * The registry is a claim. This checks it against the source.
@@ -128,5 +128,42 @@ describe('the goal panel stays out of PanelSlot', () => {
     const slots = /export type PanelSlot =([^;]+);/.exec(src('lib/code-workspace/types.ts'))?.[1];
     expect(slots, 'PanelSlot type not found — did it move?').toBeTruthy();
     expect(slots).not.toContain('goal');
+  });
+});
+
+describe('the registry OWNS panel titles', () => {
+  /*
+   * Every addPanel call used to carry its own literal — "Files" twice,
+   * "Editor" three times, "Terminal" twice. Renaming a panel meant finding all
+   * of them, and a miss produces two tabs for one concept with no error
+   * anywhere. Titles now come from the registry; this stops the literals
+   * returning one call site at a time.
+   */
+  const STATIC_TITLES = ['Chat', 'Editor', 'Files', 'Terminal'];
+
+  it.each(STATIC_TITLES)('"%s" is not hardcoded at an addPanel site', (title) => {
+    expect(
+      SURFACE_SOURCE.code,
+      `title: "${title}" is a literal — use panelTitle() so the registry stays the single name`,
+    ).not.toContain(`title: "${title}"`);
+  });
+
+  it('the layout actually calls panelTitle', () => {
+    // Absence of literals could also mean the titles vanished entirely.
+    expect(SURFACE_SOURCE.code).toContain('panelTitle(');
+  });
+
+  it('panelTitle returns the registry title, and degrades rather than throws', () => {
+    expect(panelTitle('tree')).toBe('Files');
+    expect(panelTitle('viewer')).toBe('Editor');
+    // A wrong-looking tab beats a dead Code surface.
+    expect(panelTitle('does-not-exist')).toBe('does-not-exist');
+  });
+
+  it('dynamic titles are left alone', () => {
+    // file/diff panels are titled from the filename and a terminal from its
+    // index; those are not registry concerns and must not be flattened.
+    expect(SURFACE_SOURCE.code).toMatch(/title: filePath/);
+    expect(SURFACE_SOURCE.code).toMatch(/title: `Terminal \$\{/);
   });
 });

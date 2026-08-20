@@ -28,6 +28,7 @@ import { XtermErrorBoundary } from "./xterm-error-boundary";
 import dynamic from "next/dynamic";
 import "dockview/dist/styles/dockview.css";
 import "./workspace-dockview.css";
+import { panelTitle } from "@/lib/panels/registry";
 
 const TerminalPanel = dynamic(
   () => import("./terminal").then((m) => m.TerminalPanel),
@@ -333,20 +334,20 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
           id: "chat",
           component: "chat",
           tabComponent: "chat-tab",
-          title: "Chat",
+          title: panelTitle("chat"),
           params: paramsObj,
         });
         event.api.addPanel({
           id: "viewer",
           component: "viewer",
-          title: "Editor",
+          title: panelTitle("viewer"),
           params: paramsObj,
           position: { referencePanel: chatPanel.id, direction: "right" },
         });
         event.api.addPanel({
           id: "tree",
           component: "tree",
-          title: "Files",
+          title: panelTitle("tree"),
           params: paramsObj,
           position: { referencePanel: "viewer", direction: "left" },
         });
@@ -561,7 +562,7 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
       api.addPanel({
         id: "terminal",
         component: "terminal",
-        title: "Terminal",
+        title: panelTitle("terminal"),
         params: ctx as unknown as Record<string, unknown>,
         position: ref ? { referencePanel: ref, direction: "below" } : undefined,
       });
@@ -582,7 +583,7 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
       api.addPanel({
         id: "viewer",
         component: "viewer",
-        title: "Editor",
+        title: panelTitle("viewer"),
         params: ctx as unknown as Record<string, unknown>,
         position: ref ? { referencePanel: ref, direction: "right" } : undefined,
       });
@@ -603,7 +604,7 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
       api.addPanel({
         id: "tree",
         component: "tree",
-        title: "Files",
+        title: panelTitle("tree"),
         params: ctx as unknown as Record<string, unknown>,
         position: ref ? { referencePanel: ref, direction: "right" } : undefined,
       });
@@ -625,7 +626,7 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
         id: "chat",
         component: "chat",
         tabComponent: "chat-tab",
-        title: "Chat",
+        title: panelTitle("chat"),
         params: ctx as unknown as Record<string, unknown>,
         position: ref ? { referencePanel: ref, direction: "left" } : undefined,
       });

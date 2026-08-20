@@ -185,3 +185,16 @@ export function isPanelAllowed(id: string, surface: SurfaceId): boolean {
 export function getPanel(id: string): PanelDef | undefined {
   return PANELS.find((p) => p.id === id);
 }
+
+/**
+ * The title dockview shows on a panel's tab.
+ *
+ * Every `addPanel` call used to carry its own string literal — "Files" in two
+ * places, "Editor" in three — so renaming a panel meant finding all of them and
+ * a miss produced two tabs for one concept. Falls back to the id rather than
+ * throwing: a wrong-looking tab is a better failure than a dead Code surface,
+ * which is the trade `addPanel` throwing `invalid location` already taught us.
+ */
+export function panelTitle(id: string): string {
+  return getPanel(id)?.title ?? id;
+}
