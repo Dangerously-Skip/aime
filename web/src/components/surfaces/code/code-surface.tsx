@@ -1434,17 +1434,27 @@ export function CodeSurface() {
            * surface, which owns the webview's lifecycle and hands its ref to
            * the agent; only the framing moved.
            */
+          /*
+             UNCONDITIONAL. It used to be `previewUrl ? <PreviewPanel/> : null`,
+             which is the same defect as the last two rounds, one layer up: the
+             panel's address bar is the only way for a user to SET a url, and it
+             lived inside a component that only mounted once a url was already
+             set. You needed a URL to reach the box that lets you type a URL, so
+             the panel opened as an empty dark rectangle and stayed that way.
+             
+             The panel existing IS the user asking for it. What goes in it is
+             `about:blank` until somebody — the agent or the user — says
+             otherwise.
+          */
           previewSlot={
-            previewUrl ? (
-              <PreviewPanel
-                url={previewUrl}
-                open
-                onClose={() => setPreviewOpen(false)}
-                refreshKey={refreshKey}
-                onWebviewReady={(ref) => { previewWebviewRef.current = ref as WebviewRef | null; }}
-                onConsoleMessage={(level, message) => { consoleBufferRef.current.push(level, message); }}
-              />
-            ) : null
+            <PreviewPanel
+              url={previewUrl ?? ''}
+              open
+              onClose={() => setPreviewOpen(false)}
+              refreshKey={refreshKey}
+              onWebviewReady={(ref) => { previewWebviewRef.current = ref as WebviewRef | null; }}
+              onConsoleMessage={(level, message) => { consoleBufferRef.current.push(level, message); }}
+            />
           }
           slots={{
             chat: (

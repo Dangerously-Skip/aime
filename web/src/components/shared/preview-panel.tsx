@@ -308,7 +308,13 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
         <div className={devToolsOpen ? "flex-1 min-h-0" : "flex-1 min-h-0"}>
           <webview
             ref={callbackRef as unknown as React.RefObject<never>}
-            src={url}
+            /*
+               `about:blank` rather than `''`. An Electron <webview> with an empty
+               src renders nothing at all, which is indistinguishable from the
+               panel being broken — and this panel now mounts BEFORE anything has
+               given it a url, so the empty case is the first thing a user sees.
+            */
+            src={url || 'about:blank'}
             style={{ width: "100%", height: "100%", border: "none" }}
           />
         </div>

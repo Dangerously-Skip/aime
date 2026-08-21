@@ -86,9 +86,26 @@ describe('a user can open the preview', () => {
     expect(layout).toContain('preview: PreviewRegion');
     expect(layout).toMatch(/component: "preview"/);
     expect(layout).toContain('__ideOpenPreviewPanel');
-    // and the surface no longer renders it as a sibling of the dock
-    expect(code).not.toMatch(/\{previewUrl && \(\s*<PreviewPanel/);
-    expect(code).toContain('previewSlot=');
+    /*
+       And the surface renders it UNCONDITIONALLY into that slot.
+
+       The two assertions this replaces were `not.toMatch(/\{previewUrl && \(/)`
+       and `toContain('previewSlot=')`. The code said `previewUrl ? (`, so the
+       negative check missed by one character of syntax, and the positive one was
+       satisfied by the very line carrying the bug — the panel was gated on a url
+       that only its own address bar could set, so it opened blank and stayed
+       blank. Behaviour lives in `preview-panel.empty.test.tsx`; what is checked
+       here is the one thing that file cannot see, namely that the surface does
+       not re-introduce a gate.
+    */
+    const slotAt = code.indexOf('previewSlot=');
+    expect(slotAt, 'the surface no longer fills the preview slot').toBeGreaterThan(-1);
+    const slot = code.slice(slotAt, slotAt + 200);
+    expect(slot, 'previewSlot is gated again — a blank panel is the result')
+      // `\?(?!\?)` — a ternary, not the `previewUrl ?? ''` default, which is the
+      // correct way to pass an absent url through to the panel.
+      .not.toMatch(/previewUrl\s*(\?(?!\?)|&&)/);
+    expect(slot).toContain('<PreviewPanel');
   });
 
   it('opening twice focuses rather than duplicating', () => {

@@ -115,14 +115,34 @@ export function buildBrowserMcpTools(deps: BrowserBridgeDeps): unknown[] {
       jsonSchemaToZod(schema.input_schema),
       async (args) => {
         const id = deps.newId();
-        await deps.emit(id, schema.name, args);
+        /*
+         * Logged at every stage, because this path crosses a process boundary
+         * and a request boundary, and when it fails it fails SILENTLY — the
+         * model just gets an error and reports "a configuration issue", which
+         * names nothing. Three lines here turn that into a diagnosis.
+         */
+        console.log('[browser-bridge] call', schema.name, id);
+        try {
+          await deps.emit(id, schema.name, args);
+        } catch (err) {
+          // `emit` writes the SSE event. If THAT throws, the client is never
+          // asked, so waiting on the rendezvous would burn the full timeout for
+          // a result that can never arrive.
+          console.error('[browser-bridge] emit FAILED for', schema.name, err);
+          return {
+            content: [{ type: 'text' as const, text: `Could not reach the browser: ${err instanceof Error ? err.message : String(err)}` }],
+            isError: true,
+          };
+        }
         try {
           const result = await waitForBrowserToolResult(id);
+          console.log('[browser-bridge] result', schema.name, id, 'isError:', result.isError, 'len:', result.output.length);
           return {
             content: [{ type: 'text' as const, text: result.output }],
             isError: result.isError,
           };
-        } catch {
+        } catch (err) {
+          console.error('[browser-bridge] no result for', schema.name, id, err instanceof Error ? err.message : err);
           /*
            * The rendezvous timed out: the renderer went away, the tab closed, or
            * the page hung. Reported as a tool error rather than thrown, so the
