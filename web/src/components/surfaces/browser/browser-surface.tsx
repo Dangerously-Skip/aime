@@ -1046,17 +1046,38 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
       <div className="flex flex-1 min-h-0">
         {/* Browser webview */}
         <div className={`flex-1 bg-white relative ${inspectorMode ? "ring-2 ring-blue-500 ring-inset" : ""}`}>
-          {webviewSrc ? (
-            <webview
-              ref={webviewCallbackRef as unknown as React.RefObject<never>}
-              src={webviewSrc}
-              partition="persist:browser"
-              useragent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-              allowpopups={"true" as unknown as boolean}
-              style={{ width: "100%", height: "100%", border: "none" }}
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center bg-muted">
+          {/*
+              ALWAYS MOUNTED, at about:blank until someone navigates.
+
+              This used to render only once `webviewSrc` was set, i.e. only after
+              a user had navigated. Which meant: no webview, so no browser tools,
+              so AUTOMATION COULD NOT BROWSE AT ALL — a cron job or standing
+              order firing against this surface found nothing to drive.
+
+              That looked like it needed a headless browser host (DR-23). It does
+              not. Every surface is mounted the whole time the app is running —
+              `surface-router` hides inactive ones with CSS, and "a hidden
+              surface still runs its effects" — and cron fires on the minute tick
+              in this same renderer. So there is always a renderer with this
+              surface in it; the only thing missing was the browser inside it.
+
+              Same defect as the preview panel: a component that exists only once
+              someone has already used it. The empty state is drawn OVER the
+              webview rather than instead of it, so the mascot still greets a new
+              user while the agent has something to hold.
+          */}
+          <webview
+            ref={webviewCallbackRef as unknown as React.RefObject<never>}
+            src={webviewSrc || 'about:blank'}
+            partition="persist:browser"
+            useragent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            allowpopups={"true" as unknown as boolean}
+            style={{ width: "100%", height: "100%", border: "none" }}
+          />
+          {!webviewSrc && (
+            // `absolute inset-0` — drawn OVER the webview, which is now always
+            // mounted underneath. Opaque, so about:blank never shows through.
+            <div className="absolute inset-0 flex h-full items-center justify-center bg-muted">
               <div className="text-center space-y-5">
                 <img
                   src="/mascot.svg"

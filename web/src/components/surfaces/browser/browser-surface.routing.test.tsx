@@ -141,15 +141,36 @@ describe('a goal reaches the full agent', () => {
     expect(body.browserToolsAvailable).toBe(true);
   });
 
-  it('does NOT offer them when there is no page open', async () => {
+  it('mounts a webview with a REAL src before any navigation', () => {
     /*
-     * The complement, and the one that matters more. Offering a tool nothing can
-     * execute is DR-21's loop one layer down: the agent cannot discover that the
-     * step is impossible, so it restates the same intent until the turn dies.
+     * The assertion the rest of this misses. Removing `|| 'about:blank'` leaves
+     * the element mounted with `src=""` — the ref still populates, so every
+     * other test here still passes while the browser loads nothing and every
+     * tool fails against it. An Electron <webview> with an empty src renders
+     * nothing at all; that is the same trap as the preview panel's blank box.
+     */
+    const { container } = render(<BrowserSurface />);
+    const wv = container.querySelector('webview');
+    expect(wv, 'no webview is mounted at all').toBeTruthy();
+    expect(wv!.getAttribute('src')).toBe('about:blank');
+  });
+
+  it('offers them even before the user has navigated', async () => {
+    /*
+     * THIS ASSERTION USED TO BE ITS OWN OPPOSITE, and the change is deliberate.
      *
-     * Sent as absent rather than `false` — `use-sse-stream` spreads the key only
-     * when true and the route defaults it to false. Asserted as "not true" so
-     * this test tracks the guarantee rather than that encoding.
+     * The webview used to render only after a navigation, so a fresh surface had
+     * none and the tools were correctly withheld — offering a tool nothing can
+     * execute is DR-21's loop one layer down.
+     *
+     * But that also meant AUTOMATION COULD NOT BROWSE: cron fires on the minute
+     * tick in this renderer, every surface is mounted the whole time, and the
+     * only thing missing was the browser inside this one. It is now mounted at
+     * about:blank from the start, so something can always execute a tool.
+     *
+     * The DR-21 guarantee is not weakened, it moved: a click on a blank page
+     * fails with "no snapshot has been taken", which is a fact the agent can act
+     * on, rather than a tool that does not exist.
      */
     render(<BrowserSurface />);
     await submit('find me the cheapest flight to sydney');
@@ -157,7 +178,7 @@ describe('a goal reaches the full agent', () => {
     await waitFor(() => expect(chatCalls().length).toBeGreaterThan(0));
     const call = fetchMock.mock.calls.find(([u]) => String(u).includes('/api/chat/browser'))!;
     const body = JSON.parse((call[1] as RequestInit).body as string);
-    expect(body.browserToolsAvailable ?? false).toBe(false);
+    expect(body.browserToolsAvailable).toBe(true);
   });
 
   it('carries the user text through to the request', async () => {
@@ -195,18 +216,19 @@ describe('a page question stays on the local loop', () => {
     expect(chatCalls()[0]).toContain('/api/chat/browser-turn');
   });
 
-  it('still refuses a page question with no page open', async () => {
-    // Only the quick-ask branch has this guard, so the message also identifies
-    // which branch ran.
+  it('answers a page question against the blank page rather than refusing', async () => {
+    /*
+     * Also inverted, for the same reason. There is always a webview now, so the
+     * quick-ask loop always has something to ask about — it reaches its own
+     * endpoint instead of bailing with "No webview available".
+     *
+     * What the user sees on a blank page is an honest "this page is empty",
+     * which beats a refusal that reads like a broken feature.
+     */
     render(<BrowserSurface />);
     await submit('what is on this page?');
 
-    await act(async () => { await Promise.resolve(); });
-    expect(chatCalls()).toEqual([]);
-    await waitFor(() =>
-      expect(useBrowserStore.getState().messages[CHAT]?.some((m) =>
-        m.content.includes('No webview available'),
-      )).toBe(true),
-    );
+    await waitFor(() => expect(chatCalls().length).toBeGreaterThan(0));
+    expect(chatCalls()[0]).toContain('/api/chat/browser-turn');
   });
 });
