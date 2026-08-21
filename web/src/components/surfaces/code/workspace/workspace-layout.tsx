@@ -24,7 +24,7 @@ import { ViewerPane } from "./viewer-pane";
 import { DiffViewer } from "./diff-viewer";
 import { StatusBar } from "./status-bar";
 import { KeybindHelp } from "./keybind-help";
-import { XtermErrorBoundary } from "./xterm-error-boundary";
+import { XtermErrorBoundary, installXtermFrameErrorFilter } from "./xterm-error-boundary";
 import dynamic from "next/dynamic";
 import "dockview/dist/styles/dockview.css";
 import "./workspace-dockview.css";
@@ -165,9 +165,19 @@ function FileRegion(props: IDockviewPanelProps<FilePanelParams>) {
 function TerminalRegion(props: IDockviewPanelProps<WorkspaceContext>) {
   const { workspace, slots } = safeCtx(props.params);
   if (slots.terminal) return <div className="dv-region-body">{slots.terminal}</div>;
-  // sessionKey = panel id → each terminal panel gets its own PTY (without
-  // this, two `terminal-*` panels share one shell and show identical output).
-  // ErrorBoundary swallows xterm's harmless first-render "dimensions" throw.
+  /*
+   * sessionKey = panel id → each terminal panel gets its own PTY (without this,
+   * two `terminal-*` panels share one shell and show identical output).
+   *
+   * TWO guards, because xterm's "dimensions" throw arrives two ways and each
+   * catches only one. The boundary handles the render-time throw. The frame
+   * filter handles the one xterm schedules through requestAnimationFrame, which
+   * a React boundary structurally cannot see — there is no React stack left by
+   * the time that frame runs, which is why the overlay kept appearing despite
+   * the boundary's comment claiming it would not.
+   */
+  useEffect(() => installXtermFrameErrorFilter(), []);
+
   return (
     <div className="dv-region-body">
       {workspace ? (

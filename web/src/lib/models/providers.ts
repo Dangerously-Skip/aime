@@ -9,7 +9,7 @@
  *
  * The catalog (`PROVIDER_PRESETS`) ships each provider as a template that
  * knows its transport, default base URL, required credential fields,
- * capabilities, and how to list models. See .planning/p1-model-registry.md.
+ * capabilities, and how to list models.
  */
 import type { Capability, ModelPricing } from './types';
 

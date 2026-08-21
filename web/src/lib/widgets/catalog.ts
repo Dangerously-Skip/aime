@@ -7,7 +7,7 @@
  * data-egress hazard) with a rendering layer that can only ever draw from
  * primitives we control.
  *
- * Design ported from Burnbox's A2UI (see `.planning/cockpit.md`), which has
+ * Design ported from Burnbox's A2UI, which has
  * survived real use. Deliberately distinct from `lib/a2ui/` — that is
  * Anthropic's A2UI canvas type system for conversational artifacts; this is a
  * small dashboard-tile vocabulary with a hard validation boundary.

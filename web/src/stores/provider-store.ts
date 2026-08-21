@@ -9,7 +9,7 @@ import type { ProviderConfig, ScannedModel } from '@/lib/models/providers';
 /**
  * A user-configured provider plus the models they scanned and kept. Secrets
  * live server-side in the keychain (keyed by `id`); `hasCredentials` is only a
- * UI hint. See .planning/p1-model-registry.md (DR-12).
+ * UI hint. The registry's own types carry the design; see lib/models/types.ts.
  */
 export interface ConfiguredProvider extends ProviderConfig {
   /** Scanned models the user enabled for this provider. */

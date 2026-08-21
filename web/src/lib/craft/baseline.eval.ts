@@ -36,6 +36,14 @@ import { findSlopTells, summariseTells, type Finding } from './slop-tells';
  * neither. The same applies to the brief set — see `eval-briefs.ts`.
  */
 
+/*
+ * Eval runs are written to `.planning/evals`, which is GITIGNORED on purpose.
+ *
+ * Not a dangling reference: this is an output directory, not a document. Eval
+ * artifacts are large, machine-generated and often contain scraped page text,
+ * so they are kept out of the repo deliberately. The directory is created on
+ * demand; nothing needs to exist here beforehand.
+ */
 const OUT_ROOT = path.resolve(__dirname, '../../../../.planning/evals');
 
 /**

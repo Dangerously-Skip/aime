@@ -50,10 +50,27 @@ export function useHarnessRoute(modelRoute: ModelOption | null) {
       hasBedrock,
       known,
     });
+    /*
+     * THE MODEL'S REAL PRICE, sent because only the client knows it.
+     *
+     * `pricingFor` searches the BUILT-IN Anthropic registry, so any BYOK model
+     * falls back to Sonnet-tier rates — and on an OpenRouter-only setup that is
+     * every model, which is why spend read high after the cache-token fix.
+     *
+     * The real numbers already exist: the OpenRouter scan reads each model's
+     * prompt/completion price and stores it on the provider's models. They live
+     * in the provider store, client-side, and `ProviderConfig` does not carry
+     * them — so the server cannot look them up. It can be told.
+     */
+    const priced = providers
+      .flatMap((p) => p.models ?? [])
+      .find((m) => m.id === route?.model && m.pricing);
+
     return {
       model: route?.model ?? null,
       providerConfig: route?.providerConfig ?? null,
       apiKey: anthropicApiKey || null,
+      modelPricing: priced?.pricing ?? null,
     };
   }, [modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, known, anthropicApiKey]);
 }

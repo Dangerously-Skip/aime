@@ -117,6 +117,20 @@ export async function POST(request: NextRequest) {
   const routeModel = typeof body.model === 'string' ? body.model : null;
   const providerConfig = (body.providerConfig ?? null) as Parameters<typeof resolveHarnessExecution>[0]['providerConfig'];
   const requestApiKey = typeof body.apiKey === 'string' ? body.apiKey : null;
+  /*
+   * The model's real rates, when the client knows them. Validated rather than
+   * trusted: this is loopback and unauthenticated, and a bogus rate would show
+   * a wrong number in the one place a user checks before letting a run spend.
+   */
+  const rawPricing = body.modelPricing as { inputPer1kUsd?: unknown; outputPer1kUsd?: unknown } | null;
+  const modelPricing =
+    rawPricing &&
+    typeof rawPricing.inputPer1kUsd === 'number' &&
+    typeof rawPricing.outputPer1kUsd === 'number' &&
+    rawPricing.inputPer1kUsd >= 0 &&
+    rawPricing.outputPer1kUsd >= 0
+      ? { inputPer1kUsd: rawPricing.inputPer1kUsd, outputPer1kUsd: rawPricing.outputPer1kUsd }
+      : null;
   if (!conversationId) return Response.json({ error: 'conversationId required' }, { status: 400 });
   if (!workingDir) return Response.json({ error: 'workingDir required' }, { status: 400 });
 
@@ -188,9 +202,15 @@ export async function POST(request: NextRequest) {
       // Lazily required so the pricing table is not pulled into every request.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { estimateUsageCostUsd } = require('@/lib/models/pricing') as {
-        estimateUsageCostUsd: (m: string, u: typeof usage) => number;
+        estimateUsageCostUsd: (
+          m: string,
+          u: typeof usage,
+          known?: { inputPer1kUsd: number; outputPer1kUsd: number } | null,
+        ) => number;
       };
-      return estimateUsageCostUsd(exec.model || 'claude-sonnet-4-6', usage);
+      // The client sends the scanned rates for BYOK models; without them this
+      // falls back to Sonnet-tier and overstates a cheap model's spend.
+      return estimateUsageCostUsd(exec.model || 'claude-sonnet-4-6', usage, modelPricing);
     },
   });
 
