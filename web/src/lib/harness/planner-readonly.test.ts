@@ -114,6 +114,14 @@ describe('the verifying session cannot write', () => {
       path.join(process.cwd(), 'src', 'app', 'api', 'harness', 'route.ts'),
       'utf8',
     );
-    expect(routeSrc).toMatch(/startRun\(\{[^}]*verify[^}]*\}\)/);
+    /*
+       Anchored on the CALL, not on it fitting one line. The previous regex was
+       `startRun\(\{[^}]*verify[^}]*\}\)`, which silently depended on the options
+       object containing no braces — so adding a callback argument broke a test
+       about verifiers for reasons that had nothing to do with verifiers.
+    */
+    const at = routeSrc.indexOf('startRun({');
+    expect(at, 'the route no longer calls startRun').toBeGreaterThan(-1);
+    expect(routeSrc.slice(at, at + 400)).toContain('verify');
   });
 });

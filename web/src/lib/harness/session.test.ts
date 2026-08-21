@@ -168,7 +168,7 @@ describe('createSessionRunner', () => {
 
   // A function, not a const: a const is evaluated when the describe body runs,
   // which is BEFORE beforeEach, so it would capture an empty dir.
-  const input = () => ({ goal, task, dir, sessionIndex: 1, missing: [] as string[] });
+  const input = () => ({ goal, task, dir, sessionIndex: 1, missing: [] as string[], budgetRemainingUsd: null });
 
   async function* chunks(...cs: Record<string, unknown>[]) {
     for (const c of cs) yield c as { type: string };
@@ -200,12 +200,30 @@ describe('createSessionRunner', () => {
      * mis-set ceiling costs real money.
      */
     const run = createSessionRunner({
-      query: () => chunks({ type: 'usage', inputTokens: 1000, cacheReadInputTokens: 500, outputTokens: 200 }),
+      query: () => chunks({
+        type: 'usage',
+        inputTokens: 1000,
+        cacheReadInputTokens: 500,
+        cacheCreationInputTokens: 300,
+        outputTokens: 200,
+      }),
       chatId: 'c1', cwd: dir, maxTurns: 30,
-      estimateCostUsd: (i, o) => i * 0.000001 + o * 0.000005,
+      estimateCostUsd: (u) => u.inputTokens + u.outputTokens * 10 + u.cacheReadTokens * 100 + u.cacheWriteTokens * 1000,
     });
     const out = await run(input());
-    expect(out.costUsd).toBeCloseTo(1500 * 0.000001 + 200 * 0.000005);
+    /*
+     * THE CLASSES REACH THE ESTIMATOR SEPARATELY.
+     *
+     * This assertion used to read `1500 * 0.000001`, summing cache reads into
+     * fresh input and charging them the same rate — pinning in place the bug
+     * that made a real session report $7.57 against a $3.00 budget. A cache read
+     * costs a TENTH of fresh input and dominates an agent loop's token count,
+     * because every turn re-reads the whole cached prefix.
+     *
+     * The weights here are deliberately absurd and distinct, so a regression
+     * that re-sums them cannot land on the right number by luck.
+     */
+    expect(out.costUsd).toBeCloseTo(1000 + 200 * 10 + 500 * 100 + 300 * 1000);
     expect(out.costUsd).toBeGreaterThan(0);
   });
 

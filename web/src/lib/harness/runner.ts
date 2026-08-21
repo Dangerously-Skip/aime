@@ -24,10 +24,29 @@ import { newRunState, type RunState, type StopDecision, type StopPolicy } from '
  */
 const KEY = Symbol.for('aime.harness.runs');
 
+/**
+ * The live pulse of a session, between loop events.
+ *
+ * ONE ROLLING RECORD, not an event per tool. A session can be a hundred tool
+ * calls; pushing each into `events` would bury the session/verify/park entries
+ * that actually mark progress, and hand the poller a hundred rows to render.
+ * What the user needs is the answer to "is it alive, and doing what" — a name
+ * and a count answer that in two fields.
+ */
+export interface Activity {
+  /** Most recent tool name. */
+  tool: string;
+  /** Tool calls in this run so far. A number that moves IS the liveness signal. */
+  count: number;
+  /** Epoch ms of the last one, so the UI can say how long ago. */
+  at: number;
+}
+
 interface LiveRun {
   dir: string;
   controller: AbortController;
   events: LoopEvent[];
+  activity: Activity | null;
   run: RunState;
   finished: boolean;
   decision?: StopDecision;
@@ -53,6 +72,15 @@ export interface StartOptions {
   verify?: import('./verifier').Verifier;
   policy?: StopPolicy;
   now?: () => number;
+  /**
+   * Receives a reporter for this run's tool activity.
+   *
+   * Inverted like this because the session runner is built by the CALLER, before
+   * `startRun` exists to report into. The caller holds a mutable slot, passes a
+   * sink here, and points the slot at it — so the runner does not need to know
+   * about the registry and the registry does not need to build session runners.
+   */
+  onActivitySink?: (report: (tool: string) => void) => void;
 }
 
 export type StartResult =
@@ -81,10 +109,23 @@ export function startRun(opts: StartOptions): StartResult {
     dir: opts.dir,
     controller,
     events: [],
+    activity: null,
     run: newRunState(opts.now?.() ?? Date.now()),
     finished: false,
     promise: Promise.resolve(),
   };
+  /*
+   * Handed to the caller so the session runner can report tool activity into
+   * this run's record. A getter rather than the object, because `startRun` is
+   * called before the caller has anything to report into.
+   */
+  opts.onActivitySink?.((tool) => {
+    live.activity = {
+      tool,
+      count: (live.activity?.count ?? 0) + 1,
+      at: opts.now?.() ?? Date.now(),
+    };
+  });
 
   live.promise = runGoalLoop({
     dir: opts.dir,
@@ -135,6 +176,8 @@ export interface RunStatus {
   run: RunState | null;
   decision: StopDecision | null;
   events: LoopEvent[];
+  /** Live tool pulse, or null when the run is not running. */
+  activity: Activity | null;
   /** Set when the run is parked. The one halt a user can undo by answering. */
   question: ParkedQuestion | null;
   /** Which numbered run this is. Transcript keys need it to stay unique. */
@@ -168,6 +211,9 @@ export async function runStatus(
     run: live?.run ?? persisted,
     decision: live?.decision ?? null,
     events: live?.events ?? [],
+    // Null once the run is over: a finished run has no pulse, and showing the
+    // last tool it happened to call would read as still working.
+    activity: live && !live.finished ? live.activity : null,
     question: question && question.answer === null ? question : null,
     runIndex,
   };

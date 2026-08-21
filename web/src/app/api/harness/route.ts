@@ -135,7 +135,17 @@ export async function POST(request: NextRequest) {
     new URL(request.url).origin,
   );
 
+  /*
+   * The slot that connects the session runner to the run record.
+   *
+   * `createSessionRunner` is built here, before `startRun` exists to report
+   * into, so the reporter arrives later and this holds the gap. Until then
+   * activity is dropped, which is correct — there is no run to attribute it to.
+   */
+  let reportActivity: ((tool: string) => void) | null = null;
+
   const runSession = createSessionRunner({
+    onActivity: (tool) => reportActivity?.(tool),
     chatId: `harness_${conversationId}`,
     cwd: path.resolve(workingDir),
     /*
@@ -164,13 +174,13 @@ export async function POST(request: NextRequest) {
         providerEnv: exec.providerEnv,
         cwd,
       }) as AsyncIterable<{ type: string; content?: unknown }>,
-    estimateCostUsd: (inputTokens, outputTokens) => {
+    estimateCostUsd: (usage) => {
       // Lazily required so the pricing table is not pulled into every request.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { estimateCostUsd } = require('@/lib/models/pricing') as {
-        estimateCostUsd: (m: string, i: number, o: number) => number;
+      const { estimateUsageCostUsd } = require('@/lib/models/pricing') as {
+        estimateUsageCostUsd: (m: string, u: typeof usage) => number;
       };
-      return estimateCostUsd(exec.model || 'claude-sonnet-4-6', inputTokens, outputTokens);
+      return estimateUsageCostUsd(exec.model || 'claude-sonnet-4-6', usage);
     },
   });
 
@@ -199,7 +209,13 @@ export async function POST(request: NextRequest) {
       }) as AsyncIterable<{ type: string; content?: unknown }>,
   });
 
-  const started = startRun({ conversationId, dir: resolved.dir, runSession, verify });
+  const started = startRun({
+    conversationId,
+    dir: resolved.dir,
+    runSession,
+    verify,
+    onActivitySink: (report) => { reportActivity = report; },
+  });
   if (!started.ok) return Response.json({ error: started.error }, { status: 409 });
 
   return Response.json({ ok: true, dir: resolved.dir });
