@@ -75,7 +75,19 @@ interface WorkspaceContext {
 // dockview hands each registered component a props object; we read the
 // workspace context via `params` set in addPanel.
 
-// Defensive param read — first render may not have updateParameters run yet.
+/**
+ * Defensive param read — first render may not have `updateParameters` run yet.
+ *
+ * IT REBUILDS THE OBJECT FIELD BY FIELD, so a field missing from the list below
+ * is STRIPPED on the way to every region, whatever the panel's params actually
+ * hold. `previewSlot` was missing, which is the fifth and final layer of the
+ * blank preview panel — the value was correct in the props, correct in `ctx`,
+ * correctly stamped onto the panel, and thrown away one line before it was read.
+ *
+ * TypeScript cannot object: the field is optional, so a return value without it
+ * still satisfies `WorkspaceContext`. `workspace-context.test.ts` checks this
+ * function against the interface for exactly that reason.
+ */
 function safeCtx(p: Partial<WorkspaceContext> | undefined): WorkspaceContext {
   return {
     workspace: p?.workspace ?? null,
@@ -87,6 +99,7 @@ function safeCtx(p: Partial<WorkspaceContext> | undefined): WorkspaceContext {
     onFolderChange: p?.onFolderChange ?? (() => {}),
     chatId: p?.chatId ?? '',
     slots: p?.slots ?? {},
+    previewSlot: p?.previewSlot,
   };
 }
 

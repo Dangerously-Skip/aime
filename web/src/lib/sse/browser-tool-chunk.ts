@@ -44,7 +44,26 @@ export interface BrowserToolChunkContext {
   noWebviewMessage: string;
   /** Named in the console line, so a failure says which surface it came from. */
   surface: string;
+  /**
+   * Tab management, when the surface has tabs.
+   *
+   * `executeToolInWebview` implements no case for `new_tab`, `switch_tab` or
+   * `close_tab` — they are not webview operations, they are operations on the
+   * surface's collection of webviews, and the old hand-rolled loop handled them
+   * through callbacks of its own. Routing the agent through the shared executor
+   * dropped them, and the result was DR-21's exact failure reproduced one layer
+   * down: `Unknown tool: new_tab`, twenty-two times in one run, the agent
+   * unable to discover that the step was impossible.
+   */
+  tabs?: {
+    open: (url: string) => Promise<unknown>;
+    switch: (tabId: string) => Promise<unknown>;
+    close: (tabId: string) => Promise<unknown>;
+  };
 }
+
+/** Tools that act on the surface's tabs rather than on one webview. */
+const TAB_TOOLS = new Set(['new_tab', 'switch_tab', 'close_tab']);
 
 /** Report the outcome back to the waiting server-side promise. */
 function postResult(toolUseId: string, output: string, isError: boolean, surface: string): Promise<unknown> {
@@ -79,6 +98,43 @@ export function handleBrowserToolChunk(
   const input = (event.input as Record<string, unknown>) || {};
 
   ctx.addToolCall(ctx.chatId, { id: toolUseId, name, input, status: 'running', startTime: Date.now() });
+
+  if (TAB_TOOLS.has(name)) {
+    if (!ctx.tabs) {
+      /*
+       * A surface with one view. Say so ACTIONABLY and tell the model what to
+       * do instead — "unknown tool" is what let it retry twenty-two times,
+       * because it reads as a transient fault rather than a fact about the
+       * world. Naming the alternative is what turns a wall into a signal.
+       */
+      const message =
+        `${name} is not available here: this surface shows a single page, not tabs. ` +
+        `Use navigate to go to a URL in this view, and do not try a tab tool again.`;
+      ctx.updateToolResult(ctx.chatId, toolUseId, message, true);
+      void postResult(toolUseId, message, true, ctx.surface);
+      return true;
+    }
+    const run =
+      name === 'new_tab' ? ctx.tabs.open(String(input.url ?? ''))
+      : name === 'switch_tab' ? ctx.tabs.switch(String(input.tab_id ?? input.tabId ?? ''))
+      : ctx.tabs.close(String(input.tab_id ?? input.tabId ?? ''));
+
+    void run
+      .then((outcome) => {
+        const failed = outcome === null || outcome === false;
+        const message = failed
+          ? `${name} failed. The tab could not be ${name === 'new_tab' ? 'opened' : 'changed'}.`
+          : `${name} succeeded.`;
+        ctx.updateToolResult(ctx.chatId, toolUseId, message, failed);
+        return postResult(toolUseId, message, failed, ctx.surface);
+      })
+      .catch((err) => {
+        const message = `${name} error: ${err instanceof Error ? err.message : String(err)}`;
+        ctx.updateToolResult(ctx.chatId, toolUseId, message, true);
+        return postResult(toolUseId, message, true, ctx.surface);
+      });
+    return true;
+  }
 
   const wv = ctx.webview;
   if (!wv) {

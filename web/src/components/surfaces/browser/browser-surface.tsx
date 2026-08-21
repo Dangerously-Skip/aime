@@ -506,6 +506,18 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           noWebviewMessage:
             'No browser view is available. Navigate to a page first, or use WebFetch to read a URL you are not looking at.',
           surface: 'BrowserSurface',
+          /*
+           * This surface HAS tabs, and they are not webview operations — they
+           * act on the collection of webviews the surface owns. The hand-rolled
+           * loop reached them through its own callbacks; the agent path needs
+           * the same three, or `new_tab` is an unknown tool and the agent loops
+           * on it (DR-21, reproduced exactly: twenty-two calls in one run).
+           */
+          tabs: {
+            open: handleNewTab,
+            switch: handleSwitchTab,
+            close: handleCloseTab,
+          },
         })
       ) {
         return;

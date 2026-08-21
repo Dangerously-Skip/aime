@@ -48,6 +48,19 @@ function ctxLiteral(): string {
   return src.slice(start, src.indexOf('\n  };', start));
 }
 
+/**
+ * The body of `safeCtx`, which REBUILDS the context field by field on the way
+ * to every region — so a field missing here is stripped no matter what the
+ * panel's params hold. This is the second place a field can vanish, and it is
+ * where `previewSlot` actually died: correct in the props, correct in `ctx`,
+ * correctly stamped onto the panel, and discarded one line before it was read.
+ */
+function safeCtxBody(): string {
+  const start = src.indexOf('function safeCtx(');
+  expect(start, 'safeCtx not found — has it been renamed?').toBeGreaterThan(-1);
+  return src.slice(start, src.indexOf('\n}', start));
+}
+
 describe('the panel context is fully populated', () => {
   it('declares at least the fields we know about', () => {
     // Guards the parser itself: a regex that silently matched nothing would
@@ -64,6 +77,18 @@ describe('the panel context is fully populated', () => {
     expect(
       new RegExp(`(^|[\\s{,])${field}\\s*[,:]`, 'm').test(literal),
       `WorkspaceContext declares "${field}" but ctx never sets it — any region reading it gets undefined`,
+    ).toBe(true);
+  });
+
+  it.each(declaredFields())('safeCtx passes %s through', (field) => {
+    /*
+     * BOTH SITES, because a field can be dropped at either and the symptom is
+     * identical. `ctx` was fixed first and the panel stayed blank, because
+     * `safeCtx` was still throwing the value away.
+     */
+    expect(
+      new RegExp(`(^|[\\s{,])${field}\\s*:`, 'm').test(safeCtxBody()),
+      `WorkspaceContext declares "${field}" but safeCtx rebuilds the object without it — every region gets undefined`,
     ).toBe(true);
   });
 

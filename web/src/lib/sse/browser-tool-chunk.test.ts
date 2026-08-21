@@ -165,3 +165,75 @@ describe('details that matter to the model', () => {
     expect(exec).toHaveBeenCalledWith(expect.anything(), 'get_page_state', {}, undefined);
   });
 });
+
+describe('tab tools, which are not webview operations', () => {
+  /*
+   * `executeToolInWebview` has no case for these — they act on the surface's
+   * COLLECTION of webviews, not on one. The hand-rolled loop reached them
+   * through callbacks of its own; routing the agent through the shared executor
+   * dropped them, and a real run produced `Unknown tool: new_tab` twenty-two
+   * times: DR-21's failure exactly, one layer down, with the agent unable to
+   * discover the step was impossible.
+   */
+  const tabEvent = (name: string, input: Record<string, unknown> = {}) => ({
+    type: 'browser_tool_use', toolUseId: 'tt_1', name, input,
+  });
+
+  it('never reaches the webview executor', async () => {
+    const exec = vi.spyOn(browserTools, 'executeToolInWebview');
+    const tabs = { open: vi.fn().mockResolvedValue(1), switch: vi.fn(), close: vi.fn() };
+    handleBrowserToolChunk(tabEvent('new_tab', { url: 'https://example.com' }), { ...ctx, tabs });
+    await flush();
+    expect(exec).not.toHaveBeenCalled();
+    expect(tabs.open).toHaveBeenCalledWith('https://example.com');
+  });
+
+  it.each([
+    ['switch_tab', 'switch'],
+    ['close_tab', 'close'],
+  ])('routes %s to the surface handler', async (tool, key) => {
+    const tabs = { open: vi.fn(), switch: vi.fn().mockResolvedValue(true), close: vi.fn().mockResolvedValue(true) };
+    handleBrowserToolChunk(tabEvent(tool, { tab_id: 't7' }), { ...ctx, tabs });
+    await flush();
+    expect((tabs as Record<string, ReturnType<typeof vi.fn>>)[key]).toHaveBeenCalledWith('t7');
+  });
+
+  it('reports success back to the waiting turn', async () => {
+    const tabs = { open: vi.fn().mockResolvedValue(2), switch: vi.fn(), close: vi.fn() };
+    handleBrowserToolChunk(tabEvent('new_tab', { url: 'https://example.com' }), { ...ctx, tabs });
+    await flush();
+    expect(posted()).toEqual([{ toolUseId: 'tt_1', output: 'new_tab succeeded.', isError: false }]);
+  });
+
+  it('treats null and false as failure, not success', async () => {
+    // `handleNewTab` resolves null when there is no conversation to own the tab.
+    const tabs = { open: vi.fn().mockResolvedValue(null), switch: vi.fn(), close: vi.fn() };
+    handleBrowserToolChunk(tabEvent('new_tab', { url: 'https://example.com' }), { ...ctx, tabs });
+    await flush();
+    expect(posted()[0].isError).toBe(true);
+  });
+
+  it('answers when a handler throws', async () => {
+    const tabs = { open: vi.fn().mockRejectedValue(new Error('boom')), switch: vi.fn(), close: vi.fn() };
+    handleBrowserToolChunk(tabEvent('new_tab', { url: 'x' }), { ...ctx, tabs });
+    await flush();
+    expect(posted()[0].isError).toBe(true);
+    expect(posted()[0].output).toContain('boom');
+  });
+
+  it('on a surface with no tabs, says so and names the alternative', async () => {
+    /*
+     * The Code preview panel. "Unknown tool" is what let the agent retry
+     * twenty-two times — it reads as a transient fault rather than a fact about
+     * the world, so the message has to state the fact AND the way forward.
+     */
+    handleBrowserToolChunk(tabEvent('new_tab', { url: 'x' }), ctx); // no tabs
+    await flush();
+    const [body] = posted();
+    expect(body.isError).toBe(true);
+    expect(body.output).toContain('single page');
+    expect(body.output).toContain('navigate');
+    expect(body.output).toMatch(/do not try a tab tool again/i);
+    expect(body.output).not.toContain('Unknown tool');
+  });
+});
