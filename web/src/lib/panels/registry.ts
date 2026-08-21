@@ -96,6 +96,34 @@ export const PANELS: readonly PanelDef[] = [
     defaultOpen: false,
   },
   {
+    /*
+     * `code-preview`, not `preview`: Cowork already has a rail entry by that
+     * name and they are different things — that one is a CHIP linking to a
+     * detected dev server, this one is a browser panel with an address bar.
+     * The registry's uniqueness check caught the collision, which is the point
+     * of having one.
+     *
+     * `mount` stays `preview` because that is the dockview component key, and
+     * the drift test derives from those keys rather than from ids.
+     */
+    id: 'code-preview',
+    title: 'Preview',
+    surfaces: ['code'],
+    host: 'dock',
+    mount: 'preview',
+    /*
+     * Opened from the Panels menu, or automatically when the agent writes an
+     * HTML file or starts a dev server. Not open by default: an empty browser
+     * pane is not worth the space until someone wants it.
+     *
+     * Deliberately NOT a `PanelSlot` — that type keys the persisted
+     * `Record<PanelSlot, RegionId>` whose migration discards what it does not
+     * recognise, so a fifth slot costs every user their layout. Same reason the
+     * goal panel opens on demand.
+     */
+    defaultOpen: false,
+  },
+  {
     id: 'file',
     title: 'File',
     surfaces: ['code'],
