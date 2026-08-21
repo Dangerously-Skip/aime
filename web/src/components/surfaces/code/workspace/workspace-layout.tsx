@@ -165,19 +165,8 @@ function FileRegion(props: IDockviewPanelProps<FilePanelParams>) {
 function TerminalRegion(props: IDockviewPanelProps<WorkspaceContext>) {
   const { workspace, slots } = safeCtx(props.params);
   if (slots.terminal) return <div className="dv-region-body">{slots.terminal}</div>;
-  /*
-   * sessionKey = panel id → each terminal panel gets its own PTY (without this,
-   * two `terminal-*` panels share one shell and show identical output).
-   *
-   * TWO guards, because xterm's "dimensions" throw arrives two ways and each
-   * catches only one. The boundary handles the render-time throw. The frame
-   * filter handles the one xterm schedules through requestAnimationFrame, which
-   * a React boundary structurally cannot see — there is no React stack left by
-   * the time that frame runs, which is why the overlay kept appearing despite
-   * the boundary's comment claiming it would not.
-   */
-  useEffect(() => installXtermFrameErrorFilter(), []);
-
+  // sessionKey = panel id → each terminal panel gets its own PTY (without this,
+  // two `terminal-*` panels share one shell and show identical output).
   return (
     <div className="dv-region-body">
       {workspace ? (
@@ -349,6 +338,21 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {},
   // Snapshot saving is debounced — dockview fires lots of micro-events
   // during a single drag (sash, panel-move, focus, etc.).
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /*
+   * TWO guards against xterm's "dimensions" throw, because it arrives two ways
+   * and each catches only one. `XtermErrorBoundary` handles the render-time
+   * throw. This handles the one xterm schedules through requestAnimationFrame,
+   * which a React boundary structurally cannot see — by the time that frame runs
+   * there is no React stack to catch it in, which is why the dev overlay kept
+   * appearing despite the boundary's comment claiming it would not.
+   *
+   * Installed HERE, at the top of the layout, and not in `TerminalRegion`: that
+   * component returns early when a terminal slot is supplied, so a hook after
+   * that return is called conditionally — a rules-of-hooks violation, and the
+   * kind that breaks hook ORDER rather than merely reading badly.
+   */
+  useEffect(() => installXtermFrameErrorFilter(), []);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState<string | null>(null);
