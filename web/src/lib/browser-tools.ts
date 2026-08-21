@@ -439,8 +439,25 @@ export const ARIA_SNAPSHOT_SCRIPT = `
       const indent = '  '.repeat(depth);
       let label = getLabel(el);
       if (!label) {
-        const text = (el.textContent || '').trim();
-        if (text.length > 0 && text.length <= 80) label = text;
+        /*
+         * LEAVES ONLY. textContent on a container returns the whole subtree,
+         * so a button inside main > ul > li produced FOUR lines all reading
+         * "Place bid" and only one of them carrying a ref.
+         *
+         * Found by running this in real Chromium against a laid-out page; the
+         * jsdom tests could not see it because they assert on the pieces rather
+         * than reading the tree the way a model does. A model reading that has
+         * to guess which of four identical labels is the one it can click, and
+         * three of the four answers are wrong.
+         *
+         * An explicit aria-label on a container is still honoured — that is a
+         * deliberate description, not text borrowed from a child.
+         */
+        const hasElementChildren = el.children && el.children.length > 0;
+        if (!hasElementChildren) {
+          const text = (el.textContent || '').trim();
+          if (text.length > 0 && text.length <= 80) label = text;
+        }
       }
       const states = getStates(el);
       let line = indent + '[' + role + ']';
