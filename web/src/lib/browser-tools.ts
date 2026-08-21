@@ -531,7 +531,7 @@ export async function executeToolInWebview(
         const result = await webview.executeJavaScript(`
           (function() {
             const el = document.querySelector('[data-agent-index="${index}"]');
-            if (!el) return { success: false, message: 'Element not found at index ${index}' };
+            if (!el) return { success: false, message: 'Element not found at index ${index}. The page has changed since the snapshot those indices came from — call snapshot or get_page_state again for current indices, and do not retry this index.' };
             el.click();
             return { success: true, message: 'Clicked element at index ${index}: ' + (el.textContent || '').trim().substring(0, 50) };
           })()
@@ -554,7 +554,7 @@ export async function executeToolInWebview(
             let el;
             ${index !== undefined ? `
               el = document.querySelector('[data-agent-index="${index}"]');
-              if (!el) return { success: false, message: 'Element not found at index ${index}' };
+              if (!el) return { success: false, message: 'Element not found at index ${index}. The page has changed since the snapshot those indices came from — call snapshot or get_page_state again for current indices, and do not retry this index.' };
               el.focus();
             ` : `
               el = document.activeElement;
@@ -641,7 +641,7 @@ export async function executeToolInWebview(
         const result = await webview.executeJavaScript(`
           (function() {
             const el = document.querySelector('[data-agent-index="${index}"]');
-            if (!el) return { success: false, message: 'Element not found at index ${index}' };
+            if (!el) return { success: false, message: 'Element not found at index ${index}. The page has changed since the snapshot those indices came from — call snapshot or get_page_state again for current indices, and do not retry this index.' };
             const rect = el.getBoundingClientRect();
             const cx = rect.left + rect.width / 2;
             const cy = rect.top + rect.height / 2;
@@ -666,8 +666,8 @@ export async function executeToolInWebview(
           (function() {
             const src = document.querySelector('[data-agent-index="${startIndex}"]');
             const dst = document.querySelector('[data-agent-index="${endIndex}"]');
-            if (!src) return { success: false, message: 'Source element not found at index ${startIndex}' };
-            if (!dst) return { success: false, message: 'Target element not found at index ${endIndex}' };
+            if (!src) return { success: false, message: 'Source element not found at index ${startIndex}. Re-snapshot for current indices.' };
+            if (!dst) return { success: false, message: 'Target element not found at index ${endIndex}. Re-snapshot for current indices.' };
             const srcRect = src.getBoundingClientRect();
             const dstRect = dst.getBoundingClientRect();
             const dt = new DataTransfer();
@@ -694,7 +694,7 @@ export async function executeToolInWebview(
         const result = await webview.executeJavaScript(`
           (function() {
             const el = document.querySelector('[data-agent-index="${index}"]');
-            if (!el) return { success: false, message: 'Element not found at index ${index}' };
+            if (!el) return { success: false, message: 'Element not found at index ${index}. The page has changed since the snapshot those indices came from — call snapshot or get_page_state again for current indices, and do not retry this index.' };
             if (el.tagName !== 'SELECT') return { success: false, message: 'Element at index ${index} is not a <select>' };
             // Try matching by value first, then by visible text
             let found = false;
