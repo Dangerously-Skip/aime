@@ -717,11 +717,26 @@ export function CodeSurface() {
    * picking a destination on the user's behalf is a decision nobody asked for.
    */
   useEffect(() => {
-    (window as unknown as Record<string, unknown>).__ideOpenPreview = () => {
+    const w = window as unknown as Record<string, unknown>;
+    /*
+     * Two halves, two owners.
+     *
+     * The SURFACE owns the content gate (`previewUrl`, which decides whether
+     * there is anything to render) and the webview's lifecycle. The LAYOUT owns
+     * placement, because the panel is a dockview panel now and only dockview
+     * knows where panels go. So this sets the URL and delegates to
+     * `__ideOpenPreviewPanel`, which workspace-layout registers.
+     *
+     * `current ?? 'about:blank'` rather than an assignment: opening while the
+     * agent's own preview is showing should focus it, not navigate away from
+     * what it just built.
+     */
+    w.__ideOpenPreview = () => {
       setPreviewUrl((current) => current ?? 'about:blank');
       setPreviewOpen(true);
+      (w.__ideOpenPreviewPanel as (() => void) | undefined)?.();
     };
-    return () => { delete (window as unknown as Record<string, unknown>).__ideOpenPreview; };
+    return () => { delete w.__ideOpenPreview; };
   }, []);
   const [refreshKey, setRefreshKey] = useState(0);
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
@@ -1410,6 +1425,27 @@ export function CodeSurface() {
         <WorkspaceLayout
           workspace={folder}
           chatId={chatId}
+          /*
+           * The preview is a DOCKVIEW PANEL now, not an overlay.
+           *
+           * It used to render here as a sibling of the dock — floating over the
+           * chat panel with no tab, so it could not be docked, dragged or
+           * placed like every other region. The content still belongs to the
+           * surface, which owns the webview's lifecycle and hands its ref to
+           * the agent; only the framing moved.
+           */
+          previewSlot={
+            previewUrl ? (
+              <PreviewPanel
+                url={previewUrl}
+                open
+                onClose={() => setPreviewOpen(false)}
+                refreshKey={refreshKey}
+                onWebviewReady={(ref) => { previewWebviewRef.current = ref as WebviewRef | null; }}
+                onConsoleMessage={(level, message) => { consoleBufferRef.current.push(level, message); }}
+              />
+            ) : null
+          }
           slots={{
             chat: (
               <div className="flex flex-col h-full min-h-0">
@@ -1518,17 +1554,6 @@ export function CodeSurface() {
                     </div>
                   </div>
 
-                  {/* Preview panel */}
-                  {previewUrl && (
-                    <PreviewPanel
-                      url={previewUrl}
-                      open={previewOpen}
-                      onClose={() => setPreviewOpen(false)}
-                      refreshKey={refreshKey}
-                      onWebviewReady={(ref) => { previewWebviewRef.current = ref as WebviewRef | null; }}
-                      onConsoleMessage={(level, message) => { consoleBufferRef.current.push(level, message); }}
-                    />
-                  )}
                 </div>
               </div>
             ),

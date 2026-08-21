@@ -59,6 +59,16 @@ interface WorkspaceContext {
   chatId: string;
   /** Slot overrides from the parent (e.g. real chat composer from code-surface). */
   slots: Partial<Record<"chat" | "tree" | "tabs" | "viewer" | "terminal" | "branch", ReactNode>>;
+  /**
+   * The preview panel's content, supplied by the surface.
+   *
+   * Its own field rather than a member of `slots` above, because that Record is
+   * keyed by `PanelSlot` — the type behind the persisted
+   * `Record<PanelSlot, RegionId>` whose migration discards what it does not
+   * recognise. Adding `preview` there would cost every user their layout, which
+   * is the same reason the goal panel opens on demand.
+   */
+  previewSlot?: ReactNode;
 }
 
 // ── Panel components ─────────────────────────────────────────────────────
@@ -205,6 +215,25 @@ function DiffRegion(props: IDockviewPanelProps<DiffPanelParams>) {
  * On-demand is also the better behaviour: the panel opens itself when a goal
  * exists and is absent when there is nothing to show.
  */
+/**
+ * The preview, as a real dockview panel.
+ *
+ * It used to render OUTSIDE dockview entirely — a sibling overlay floating on
+ * top of the chat panel, with no tab, so it could not be docked, dragged or
+ * placed like every other region. That was a shortcut: the panel already
+ * existed, and making it reachable from the Panels menu was less work than
+ * making it a panel. It looked wrong immediately, because everything beside it
+ * IS a panel.
+ *
+ * The content comes from the surface via `slots.preview`, the same way chat,
+ * tree and terminal do — the webview belongs to the surface, which owns its
+ * lifecycle and hands the ref to the agent.
+ */
+function PreviewRegion(props: IDockviewPanelProps<WorkspaceContext>) {
+  const ctx = safeCtx(props.params);
+  return <div className="dv-region-body">{ctx.previewSlot ?? null}</div>;
+}
+
 function GoalRegion(props: IDockviewPanelProps<WorkspaceContext>) {
   const { workspace, chatId } = safeCtx(props.params);
   return (
@@ -222,6 +251,7 @@ const COMPONENTS = {
   diff: DiffRegion,
   file: FileRegion,
   goal: GoalRegion,
+  preview: PreviewRegion,
 } as const;
 
 // Chat is always available — render its tab with the close action hidden.
@@ -250,6 +280,8 @@ interface WorkspaceLayoutProps {
     terminal: ReactNode;
     chat: ReactNode;
   }>;
+  /** Content for the on-demand preview panel. */
+  previewSlot?: ReactNode;
 }
 
 /**
@@ -494,6 +526,45 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
           // Nothing left to try. The run is unaffected — it lives on the server —
           // so log and let the inline status carry the news instead.
           console.warn("[harness] could not open the goal panel:", e);
+        }
+      }
+    };
+
+    /*
+     * Open the preview as a real panel.
+     *
+     * Same shape and the same defensive placement as the goal opener above —
+     * dockview threw `invalid location` there on a real run, and a panel in the
+     * wrong group is cosmetic where a throw takes down the surface.
+     *
+     * It lands BESIDE the editor rather than within it: a preview is something
+     * you watch while working on something else, so stacking it as a tab over
+     * the file you are editing is the wrong default. Users can drag it anywhere
+     * afterwards, which is the entire point of making it a panel.
+     */
+    (window as unknown as Record<string, unknown>).__ideOpenPreviewPanel = () => {
+      const id = "preview";
+      const existing = event.api.getPanel(id);
+      if (existing) {
+        existing.api.setActive();
+        return;
+      }
+      const spec = {
+        id,
+        component: "preview",
+        title: "Preview",
+        params: { ...ctx } as unknown as Record<string, unknown>,
+      };
+      const ref = editorRef();
+      try {
+        event.api.addPanel(
+          ref ? { ...spec, position: { referencePanel: ref, direction: "below" as const } } : spec,
+        );
+      } catch {
+        try {
+          event.api.addPanel(spec);
+        } catch (e) {
+          console.warn("[preview] could not open the preview panel:", e);
         }
       }
     };

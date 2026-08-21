@@ -53,21 +53,62 @@ describe('a user can open the preview', () => {
     expect(code).toContain('__ideOpenPreview');
   });
 
-  it('the opener sets the gate that mounts the panel', () => {
+  it('the opener sets the gate AND asks the layout to place the panel', () => {
     /*
-     * `previewUrl` is the mount condition. An opener that only flipped
-     * `previewOpen` would toggle a boolean nothing reads.
+     * Two halves, two owners: the surface owns `previewUrl` (whether there is
+     * anything to render) and the layout owns placement, because it is a
+     * dockview panel and only dockview knows where panels go.
+     *
+     * Anchored on the assignment, not the bare name — the name also appears in
+     * prose above it, and matching that would inspect a comment.
      */
-    const opener = code.slice(code.indexOf('__ideOpenPreview'), code.indexOf('__ideOpenPreview') + 400);
+    const at = code.indexOf('w.__ideOpenPreview = () => {');
+    expect(at, 'surface does not register __ideOpenPreview').toBeGreaterThan(0);
+    const opener = code.slice(at, at + 400);
     expect(opener).toContain('setPreviewUrl');
     expect(opener).toContain('setPreviewOpen(true)');
+    expect(opener).toContain('__ideOpenPreviewPanel');
   });
 
   it('does not clobber a URL the agent already set', () => {
-    // Opening the panel while a dev server preview is showing should focus it,
-    // not navigate away from what the agent just built.
-    const opener = code.slice(code.indexOf('__ideOpenPreview'), code.indexOf('__ideOpenPreview') + 400);
-    expect(opener).toMatch(/current \?\? 'about:blank'/);
+    const at = code.indexOf('w.__ideOpenPreview = () => {');
+    expect(code.slice(at, at + 400)).toMatch(/current \?\? 'about:blank'/);
+  });
+
+  it('is a REAL dockview panel, not an overlay', () => {
+    /*
+     * The version this replaces rendered outside dockview entirely — a sibling
+     * floating over the chat panel, with no tab, so it could not be docked,
+     * dragged or placed like every other region. Everything beside it IS a
+     * panel, and it looked wrong immediately.
+     */
+    const layout = src('components/surfaces/code/workspace/workspace-layout.tsx');
+    expect(layout).toContain('preview: PreviewRegion');
+    expect(layout).toMatch(/component: "preview"/);
+    expect(layout).toContain('__ideOpenPreviewPanel');
+    // and the surface no longer renders it as a sibling of the dock
+    expect(code).not.toMatch(/\{previewUrl && \(\s*<PreviewPanel/);
+    expect(code).toContain('previewSlot=');
+  });
+
+  it('opening twice focuses rather than duplicating', () => {
+    const layout = src('components/surfaces/code/workspace/workspace-layout.tsx');
+    const at = layout.indexOf('__ideOpenPreviewPanel');
+    const opener = layout.slice(at, at + 700);
+    expect(opener).toContain('getPanel');
+    expect(opener).toContain('setActive');
+  });
+
+  it('survives dockview refusing the placement', () => {
+    /*
+     * `addPanel` threw `invalid location` on a real run and took the whole Code
+     * surface down. A panel in the wrong group is cosmetic; a throw is not.
+     */
+    const layout = src('components/surfaces/code/workspace/workspace-layout.tsx');
+    const at = layout.indexOf('__ideOpenPreviewPanel');
+    const opener = layout.slice(at, at + 900);
+    expect(opener).toMatch(/try \{/);
+    expect(opener).toMatch(/catch/);
   });
 
   it('is NOT added to PanelSlot, which would reset every saved layout', () => {
