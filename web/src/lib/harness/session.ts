@@ -242,6 +242,15 @@ export interface SessionDeps {
    * it makes every other problem unreadable.
    */
   onActivity?: (toolName: string) => void;
+  /**
+   * Record what the run actually FETCHED, so a citation can be checked rather
+   * than taken on trust (DR-22 D-3).
+   *
+   * Fed from both the tool INPUT and its RESULT: a `navigate` names its URL in
+   * the input, while a search names the pages it found only in the result, and
+   * both count as "this run saw that page".
+   */
+  onRetrieval?: (text: string) => void;
 }
 
 /**
@@ -286,6 +295,15 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
         } else if (chunk.type === 'tool_use') {
           const name = typeof chunk.name === 'string' ? chunk.name : 'tool';
           deps.onActivity?.(name);
+          // The URL a fetch/navigate names before it happens.
+          if (chunk.input) deps.onRetrieval?.(JSON.stringify(chunk.input));
+        } else if (chunk.type === 'tool_result') {
+          /*
+           * And the URLs that only appear in the ANSWER — a search returns pages
+           * the run never named itself, and reading one of those results is
+           * exactly as much "the run saw this page" as navigating to it.
+           */
+          if (typeof chunk.content === 'string') deps.onRetrieval?.(chunk.content);
         } else if (chunk.type === 'error') {
           error = typeof chunk.content === 'string' ? chunk.content : 'provider error';
         } else if (chunk.type === 'usage') {

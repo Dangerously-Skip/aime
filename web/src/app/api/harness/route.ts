@@ -10,6 +10,7 @@ import { TURN_BACKSTOP } from '@/lib/surfaces/shared/limits';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
 import { harnessDir, ensureGitignored, currentRunIndex } from '@/lib/harness/ledger';
 import { createSessionRunner } from '@/lib/harness/session';
+import { RetrievalLog } from '@/lib/harness/evidence';
 import { createVerifier, VERIFIER_TOOLS, VERIFIER_DENIED } from '@/lib/harness/verifier';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -144,8 +145,17 @@ export async function POST(request: NextRequest) {
    */
   let reportActivity: ((tool: string) => void) | null = null;
 
+  /*
+   * What this run actually fetched. Lives for the length of the run and is
+   * consulted by the verifier, so a citation can be checked instead of trusted
+   * (DR-22 D-3). One log per run: evidence from session 1 is still evidence in
+   * session 4, because it is the RUN that did the retrieving.
+   */
+  const retrieved = new RetrievalLog();
+
   const runSession = createSessionRunner({
     onActivity: (tool) => reportActivity?.(tool),
+    onRetrieval: (text) => retrieved.recordFrom(text),
     chatId: `harness_${conversationId}`,
     cwd: path.resolve(workingDir),
     /*
@@ -186,6 +196,7 @@ export async function POST(request: NextRequest) {
 
   const cwd = path.resolve(workingDir);
   const verify = createVerifier({
+    retrieved: () => retrieved,
     treeFingerprint: () => treeFingerprint(cwd),
     query: (prompt) =>
       provider.query({
