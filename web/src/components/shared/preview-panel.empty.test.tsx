@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { PreviewPanel } from './preview-panel';
 
 /*
@@ -96,5 +96,82 @@ describe('with a url', () => {
     render(<PreviewPanel url="http://localhost:3000/" open onClose={noop} />);
     expect((screen.getByLabelText('Preview address') as HTMLInputElement).value)
       .toBe('http://localhost:3000/');
+  });
+});
+
+describe('a local file path is served, not opened as file://', () => {
+  /*
+   * Previewing a file you just wrote is this panel's whole job, so refusing
+   * `/Users/…/thing.html` made it useless for its main case. `file://` is not
+   * the way to say yes — the webview is handed to an agent, so a preview that
+   * loads file:// on request is a way to read the disk through a text box, and
+   * a null origin breaks embeds, ES modules and fetch on its own terms.
+   *
+   * `/api/preview` stands up a static server rooted at the file's OWN directory
+   * and returns an http://127.0.0.1 origin. These prove the panel uses it.
+   */
+  const PATH = '/Users/me/dev/demo/interstellar-explorer.html';
+
+  function renderWithWebview() {
+    const loadURL = vi.fn();
+    const r = render(<PreviewPanel url="" open onClose={noop} />);
+    Object.assign(r.container.querySelector('webview')!, { loadURL, getURL: () => '' });
+    return { loadURL };
+  }
+
+  const type = (value: string) => {
+    const bar = screen.getByLabelText('Preview address');
+    fireEvent.change(bar, { target: { value } });
+    fireEvent.keyDown(bar, { key: 'Enter' });
+  };
+
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ url: 'http://127.0.0.1:45231/interstellar-explorer.html' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('asks the preview server for an http origin', async () => {
+    const { loadURL } = renderWithWebview();
+    type(PATH);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/preview');
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ path: PATH });
+    await waitFor(() =>
+      expect(loadURL).toHaveBeenCalledWith('http://127.0.0.1:45231/interstellar-explorer.html'),
+    );
+  });
+
+  it('never hands file:// to the webview', async () => {
+    const { loadURL } = renderWithWebview();
+    type(`file://${PATH}`);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    // The scheme is stripped and the PATH is what gets served.
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string).path).toBe(PATH);
+    await waitFor(() => expect(loadURL).toHaveBeenCalled());
+    for (const [u] of loadURL.mock.calls) expect(String(u)).not.toMatch(/^file:/);
+  });
+
+  it('says so in the bar when the file cannot be previewed', async () => {
+    // A panel that silently stays blank is the failure this panel has had four
+    // times; an unreachable file must produce words, not another dark box.
+    fetchMock.mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: 'Not found' }) });
+    renderWithWebview();
+    type('/no/such/file.html');
+    // A line of its own, so what the user typed survives for them to fix.
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/could not preview/i));
+    expect((screen.getByLabelText('Preview address') as HTMLInputElement).value).toBe('/no/such/file.html');
+  });
+
+  it('still treats a bare hostname as https, not as a path', async () => {
+    const { loadURL } = renderWithWebview();
+    type('example.com');
+    await waitFor(() => expect(loadURL).toHaveBeenCalledWith('https://example.com/'));
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

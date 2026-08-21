@@ -2,6 +2,7 @@ import type { SurfaceConfig } from './index';
 import { APP_NAME } from '@/config/branding';
 import { TURN_BACKSTOP } from './shared/limits';
 import { webSearchPrompt } from './shared/web-search-prompt';
+import { factualClaimsPrompt } from './shared/factual-claims';
 
 export function getBrowserConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
   return {
@@ -93,6 +94,8 @@ changed. Nothing changing after a click means the click missed. Do not repeat it
 The element list is capped and says what it omitted. If content elements were
 dropped, you have not seen the whole page: scroll or page through before
 concluding anything about "all" of something.
+
+${factualClaimsPrompt()}
 
 ${webSearchPrompt()}`,
     },

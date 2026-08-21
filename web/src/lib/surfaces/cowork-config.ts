@@ -2,6 +2,7 @@ import type { SurfaceConfig } from './index';
 import { PPT_PROMPT } from './shared/ppt-prompt';
 import { APP_NAME } from '@/config/branding';
 import { webSearchPrompt } from './shared/web-search-prompt';
+import { factualClaimsPrompt } from './shared/factual-claims';
 import { TURN_BACKSTOP } from './shared/limits';
 
 export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
@@ -70,6 +71,8 @@ needed.
 - For data-gathering tasks (API calls, scraping, etc.), save intermediate results to files rather than relying on tool output staying in context. Pipe large outputs through \`| head -100\` or \`| jq '.[:10]'\` to keep context manageable.
 - Write a single self-contained Python script that does all the work (gather data + generate the document) and run it in one Bash call. This is more reliable than running 20 separate Bash commands whose outputs fill the context.
 - If a task requires many tool calls, prioritize completing the deliverable (the file the user asked for) over comprehensiveness of data gathering. A delivered report with available data is better than an incomplete task that ran out of turns.
+
+${factualClaimsPrompt()}
 
 ${webSearchPrompt()}
 

@@ -152,6 +152,15 @@ async function tavily(
  * are paying for the retrieval, not the writing. The citations arrive whether or
  * not the model says anything worth reading.
  */
+/**
+ * The carrier used when nothing configured one.
+ *
+ * A default, not a hardcoded choice: it is overridable per route, named in one
+ * place, and only reached when the caller expressed no preference. Kept cheap on
+ * purpose — the model's prose is thrown away and only its citations are kept.
+ */
+export const DEFAULT_SEARCH_CARRIER = 'openai/gpt-4o-mini';
+
 async function openrouter(
   route: SearchRoute,
   q: string,
@@ -162,8 +171,22 @@ async function openrouter(
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${route.apiKey ?? ''}` },
     body: JSON.stringify({
-      // Cheapest capable model: the answer is discarded, only citations are kept.
-      model: 'openai/gpt-4o-mini',
+      /*
+       * The carrier for the web plugin. The answer is discarded, so the cheapest
+       * capable model is right — but the ID MUST NOT BE HARDCODED HERE.
+       *
+       * It was `openai/gpt-4o-mini`, written into this file, which never
+       * consults the model chokepoint. That is the memory extractor's bug in a
+       * second place: an account that cannot serve that exact id gets a 400 and
+       * search returns nothing, on every query, invisibly — because a failed
+       * search degrades to "no results", which is indistinguishable from a
+       * genuine miss.
+       *
+       * The route decides; this is only the fallback for a route that expressed
+       * no preference, and it is named once, here, so there is one place to
+       * change when the cheap model of the day changes.
+       */
+      model: route.carrierModel || DEFAULT_SEARCH_CARRIER,
       plugins: [{ id: 'web', max_results: n }],
       max_tokens: 64,
       messages: [{ role: 'user', content: `Search the web for: ${q}` }],

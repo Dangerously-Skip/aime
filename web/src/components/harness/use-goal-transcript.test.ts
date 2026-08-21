@@ -102,3 +102,58 @@ describe('transcriptLines', () => {
     expect(new Set(out.map((l) => l.key)).size).toBe(2);
   });
 });
+
+describe('a stopped run says it has stopped — to the model, not just the user', () => {
+  /*
+   * These lines are posted as ASSISTANT turns, so they are the history of every
+   * later turn in the conversation. After a run stopped on budget, the model
+   * read "Session 1 — working on…", "Checked and passed", and carried on in the
+   * same voice: "Now let me verify t-002", "t-002 verified" — with no verifier,
+   * no ledger write and no run. The plan never moved and the panel looked broken.
+   *
+   * A false claim of verification is the worst failure this system has, because
+   * verification is the only reason to trust any of it.
+   */
+  const stopped = (reason: string) =>
+    transcriptLines({
+      runIndex: 1,
+      goal: { objective: 'do the thing' },
+      ledger: { tasks: [{ id: 't-001', title: 'one', status: 'passed' }] },
+      run: { sessions: 2, spentUsd: 7.57 },
+      decision: { stop: true, reason, detail: 'Spent $7.57 of $3.00.' },
+      events: [],
+      running: false,
+    } as never);
+
+  const stopLine = (reason = 'budget') =>
+    stopped(reason).find((l) => l.content.includes('**Goal'))!.content;
+
+  it('still reports what happened', () => {
+    expect(stopLine()).toContain('Spent $7.57 of $3.00.');
+    expect(stopLine()).toContain('2 sessions');
+  });
+
+  it('states there is no verifier running', () => {
+    expect(stopLine()).toMatch(/no\s+verifier running/i);
+  });
+
+  it('forbids narrating sessions and claiming verification', () => {
+    const c = stopLine();
+    expect(c).toMatch(/do not narrate sessions/i);
+    expect(c).toMatch(/claim a task is verified/i);
+  });
+
+  it('says the plan will not change, so the panel is not "broken"', () => {
+    expect(stopLine()).toMatch(/plan will not change/i);
+  });
+
+  it('names the way to start another run', () => {
+    // A wall with no door is how a model ends up inventing one.
+    expect(stopLine()).toMatch(/pursue goal/i);
+  });
+
+  it('says it on completion too, not only on a budget stop', () => {
+    // A completed run is just as able to be spoken for after the fact.
+    expect(stopLine('complete')).toMatch(/no\s+verifier running/i);
+  });
+});

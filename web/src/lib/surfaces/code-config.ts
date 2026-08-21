@@ -1,6 +1,7 @@
 import type { SurfaceConfig } from './index';
 import { APP_NAME } from '@/config/branding';
 import { webSearchPrompt } from './shared/web-search-prompt';
+import { factualClaimsPrompt } from './shared/factual-claims';
 import { TURN_BACKSTOP } from './shared/limits';
 
 export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceConfig {
@@ -26,6 +27,8 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       append: `You are ${APP_NAME}, an AI assistant.
 Do not use emojis in your responses. Keep output clean, professional, and text-only.
 Prefer prose over bullet points in conversational responses.
+
+${factualClaimsPrompt()}
 
 ${webSearchPrompt()}`,
     },

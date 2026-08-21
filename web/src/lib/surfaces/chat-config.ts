@@ -1,4 +1,5 @@
 import type { SurfaceConfig } from './index';
+import { factualClaimsPrompt } from './shared/factual-claims';
 import { PPT_PROMPT } from './shared/ppt-prompt';
 import { APP_NAME } from '@/config/branding';
 import { TURN_BACKSTOP } from './shared/limits';
@@ -88,7 +89,9 @@ If the user shares samples of their own writing and asks you to learn or match
 their style, call \`VoiceProfileSave\` with what you actually observed — specific
 and checkable ("sentences average 12 words"), never vague ("professional yet
 friendly"). It governs prose you draft FOR them, not your replies to them.
-`,
+
+
+${factualClaimsPrompt()}`,
     model: 'sonnet',
     /*
      * Interactive, so it gets the interactive backstop. See TURN_BACKSTOP.

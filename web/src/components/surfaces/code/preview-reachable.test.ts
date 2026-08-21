@@ -142,11 +142,22 @@ describe('a user can open the preview', () => {
 
 describe('the address bar is editable', () => {
   it('is an input, not a label', () => {
-    // It was a read-only div showing wherever the agent had navigated.
-    // The bound is generous on purpose: the handlers between `<input` and the
-    // aria-label are long, and the first version capped it at 400 characters and
-    // failed against correct markup.
-    expect(panel).toMatch(/<input[\s\S]{0,900}aria-label="Preview address"/);
+    /*
+       It was a read-only div showing wherever the agent had navigated.
+
+       ASSERTED WITHOUT A DISTANCE BOUND. This read
+       `/<input[\s\S]{0,900}aria-label="Preview address"/` — and before that
+       {0,400}, which failed against correct markup the first time. Adding one
+       handler to the element breaks it again, which is a test failing for a
+       reason that has nothing to do with what it is testing.
+
+       The real guarantee — that a user can find and type into the bar — is
+       proven by rendering in `preview-panel.empty.test.tsx`, which asks for it
+       by its accessible name. What is left here is the structural half: it is an
+       input, and it is labelled.
+    */
+    expect(panel).toContain('<input');
+    expect(panel).toContain('aria-label="Preview address"');
     expect(panel).toContain('urlDraft');
   });
 
