@@ -77,6 +77,13 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
    * the page fired a navigation event.
    */
   const [urlDraft, setUrlDraft] = useState(url);
+  /*
+   * Why a separate line rather than writing into the address bar: overwriting
+   * what the user typed loses the thing they were trying to fix. And why a line
+   * at all — this panel has now been silently blank four separate times, so a
+   * failure here has to produce WORDS.
+   */
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const webviewRef = useRef<WebviewNode | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<ConsoleEntry[]>([]);
   const [devToolsOpen, setDevToolsOpen] = useState(false);
@@ -238,6 +245,43 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
+              /*
+               * A LOCAL PATH IS SERVED, NOT OPENED.
+               *
+               * Previewing a file you just wrote is this panel's whole job, so
+               * refusing `/Users/…/thing.html` made it useless for its main
+               * case. But `file://` is not the way to say yes: the webview is
+               * handed to an agent, and a preview that loads file:// on request
+               * is a way to read the disk through a text box. A null origin is
+               * also broken on its own terms — YouTube embeds fail, ES modules
+               * resolve against the filesystem root, fetch and CORS refuse.
+               *
+               * `/api/preview` already solves this properly: it stands up a
+               * static server rooted at the FILE'S OWN DIRECTORY, so siblings
+               * resolve and nothing above it is reachable, and hands back an
+               * http://127.0.0.1 origin. Existing machinery, already contained.
+               */
+              setPreviewError(null);
+              if (looksLikeLocalPath(urlDraft)) {
+                const filePath = localPathOf(urlDraft);
+                setCurrentUrl(filePath);
+                void fetch('/api/preview', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ path: filePath }),
+                })
+                  .then(async (r) => {
+                    const body = (await r.json()) as { url?: string; error?: string };
+                    if (!r.ok || !body.url) throw new Error(body.error || `HTTP ${r.status}`);
+                    webviewRef.current?.loadURL(body.url);
+                  })
+                  .catch((err) => {
+                    setPreviewError(
+                      `Could not preview ${filePath} — ${err instanceof Error ? err.message : String(err)}`,
+                    );
+                  });
+                return;
+              }
               const next = normaliseUrl(urlDraft);
               if (next) {
                 setCurrentUrl(next);
@@ -302,13 +346,28 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
         </Button>
       </div>
 
+      {previewError && (
+        <div
+          role="alert"
+          className="px-3 py-1.5 text-[11px] text-destructive border-b border-border bg-destructive/5"
+        >
+          {previewError}
+        </div>
+      )}
+
       {/* Webview + Console */}
       <div className="flex-1 min-h-0 flex flex-col">
         {/* Webview */}
         <div className={devToolsOpen ? "flex-1 min-h-0" : "flex-1 min-h-0"}>
           <webview
             ref={callbackRef as unknown as React.RefObject<never>}
-            src={url}
+            /*
+               `about:blank` rather than `''`. An Electron <webview> with an empty
+               src renders nothing at all, which is indistinguishable from the
+               panel being broken — and this panel now mounts BEFORE anything has
+               given it a url, so the empty case is the first thing a user sees.
+            */
+            src={url || 'about:blank'}
             style={{ width: "100%", height: "100%", border: "none" }}
           />
         </div>
@@ -381,6 +440,23 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
  * a text box. Bare hostnames get https rather than being treated as a search —
  * the address bar of a preview panel is not a search engine.
  */
+export function looksLikeLocalPath(raw: string): boolean {
+  const t = raw.trim();
+  if (!t) return false;
+  return t.startsWith('/') || t.startsWith('~/') || t.toLowerCase().startsWith('file://');
+}
+
+/** `file:///a/b.html` → `/a/b.html`. Anything else is returned unchanged. */
+export function localPathOf(raw: string): string {
+  const t = raw.trim();
+  if (!t.toLowerCase().startsWith('file://')) return t;
+  try {
+    return decodeURIComponent(new URL(t).pathname);
+  } catch {
+    return t.slice('file://'.length);
+  }
+}
+
 export function normaliseUrl(raw: string): string | null {
   const text = raw.trim();
   if (!text) return null;

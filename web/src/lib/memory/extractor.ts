@@ -2,22 +2,34 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { MemoryCategory } from './types';
 
 /**
- * The model extraction falls back to when the caller names none.
+ * An operator override, and the ONLY model this file names.
  *
- * A hardcoded Anthropic id used to be the ONLY option, and it is wrong for
- * anyone not on Anthropic. `ANTHROPIC_BASE_URL` points at this app's llm-proxy,
- * so the id travelled to whatever provider the user configured and came back:
+ * WHAT WAS HERE BEFORE, and why a comment was not the fix. This line read
+ * `process.env.MEMORY_EXTRACTION_MODEL || 'claude-haiku-4-5-20251001'`, so an
+ * unconfigured install still sent a hardcoded Anthropic id. `ANTHROPIC_BASE_URL`
+ * points at this app's llm-proxy, so that id travelled to whatever provider the
+ * user actually has and came straight back:
  *
  *   [llm-proxy] upstream 400: "claude-haiku-4-5-20251001 is not a valid model ID"
  *
- * — on every single turn, for an OpenRouter user, silently. Memory extraction
- * was simply dead for them, and the only trace was a 400 in a log nobody reads.
+ * On every turn, silently — extraction returns [] on error, so the only trace
+ * was a 400 in a log nobody reads, and the feature simply never worked for an
+ * OpenRouter user. The previous round of this fix added the caller-supplied
+ * `model` parameter and wrote the diagnosis down, but LEFT THE FALLBACK, so the
+ * failing path stayed reachable and stayed the default.
  *
- * This is the failure `resolveSendRoute` exists to prevent, in a file that never
- * called it: code that skips the chokepoint resolves against the built-in
- * Anthropic registry and then demands an Anthropic account.
+ * There is no correct hardcoded value here. A model id is only meaningful
+ * against a provider, this file cannot know which one it is talking to, and
+ * guessing is what produced the 400. So when nothing resolves a model, this
+ * SKIPS — which is what the `model` parameter's own contract already promised
+ * ("an unresolvable model means skip, never fail") while the fallback quietly
+ * contradicted it.
+ *
+ * Skipping costs a first-party user with no configuration their automatic
+ * memory extraction; guessing cost every OpenRouter user the same thing, plus a
+ * 400 per turn, plus the appearance that the feature worked.
  */
-const FALLBACK_MODEL = process.env.MEMORY_EXTRACTION_MODEL || 'claude-haiku-4-5-20251001';
+const CONFIGURED_MODEL = process.env.MEMORY_EXTRACTION_MODEL || null;
 
 const EXTRACTION_PROMPT = `You are a memory extraction system. Analyze the conversation turn and extract useful memories about the user.
 
@@ -76,10 +88,20 @@ export async function extractMemories(
   const key = apiKey || process.env.ANTHROPIC_API_KEY;
   if (!key) return [];
 
+  /*
+   * No model, no extraction. See CONFIGURED_MODEL above: a guess here is a 400
+   * against the user's real provider, once per turn, invisibly.
+   */
+  const chosen = model || CONFIGURED_MODEL;
+  if (!chosen) {
+    console.warn('[MEMORY] Skipped extraction: the caller resolved no model and MEMORY_EXTRACTION_MODEL is unset.');
+    return [];
+  }
+
   try {
     const client = new Anthropic({ apiKey: key });
     const response = await client.messages.create({
-      model: model || FALLBACK_MODEL,
+      model: chosen,
       max_tokens: 1024,
       system: EXTRACTION_PROMPT,
       messages: [

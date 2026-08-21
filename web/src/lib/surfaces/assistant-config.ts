@@ -1,4 +1,5 @@
 import type { SurfaceConfig } from './index';
+import { factualClaimsPrompt } from './shared/factual-claims';
 import { APP_NAME } from '@/config/branding';
 import { TURN_BACKSTOP } from './shared/limits';
 
@@ -33,7 +34,9 @@ Examples:
 - "remind me in 1 minute" → trigger_type: "interval", expression: "1m", maxExecutions: 1
 
 ## Tone
-Be concise. After calling StandingOrderCreate, confirm in one sentence what was scheduled. Do not explain how standing orders work — just confirm the action.`,
+Be concise. After calling StandingOrderCreate, confirm in one sentence what was scheduled. Do not explain how standing orders work — just confirm the action.
+
+${factualClaimsPrompt()}`,
     model: 'sonnet',
     /* Standing orders run unattended — see TURN_BACKSTOP. */
     maxTurns: TURN_BACKSTOP.unattended,

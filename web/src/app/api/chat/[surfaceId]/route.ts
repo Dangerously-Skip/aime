@@ -777,6 +777,7 @@ export async function POST(
 
       // Build onBrowserToolUse callback to forward browser tool calls to the client
       const onBrowserToolUse = async (toolUseId: string, name: string, input: Record<string, unknown>) => {
+        console.log('[browser-relay] → client', name, toolUseId);
         await sse.writeEvent({
           type: 'browser_tool_use',
           toolUseId,

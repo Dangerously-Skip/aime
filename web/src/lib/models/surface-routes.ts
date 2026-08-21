@@ -22,12 +22,27 @@ export const DEFAULT_SURFACE_ROUTE: SurfaceRoute = { capability: 'chat', tier: '
 export const SURFACE_ROUTES: Record<string, SurfaceRoute> = {
   // Conversational surfaces → chat capability.
   chat: { capability: 'chat', tier: 'good' }, // → sonnet
-  browser: { capability: 'chat', tier: 'good' }, // → sonnet
   assistant: { capability: 'chat', tier: 'good' }, // → sonnet
   // Tool-driven surfaces → code capability. Cowork runs premium by default,
   // matching its previous hardcoded 'opus'.
   cowork: { capability: 'code', tier: 'smort' }, // → opus
   code: { capability: 'code', tier: 'good' }, // → sonnet
+  /*
+     Browser is tool-driven, and only became so recently.
+
+     It sat on `chat/good` because that described it accurately: a hand-rolled
+     ReAct loop with nineteen browser tools and nothing else — no MCP, no
+     connectors, no files, no memory (DR-22). It now runs the same agent as Code,
+     over the same toolset plus the browser relay, so it belongs on the same
+     side of the split this table's own comment draws.
+
+     The resolved model is unchanged against the default Claude registry
+     (code/good → sonnet, exactly as chat/good did), so this is not a quiet
+     upgrade. What changes is WHICH SLOT of the user's tier grid governs it: a
+     user who set a cheap conversational model for chat is no longer given it
+     for a surface that drives a browser and writes files.
+  */
+  browser: { capability: 'code', tier: 'good' }, // → sonnet
 };
 
 /**

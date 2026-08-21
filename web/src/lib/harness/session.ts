@@ -202,12 +202,55 @@ export interface SessionDeps {
     chatId: string;
     maxTurns: number;
     cwd: string;
+    /**
+     * The run's REMAINING budget, or null for no limit.
+     *
+     * Passed down so the provider — the only layer that can stop a turn while
+     * it is spending — actually enforces it. Without this the harness checked
+     * the budget only between sessions, and a real run reached $7.57 against a
+     * $3.00 cap before anything noticed.
+     */
+    maxBudgetUsd: number | null;
   }) => AsyncIterable<{ type: string; content?: unknown; [k: string]: unknown }>;
   chatId: string;
   cwd: string;
   maxTurns: number;
-  /** Estimator for backends that do not report a price. */
-  estimateCostUsd?: (inputTokens: number, outputTokens: number) => number;
+  /**
+   * Estimator for backends that do not report a price.
+   *
+   * Takes the token classes SEPARATELY. They were summed into one number and
+   * charged at the input rate, which overstates an agent session by roughly 10x:
+   * a cache read costs a tenth of fresh input and dominates the count, because
+   * every turn re-reads the whole cached prefix.
+   */
+  estimateCostUsd?: (usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  }) => number;
+  /**
+   * Called for each tool the session runs, so the UI has a pulse.
+   *
+   * WHY. Loop events fire at SESSION boundaries — start, end, verify, park. A
+   * session is many minutes and can be a hundred tool calls, and between those
+   * boundaries the run emitted nothing at all. On screen that is
+   * indistinguishable from a hang: a real run sat at "session 1 · t-001" while
+   * making 94 tool calls, and was reported as stopped.
+   *
+   * A run that cannot be told apart from a dead one is worse than a bug, because
+   * it makes every other problem unreadable.
+   */
+  onActivity?: (toolName: string) => void;
+  /**
+   * Record what the run actually FETCHED, so a citation can be checked rather
+   * than taken on trust (DR-22 D-3).
+   *
+   * Fed from both the tool INPUT and its RESULT: a `navigate` names its URL in
+   * the input, while a search names the pages it found only in the result, and
+   * both count as "this run saw that page".
+   */
+  onRetrieval?: (text: string) => void;
 }
 
 /**
@@ -235,6 +278,8 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
     let costUsd = 0;
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheWriteTokens = 0;
     let error: string | undefined;
 
     try {
@@ -243,9 +288,22 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
         chatId: deps.chatId,
         maxTurns: deps.maxTurns,
         cwd: deps.cwd,
+        maxBudgetUsd: input.budgetRemainingUsd,
       })) {
         if (chunk.type === 'text' && typeof chunk.content === 'string') {
           text += chunk.content;
+        } else if (chunk.type === 'tool_use') {
+          const name = typeof chunk.name === 'string' ? chunk.name : 'tool';
+          deps.onActivity?.(name);
+          // The URL a fetch/navigate names before it happens.
+          if (chunk.input) deps.onRetrieval?.(JSON.stringify(chunk.input));
+        } else if (chunk.type === 'tool_result') {
+          /*
+           * And the URLs that only appear in the ANSWER — a search returns pages
+           * the run never named itself, and reading one of those results is
+           * exactly as much "the run saw this page" as navigating to it.
+           */
+          if (typeof chunk.content === 'string') deps.onRetrieval?.(chunk.content);
         } else if (chunk.type === 'error') {
           error = typeof chunk.content === 'string' ? chunk.content : 'provider error';
         } else if (chunk.type === 'usage') {
@@ -273,10 +331,11 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
           if (typeof usage.totalCostUsd === 'number') {
             costUsd = usage.totalCostUsd;
           } else {
-            inputTokens =
-              (usage.inputTokens ?? 0) +
-              (usage.cacheReadInputTokens ?? 0) +
-              (usage.cacheCreationInputTokens ?? 0);
+            // Kept APART. Summing them here is what made a $0.60 session read as
+            // $7.57 — see the multipliers in lib/models/pricing.
+            inputTokens = usage.inputTokens ?? 0;
+            cacheReadTokens = usage.cacheReadInputTokens ?? 0;
+            cacheWriteTokens = usage.cacheCreationInputTokens ?? 0;
             outputTokens = usage.outputTokens ?? 0;
           }
         }
@@ -285,8 +344,12 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
       error = e instanceof Error ? e.message : String(e);
     }
 
-    if (costUsd === 0 && (inputTokens || outputTokens) && deps.estimateCostUsd) {
-      costUsd = deps.estimateCostUsd(inputTokens, outputTokens);
+    if (
+      costUsd === 0 &&
+      (inputTokens || outputTokens || cacheReadTokens || cacheWriteTokens) &&
+      deps.estimateCostUsd
+    ) {
+      costUsd = deps.estimateCostUsd({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens });
     }
 
     const asked = parseSessionQuestion(text);

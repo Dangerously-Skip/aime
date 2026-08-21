@@ -64,6 +64,20 @@ export interface SessionInput {
   missing: string[];
   /** The user's answer to a question this run parked on, if there was one. */
   answer?: string | null;
+  /**
+   * What is left of the goal's budget, or null when there is no limit.
+   *
+   * THE GUARD THAT WAS NOT THERE. `shouldStop` checks the budget BETWEEN
+   * sessions, so a single session was unbounded and the cap could only be
+   * noticed after it had already been passed. A real run spent $7.57 against a
+   * $3.00 budget — 2.5x — and reported it as a clean stop.
+   *
+   * A limit enforced only after the money is gone is not a limit. This carries
+   * the remainder down to the provider, which can actually stop a turn when it
+   * runs out, so the between-sessions check becomes a backstop rather than the
+   * only line of defence.
+   */
+  budgetRemainingUsd: number | null;
 }
 
 export interface SessionOutcome {
@@ -363,6 +377,14 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         dir,
         sessionIndex,
         missing: task.lastVerdict?.missing ?? [],
+        /*
+         * Whatever is left, floored at zero. `shouldStop` above has already
+         * refused to start a session with nothing remaining, so zero here means
+         * "the last session overspent" — and passing 0 is the right answer to
+         * that, not a reason to hand out an unbounded session.
+         */
+        budgetRemainingUsd:
+          goal.budgetUsd === null ? null : Math.max(0, goal.budgetUsd - run.spentUsd),
         /*
          * EVERY decision, not only the one just consumed. A session that starts
          * two tasks later still needs to know which total the user chose.

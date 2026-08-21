@@ -38,6 +38,9 @@ describe('the registry is the only handler', () => {
     'components/surfaces/cowork/cowork-surface.tsx',
     'components/surfaces/code/code-surface.tsx',
     'components/surfaces/assistant/assistant-surface.tsx',
+    // Joined the list when it stopped hand-rolling its own loop against the raw
+    // Messages API and started routing goals through the main chat path (DR-22).
+    'components/surfaces/browser/browser-surface.tsx',
     'components/projects/project-detail.tsx',
   ];
 

@@ -102,6 +102,32 @@ export function jsonSchemaToZod(schema: {
   return shape;
 }
 
+/** The MCP server these tools are mounted on. */
+export const BROWSER_MCP_SERVER = 'aime';
+
+/**
+ * The names the MODEL sees, and therefore the names an allow-list must use.
+ *
+ * WHY THIS EXISTS. Registering the tools is not enough to make them callable.
+ * The SDK gates a tool that no permission rule covers, and `canUseTool` is not
+ * consulted for it — so the call is refused before any handler runs, the model
+ * is told "permission", and NOTHING IN OUR CODE LOGS A THING. That is exactly
+ * how it presented: six browser tool calls, zero relay events, zero denials in
+ * the log, and an agent reporting "a permission issue with the browser tools".
+ *
+ * Derived from the same array and the same exclusion as the tools themselves,
+ * so the allow-list cannot drift from what is actually mounted. A hand-written
+ * copy of these nineteen names in a surface config is the drift this whole file
+ * exists to avoid, and it is also how the bug got here: `browser-config.ts`
+ * lists `mcp__aime__FetchUrl` and `mcp__aime__SearchWeb` by hand, and the
+ * browser tools were simply never added when they arrived.
+ */
+export function browserMcpToolNames(): string[] {
+  return BROWSER_TOOL_SCHEMAS
+    .filter((s) => !EXCLUDED.has(s.name))
+    .map((s) => `mcp__${BROWSER_MCP_SERVER}__${s.name}`);
+}
+
 /**
  * Build the SDK tools.
  *
@@ -115,14 +141,34 @@ export function buildBrowserMcpTools(deps: BrowserBridgeDeps): unknown[] {
       jsonSchemaToZod(schema.input_schema),
       async (args) => {
         const id = deps.newId();
-        await deps.emit(id, schema.name, args);
+        /*
+         * Logged at every stage, because this path crosses a process boundary
+         * and a request boundary, and when it fails it fails SILENTLY — the
+         * model just gets an error and reports "a configuration issue", which
+         * names nothing. Three lines here turn that into a diagnosis.
+         */
+        console.log('[browser-bridge] call', schema.name, id);
+        try {
+          await deps.emit(id, schema.name, args);
+        } catch (err) {
+          // `emit` writes the SSE event. If THAT throws, the client is never
+          // asked, so waiting on the rendezvous would burn the full timeout for
+          // a result that can never arrive.
+          console.error('[browser-bridge] emit FAILED for', schema.name, err);
+          return {
+            content: [{ type: 'text' as const, text: `Could not reach the browser: ${err instanceof Error ? err.message : String(err)}` }],
+            isError: true,
+          };
+        }
         try {
           const result = await waitForBrowserToolResult(id);
+          console.log('[browser-bridge] result', schema.name, id, 'isError:', result.isError, 'len:', result.output.length);
           return {
             content: [{ type: 'text' as const, text: result.output }],
             isError: result.isError,
           };
-        } catch {
+        } catch (err) {
+          console.error('[browser-bridge] no result for', schema.name, id, err instanceof Error ? err.message : err);
           /*
            * The rendezvous timed out: the renderer went away, the tab closed, or
            * the page hung. Reported as a tool error rather than thrown, so the

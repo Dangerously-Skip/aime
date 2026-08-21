@@ -48,6 +48,26 @@ describe('surface defaults resolve to the previous hardcoded models', () => {
     expect(driverFor(surfaceId)).toBe(expected);
   });
 
+  /*
+   * The model is the same either way on the default registry — which is what
+   * makes the tests above pass whichever capability browser is on, and why the
+   * capability needs pinning separately.
+   *
+   * It matters on a BYOK setup, where chat/good and code/good are two different
+   * slots the user fills independently. Browser drives a browser, writes files
+   * and reaches connectors now (DR-22); giving it whatever cheap conversational
+   * model fills the chat slot is the wrong default.
+   */
+  it.each([
+    ['browser', 'code'],
+    ['code', 'code'],
+    ['cowork', 'code'],
+    ['chat', 'chat'],
+    ['assistant', 'chat'],
+  ])('%s asks for the %s capability', (surfaceId, capability) => {
+    expect(getSurfaceRoute(surfaceId).capability).toBe(capability);
+  });
+
   it('a stallion override on cowork reaches Fable', () => {
     const { capability, tier } = getSurfaceRoute('cowork', { cowork: 'stallion' });
     expect(resolveRoute(reg, capability, tier, all)?.model.driverModel).toBe('claude-fable-5');

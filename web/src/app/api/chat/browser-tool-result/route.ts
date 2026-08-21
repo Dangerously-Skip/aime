@@ -31,6 +31,10 @@ export async function POST(req: NextRequest) {
   }
 
   const resolved = resolveBrowserToolResult(toolUseId, output, isError ?? false);
+  // `resolved: false` means nothing was waiting on that id — the tool had
+  // already given up, or the id never matched. Worth distinguishing from "the
+  // client never POSTed at all", which looks identical from the model's side.
+  console.log('[browser-relay] ← client', toolUseId, 'matched a waiter:', resolved);
 
   if (!resolved) {
     return Response.json(

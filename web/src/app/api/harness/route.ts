@@ -10,6 +10,7 @@ import { TURN_BACKSTOP } from '@/lib/surfaces/shared/limits';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
 import { harnessDir, ensureGitignored, currentRunIndex } from '@/lib/harness/ledger';
 import { createSessionRunner } from '@/lib/harness/session';
+import { RetrievalLog } from '@/lib/harness/evidence';
 import { createVerifier, VERIFIER_TOOLS, VERIFIER_DENIED } from '@/lib/harness/verifier';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -135,7 +136,26 @@ export async function POST(request: NextRequest) {
     new URL(request.url).origin,
   );
 
+  /*
+   * The slot that connects the session runner to the run record.
+   *
+   * `createSessionRunner` is built here, before `startRun` exists to report
+   * into, so the reporter arrives later and this holds the gap. Until then
+   * activity is dropped, which is correct — there is no run to attribute it to.
+   */
+  let reportActivity: ((tool: string) => void) | null = null;
+
+  /*
+   * What this run actually fetched. Lives for the length of the run and is
+   * consulted by the verifier, so a citation can be checked instead of trusted
+   * (DR-22 D-3). One log per run: evidence from session 1 is still evidence in
+   * session 4, because it is the RUN that did the retrieving.
+   */
+  const retrieved = new RetrievalLog();
+
   const runSession = createSessionRunner({
+    onActivity: (tool) => reportActivity?.(tool),
+    onRetrieval: (text) => retrieved.recordFrom(text),
     chatId: `harness_${conversationId}`,
     cwd: path.resolve(workingDir),
     /*
@@ -164,18 +184,19 @@ export async function POST(request: NextRequest) {
         providerEnv: exec.providerEnv,
         cwd,
       }) as AsyncIterable<{ type: string; content?: unknown }>,
-    estimateCostUsd: (inputTokens, outputTokens) => {
+    estimateCostUsd: (usage) => {
       // Lazily required so the pricing table is not pulled into every request.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { estimateCostUsd } = require('@/lib/models/pricing') as {
-        estimateCostUsd: (m: string, i: number, o: number) => number;
+      const { estimateUsageCostUsd } = require('@/lib/models/pricing') as {
+        estimateUsageCostUsd: (m: string, u: typeof usage) => number;
       };
-      return estimateCostUsd(exec.model || 'claude-sonnet-4-6', inputTokens, outputTokens);
+      return estimateUsageCostUsd(exec.model || 'claude-sonnet-4-6', usage);
     },
   });
 
   const cwd = path.resolve(workingDir);
   const verify = createVerifier({
+    retrieved: () => retrieved,
     treeFingerprint: () => treeFingerprint(cwd),
     query: (prompt) =>
       provider.query({
@@ -199,7 +220,13 @@ export async function POST(request: NextRequest) {
       }) as AsyncIterable<{ type: string; content?: unknown }>,
   });
 
-  const started = startRun({ conversationId, dir: resolved.dir, runSession, verify });
+  const started = startRun({
+    conversationId,
+    dir: resolved.dir,
+    runSession,
+    verify,
+    onActivitySink: (report) => { reportActivity = report; },
+  });
   if (!started.ok) return Response.json({ error: started.error }, { status: 409 });
 
   return Response.json({ ok: true, dir: resolved.dir });

@@ -1,3 +1,4 @@
+import { RetrievalLog, unretrievedCitations, citationFailure } from './evidence';
 import type { Goal, Task, TaskVerdict } from './ledger';
 import type { Decision } from './question';
 
@@ -200,6 +201,16 @@ export interface VerifierDeps {
   /** `git status --porcelain`, or equivalent. Empty string when not a repo. */
   treeFingerprint: () => Promise<string>;
   nowIso?: () => string;
+  /**
+   * What this run actually fetched, so a citation can be checked rather than
+   * taken on trust (DR-22 D-3).
+   *
+   * Optional because a run with no retrieval at all — make ./check.sh pass —
+   * has nothing to check against, and demanding a log there would fail every
+   * local task. Absent means the URL check does not run; it does NOT mean
+   * citations are accepted, because the no-evidence rule still applies.
+   */
+  retrieved?: () => RetrievalLog;
 }
 
 export type Verifier = (
@@ -237,6 +248,26 @@ export function createVerifier(deps: VerifierDeps): Verifier {
     }
 
     const verdict = parseVerdict(text, at);
+
+    /*
+     * EVERY CITED URL MUST HAVE BEEN FETCHED (DR-22 D-3).
+     *
+     * The no-evidence rule above already refuses a bare pass, but the evidence
+     * itself is free text the verifier wrote — so the one control between a
+     * claim and the ledger could be satisfied by a plausible-looking URL the run
+     * had never opened. That is precisely the failure that happened: market
+     * values recalled from weights, wrong by three to four times, with the
+     * whole ranking computed from them.
+     *
+     * Only applied to a PASS. A failing verdict citing a bad URL is already
+     * failing, and adding a second reason helps nobody.
+     */
+    if (verdict.passed && deps.retrieved) {
+      const bad = unretrievedCitations(verdict.evidence, deps.retrieved());
+      if (bad.length > 0) {
+        return { passed: false, missing: [citationFailure(bad)], evidence: verdict.evidence, at };
+      }
+    }
 
     const after = await deps.treeFingerprint().catch(() => before);
     if (!treeUnchanged(before, after)) {

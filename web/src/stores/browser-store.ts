@@ -38,6 +38,14 @@ interface BrowserActions {
   clearMessages: (chatId: string) => void;
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
+  /**
+   * Close out tools still marked running.
+   *
+   * Required by `handleCoreChunk`, which every other surface already routes its
+   * SSE events through. The browser surface had its own hand-rolled loop and so
+   * never needed it — the same reason it had the weakest agent in the app.
+   */
+  completeRunningTools: (chatId: string) => void;
   addTab: (tab: BrowserTab, chatId?: string) => void;
   removeTab: (tabId: string, chatId?: string) => void;
   setActiveTab: (tabId: string, chatId?: string) => void;
@@ -135,6 +143,30 @@ export const useBrowserStore = create<BrowserStore>()(
         set((state) => {
           const next = withToolResult(state.messages, chatId, toolCallId, output, isError, Date.now());
           return next ? { messages: next } : state;
+        }),
+
+      completeRunningTools: (chatId) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          if (!msgs?.length) return state;
+          const lastIdx = msgs.length - 1;
+          const last = msgs[lastIdx];
+          if (last.role !== 'assistant' || !last.toolCalls) return state;
+          // No-op when nothing is running, so a stream of text events does not
+          // rewrite the message array on every chunk.
+          if (!last.toolCalls.some((tc) => tc.status === 'running')) return state;
+          const updated = [...msgs];
+          updated[lastIdx] = {
+            ...last,
+            isLoading: false,
+            isStreaming: false,
+            toolCalls: last.toolCalls.map((tc) =>
+              tc.status === 'running'
+                ? { ...tc, status: 'complete' as const, endTime: Date.now() }
+                : tc,
+            ),
+          };
+          return { messages: { ...state.messages, [chatId]: updated } };
         }),
 
       setLoopPhase: (phase) => set({ loopPhase: phase }),

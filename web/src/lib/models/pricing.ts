@@ -55,8 +55,50 @@ export function pricingFor(model: string): { input: number; output: number } {
   return FALLBACK_PER_1K;
 }
 
+/**
+ * Cache tokens are NOT priced like fresh input, and the difference is the whole
+ * story for an agent loop.
+ *
+ * Anthropic bills a cache READ at a tenth of the input rate and a cache WRITE at
+ * 1.25x. A long agentic session re-reads its entire cached prefix on every turn,
+ * so cache reads dominate the token count — often by an order of magnitude over
+ * fresh input. Folding them into `inputTokens` and charging the full rate, which
+ * is what the harness did, therefore overstates the bill by roughly 10x on the
+ * dominant term.
+ *
+ * That is not a rounding error, it is the difference between "$0.60 of $3.00"
+ * and "$7.57 of $3.00" — the second of which was reported from a real run and
+ * was, correctly, not believed.
+ */
+export const CACHE_READ_MULTIPLIER = 0.1;
+export const CACHE_WRITE_MULTIPLIER = 1.25;
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  /** Prefix served from cache — a tenth of the input rate. */
+  cacheReadTokens?: number;
+  /** Prefix written INTO the cache — 1.25x the input rate. */
+  cacheWriteTokens?: number;
+}
+
 /** Estimated USD for a turn. See the caveat at the top of this file. */
-export function estimateCostUsd(model: string, inputTokens: number, outputTokens: number): number {
+export function estimateCostUsd(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+): number {
+  return estimateUsageCostUsd(model, { inputTokens, outputTokens });
+}
+
+/** Estimated USD for a turn, pricing each class of token at its own rate. */
+export function estimateUsageCostUsd(model: string, usage: TokenUsage): number {
   const p = pricingFor(model);
-  return (inputTokens / 1000) * p.input + (outputTokens / 1000) * p.output;
+  const per1k = (tokens: number, rate: number) => (tokens / 1000) * rate;
+  return (
+    per1k(usage.inputTokens, p.input) +
+    per1k(usage.outputTokens, p.output) +
+    per1k(usage.cacheReadTokens ?? 0, p.input * CACHE_READ_MULTIPLIER) +
+    per1k(usage.cacheWriteTokens ?? 0, p.input * CACHE_WRITE_MULTIPLIER)
+  );
 }

@@ -23,6 +23,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Message } from "@/stores/chat-store";
 import { ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
+import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { handleCoreChunk } from "@/lib/sse/core-chunks";
+import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
+import { handleBrowserToolChunk } from "@/lib/sse/browser-tool-chunk";
+import { classifyBrowserRequest } from "@/lib/browser/request-shape";
+import { useDocumentPrint } from "@/hooks/use-document-print";
+import { useElectron } from "@/hooks/use-electron";
 
 /** Same source of truth the other surfaces use for their capability. */
 const CAPABILITY = getSurfaceRoute("browser").capability;
@@ -133,6 +140,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
   const appendToLastAssistant = useBrowserStore((s) => s.appendToLastAssistant);
   const addToolCall = useBrowserStore((s) => s.addToolCall);
   const updateToolResult = useBrowserStore((s) => s.updateToolResult);
+  const completeRunningTools = useBrowserStore((s) => s.completeRunningTools);
   const startStreaming = useBrowserStore((s) => s.startStreaming);
   const stopStreaming = useBrowserStore((s) => s.stopStreaming);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
@@ -389,7 +397,28 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     return webviewNodeRef.current;
   }, []);
 
-  const { runAgentLoop, abort } = useBrowserAgent({
+  /*
+   * Which loop is currently running, so Stop stops the right one.
+   *
+   * The two paths have separate abort mechanisms — the local loop owns an
+   * AbortController, the SSE stream is keyed in a registry — and calling the
+   * wrong one leaves a turn running with the composer unlocked.
+   */
+  const activeLoopRef = useRef<'quick-ask' | 'agent' | null>(null);
+
+  /*
+   * The three relay handlers. Each one PAUSES THE TURN server-side, which is why
+   * `CoreChunkContext` declares them required rather than optional — Code
+   * shipped without them and a connector request stalled for 300s and a document
+   * print for 60s, with nothing on screen to explain either.
+   *
+   * Browser gets them for the same reason it is being routed through the main
+   * agent at all: it now has the same tools, so it can hit the same pauses.
+   */
+  const printDocument = useDocumentPrint();
+  const { showNotification } = useElectron();
+
+  const { runAgentLoop, abort: abortQuickAsk } = useBrowserAgent({
     onText(text) {
       const id = useBrowserStore.getState().currentChatId ?? "";
       appendToLastAssistant(id, text);
@@ -438,6 +467,119 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     onNewTab: handleNewTab,
     onCloseTab: handleCloseTab,
   });
+
+  /*
+   * The full agent, on the same path as every other surface.
+   *
+   * WHY THIS EXISTS. This surface used to have exactly one loop: a hand-rolled
+   * ReAct loop against the raw Messages API with `tools: BROWSER_TOOL_SCHEMAS`
+   * and nothing else. So the surface whose entire purpose is agentic browsing
+   * ran the LEAST capable agent in the app — no MCP, no connectors, no canvas,
+   * no memory, no subagents, no skills (DR-22).
+   *
+   * The reported failure was not a loop-quality problem. Asked to compare camera
+   * listings across pages and report the best ROI, that agent had nowhere to
+   * accumulate findings, no table to build, nothing that survived the
+   * conversation, and no plan. DR-21 improved the loop — a missing verb, change
+   * observation, a shared detector — and all of it was worth doing, but it was
+   * tuning the executor while the agent was missing its hands.
+   */
+  const { sendMessage, abort: abortAgent } = useSSEStream({
+    chatId,
+    setIsStreaming: (v) => {
+      if (v) startStreaming(chatId);
+      else stopStreaming(chatId);
+    },
+    onChunk(event) {
+      if (handleAgnosticChunk(event, { chatId, surface: 'Browser' })) return;
+
+      // The browser-tool relay: the server pauses the turn, we execute against
+      // the live webview and POST the result back. Shared with Code rather than
+      // copied — see the note in lib/sse/browser-tool-chunk.
+      if (
+        handleBrowserToolChunk(event, {
+          chatId,
+          webview: webviewNodeRef.current,
+          consoleBuffer: consoleBufferRef.current,
+          addToolCall,
+          updateToolResult,
+          noWebviewMessage:
+            'No browser view is available. Navigate to a page first, or use WebFetch to read a URL you are not looking at.',
+          surface: 'BrowserSurface',
+          /*
+           * This surface HAS tabs, and they are not webview operations — they
+           * act on the collection of webviews the surface owns. The hand-rolled
+           * loop reached them through its own callbacks; the agent path needs
+           * the same three, or `new_tab` is an unknown tool and the agent loops
+           * on it (DR-21, reproduced exactly: twenty-two calls in one run).
+           */
+          tabs: {
+            open: handleNewTab,
+            switch: handleSwitchTab,
+            close: handleCloseTab,
+          },
+        })
+      ) {
+        return;
+      }
+
+      handleCoreChunk(event, {
+        chatId,
+        store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+        printDocument,
+        /*
+         * Browser cannot DISPLAY a canvas. The canvas store, its overlay and its
+         * dispatch are all keyed to chat/cowork/code, and widening them is a
+         * separate decision from routing this surface through the main agent —
+         * DR-22 wants the canvas here eventually, but not smuggled in under a
+         * swap whose layout nobody has looked at yet.
+         *
+         * So the absence is stated rather than silent. A dropped canvas event is
+         * this codebase's signature bug: a capability that is wired, produces
+         * nothing, and gives the user no way to tell whether the agent tried.
+         * Canvas does not block the turn, so a line in the transcript is the
+         * whole cost — and "Continue in Cowork" is already on this surface.
+         */
+        onCanvas: (event) => {
+          const title = (event.doc as { title?: string } | undefined)?.title;
+          console.warn('[BrowserSurface] canvas event — this surface cannot display one', { title });
+          appendToLastAssistant(
+            chatId,
+            `\n\n_Built a canvas${title ? ` — \u201c${title}\u201d` : ''}, which the Browser surface cannot display. Continue this conversation in Cowork to see it._\n`,
+          );
+        },
+        notify: (title, body) => {
+          if (!document.hasFocus()) showNotification(title, body);
+        },
+      });
+    },
+    onDone() {
+      activeLoopRef.current = null;
+      completeRunningTools(chatId);
+      stopStreaming(chatId);
+      setLoopPhase('idle');
+    },
+    onError(error) {
+      activeLoopRef.current = null;
+      completeRunningTools(chatId);
+      stopStreaming(chatId);
+      setLoopPhase('idle');
+      appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
+    },
+  });
+
+  /**
+   * Stop whichever loop is running.
+   *
+   * Two paths, two abort mechanisms. Calling the wrong one leaves the turn
+   * running while the composer unlocks, which reads as Stop having done nothing.
+   */
+  const abort = useCallback(() => {
+    if (activeLoopRef.current === 'agent') abortAgent();
+    else abortQuickAsk();
+    activeLoopRef.current = null;
+    setLoopPhase('idle');
+  }, [abortAgent, abortQuickAsk, setLoopPhase]);
 
   // Ensure a browser conversation exists for tab management.
   // Returns the chatId (creating one if needed).
@@ -657,11 +799,6 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
       // returns a specific, actionable message when there genuinely are none.
 
       const wv = webviewNodeRef.current;
-      if (!wv) {
-        appendToLastAssistant(id, "No webview available. Navigate to a page first.");
-        stopStreaming(id);
-        return;
-      }
 
       // The one chokepoint: whatever the user configured in Settings (tier grid
       // + BYOK providers) decides where this turn runs, exactly as on every
@@ -673,15 +810,68 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
         hasBedrock,
         known: builtinAccessKnown,
       });
-      await runAgentLoop(
-        text,
-        {
-          model: sessionControls?.modelOverride ?? route?.model ?? null,
-          providerConfig: route?.providerConfig,
-        },
-        wv,
-        context.length > 0 ? context : undefined,
-      );
+      const model = sessionControls?.modelOverride ?? route?.model ?? null;
+
+      /*
+       * TWO LOOPS, SPLIT BY THE SHAPE OF THE REQUEST — not by a toggle the user
+       * has to find (DR-22 D-1).
+       *
+       * A question about what is on screen stays local: no round trip, browser
+       * tools only, sub-second. Anything goal-shaped routes through the main
+       * chat path and inherits everything the other surfaces have.
+       *
+       * The default is the full agent, because the two mistakes cost different
+       * amounts: a page question routed to the agent costs a few seconds, while
+       * a goal routed to the quick loop fails the whole task silently.
+       */
+      const shape = classifyBrowserRequest(text);
+
+      if (shape === 'quick-ask') {
+        if (!wv) {
+          appendToLastAssistant(id, "No webview available. Navigate to a page first.");
+          stopStreaming(id);
+          return;
+        }
+        activeLoopRef.current = 'quick-ask';
+        await runAgentLoop(
+          text,
+          { model, providerConfig: route?.providerConfig },
+          wv,
+          context.length > 0 ? context : undefined,
+        );
+        activeLoopRef.current = null;
+        return;
+      }
+
+      activeLoopRef.current = 'agent';
+      setLoopPhase('thinking');
+
+      /*
+       * Pending context — a selection, a screenshot, an inspected element, an
+       * attachment — is prepended as text. The full agent takes history rather
+       * than a context array, and dropping these would silently lose the thing
+       * the user pointed at, which is most of why they used the inspector.
+       */
+      const contextPrefix = context.length > 0
+        ? context.map((c) => `<context type="${c.type}" label="${c.label}">\n${c.content}\n</context>`).join('\n') + '\n\n'
+        : '';
+
+      await sendMessage(contextPrefix + text, id, 'browser', model, {
+        /*
+         * Only when a webview can actually serve them. Offering `navigate` with
+         * nothing to navigate is DR-21's loop one layer down: the agent cannot
+         * discover that a step is impossible, so it repeats it until the turn
+         * dies.
+         */
+        browserToolsAvailable: !!wv,
+        apiKey: anthropicApiKey || undefined,
+        providerConfig: route?.providerConfig,
+        history: stripMessagesForHistory(
+          (useBrowserStore.getState().messages[id] ?? []) as Message[],
+        ),
+        memories: memoriesStr || undefined,
+        sessionControls: sessionControls ?? undefined,
+      });
     },
     // sessionControls is read for slash-command handling and was previously
     // missing, so chained slash commands applied against a stale value.

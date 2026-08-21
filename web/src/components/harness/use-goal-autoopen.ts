@@ -31,8 +31,25 @@ export function useGoalAutoOpen(conversationId: string, workingDir: string | nul
     if (!workingDir || !conversationId) return;
     if (opened.current === conversationId) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
 
     const check = async () => {
+      /*
+       * THE GUARD HAS TO BE IN HERE, not only in the effect body above.
+       *
+       * Up there it is evaluated ONCE, when the effect runs. `check` is on a
+       * 5s interval, so after the panel opened it kept calling the opener
+       * forever — and the opener calls `setActive()` on an existing panel. The
+       * result: click Chat, get thrown back to Goal about five seconds later,
+       * again and again, with no way to stay on the tab you chose.
+       *
+       * "Opened at most once per conversation" was the stated intent; this is
+       * where it is actually enforced.
+       */
+      if (opened.current === conversationId) {
+        if (timer) clearInterval(timer);
+        return;
+      }
       try {
         const res = await fetch(
           `/api/harness?conversationId=${encodeURIComponent(conversationId)}&workingDir=${encodeURIComponent(workingDir)}`,
@@ -52,11 +69,12 @@ export function useGoalAutoOpen(conversationId: string, workingDir: string | nul
 
     void check();
     // Slower than the panel's own 2s refresh: this only has to notice that a
-    // goal has come into existence, which happens once.
-    const id = setInterval(check, 5000);
+    // goal has come into existence, which happens once — and once it has, the
+    // guard in `check` stops the interval rather than leaving it spinning.
+    timer = setInterval(check, 5000);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      if (timer) clearInterval(timer);
     };
   }, [conversationId, workingDir]);
 }

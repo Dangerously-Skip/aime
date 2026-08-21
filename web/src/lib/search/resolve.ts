@@ -47,6 +47,21 @@ export interface SearchRoute {
   instanceUrl?: string;
   /** Resolve the key from this stored provider id — server-side only. */
   credentialProviderId?: string;
+  /**
+   * The model that CARRIES the OpenRouter web-plugin call.
+   *
+   * OpenRouter is not a search API — it is a model router, and retrieval happens
+   * during inference via the `web` plugin. So a search is a chat completion
+   * whose ANNOTATIONS are the payload; the prose is discarded at 64 tokens. The
+   * model therefore barely matters, and the cheapest capable one is right.
+   *
+   * What is NOT right is hardcoding its id. `openai/gpt-4o-mini` was written
+   * into `execute.ts`, which never consults the model chokepoint — the same
+   * defect as the memory extractor's hardcoded Anthropic id, and it fails the
+   * same way: an account that cannot serve that exact id gets a 400 and search
+   * silently returns nothing, on every query, with no trace a user would see.
+   */
+  carrierModel?: string;
 }
 
 /**
@@ -71,6 +86,8 @@ export interface SearchDefaults {
    * all and started inventing URLs. Reconfigurable, and `'none'` beats it.
    */
   openrouterProviderId?: string | null;
+  /** Overrides the web-plugin carrier model. See SearchRoute.carrierModel. */
+  searchCarrierModel?: string | null;
 }
 
 export function resolveSearchRoute(
@@ -119,7 +136,13 @@ export function resolveSearchRoute(
    * answer delivered confidently.
    */
   const borrow = defaults.openrouterProviderId?.trim();
-  if (borrow) return { providerId: 'openrouter', credentialProviderId: borrow };
+  if (borrow) {
+    return {
+      providerId: 'openrouter',
+      credentialProviderId: borrow,
+      carrierModel: defaults.searchCarrierModel?.trim() || undefined,
+    };
+  }
 
   return null;
 }

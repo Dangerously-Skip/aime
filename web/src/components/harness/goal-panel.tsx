@@ -31,6 +31,14 @@ export interface HarnessStatus {
   decision: StopDecision | null
   events: { type: string; sessionIndex?: number; taskId?: string; detail?: string }[]
   question?: ParkedQuestion | null
+  /**
+   * Live tool pulse between loop events, or null when the run is not running.
+   *
+   * Optional on the client type because a status from an older server, or from
+   * a run that predates this field, simply has no pulse — which renders as no
+   * pulse rather than as a crash.
+   */
+  activity?: { tool: string; count: number; at: number } | null
 }
 
 const STATUS_STYLE: Record<Task['status'], string> = {
@@ -324,6 +332,29 @@ export function GoalPanel({
           ))}
         </ul>
       </div>
+
+      {/*
+          THE PULSE.
+
+          Loop events fire at SESSION boundaries, and a session is many minutes
+          and can be a hundred tool calls. Between them the panel said nothing —
+          so a run making 94 tool calls looked exactly like one that had died,
+          and was reported as stopped.
+
+          A count that MOVES is the whole signal. The tool name is a bonus that
+          costs nothing and makes "is it doing something sensible" answerable too.
+      */}
+      {status.activity && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden>
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+          </span>
+          <span className="truncate" data-testid="harness-activity">
+            {status.activity.tool} · {status.activity.count} tool{status.activity.count === 1 ? '' : 's'} this run
+          </span>
+        </div>
+      )}
 
       {status.events.length > 0 && (
         <div className="space-y-1">

@@ -53,23 +53,23 @@ export const BROWSER_TOOL_SCHEMAS = [
   },
   {
     name: 'click',
-    description: 'Click an interactive element by its index number (shown in brackets like [3]).',
+    description: 'Click an interactive element by the ref shown in the latest snapshot (e.g. ref=3:12).',
     input_schema: {
       type: 'object' as const,
       properties: {
-        index: { type: 'number', description: 'The element index to click' },
+        ref: { type: 'string', description: 'The element ref from the latest snapshot, e.g. "3:12". Refs expire when the page changes.' },
       },
-      required: ['index'],
+      required: ['ref'],
     },
   },
   {
     name: 'type_text',
-    description: 'Type text into a focused input or a specific element by index. If index is omitted, types into the currently focused element.',
+    description: 'Type text into an element by ref, or into the focused element if ref is omitted.',
     input_schema: {
       type: 'object' as const,
       properties: {
         text: { type: 'string', description: 'The text to type' },
-        index: { type: 'number', description: 'Optional element index to focus first' },
+        ref: { type: 'string', description: 'Optional. The element ref from the latest snapshot, e.g. "3:12". Refs expire when the page changes.' },
         pressEnter: { type: 'boolean', description: 'Press Enter after typing (default: false)' },
       },
       required: ['text'],
@@ -115,13 +115,13 @@ export const BROWSER_TOOL_SCHEMAS = [
   },
   {
     name: 'hover',
-    description: 'Hover over an interactive element by its index number. Triggers mouseenter and mouseover events, useful for revealing tooltips, dropdown menus, or hover states.',
+    description: 'Hover over an element by ref. Triggers mouseenter/mouseover — reveals tooltips, dropdown menus and hover states.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        index: { type: 'number', description: 'The element index to hover over' },
+        ref: { type: 'string', description: 'The element ref from the latest snapshot, e.g. "3:12". Refs expire when the page changes.' },
       },
-      required: ['index'],
+      required: ['ref'],
     },
   },
   {
@@ -130,10 +130,10 @@ export const BROWSER_TOOL_SCHEMAS = [
     input_schema: {
       type: 'object' as const,
       properties: {
-        startIndex: { type: 'number', description: 'The element index to drag from' },
-        endIndex: { type: 'number', description: 'The element index to drop onto' },
+        startRef: { type: 'string', description: 'Ref to drag FROM. The element ref from the latest snapshot, e.g. "3:12". Refs expire when the page changes.' },
+        endRef: { type: 'string', description: 'Ref to drop ONTO. The element ref from the latest snapshot, e.g. "3:12". Refs expire when the page changes.' },
       },
-      required: ['startIndex', 'endIndex'],
+      required: ['startRef', 'endRef'],
     },
   },
   {
@@ -142,10 +142,10 @@ export const BROWSER_TOOL_SCHEMAS = [
     input_schema: {
       type: 'object' as const,
       properties: {
-        index: { type: 'number', description: 'The element index of the <select> element' },
+        ref: { type: 'string', description: 'Ref of the <select>. The element ref from the latest snapshot, e.g. "3:12". Refs expire when the page changes.' },
         value: { type: 'string', description: 'The value or visible text of the option to select' },
       },
-      required: ['index', 'value'],
+      required: ['ref', 'value'],
     },
   },
   {
@@ -279,8 +279,113 @@ export const BROWSER_TOOL_NAMES: Set<string> = new Set(
 // ── ARIA snapshot script ─────────────────────────────────────────────────────
 // Injected into the webview to build an accessibility tree representation.
 
-const ARIA_SNAPSHOT_SCRIPT = `
+/**
+ * Stamp every interactive element with a VERSIONED ref, and bump the version.
+ *
+ * WHY THIS EXISTS AT ALL. `data-agent-index` was written by exactly one script,
+ * `DOM_EXTRACTION_SCRIPT`, imported by exactly one file — the old hand-rolled
+ * loop. The agent path never ran it, and `snapshot` returned an accessibility
+ * tree with NO addresses in it. So the model was shown a picture of the page
+ * with nothing to point at, and every acting tool resolved an attribute that had
+ * never been written. Seven clicks in two real runs, seven failures.
+ *
+ * The fix is the one Playwright MCP settled on: THE SNAPSHOT MINTS THE REFS IT
+ * RETURNS. One operation, one numbering, no second script to forget.
+ *
+ * WHY VERSIONED. A ref is a pointer into "what the page looked like when you
+ * last looked", not a stable id. The literature is blunt about the danger: a
+ * Cancel button with ref 10 in one snapshot can be a DELETE button with ref 10
+ * after a re-render, and an agent holding the old number will happily press it.
+ * Prefixing the snapshot version makes a stale ref unresolvable instead of
+ * wrong — the failure becomes "look again", not "you deleted the thing".
+ */
+export const MARK_INTERACTIVE_JS = `
+  const INTERACTIVE_SEL = [
+    'a[href]', 'button', 'input', 'textarea', 'select',
+    '[role="button"]', '[role="link"]', '[role="tab"]', '[role="menuitem"]',
+    '[role="checkbox"]', '[role="radio"]', '[role="switch"]', '[role="option"]',
+    '[onclick]', '[tabindex]',
+  ].join(', ');
+
+  function markInteractive() {
+    // A monotonic counter on the document. Survives re-marking, resets with the
+    // page — which is exactly right: a navigation invalidates every old ref.
+    const version = (window.__aimeSnapVersion = (window.__aimeSnapVersion || 0) + 1);
+    document.querySelectorAll('[data-agent-ref]').forEach(function (el) {
+      el.removeAttribute('data-agent-ref');
+    });
+    document.querySelectorAll('[data-agent-index]').forEach(function (el) {
+      el.removeAttribute('data-agent-index');
+    });
+    const map = new Map();
+    let n = 0;
+    document.querySelectorAll(INTERACTIVE_SEL).forEach(function (el) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
+      if (el.getAttribute('aria-hidden') === 'true') return;
+      if (map.has(el)) return;
+      const ref = version + ':' + n;
+      el.setAttribute('data-agent-ref', ref);
+      // Legacy numeric, still read by the quick-ask loop's page-state formatter.
+      el.setAttribute('data-agent-index', String(n));
+      map.set(el, ref);
+      n++;
+    });
+    return { version: version, count: n, map: map };
+  }
+`;
+
+/**
+ * Resolve a ref inside the page, and explain precisely why if it fails.
+ *
+ * THREE DISTINCT ANSWERS, because they need three different reactions and the
+ * old single message ("Element not found at index 5") produced the wrong one
+ * every time — it reads as bad luck, so the model retried the same index.
+ *
+ *   - no snapshot yet      → take one; you are pointing at nothing
+ *   - stale version        → the page moved under you; look again
+ *   - current but missing  → that element is gone specifically; the rest stand
+ */
+export const RESOLVE_REF_JS = `
+  function resolveRef(ref) {
+    // The quick-ask loop addresses by plain number against data-agent-index,
+    // which its own page-state script stamps. Kept working rather than migrated:
+    // that loop is deliberately small and is not where the agent runs.
+    if (String(ref).indexOf('LEGACY:') === 0) {
+      const n = String(ref).slice(7);
+      const legacyEl = document.querySelector('[data-agent-index="' + n + '"]');
+      return legacyEl
+        ? { el: legacyEl, why: null }
+        : { el: null, why: 'No element at index ' + n + '. The page has changed since it was ' +
+            'listed — get the page state again, and do not retry this index.' };
+    }
+    const current = window.__aimeSnapVersion || 0;
+    if (current === 0) {
+      return { el: null, why: 'No snapshot has been taken of this page yet, so "' + ref +
+        '" points at nothing. Call snapshot first — it returns the refs you can act on.' };
+    }
+    const el = document.querySelector('[data-agent-ref="' + ref + '"]');
+    if (el) return { el: el, why: null };
+    const askedVersion = parseInt(String(ref).split(':')[0], 10);
+    if (askedVersion !== current) {
+      return { el: null, why: 'Ref "' + ref + '" is from snapshot ' + askedVersion +
+        ' and the page is now at snapshot ' + current + '. The page changed under you. ' +
+        'Call snapshot again and use a ref from the new one — do NOT retry this ref, and ' +
+        'do not assume the same number means the same element.' };
+    }
+    return { el: null, why: 'Ref "' + ref + '" was in the current snapshot but that element ' +
+      'is no longer in the page. Other refs from this snapshot may still be good; call ' +
+      'snapshot again if several fail.' };
+  }
+`;
+
+export const ARIA_SNAPSHOT_SCRIPT = `
 (function() {
+  ${MARK_INTERACTIVE_JS}
+  const marked = markInteractive();
+
   const IMPLICIT_ROLES = {
     A: 'link', BUTTON: 'button', H1: 'heading', H2: 'heading', H3: 'heading',
     H4: 'heading', H5: 'heading', H6: 'heading', IMG: 'img', INPUT: 'textbox',
@@ -334,13 +439,40 @@ const ARIA_SNAPSHOT_SCRIPT = `
       const indent = '  '.repeat(depth);
       let label = getLabel(el);
       if (!label) {
-        const text = (el.textContent || '').trim();
-        if (text.length > 0 && text.length <= 80) label = text;
+        /*
+         * LEAVES ONLY. textContent on a container returns the whole subtree,
+         * so a button inside main > ul > li produced FOUR lines all reading
+         * "Place bid" and only one of them carrying a ref.
+         *
+         * Found by running this in real Chromium against a laid-out page; the
+         * jsdom tests could not see it because they assert on the pieces rather
+         * than reading the tree the way a model does. A model reading that has
+         * to guess which of four identical labels is the one it can click, and
+         * three of the four answers are wrong.
+         *
+         * An explicit aria-label on a container is still honoured — that is a
+         * deliberate description, not text borrowed from a child.
+         */
+        const hasElementChildren = el.children && el.children.length > 0;
+        if (!hasElementChildren) {
+          const text = (el.textContent || '').trim();
+          if (text.length > 0 && text.length <= 80) label = text;
+        }
       }
       const states = getStates(el);
       let line = indent + '[' + role + ']';
       if (label) line += ' "' + label.substring(0, 80) + '"';
       if (states.length > 0) line += ' (' + states.join(', ') + ')';
+      /*
+       * THE REF, on the line the model reads.
+       *
+       * This is the whole fix. The tree used to describe the page and name
+       * nothing in it, so there was no way to say WHICH button. Only elements
+       * that were actually marked get one — a heading has no ref because you
+       * cannot click a heading, and offering one would invite the attempt.
+       */
+      const ref = el.getAttribute && el.getAttribute('data-agent-ref');
+      if (ref) line += ' ref=' + ref;
       lines.push(line);
     }
 
@@ -352,7 +484,20 @@ const ARIA_SNAPSHOT_SCRIPT = `
   }
 
   walk(document.body, 0);
-  return lines.join('\\n') || 'Empty page — no ARIA roles detected.';
+  if (lines.length === 0) {
+    /*
+     * Canvas, WebGL, or a page that renders no semantics. The accessibility tree
+     * is empty BY CONSTRUCTION here, so saying "empty page" invites a retry that
+     * cannot succeed. Name the alternative instead — screenshot is the only tool
+     * that can see this kind of page.
+     */
+    return 'No accessible elements on this page — it may be canvas- or WebGL-rendered. ' +
+      'The accessibility tree cannot describe it, so re-snapshotting will not help. ' +
+      'Use screenshot to see it, or extract_content for any text it does expose.';
+  }
+  return 'Snapshot ' + marked.version + ' — ' + marked.count + ' interactive elements. ' +
+    'Refs are valid only until the page changes; re-snapshot after any navigation.\\n\\n' +
+    lines.join('\\n');
 })()
 `;
 
@@ -501,6 +646,20 @@ export interface ToolResult {
 
 // ── Tool executor ────────────────────────────────────────────────────────────
 
+/**
+ * The ref a tool call is addressing.
+ *
+ * Accepts the legacy numeric `index` too, because the quick-ask loop still
+ * addresses that way and its own page-state formatter still emits plain
+ * numbers. A bare number is read as "current snapshot", which is what it meant.
+ */
+function refOf(input: Record<string, unknown>): string {
+  if (typeof input.ref === 'string' && input.ref) return input.ref;
+  const legacy = input.index;
+  if (typeof legacy === 'number') return `LEGACY:${legacy}`;
+  return String(input.ref ?? input.index ?? '');
+}
+
 export async function executeToolInWebview(
   webview: WebviewRef,
   toolName: string,
@@ -526,14 +685,16 @@ export async function executeToolInWebview(
     }
 
     case 'click': {
-      const index = input.index as number;
+      const ref = refOf(input);
       try {
         const result = await webview.executeJavaScript(`
           (function() {
-            const el = document.querySelector('[data-agent-index="${index}"]');
-            if (!el) return { success: false, message: 'Element not found at index ${index}' };
-            el.click();
-            return { success: true, message: 'Clicked element at index ${index}: ' + (el.textContent || '').trim().substring(0, 50) };
+            ${RESOLVE_REF_JS}
+            const found = resolveRef(${JSON.stringify(ref)});
+            if (!found.el) return { success: false, message: found.why };
+            const label = (found.el.textContent || '').trim().substring(0, 60);
+            found.el.click();
+            return { success: true, message: 'Clicked ' + ${JSON.stringify(ref)} + (label ? ': ' + label : '') };
           })()
         `);
         await new Promise(r => setTimeout(r, 300));
@@ -545,16 +706,20 @@ export async function executeToolInWebview(
 
     case 'type_text': {
       const text = input.text as string;
-      const index = input.index as number | undefined;
+      // Either addressing works: a ref from the snapshot, or the legacy numeric
+      // index the quick-ask loop still emits. Absent means "the focused element".
+      const hasTarget = input.ref !== undefined || input.index !== undefined;
       const pressEnter = input.pressEnter as boolean | undefined;
       try {
         const escapedText = text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
         const result = await webview.executeJavaScript(`
           (function() {
+            ${RESOLVE_REF_JS}
             let el;
-            ${index !== undefined ? `
-              el = document.querySelector('[data-agent-index="${index}"]');
-              if (!el) return { success: false, message: 'Element not found at index ${index}' };
+            ${hasTarget ? `
+              const _f = resolveRef(${JSON.stringify(refOf(input))});
+              if (!_f.el) return { success: false, message: _f.why };
+              el = _f.el;
               el.focus();
             ` : `
               el = document.activeElement;
@@ -636,19 +801,20 @@ export async function executeToolInWebview(
     }
 
     case 'hover': {
-      const index = input.index as number;
       try {
         const result = await webview.executeJavaScript(`
           (function() {
-            const el = document.querySelector('[data-agent-index="${index}"]');
-            if (!el) return { success: false, message: 'Element not found at index ${index}' };
+            ${RESOLVE_REF_JS}
+            const _f = resolveRef(${JSON.stringify(refOf(input))});
+            if (!_f.el) return { success: false, message: _f.why };
+            const el = _f.el;
             const rect = el.getBoundingClientRect();
             const cx = rect.left + rect.width / 2;
             const cy = rect.top + rect.height / 2;
             el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, clientX: cx, clientY: cy }));
             el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: cx, clientY: cy }));
             el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: cx, clientY: cy }));
-            return { success: true, message: 'Hovered element at index ${index}: ' + (el.textContent || '').trim().substring(0, 50) };
+            return { success: true, message: 'Hovered ' + ${JSON.stringify(refOf(input))} + ': ' + (el.textContent || '').trim().substring(0, 50) };
           })()
         `);
         await new Promise(r => setTimeout(r, 300));
@@ -664,10 +830,12 @@ export async function executeToolInWebview(
       try {
         const result = await webview.executeJavaScript(`
           (function() {
-            const src = document.querySelector('[data-agent-index="${startIndex}"]');
-            const dst = document.querySelector('[data-agent-index="${endIndex}"]');
-            if (!src) return { success: false, message: 'Source element not found at index ${startIndex}' };
-            if (!dst) return { success: false, message: 'Target element not found at index ${endIndex}' };
+            ${RESOLVE_REF_JS}
+            const _s = resolveRef(${JSON.stringify(String(input.startRef ?? input.start_ref ?? `LEGACY:${input.startIndex}`))});
+            const _d = resolveRef(${JSON.stringify(String(input.endRef ?? input.end_ref ?? `LEGACY:${input.endIndex}`))});
+            if (!_s.el) return { success: false, message: 'Drag source — ' + _s.why };
+            if (!_d.el) return { success: false, message: 'Drag target — ' + _d.why };
+            const src = _s.el, dst = _d.el;
             const srcRect = src.getBoundingClientRect();
             const dstRect = dst.getBoundingClientRect();
             const dt = new DataTransfer();
@@ -687,15 +855,16 @@ export async function executeToolInWebview(
     }
 
     case 'select_option': {
-      const index = input.index as number;
       const value = input.value as string;
       try {
         const escapedValue = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         const result = await webview.executeJavaScript(`
           (function() {
-            const el = document.querySelector('[data-agent-index="${index}"]');
-            if (!el) return { success: false, message: 'Element not found at index ${index}' };
-            if (el.tagName !== 'SELECT') return { success: false, message: 'Element at index ${index} is not a <select>' };
+            ${RESOLVE_REF_JS}
+            const _f = resolveRef(${JSON.stringify(refOf(input))});
+            if (!_f.el) return { success: false, message: _f.why };
+            const el = _f.el;
+            if (el.tagName !== 'SELECT') return { success: false, message: 'Ref ' + ${JSON.stringify(refOf(input))} + ' is a <' + el.tagName.toLowerCase() + '>, not a <select>. Snapshot marks selects with role combobox — pick one of those.' };
             // Try matching by value first, then by visible text
             let found = false;
             for (const opt of el.options) {
@@ -708,7 +877,7 @@ export async function executeToolInWebview(
             if (!found) return { success: false, message: 'Option "${escapedValue}" not found in select' };
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-            return { success: true, message: 'Selected option "${escapedValue}" in element at index ${index}' };
+            return { success: true, message: 'Selected option "${escapedValue}" in ' + ${JSON.stringify(refOf(input))} };
           })()
         `);
         await new Promise(r => setTimeout(r, 200));

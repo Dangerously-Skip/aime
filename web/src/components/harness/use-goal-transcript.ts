@@ -98,7 +98,27 @@ export function transcriptLines(
     const spend = s.run ? ` · $${s.run.spentUsd.toFixed(2)} over ${s.run.sessions} session${s.run.sessions === 1 ? '' : 's'}` : '';
     out.push({
       key: `${run}:stopped:${s.decision.reason}:${s.run?.sessions ?? 0}`,
-      content: `**Goal ${s.decision.reason === 'complete' ? 'complete' : 'stopped'}** — ${s.decision.detail ?? ''}${spend}`,
+      /*
+       * THE RUN IS OVER, SAID TO THE MODEL AS WELL AS TO THE USER.
+       *
+       * These lines are posted into the chat as assistant turns, so they become
+       * the history of every LATER turn in this conversation. After a run
+       * stopped, the model read "Session 1 — working on…", "Checked and passed"
+       * and carried straight on in the same voice: "Now let me verify t-002",
+       * "t-002 verified" — with no verifier, no ledger write, and no run. The
+       * plan never moved, and the user reasonably read the panel as broken.
+       *
+       * A false claim of verification is the worst failure this system has,
+       * because verification is the only reason to trust any of it. The fix is
+       * cheap and lands in the one place that causes the confusion: the same
+       * history now says the harness is not running and cannot be spoken for.
+       */
+      content:
+        `**Goal ${s.decision.reason === 'complete' ? 'complete' : 'stopped'}** — ${s.decision.detail ?? ''}${spend}` +
+        `\n\n_The goal run has ended. Anything from here is an ordinary chat turn: there is no ` +
+        `verifier running, tasks cannot be marked passed, and the plan will not change. Do not ` +
+        `narrate sessions or claim a task is verified — say what you actually did, and toggle ` +
+        `**Pursue goal** to start another run._`,
     });
   }
 

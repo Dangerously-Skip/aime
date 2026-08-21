@@ -69,7 +69,6 @@ import {
   isSearchEntry,
 } from "@/lib/cowork/context-entry";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
-import { GoalPanel } from "@/components/harness/goal-panel";
 import { RailSlot } from "@/lib/panels/rail-slot";
 import { railPanels } from "@/lib/panels/registry";
 import {
