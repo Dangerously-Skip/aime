@@ -296,7 +296,7 @@ function useDockviewTheme(): DockviewTheme {
   return useIsDarkTheme() ? themeAbyssSpaced : themeLightSpaced;
 }
 
-export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} }: WorkspaceLayoutProps) {
+export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {}, previewSlot }: WorkspaceLayoutProps) {
   const { layout, setDockviewLayout, setVisible } = useCodeWorkspace(workspace);
   const apiRef = useRef<DockviewApi | null>(null);
   const dockviewTheme = useDockviewTheme();
@@ -318,6 +318,17 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
     onFolderChange: onFolderChange ?? (() => {}),
     chatId,
     slots,
+    /*
+       THE FOURTH LAYER of the blank preview panel, and the one that made the
+       previous three fixes invisible.
+
+       `WorkspaceContext` declares `previewSlot` and `PreviewRegion` reads it,
+       and the prop arrives on this component — but it was never copied into
+       `ctx`, the object stamped onto every dockview panel as its params. So
+       `ctx.previewSlot` was `undefined` forever and the region rendered `null`,
+       no matter what the surface put in the slot.
+    */
+    previewSlot,
   };
 
   function onReady(event: DockviewReadyEvent) {
@@ -616,7 +627,12 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {} 
       panel.api.updateParameters({ fromRef: baseBranch ?? undefined });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyOpen, slots, workspace, baseBranch]);
+    // `previewSlot` belongs here for the same reason `slots` does: dockview
+    // panels keep the params they were CREATED with, so a value that changes
+    // later only reaches a panel through updateParameters. Without it the
+    // preview would work only if its panel happened to be created after the
+    // url arrived — which is never, since the panel is how you set the url.
+  }, [historyOpen, slots, previewSlot, workspace, baseBranch]);
 
   // Add / remove the terminal panel reactively
   useEffect(() => {
