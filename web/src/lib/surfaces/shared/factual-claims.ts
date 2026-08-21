@@ -45,6 +45,44 @@ If a whole comparison rests on numbers you could not verify, say that about the
 comparison, not just the numbers. A ranking built on guesses is a guess, however
 carefully the arithmetic was done.`;
 
+/**
+ * When a surface has a live browser, say so and say when to reach for it.
+ *
+ * OBSERVED, not theorised. A Code run with the preview panel open was OFFERED
+ * the browser tools and barely touched them: 5 `navigate` against 83 `Bash` and
+ * 19 `FetchUrl`, on a task that was entirely about reading listing pages. The
+ * tools were registered, permitted and working — and the prompt never mentioned
+ * they existed or when they would beat a fetch.
+ *
+ * The Browser surface has this guidance already ("Which tool reads a page") and
+ * it is the reason that surface reaches for the right one. Code and Cowork had
+ * nothing, so the model defaulted to what it always has: shell and fetch.
+ *
+ * ONLY EMITTED WHEN THE TOOLS ARE ACTUALLY THERE. Naming a tool that is not
+ * registered is the trap this codebase keeps falling into — an agent told it can
+ * navigate, on a run with no webview, cannot discover the step is impossible and
+ * repeats it (DR-21). The caller passes what it knows.
+ */
+export function browserToolsPrompt(available: boolean): string {
+  if (!available) return '';
+  return `## You have a real browser open
+Alongside fetching, you can drive an actual browser view: \`navigate\`, \`snapshot\`,
+\`click\`, \`type_text\`, \`scroll\`, \`extract_content\`. This is not a slower FetchUrl —
+it is the only way to reach anything a fetch cannot see.
+
+Prefer the browser when the page needs a SESSION or an INTERACTION: results behind
+a login, a filter or sort you have to apply, pagination driven by clicks, prices
+that only appear after the page's own scripts run, anything where a raw fetch
+returns a shell with no content in it.
+
+Prefer \`FetchUrl\` when the page is static and you only need its text — it is
+faster and cheaper, and most documentation and articles are exactly that.
+
+To act on a page: \`snapshot\` first. It returns the page's structure with a \`ref\`
+on every element you can touch, and the acting tools take those refs. Refs expire
+the moment the page changes, so re-snapshot after anything that moves it.`;
+}
+
 /** The fragment, for surfaces that compose their prompt from parts. */
 export function factualClaimsPrompt(): string {
   return FACTUAL_CLAIMS_PROMPT;

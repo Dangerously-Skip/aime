@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AIME (formerly Quarry — open-source rename in progress, see `.planning/aime-roadmap.md`) is an Electron desktop AI workspace powered by the Claude Agent SDK. Product name lives in `web/src/config/branding.ts` (`APP_NAME`) — never hardcode it. Built with Next.js 16, React 19, and shadcn/ui in the `web/` directory. Five surfaces (Chat, Cowork, Code, Browser, Assistant) with real-time streaming via SSE, OAuth connectors exposed as MCP tools, agent routing, standing orders/automation, memory extraction, ROI telemetry, and document processing (PDF, DOCX, XLSX, PPTX, audio, video).
+AIME (formerly Quarry — open-source rename in progress) is an Electron desktop AI workspace powered by the Claude Agent SDK. Product name lives in `web/src/config/branding.ts` (`APP_NAME`) — never hardcode it. Built with Next.js 16, React 19, and shadcn/ui in the `web/` directory. Five surfaces (Chat, Cowork, Code, Browser, Assistant) with real-time streaming via SSE, OAuth connectors exposed as MCP tools, agent routing, standing orders/automation, memory extraction, ROI telemetry, and document processing (PDF, DOCX, XLSX, PPTX, audio, video).
 
 ## Development Commands
 

@@ -9,7 +9,8 @@ orders and scheduled automation, document generation, and long-term memory.
 
 > **Status:** AIME is the open-source continuation of an internal tool
 > (previously "Quarry"). The rename and de-internalization are in progress —
-> see `.planning/aime-roadmap.md` for the roadmap and decision records.
+> Design decisions are recorded in commit messages and in comments at the
+> point of use — the code explains its own history where it matters.
 > Existing installs migrate their data automatically.
 
 ## Surfaces

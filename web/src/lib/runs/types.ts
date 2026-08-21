@@ -1,6 +1,6 @@
 /**
  * Goals and Runs — the substrate under both Clawish (P6/C1–C2) and Cockpit
- * (P6/K3). See `.planning/clawish.md` and `.planning/cockpit.md`.
+ * (P6/K3).
  *
  * The insight that produced this file: OpenClaw's triggers, openworker's
  * outcomes, and a Cockpit dashboard all need the same missing object.

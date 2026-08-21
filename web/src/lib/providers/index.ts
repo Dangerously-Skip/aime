@@ -11,7 +11,7 @@ declare global {
 
 // Provider registry - cached on globalThis for hot reload survival.
 // Claude (Agent SDK) is the only execution engine; the multi-provider
-// model registry is a roadmap pillar (see .planning/aime-roadmap.md).
+// model registry is the chokepoint every surface resolves through.
 function getRegistry(): Record<string, typeof BaseProvider> {
   if (!globalThis.__providerRegistry) {
     globalThis.__providerRegistry = {

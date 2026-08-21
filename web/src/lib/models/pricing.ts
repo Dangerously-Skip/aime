@@ -92,8 +92,24 @@ export function estimateCostUsd(
 }
 
 /** Estimated USD for a turn, pricing each class of token at its own rate. */
-export function estimateUsageCostUsd(model: string, usage: TokenUsage): number {
-  const p = pricingFor(model);
+export function estimateUsageCostUsd(
+  model: string,
+  usage: TokenUsage,
+  /**
+   * The model's ACTUAL rates, when the caller knows them.
+   *
+   * `pricingFor` searches the built-in Anthropic registry, so a BYOK model falls
+   * back to Sonnet-tier rates — and on an OpenRouter-only setup that is every
+   * model, which overstates spend for the cheap ones by a wide margin. The real
+   * numbers are scanned from the provider (OpenRouter publishes per-model
+   * prompt/completion prices) and live client-side; passing them here is what
+   * turns an estimate into an actual.
+   */
+  known?: { inputPer1kUsd: number; outputPer1kUsd: number } | null,
+): number {
+  const p = known
+    ? { input: known.inputPer1kUsd, output: known.outputPer1kUsd }
+    : pricingFor(model);
   const per1k = (tokens: number, rate: number) => (tokens / 1000) * rate;
   return (
     per1k(usage.inputTokens, p.input) +

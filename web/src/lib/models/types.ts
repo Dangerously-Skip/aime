@@ -3,7 +3,7 @@
  *
  * Surfaces and features request a (capability, tier) pair; the registry
  * resolves it to a concrete Model on a configured ModelProvider, with
- * fallback ("tumbling"). See .planning/p1-model-registry.md for the design
+ * fallback ("tumbling"). The rules live in resolveRoute; see its comments for
  * and the Agent-SDK-drives-Claude-only constraint that shapes it.
  */
 

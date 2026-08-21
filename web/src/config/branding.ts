@@ -6,7 +6,7 @@
  * hardcoded product name; `branding.test.ts` guards the surface prompts.
  *
  * Infrastructure identifiers (storage-key prefix, data directory, Electron
- * appId) migrate in later P0 slices — see .planning/aime-roadmap.md.
+ * appId) migrate in later slices of the rename.
  */
 
 export const APP_NAME = 'AIME';

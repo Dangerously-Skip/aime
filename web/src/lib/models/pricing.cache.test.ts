@@ -84,3 +84,45 @@ describe('the magnitude of the bug that was here', () => {
     expect(cost).toBeGreaterThan(0);
   });
 });
+
+describe('a BYOK model is charged its OWN rate, not Sonnet-tier', () => {
+  /*
+   * `pricingFor` searches the BUILT-IN Anthropic registry, so any model that is
+   * not in it falls back to Sonnet-tier rates. On an OpenRouter-only setup that
+   * is every model — which is why spend still read high after the cache-token
+   * fix was in.
+   *
+   * The real numbers already exist: the OpenRouter scan reads each model's
+   * prompt/completion price. They live client-side, so the client sends them.
+   */
+  const usage = { inputTokens: 1_000_000, outputTokens: 200_000 };
+
+  it('falls back to Sonnet-tier when nothing is known — the old behaviour', () => {
+    const fallback = estimateUsageCostUsd('deepseek/deepseek-v4-pro', usage);
+    const sonnet = estimateUsageCostUsd('claude-sonnet-4-6', usage);
+    expect(fallback).toBeCloseTo(sonnet, 6);
+  });
+
+  it('uses the rates it is given instead', () => {
+    // DeepSeek is roughly an order of magnitude cheaper than Sonnet.
+    const real = { inputPer1kUsd: 0.00027, outputPer1kUsd: 0.0011 };
+    const priced = estimateUsageCostUsd('deepseek/deepseek-v4-pro', usage, real);
+    expect(priced).toBeCloseTo(1_000 * 0.00027 + 200 * 0.0011, 6);
+    expect(priced).toBeLessThan(estimateUsageCostUsd('deepseek/deepseek-v4-pro', usage) / 5);
+  });
+
+  it('known rates apply to cache tokens too', () => {
+    // Otherwise the dominant term silently reverts to the fallback.
+    const real = { inputPer1kUsd: 0.001, outputPer1kUsd: 0.002 };
+    const withCache = estimateUsageCostUsd(
+      'some/model', { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_000_000 }, real,
+    );
+    expect(withCache).toBeCloseTo(1_000 * 0.001 * CACHE_READ_MULTIPLIER, 6);
+  });
+
+  it('null means "I do not know", not "free"', () => {
+    // A caller with no pricing must not accidentally zero the bill.
+    const a = estimateUsageCostUsd('unknown/model', usage, null);
+    expect(a).toBeGreaterThan(0);
+  });
+});

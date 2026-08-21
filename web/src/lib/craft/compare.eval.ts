@@ -47,6 +47,7 @@ import { RUBRIC_IDS } from './rubric';
  * other half of the instrument.
  */
 
+// Gitignored output directory, not a document — see baseline.eval.ts.
 const OUT_ROOT = path.resolve(__dirname, '../../../../.planning/evals');
 const ENABLED = process.env.AIME_EVAL === '1';
 

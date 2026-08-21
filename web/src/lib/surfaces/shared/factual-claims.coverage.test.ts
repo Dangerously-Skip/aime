@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getSurfaceConfig } from '../index';
-import { FACTUAL_CLAIMS_PROMPT } from './factual-claims';
+import { FACTUAL_CLAIMS_PROMPT, browserToolsPrompt } from './factual-claims';
 
 /**
  * EVERY SURFACE THAT RESEARCHES MUST CARRY THE SOURCING RULE.
@@ -90,5 +90,56 @@ describe('what the rule actually says', () => {
     const src = fs.readFileSync(path.join(SRC, 'lib/surfaces/shared/factual-claims.ts'), 'utf8');
     // Tolerant of comment wrapping — the claim matters, not the line breaks.
     expect(src.replace(/\s*\*\s*/g, ' ')).toMatch(/prompt is guidance, not a gate/i);
+  });
+});
+
+describe('the browser note appears only when the browser does', () => {
+  /*
+   * OBSERVED, not theorised: a Code run with the preview panel open was offered
+   * the browser tools and barely used them — 5 navigate against 83 Bash and 19
+   * FetchUrl, on a task entirely about reading listing pages. Registered,
+   * permitted, working, and never mentioned in the prompt.
+   *
+   * The other half matters more. Naming a tool that is NOT registered is the
+   * DR-21 loop: an agent told it can navigate, on a run with no webview, cannot
+   * discover the step is impossible and repeats it until the turn dies.
+   */
+  it('says nothing when there is no browser', () => {
+    expect(browserToolsPrompt(false)).toBe('');
+  });
+
+  it('names the tools when there is one', () => {
+    const p = browserToolsPrompt(true);
+    for (const t of ['navigate', 'snapshot', 'click', 'extract_content']) expect(p).toContain(t);
+  });
+
+  it('says WHEN the browser beats a fetch', () => {
+    // Without this it reads as "a slower FetchUrl" and stays unused.
+    const p = browserToolsPrompt(true);
+    expect(p).toMatch(/login|session/i);
+    expect(p).toMatch(/filter|sort|pagination/i);
+    expect(p).toMatch(/scripts run/i);
+  });
+
+  it('says when to prefer a fetch, so the browser is not overused either', () => {
+    // No `s` flag — the project's TS target predates it. `[\s\S]` does the same.
+    expect(browserToolsPrompt(true)).toMatch(/prefer[\s\S]*FetchUrl[\s\S]*static/i);
+  });
+
+  it('teaches snapshot-then-act, which is the only order that works', () => {
+    const p = browserToolsPrompt(true);
+    expect(p).toMatch(/snapshot.*first/i);
+    expect(p).toMatch(/ref/);
+    expect(p).toMatch(/expire/i);
+  });
+
+  it('is gated on the SAME flag that mounts the tools', () => {
+    /*
+     * Emitted in the provider, not per surface, so the note and the tools cannot
+     * disagree — the failure would be silent in both directions.
+     */
+    const provider = fs.readFileSync(path.join(SRC, 'lib/providers/claude-provider.ts'), 'utf8');
+    expect(provider).toContain('browserToolsPrompt(browserToolsServable)');
+    expect(provider).toContain('hasWebview: browserToolsServable');
   });
 });

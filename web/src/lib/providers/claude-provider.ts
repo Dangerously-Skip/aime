@@ -7,6 +7,7 @@ import { correctWebSearchSection, type SearchToolKind } from '../surfaces/shared
 import { themeInstruction } from '../themes/resolve';
 import { allowedPluginPaths } from '../themes/deck-format';
 import { imageInstruction } from '../images/prompt';
+import { browserToolsPrompt } from '../surfaces/shared/factual-claims';
 import { loadICloudCredentials } from '../icloud/credentials';
 import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
@@ -466,7 +467,22 @@ export class ClaudeProvider extends BaseProvider {
      * document, none of which set one — never heard the tool existed.
      */
     const imageNote = imageInstruction(!!imageApiKey);
-    const extraNotes = themeNote + imageNote;
+    /*
+     * Tell the model it has a browser, but only when it does.
+     *
+     * OBSERVED: a Code run with the preview panel open was offered the browser
+     * tools and barely used them — 5 navigate against 83 Bash and 19 FetchUrl,
+     * on a task entirely about reading listing pages. Registered, permitted,
+     * working, and never mentioned in the prompt.
+     *
+     * Emitted HERE rather than in each surface config so it is gated on the very
+     * same flag that mounts the tools. A surface cannot forget it, and it cannot
+     * be emitted for a run with no webview — which would be DR-21's loop again:
+     * an agent told it can navigate, with nothing to navigate, cannot discover
+     * the step is impossible.
+     */
+    const browserNote = browserToolsPrompt(browserToolsServable);
+    const extraNotes = themeNote + imageNote + (browserNote ? `\n\n${browserNote}` : '');
     const systemPrompt = (() => {
       if (typeof rawSystemPrompt === 'string') {
         return correctWebSearchSection(rawSystemPrompt, searchTool) + extraNotes;
