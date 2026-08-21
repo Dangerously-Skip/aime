@@ -95,7 +95,20 @@ describe('the preview region', () => {
     // its ref to the agent, so only the framing lives here.
     const at = src.indexOf('function PreviewRegion');
     expect(at).toBeGreaterThan(-1);
-    const body = src.slice(at, at + 300);
+    // Wide enough to include the empty state, which is part of the region now.
+    const body = src.slice(at, at + 1600);
     expect(body).toContain('previewSlot');
+  });
+
+  it('says WHY it is empty rather than rendering nothing', () => {
+    /*
+     * `?? null` is how this panel spent four rounds of fixes looking identical
+     * to every kind of failure. The user saw the same empty dark rectangle each
+     * time, which distinguished none of them.
+     */
+    const at = src.indexOf('function PreviewRegion');
+    const body = src.slice(at, at + 1600);
+    expect(body, 'the region renders bare null again').not.toMatch(/previewSlot \?\? null/);
+    expect(body).toMatch(/could not be mounted/);
   });
 });

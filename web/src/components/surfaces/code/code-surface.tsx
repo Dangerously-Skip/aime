@@ -1147,8 +1147,10 @@ export function CodeSurface() {
           // panel cannot be placed; the inline status below the composer is the
           // feedback that must not depend on dockview.
           try {
+            // `true` — the user just pressed send on a goal, so moving them to
+            // the panel is what they asked for. The status poll passes nothing.
             const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
-            if (typeof open === "function") (open as () => void)();
+            if (typeof open === "function") (open as (focus?: boolean) => void)(true);
           } catch {
             /* the panel is a convenience, not the run */
           }

@@ -231,7 +231,30 @@ function DiffRegion(props: IDockviewPanelProps<DiffPanelParams>) {
  */
 function PreviewRegion(props: IDockviewPanelProps<WorkspaceContext>) {
   const ctx = safeCtx(props.params);
-  return <div className="dv-region-body">{ctx.previewSlot ?? null}</div>;
+  /*
+   * NEVER RENDER AN UNEXPLAINED BLANK PANEL.
+   *
+   * `?? null` is how this panel spent four rounds of fixes looking identical to
+   * every kind of failure: gated on a url, mounted as an overlay, returning
+   * early on `open`, and finally a slot that never reached ctx. Each time the
+   * user saw the same empty dark rectangle, which said nothing about which of
+   * those it was.
+   *
+   * An empty state that names its own cause is worth more than the two lines it
+   * costs — and if it ever appears again, the next report arrives with the
+   * diagnosis already in it.
+   */
+  if (!ctx.previewSlot) {
+    console.warn('[workspace] preview panel has no slot — ctx.previewSlot is empty', {
+      keys: Object.keys((props.params ?? {}) as object),
+    });
+    return (
+      <div className="dv-region-body items-center justify-center text-xs text-muted-foreground p-4 text-center">
+        The preview could not be mounted — the surface supplied no content for this panel.
+      </div>
+    );
+  }
+  return <div className="dv-region-body">{ctx.previewSlot}</div>;
 }
 
 function GoalRegion(props: IDockviewPanelProps<WorkspaceContext>) {
@@ -499,11 +522,24 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {},
      * idempotent — calling it while the panel is open just focuses it, which is
      * what makes the auto-open effect safe to run on every status poll.
      */
-    (window as unknown as Record<string, unknown>).__ideOpenGoal = () => {
+    /**
+     * Open the goal panel. `focus` is opt-in, and that is the whole point.
+     *
+     * This used to `setActive()` unconditionally, with a comment calling that
+     * "idempotent" and therefore "safe to run on every status poll". It is
+     * idempotent about EXISTENCE and not about FOCUS, and the poll ran every
+     * five seconds: clicking Chat threw you back to Goal a few seconds later,
+     * forever. A caller reacting to a poll must not move the user; a caller
+     * reacting to the user pressing send may.
+     *
+     * Creating the panel still focuses it — that is dockview's own behaviour on
+     * addPanel, and a panel that appears unnoticed is not much use.
+     */
+    (window as unknown as Record<string, unknown>).__ideOpenGoal = (focus?: boolean) => {
       const id = "goal";
       const existing = event.api.getPanel(id);
       if (existing) {
-        existing.api.setActive();
+        if (focus) existing.api.setActive();
         return;
       }
       /*
