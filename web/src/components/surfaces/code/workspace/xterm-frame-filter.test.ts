@@ -46,12 +46,30 @@ const fire = (message: string, error?: Error) => {
   return { swallowed };
 };
 
+/**
+ * Keep the events we dispatch from counting as UNHANDLED.
+ *
+ * These tests fire genuine `error` events at `window`. In the cases where no
+ * filter is installed — after uninstall, and in production — nothing prevents
+ * them, so vitest records them as unhandled errors and fails the run with every
+ * test passing. That is a real trap: the suite went green while `npm run verify`
+ * went red, which is the shape that reaches CI.
+ *
+ * Registered in the BUBBLE phase so it runs after the filter's capture-phase
+ * listener, and it only suppresses reporting — the filter's own debug line,
+ * which is what the assertions read, is untouched.
+ */
+let swallowAll: (e: ErrorEvent) => void;
+
 beforeEach(() => {
   vi.spyOn(console, 'debug').mockImplementation(() => {});
   uninstall = () => {};
+  swallowAll = (e: ErrorEvent) => e.preventDefault();
+  window.addEventListener('error', swallowAll);
 });
 afterEach(() => {
   uninstall();
+  window.removeEventListener('error', swallowAll);
   vi.restoreAllMocks();
 });
 
