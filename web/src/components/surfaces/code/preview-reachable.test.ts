@@ -168,3 +168,42 @@ describe('normaliseUrl', () => {
     expect(normaliseUrl('http://')).toBeNull();
   });
 });
+
+describe('the panel actually renders inside a dock', () => {
+  const panel = src('components/shared/preview-panel.tsx');
+
+  it('fills its container instead of being a 480px slab', () => {
+    /*
+     * Written as an overlay docked right of the chat column, it carried its own
+     * width, `shrink-0` and a left border. In a dockview panel the panel already
+     * has a size, and the border draws a seam where the gutter does the job.
+     */
+    expect(panel).not.toMatch(/w-\[480px\]/);
+    expect(panel).not.toMatch(/shrink-0 w-\[480px\]/);
+    expect(panel).toMatch(/h-full min-h-0 w-full/);
+  });
+
+  it('does not blank itself when `open` is false', () => {
+    /*
+     * `if (!open) return null` meant "the overlay is hidden". A dockview panel
+     * decides visibility by existing, so that guard could only hide content
+     * inside a panel the user had deliberately opened — which is exactly what
+     * happened: the tab appeared and the body was empty.
+     */
+    expect(panel).not.toMatch(/if \(!open\) return null;/);
+  });
+
+  it('keeps min-h-0, without which the webview gets no room', () => {
+    // A flex child defaults to min-height:auto and refuses to shrink below its
+    // content. Same trap as the video stage on the deck.
+    expect(panel).toContain('min-h-0');
+  });
+
+  it('the duplicate Preview chip is gone from the chat panel', () => {
+    // It was the overlay's toggle, anchored where the overlay used to sit. The
+    // tab is the control now, and two controls for one thing in two places is
+    // worse than either.
+    expect(code).not.toMatch(/Preview chip header/);
+    expect(code).not.toMatch(/setPreviewOpen\(\(prev\) => !prev\)/);
+  });
+});
