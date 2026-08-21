@@ -102,6 +102,32 @@ export function jsonSchemaToZod(schema: {
   return shape;
 }
 
+/** The MCP server these tools are mounted on. */
+export const BROWSER_MCP_SERVER = 'aime';
+
+/**
+ * The names the MODEL sees, and therefore the names an allow-list must use.
+ *
+ * WHY THIS EXISTS. Registering the tools is not enough to make them callable.
+ * The SDK gates a tool that no permission rule covers, and `canUseTool` is not
+ * consulted for it — so the call is refused before any handler runs, the model
+ * is told "permission", and NOTHING IN OUR CODE LOGS A THING. That is exactly
+ * how it presented: six browser tool calls, zero relay events, zero denials in
+ * the log, and an agent reporting "a permission issue with the browser tools".
+ *
+ * Derived from the same array and the same exclusion as the tools themselves,
+ * so the allow-list cannot drift from what is actually mounted. A hand-written
+ * copy of these nineteen names in a surface config is the drift this whole file
+ * exists to avoid, and it is also how the bug got here: `browser-config.ts`
+ * lists `mcp__aime__FetchUrl` and `mcp__aime__SearchWeb` by hand, and the
+ * browser tools were simply never added when they arrived.
+ */
+export function browserMcpToolNames(): string[] {
+  return BROWSER_TOOL_SCHEMAS
+    .filter((s) => !EXCLUDED.has(s.name))
+    .map((s) => `mcp__${BROWSER_MCP_SERVER}__${s.name}`);
+}
+
 /**
  * Build the SDK tools.
  *

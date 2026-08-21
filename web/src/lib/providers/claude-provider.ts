@@ -17,7 +17,7 @@ import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { waitForAnswer } from '../pending-questions';
 import { randomUUID } from 'node:crypto';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
-import { buildIfServable } from '../mcp/browser-tool-bridge';
+import { buildIfServable, browserMcpToolNames } from '../mcp/browser-tool-bridge';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
 import { waitForConnector } from '../pending-connectors';
 import { waitForDocumentPrint } from '../pending-documents';
@@ -225,10 +225,40 @@ export class ClaudeProvider extends BaseProvider {
       }
     }
 
+    /*
+     * Can a browser tool actually be executed on this run? Only the renderer
+     * knows, so only the renderer says (see `browserToolsAvailable` on the
+     * route). Computed here rather than at the MCP-server call below, because
+     * the allow-list is assembled first and needs the same answer.
+     */
+    const browserToolsServable = browserToolsAvailable === true && !!onBrowserToolUse;
+
     // Merge: explicit params > surface config > constructor defaults
-    const allowedTools = explicitAllowedTools
-      || surfaceConfig?.allowedTools
-      || this.defaultAllowedTools;
+    const allowedTools = [
+      ...(explicitAllowedTools || surfaceConfig?.allowedTools || this.defaultAllowedTools),
+      /*
+       * The browser tools auto-approve themselves when they are servable.
+       *
+       * REGISTERING A TOOL IS NOT ENOUGH TO MAKE IT CALLABLE. A tool no
+       * permission rule covers is refused by the SDK before any handler runs,
+       * and `canUseTool` is not consulted, so nothing in this codebase logs it.
+       * That is how this presented: the model held `mcp__aime__navigate`, called
+       * it six times, and reported "a permission issue" — with zero relay
+       * events and zero denials anywhere in our logs.
+       *
+       * Here rather than in each surface config, because a hand-written list is
+       * how the gap appeared: `browser-config.ts` names `mcp__aime__FetchUrl`
+       * and `mcp__aime__SearchWeb` by hand and was never updated when the
+       * browser tools were mounted. A surface says whether it HAS a browser;
+       * it should not also have to remember the nineteen names.
+       *
+       * Auto-approve is the right level and not a widening: these tools only
+       * exist on a run that declared a live webview, they act only inside the
+       * webview the user is looking at, and the user watches every one of them
+       * happen. `deniedTools` still outranks this, so a user's own block holds.
+       */
+      ...(browserToolsServable ? browserMcpToolNames() : []),
+    ];
     /**
      * Tools withheld from this run. `allowedTools` cannot do this — it is an
      * auto-approve list, so narrowing it leaves the tool mounted and reachable
@@ -746,7 +776,7 @@ export class ClaudeProvider extends BaseProvider {
      * infinite loop; absence is expressed by the tool not existing.
      */
     const browserTools = buildIfServable({
-      hasWebview: browserToolsAvailable === true && !!onBrowserToolUse,
+      hasWebview: browserToolsServable,
       tool: tool as never,
       emit: async (toolUseId, name, input) => {
         await onBrowserToolUse?.(toolUseId, name, input);

@@ -37,7 +37,18 @@ describe('the tools reach the SDK', () => {
      * be closed, so either signal alone registers tools nothing can execute —
      * DR-21's infinite loop, one layer down.
      */
-    expect(provider).toMatch(/hasWebview:\s*browserToolsAvailable === true && !!onBrowserToolUse/);
+    /*
+       Both signals, wherever the expression lives. It was inline at
+       `hasWebview:` until the allow-list needed the same answer — permitting the
+       tools and mounting them must not be able to disagree — so it became a
+       named flag that both read. Asserted on the DEFINITION rather than on
+       either use, so extracting it again does not fail this for no reason while
+       dropping half the condition still does.
+    */
+    expect(provider).toMatch(
+      /const browserToolsServable =\s*browserToolsAvailable === true && !!onBrowserToolUse/,
+    );
+    expect(provider).toContain('hasWebview: browserToolsServable');
   });
 
   it('the route requires a live stream AS WELL as a webview', () => {
