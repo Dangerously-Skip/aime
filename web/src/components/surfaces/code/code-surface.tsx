@@ -1461,22 +1461,13 @@ export function CodeSurface() {
                   </div>
                 )}
 
-                {/* Preview chip header */}
-                {previewUrl && (
-                  <div className="flex items-center gap-2 px-4 py-1.5 border-b border-border/50 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setPreviewOpen((prev) => !prev)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs text-primary hover:bg-primary/10 transition-colors animate-in fade-in slide-in-from-left-2 duration-300"
-                    >
-                      <Globe className="h-3 w-3" />
-                      <span>Preview</span>
-                      <span className="text-primary/70 font-mono truncate max-w-[200px]">
-                        {previewUrl.replace(/^https?:\/\//, "")}
-                      </span>
-                    </button>
-                  </div>
-                )}
+                {/*
+                  The "Preview about:blank" chip lived here — the overlay's
+                  show/hide toggle, sitting inside the CHAT panel because that
+                  is where the overlay was anchored. The panel has its own tab
+                  now, so the chip was a second control for the same thing in
+                  the wrong place.
+                */}
 
                 <div className="flex flex-1 min-h-0">
                   {/* Messages + input column */}

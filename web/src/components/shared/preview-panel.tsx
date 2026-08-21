@@ -194,10 +194,30 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
     setHasErrors(false);
   }
 
-  if (!open) return null;
+  /*
+     `open` used to mean "the overlay is showing". A dockview panel decides that
+     by existing, so an internal guard can only ever hide content inside a panel
+     the user deliberately opened — which is precisely what happened: the tab
+     appeared and the body was blank.
+     
+     Kept in the props for the callers that still toggle it, but it no longer
+     suppresses render.
+  */
 
   return (
-    <div className="flex flex-col shrink-0 w-[480px] border-l border-border bg-background">
+    /*
+       FILLS ITS CONTAINER now, rather than being a 480px slab.
+       
+       This was written as an overlay docked to the right of the chat column, so
+       it carried its own width, `shrink-0` and a left border. Inside a dockview
+       panel that is wrong twice over: the panel already has a size, and the
+       border draws a seam where the gutter does the job.
+       
+       `min-h-0` matters — a flex child defaults to `min-height:auto` and refuses
+       to shrink below its content, which is what left the webview with no room
+       and the panel looking blank.
+    */
+    <div className="flex flex-col h-full min-h-0 w-full bg-background">
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border">
         <Globe className="h-3.5 w-3.5 text-primary shrink-0" />
