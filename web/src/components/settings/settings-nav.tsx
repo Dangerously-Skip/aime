@@ -1,6 +1,6 @@
 "use client"
 
-import { Brain, Code, Database, Fingerprint, Globe, Link, Palette, Share2, Shield, TrendingUp, User, Users, Wrench } from 'lucide-react'
+import { Brain, Code, Database, Fingerprint, Globe, Link, Palette, Share2, Shield, TrendingUp, User, Users, Wrench, BellOff } from 'lucide-react'
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -15,6 +15,13 @@ const navItems = [
   { id: "code", label: "Code", icon: Code },
   { id: "security", label: "Security", icon: Shield },
   { id: "memory", label: "Memory", icon: Brain },
+  /*
+   * Its own entry for one control, deliberately. "Stop it pinging me at night"
+   * is something people go looking for BY NAME, and a quiet-hours toggle buried
+   * in Memory or Data is a toggle nobody finds. It is also where the per-widget
+   * notification defaults will go.
+   */
+  { id: "notifications", label: "Notifications", icon: BellOff },
   { id: "roi", label: "Usage & ROI", icon: TrendingUp },
   { id: "data", label: "Data & Privacy", icon: Database },
 ] as const
