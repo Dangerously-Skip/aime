@@ -10,7 +10,8 @@ import type { Run } from "@/lib/runs/types";
 import { formatRelative } from "@/lib/runs/format";
 import { WidgetRenderer } from "./widget-renderer";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, Trash2, Pause, Play, MessageSquare } from "lucide-react";
+import { Loader2, RefreshCw, Trash2, Pause, Play, MessageSquare, Bell, BellOff } from "lucide-react";
+import { isUnread } from "@/lib/widgets/unread";
 import { useAppStore } from "@/stores/app-store";
 import { useChatStore } from "@/stores/chat-store";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -36,6 +37,8 @@ export function WidgetTile({
   const setRender = useWidgetStore((s) => s.setRender);
   const setEnabled = useWidgetStore((s) => s.setEnabled);
   const removeWidget = useWidgetStore((s) => s.removeWidget);
+  const markSeen = useWidgetStore((s) => s.markSeen);
+  const updateWidget = useWidgetStore((s) => s.updateWidget);
   const addConversation = useConversationStore((s) => s.addConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
   const addMessage = useChatStore((s) => s.addMessage);
@@ -145,8 +148,30 @@ export function WidgetTile({
     removeWidget(widget.id);
   };
 
+  /*
+   * The tile is "read" once it has been on screen for a moment.
+   *
+   * A moment, not instantly: widgets render in a masonry grid and several are
+   * mounted at once, so marking on mount would clear every badge the instant the
+   * surface opened — including tiles below the fold that were never looked at.
+   * A short dwell is the cheapest approximation of "looked at" that does not
+   * need an intersection observer, and erring towards leaving it unread is the
+   * right direction: a badge that lingers is a nuisance, one that vanishes loses
+   * the news.
+   */
+  const unread = isUnread(widget);
+  useEffect(() => {
+    if (!unread) return;
+    const t = setTimeout(() => markSeen(widget.id), 2_000);
+    return () => clearTimeout(t);
+  }, [unread, widget.id, widget.refreshedAt, markSeen]);
+
   return (
-    <div className="mb-4 inline-block w-full break-inside-avoid rounded-xl border border-border/60 bg-card align-top">
+    <div
+      className={`mb-4 inline-block w-full break-inside-avoid rounded-xl border bg-card align-top ${
+        unread ? "border-primary/50" : "border-border/60"
+      }`}
+    >
       <div className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
         <span
           className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -156,6 +181,14 @@ export function WidgetTile({
         <p className="min-w-0 flex-1 truncate text-xs font-medium" title={widget.recipe}>
           {widget.title}
         </p>
+        {unread && (
+          <span
+            className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-medium text-primary-foreground"
+            aria-label="New since you last looked"
+          >
+            new
+          </span>
+        )}
         <span className="shrink-0 text-[10px] text-muted-foreground">
           {busy
             ? `working (${elapsed}s)`
@@ -163,6 +196,16 @@ export function WidgetTile({
               ? formatRelative(widget.refreshedAt, Date.now())
               : "never run"}
         </span>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-5 w-5"
+          title={widget.notifyOnChange ? "Notifications on — click to mute" : "Notify me when this changes"}
+          aria-label={widget.notifyOnChange ? "Mute notifications" : "Notify me when this changes"}
+          onClick={() => updateWidget(widget.id, { notifyOnChange: !widget.notifyOnChange })}
+        >
+          {widget.notifyOnChange ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3 opacity-40" />}
+        </Button>
         <Button
           size="icon"
           variant="ghost"

@@ -22,6 +22,20 @@ export interface Widget {
   refreshEverySeconds?: number;
   /** Whether the refresh agent may reach the web. */
   allowWeb?: boolean;
+  /**
+   * The render the user has actually LOOKED at, as a fingerprint.
+   *
+   * Not "did the last refresh change anything" — that is a different question
+   * and answering it would produce a badge that lies. Consider: the tile changes
+   * at 09:00 while you are away, then refreshes unchanged at 10:00. A flag set
+   * by the last refresh clears itself, and the news you never read is gone.
+   *
+   * Comparing against what was SEEN survives any number of unchanged refreshes,
+   * which is the only version of this that is honest.
+   */
+  seenFingerprint?: string;
+  /** Interrupt with an OS notification when this widget changes. Default off. */
+  notifyOnChange?: boolean;
   /** Scope: a conversation or project supplies the data the recipe reads. */
   scopeConversationId?: string;
   scopeProjectId?: string;
