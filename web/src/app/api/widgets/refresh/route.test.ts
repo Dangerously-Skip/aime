@@ -12,6 +12,22 @@ vi.mock('@/lib/providers', () => ({
   getAvailableProviders: () => ['claude'],
 }));
 
+/*
+ * A configured model, because a refresh now DECLINES without one.
+ *
+ * These tests are about grounding, validation and run recording; the model
+ * resolution they depend on is covered by `widgets/refresh-model.test.ts`,
+ * which drives the real manifest file. Mocking it here mocks a boundary these
+ * tests do not exist to prove, which is the allowed case.
+ */
+vi.mock('@/lib/models/execution-manifest-fs', () => ({
+  readExecutionManifest: async () => ({
+    version: 1,
+    updatedAt: '2026-08-22T00:00:00.000Z',
+    routes: { chat: { model: 'haiku' } },
+  }),
+}));
+
 /** Script the provider to reply with the given text. */
 function reply(text: string) {
   queryMock.mockImplementation(async function* () {
@@ -139,7 +155,16 @@ describe('POST /api/widgets/refresh — grounding', () => {
     expect(params.maxTurns).toBeGreaterThan(1);
   });
 
-  it('pins refreshes to a cheap model', async () => {
+  it('uses the configured model, not a hardcoded one', async () => {
+    /*
+     * This asserted `toBe('haiku')` against a hardcoded `opts.model ?? 'haiku'`,
+     * which is the bug it was pinning: on an account with no Anthropic key that
+     * id reached a provider that had never heard of it, and every scheduled
+     * refresh failed once per tick, silently.
+     *
+     * It still reads 'haiku' here — but now because the mocked manifest SAYS so,
+     * which is the difference between a configured model and a guessed one.
+     */
     reply(JSON.stringify({ type: 'divider' }));
     await post({ widget });
     expect(queryMock.mock.calls[0][0].model).toBe('haiku');

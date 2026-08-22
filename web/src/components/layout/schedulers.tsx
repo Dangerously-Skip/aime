@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 import { useCron } from "@/hooks/use-cron";
+import { useExecutionManifest } from "@/hooks/use-execution-manifest";
 import { useAppStore } from "@/stores/app-store";
 import { useContextBusStore } from "@/stores/context-bus-store";
 
@@ -61,6 +62,19 @@ export function Schedulers() {
   );
 
   useCron(onFire);
+
+  /*
+   * Publish the tier grid's decision so SERVER-SIDE work can obey it.
+   *
+   * The widget scheduler ticks inside the Next server so a refresh works "with
+   * no window at all", and therefore cannot see the provider store. Without this
+   * it fell back to a hardcoded model id and an Anthropic-only key — no refresh
+   * at all on any other account, once per tick, silently.
+   *
+   * Here for the same reason the schedulers are: it has to run whatever the user
+   * is looking at, and a surface is the wrong owner for something global.
+   */
+  useExecutionManifest();
 
   return null;
 }
