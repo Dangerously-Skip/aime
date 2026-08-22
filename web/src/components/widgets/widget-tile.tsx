@@ -10,7 +10,11 @@ import type { Run } from "@/lib/runs/types";
 import { formatRelative } from "@/lib/runs/format";
 import { WidgetRenderer } from "./widget-renderer";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, Trash2, Pause, Play } from "lucide-react";
+import { Loader2, RefreshCw, Trash2, Pause, Play, MessageSquare } from "lucide-react";
+import { useAppStore } from "@/stores/app-store";
+import { useChatStore } from "@/stores/chat-store";
+import { useConversationStore } from "@/stores/conversation-store";
+import { widgetConversationSeed } from "@/lib/widgets/widget-to-text";
 
 /**
  * One Cockpit tile: the widget's last render, a refresh affordance, and its
@@ -32,6 +36,10 @@ export function WidgetTile({
   const setRender = useWidgetStore((s) => s.setRender);
   const setEnabled = useWidgetStore((s) => s.setEnabled);
   const removeWidget = useWidgetStore((s) => s.removeWidget);
+  const addConversation = useConversationStore((s) => s.addConversation);
+  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+  const addMessage = useChatStore((s) => s.addMessage);
+  const setActiveSurface = useAppStore((s) => s.setActiveSurface);
 
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -92,6 +100,42 @@ export function WidgetTile({
     [refresh, onViewRuns, setEnabled, widget.id, widget.enabled],
   );
 
+  /**
+   * Open a chat about this tile.
+   *
+   * THE ONE THING A CARD CANNOT DO. A widget is glanceable and mute — you can
+   * see that three cameras are underpriced and you cannot ask which to bid on.
+   * That is what a heartbeat could do and a schedule cannot, and this is how the
+   * widget model gets it back without a second proactive mechanism competing
+   * with the first.
+   *
+   * The card's CONTENT and its RECIPE both travel, because the likeliest next
+   * question is "why is that one cheap?" — and an agent without the recipe
+   * invents a provenance, which is an uncited claim one layer up.
+   */
+  const handleDiscuss = () => {
+    const chatId = crypto.randomUUID();
+    addConversation({
+      id: chatId,
+      title: widget.title,
+      surface: "chat",
+      lastMessage: "",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    addMessage(chatId, {
+      id: crypto.randomUUID(),
+      // ASSISTANT, not user: the tile is something the agent produced, and
+      // seeding it as the user's own words would have them apparently say
+      // something they never typed.
+      role: "assistant",
+      content: widgetConversationSeed(widget, node, Date.now()),
+      timestamp: Date.now(),
+    });
+    setActiveConversation(chatId);
+    setActiveSurface("chat");
+  };
+
   const handleDelete = () => {
     if (!armed) {
       setArmed(true);
@@ -119,6 +163,16 @@ export function WidgetTile({
               ? formatRelative(widget.refreshedAt, Date.now())
               : "never run"}
         </span>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-5 w-5"
+          title="Ask about this"
+          aria-label="Ask about this"
+          onClick={handleDiscuss}
+        >
+          <MessageSquare className="h-3 w-3" />
+        </Button>
         <Button
           size="icon"
           variant="ghost"

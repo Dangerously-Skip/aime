@@ -6,6 +6,7 @@
 import { widgetSystemPrompt, extractWidgetJson } from './prompt';
 import { parseWidget, type WidgetNode } from './catalog';
 import { isGrounded, WIDGET_REFRESH_TIMEOUT_MS, widgetToGoal, type Widget } from './widget';
+import { judgeChange, NO_BUSYWORK_GUARD } from './unchanged';
 import { readExecutionManifest } from '@/lib/models/execution-manifest-fs';
 import { resolveFromManifest } from '@/lib/models/execution-manifest';
 import { getSurfaceRoute } from '@/lib/models/surface-routes';
@@ -24,6 +25,15 @@ export interface RefreshResult {
   node: WidgetNode | null;
   run: Run;
   error?: string;
+  /**
+   * Did the render actually differ from what the tile already showed?
+   *
+   * Absent on a failure. `false` means the run succeeded and found nothing new,
+   * which is the ordinary outcome of a scheduled refresh and must not be
+   * announced — see `unchanged.ts`.
+   */
+  changed?: boolean;
+  changeReason?: 'first-render' | 'content-changed' | 'unchanged' | 'nothing-rendered';
   /** HTTP-ish status for the route wrapper. */
   status: 200 | 502 | 504;
 }
@@ -123,10 +133,21 @@ export async function refreshWidget(
   };
 
   const grounded = isGrounded(widget);
-  const system = widgetSystemPrompt({
-    grounded,
-    webUnconfigured: !hasSearch(null, process.env),
-  });
+  const system =
+    widgetSystemPrompt({
+      grounded,
+      webUnconfigured: !hasSearch(null, process.env),
+    }) +
+    /*
+     * The don't-invent-work guard, on SCHEDULED runs only.
+     *
+     * A manual refresh is the user asking "what is it now" — they are looking at
+     * it, and telling that run to prefer stability would be answering a question
+     * they did not ask. A scheduled run is the opposite: most will find nothing,
+     * and a model told only "refresh this" manufactures difference to look
+     * useful. Hermes ships the same guard for the same reason.
+     */
+    (trigger === 'manual' ? '' : `\n\n${NO_BUSYWORK_GUARD}`);
 
   try {
     const { getProvider } = await import('@/lib/providers');
@@ -205,7 +226,20 @@ export async function refreshWidget(
     }
 
     const finished = await settle('succeeded', { node });
-    return { node, run: finished, status: 200 };
+    /*
+     * Did this run produce NEWS, or merely a result?
+     *
+     * Structural, not textual: a widget returns a render tree, so "unchanged" is
+     * a comparison rather than a judgement — nothing to tune, no model asked to
+     * assess its own novelty. Both OpenClaw and Hermes centre their proactive
+     * agents on suppressing this case, and not because of cost: an agent that
+     * reports every cycle teaches you to ignore it.
+     *
+     * The refresh still HAPPENED and the run is still recorded — this only says
+     * whether the tile has anything to tell you.
+     */
+    const change = judgeChange(widget.render ?? null, node);
+    return { node, run: finished, status: 200, changed: change.changed, changeReason: change.reason };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Refresh failed';
     const finished = await settle('failed', { error: message });
