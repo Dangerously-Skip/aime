@@ -13,7 +13,10 @@ import { defineConfig, devices } from '@playwright/test';
  * A fixed value is correct here and would not be anywhere else: this server is
  * ephemeral, on loopback, and holds nothing.
  */
-const E2E_API_TOKEN = 'e2e-' + 'x'.repeat(60);
+export const E2E_API_TOKEN = 'e2e-' + 'x'.repeat(60);
+
+/** The port the dev server and Electron must agree on. */
+export const E2E_PORT = 3100;
 
 export default defineConfig({
   testDir: './e2e',
@@ -29,7 +32,34 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      // The browser specs. Electron ones are excluded so they do not get a
+      // browser context they cannot use.
+      testIgnore: /\.electron\.spec\.ts$/,
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      /*
+       * THE MAIN PROCESS, which nothing tested until now.
+       *
+       * Every other layer has coverage; `main-web.js` had none, and it holds the
+       * minute ticker every scheduled feature depends on, the window lifecycle,
+       * and — as of the headless browser — a piece of agent infrastructure. Two
+       * features have already hit this blind spot: the tick was verified by
+       * reading, and the headless browser could not be verified at all.
+       *
+       * `_electron.launch()` runs the REAL main process against the dev server
+       * Playwright already starts, because `app.isPackaged` is false there and
+       * main expects a server on PORT rather than forking one.
+       */
+      name: 'electron',
+      testMatch: /\.electron\.spec\.ts$/,
+      /*
+       * ONE AT A TIME. The app takes a single-instance lock, so parallel workers
+       * each launching their own Electron leave all but the first dead — and the
+       * symptom is `electronAPI is undefined`, which reads like a preload bug
+       * rather than a harness one.
+       */
+      fullyParallel: false,
     },
   ],
   webServer: {
