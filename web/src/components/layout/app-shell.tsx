@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Schedulers } from "./schedulers";
 import { Sidebar } from "./sidebar";
 import { Tabbar } from "./tabbar";
 import { SurfaceRouter } from "./surface-router";
@@ -20,6 +21,8 @@ import { ReminderModal } from "@/components/shared/reminder-modal";
 import { HeartbeatPanel } from "./heartbeat-panel";
 
 export function AppShell() {
+  // Minute-tick schedulers, mounted once. See schedulers.tsx for why they live
+  // in the shell rather than in a surface.
   const sidebarVisible = useAppStore((s) => s.sidebarVisible);
   const setSidebarVisible = useAppStore((s) => s.setSidebarVisible);
   const sidebarMode = useAppStore((s) => s.sidebarMode);
@@ -139,6 +142,13 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
+      {/*
+          Renders nothing. Mounted here so the minute-tick schedulers run
+          whatever the user is looking at — see schedulers.tsx, and note that
+          `useCron` reached production having never been called from anywhere.
+      */}
+      <Schedulers />
+
       {/* Sidebar */}
       <div
         className={`h-full shrink-0 transition-all duration-200 ${

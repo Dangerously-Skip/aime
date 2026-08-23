@@ -90,6 +90,18 @@ interface SettingsState {
    */
   /** `'none'` = explicitly off (sticks); `null` = never chosen (may default on). */
   searchProvider: SearchProviderId | 'none' | null;
+  /**
+   * Hours in which a scheduled briefing must not interrupt.
+   *
+   * The interruption budget, not the token budget — OpenClaw lists quiet hours
+   * as a ~33% cost saving and that is the lesser reason. A briefing scheduled
+   * for 06:00 should not wake you at 06:00. It still RUNS and still marks the
+   * tile unread; only the notification is withheld.
+   *
+   * `null` means never quiet, which is the right default for a feature nobody
+   * has opted into yet.
+   */
+  quietHours: { fromHour: number; toHour: number } | null;
   searchApiKey: string | null;
   /**
    * Where "Share" publishes a deck, when the user has configured a bucket.
@@ -181,6 +193,7 @@ interface SettingsActions {
   clearGithubAuth: () => void;
   setAnthropicApiKey: (key: string | null) => void;
   setSearchProvider: (id: SearchProviderId | 'none' | null) => void;
+  setQuietHours: (hours: { fromHour: number; toHour: number } | null) => void;
   setSearchApiKey: (key: string | null) => void;
   setDeckStorage: (v: SettingsState['deckStorage']) => void;
   setSearchInstanceUrl: (url: string | null) => void;
@@ -225,6 +238,7 @@ export const INITIAL_SETTINGS: SettingsState = {
   githubUser: null,
   anthropicApiKey: null,
   searchProvider: null,
+  quietHours: null,
   searchApiKey: null,
   deckStorage: null,
   searchInstanceUrl: null,
@@ -283,6 +297,7 @@ export const PERSISTED_SETTINGS_KEYS = [
   'githubUser',
   'anthropicApiKey',
   'searchProvider',
+  'quietHours',
   'searchApiKey',
   'deckStorage',
   'searchInstanceUrl',
@@ -372,6 +387,7 @@ export const useSettingsStore = create<SettingsStore>()(
 
       setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
       setSearchProvider: (searchProvider) => set({ searchProvider }),
+      setQuietHours: (quietHours) => set({ quietHours }),
       setSearchApiKey: (searchApiKey) => set({ searchApiKey }),
       setDeckStorage: (deckStorage) => set({ deckStorage }),
       setSearchInstanceUrl: (searchInstanceUrl) => set({ searchInstanceUrl }),

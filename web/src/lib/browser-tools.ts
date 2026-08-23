@@ -425,6 +425,18 @@ export const ARIA_SNAPSHOT_SCRIPT = `
     return states;
   }
 
+  /*
+   * Roles whose accessible name comes from their content (ARIA "name from
+   * author and content"). Everything else must be named explicitly or go
+   * unnamed — borrowing a descendant's text is what produced four identical
+   * lines for one button.
+   */
+  const NAME_FROM_CONTENT = new Set([
+    'button', 'link', 'heading', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
+    'option', 'radio', 'checkbox', 'switch', 'tab', 'treeitem', 'cell',
+    'columnheader', 'rowheader', 'gridcell', 'tooltip', 'legend', 'caption',
+  ]);
+
   function walk(el, depth) {
     if (nodeCount >= MAX_NODES || depth > MAX_DEPTH) return;
     if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return;
@@ -440,22 +452,28 @@ export const ARIA_SNAPSHOT_SCRIPT = `
       let label = getLabel(el);
       if (!label) {
         /*
-         * LEAVES ONLY. textContent on a container returns the whole subtree,
-         * so a button inside main > ul > li produced FOUR lines all reading
-         * "Place bid" and only one of them carrying a ref.
+         * NAME FROM CONTENT — the ARIA rule, not a guess.
          *
-         * Found by running this in real Chromium against a laid-out page; the
-         * jsdom tests could not see it because they assert on the pieces rather
-         * than reading the tree the way a model does. A model reading that has
-         * to guess which of four identical labels is the one it can click, and
-         * three of the four answers are wrong.
+         * The problem this solves: textContent on a CONTAINER returns the whole
+         * subtree, so a button inside main > ul > li produced four lines all
+         * reading "Place bid" with a ref on only one.
          *
-         * An explicit aria-label on a container is still honoured — that is a
-         * deliberate description, not text borrowed from a child.
+         * My first fix was "leaves only", and it was wrong in a way the e2e
+         * test could not see because the fixture said a text-only button.
+         * Real markup nests a span inside the button — so the
+         * button has an element child, so it got NO label, and the model was
+         * handed an unlabelled button line: it can see there is a button and not what
+         * it does. Strictly worse than the duplication it replaced.
+         *
+         * The accessibility spec already draws this line. Certain roles take
+         * their accessible name FROM THEIR CONTENT however deeply it is nested
+         * (button, link, heading, tab, option…); containers like main,
+         * navigation, list and listitem do not. That is exactly the distinction
+         * needed, it is what a screen reader does, and it is not something we
+         * have to invent or tune.
          */
-        const hasElementChildren = el.children && el.children.length > 0;
-        if (!hasElementChildren) {
-          const text = (el.textContent || '').trim();
+        if (NAME_FROM_CONTENT.has(role)) {
+          const text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
           if (text.length > 0 && text.length <= 80) label = text;
         }
       }
@@ -654,7 +672,20 @@ export interface ToolResult {
  * numbers. A bare number is read as "current snapshot", which is what it meant.
  */
 function refOf(input: Record<string, unknown>): string {
-  if (typeof input.ref === 'string' && input.ref) return input.ref;
+  /*
+   * A BARE NUMBER IS A LEGACY INDEX, whichever key it arrives under.
+   *
+   * The `LEGACY:` branch was unreachable: the schemas now say `ref: string`, so
+   * the quick-ask loop — whose page state still numbers elements `[12]` — sends
+   * `ref: "12"`, which fell through as a versioned ref and produced "no
+   * snapshot has been taken" on a page it had just described. The loop looked
+   * broken by the fix that was supposed to leave it alone.
+   *
+   * Versioned refs always contain a colon, so the two are unambiguous.
+   */
+  if (typeof input.ref === 'string' && input.ref) {
+    return /^\d+$/.test(input.ref.trim()) ? `LEGACY:${input.ref.trim()}` : input.ref;
+  }
   const legacy = input.index;
   if (typeof legacy === 'number') return `LEGACY:${legacy}`;
   return String(input.ref ?? input.index ?? '');

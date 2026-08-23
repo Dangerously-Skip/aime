@@ -54,6 +54,7 @@ import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useDeckTheme } from "@/hooks/use-deck-theme";
 import { useSearchSettings } from "@/hooks/use-search-settings";
+import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -560,6 +561,14 @@ export function ChatSurface() {
       disableBashTool,
     ]
   );
+
+  /*
+   * A due cron job runs HERE, through this surface's own submit — not through a
+   * scheduler with a send path of its own, which would be a fourth place that
+   * starts a turn. Before this, a job published to the bus, switched surface,
+   * and nothing ran it.
+   */
+  useScheduledPrompt('chat', handleSubmit);
 
   const handleRetry = useCallback(() => {
     if (!chatId || isStreaming) return;

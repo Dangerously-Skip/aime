@@ -181,7 +181,7 @@ describe('tab tools, which are not webview operations', () => {
 
   it('never reaches the webview executor', async () => {
     const exec = vi.spyOn(browserTools, 'executeToolInWebview');
-    const tabs = { open: vi.fn().mockResolvedValue(1), switch: vi.fn(), close: vi.fn() };
+    const tabs = { open: vi.fn().mockResolvedValue(1), switch: vi.fn(), close: vi.fn(), list: () => [{ id: 't0' }, { id: 't1' }] };
     handleBrowserToolChunk(tabEvent('new_tab', { url: 'https://example.com' }), { ...ctx, tabs });
     await flush();
     expect(exec).not.toHaveBeenCalled();
@@ -191,15 +191,58 @@ describe('tab tools, which are not webview operations', () => {
   it.each([
     ['switch_tab', 'switch'],
     ['close_tab', 'close'],
-  ])('routes %s to the surface handler', async (tool, key) => {
-    const tabs = { open: vi.fn(), switch: vi.fn().mockResolvedValue(true), close: vi.fn().mockResolvedValue(true) };
-    handleBrowserToolChunk(tabEvent(tool, { tab_id: 't7' }), { ...ctx, tabs });
+  ])('%s translates the model INDEX to a tab id', async (tool, key) => {
+    /*
+     * THIS TEST PINNED THE BUG. It passed `tab_id: 't7'` and asserted the
+     * handler was called with 't7' — but no schema declares `tab_id`. The
+     * schemas offer `tab_index`, a 0-based position in the open-tabs list,
+     * because a position is what the model can see; the surface callbacks take
+     * a UUID, because that is what still identifies a tab as the list changes.
+     *
+     * So the real path received '' and every switch and close failed, while
+     * this test went green against a parameter nothing sends.
+     */
+    const tabs = {
+      open: vi.fn(),
+      switch: vi.fn().mockResolvedValue(true),
+      close: vi.fn().mockResolvedValue(true),
+      list: () => [{ id: 'uuid-a' }, { id: 'uuid-b' }, { id: 'uuid-c' }],
+    };
+    handleBrowserToolChunk(tabEvent(tool, { tab_index: 1 }), { ...ctx, tabs });
     await flush();
-    expect((tabs as Record<string, ReturnType<typeof vi.fn>>)[key]).toHaveBeenCalledWith('t7');
+    expect((tabs as unknown as Record<string, ReturnType<typeof vi.fn>>)[key]).toHaveBeenCalledWith('uuid-b');
+  });
+
+  it('an out-of-range index says how many tabs there are', async () => {
+    // Actionable beats silent: "index 7 does not exist, there are 2" is a fact
+    // the model can use, and a quiet failure is what a retry loop feeds on.
+    const tabs = {
+      open: vi.fn(), switch: vi.fn(), close: vi.fn(),
+      list: () => [{ id: 'a' }, { id: 'b' }],
+    };
+    handleBrowserToolChunk(tabEvent('switch_tab', { tab_index: 7 }), { ...ctx, tabs });
+    await flush();
+    expect(tabs.switch).not.toHaveBeenCalled();
+    const [result] = posted();
+    expect(result.isError).toBe(true);
+    expect(result.output).toMatch(/2 open tabs/);
+    expect(result.output).toMatch(/index 7 does not exist/);
+  });
+
+  it('a missing index is refused rather than sent as tab zero', async () => {
+    // Defaulting to 0 would close the wrong tab, confidently.
+    const tabs = {
+      open: vi.fn(), switch: vi.fn(), close: vi.fn(),
+      list: () => [{ id: 'a' }, { id: 'b' }],
+    };
+    handleBrowserToolChunk(tabEvent('close_tab', {}), { ...ctx, tabs });
+    await flush();
+    expect(tabs.close).not.toHaveBeenCalled();
+    expect(posted()[0].isError).toBe(true);
   });
 
   it('reports success back to the waiting turn', async () => {
-    const tabs = { open: vi.fn().mockResolvedValue(2), switch: vi.fn(), close: vi.fn() };
+    const tabs = { open: vi.fn().mockResolvedValue(2), switch: vi.fn(), close: vi.fn(), list: () => [{ id: 't0' }, { id: 't1' }] };
     handleBrowserToolChunk(tabEvent('new_tab', { url: 'https://example.com' }), { ...ctx, tabs });
     await flush();
     expect(posted()).toEqual([{ toolUseId: 'tt_1', output: 'new_tab succeeded.', isError: false }]);
@@ -207,14 +250,14 @@ describe('tab tools, which are not webview operations', () => {
 
   it('treats null and false as failure, not success', async () => {
     // `handleNewTab` resolves null when there is no conversation to own the tab.
-    const tabs = { open: vi.fn().mockResolvedValue(null), switch: vi.fn(), close: vi.fn() };
+    const tabs = { open: vi.fn().mockResolvedValue(null), switch: vi.fn(), close: vi.fn(), list: () => [{ id: 't0' }, { id: 't1' }] };
     handleBrowserToolChunk(tabEvent('new_tab', { url: 'https://example.com' }), { ...ctx, tabs });
     await flush();
     expect(posted()[0].isError).toBe(true);
   });
 
   it('answers when a handler throws', async () => {
-    const tabs = { open: vi.fn().mockRejectedValue(new Error('boom')), switch: vi.fn(), close: vi.fn() };
+    const tabs = { open: vi.fn().mockRejectedValue(new Error('boom')), switch: vi.fn(), close: vi.fn(), list: () => [{ id: 't0' }, { id: 't1' }] };
     handleBrowserToolChunk(tabEvent('new_tab', { url: 'x' }), { ...ctx, tabs });
     await flush();
     expect(posted()[0].isError).toBe(true);

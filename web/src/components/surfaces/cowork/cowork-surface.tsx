@@ -111,6 +111,7 @@ import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { useToolBudgetStore } from "@/stores/tool-budget-store";
 import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { useDocumentPrint } from "@/hooks/use-document-print";
+import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("cowork").capability;
@@ -1556,6 +1557,14 @@ export function CoworkSurface() {
       currentProjectId,
     ]
   );
+
+  /*
+   * A due cron job runs HERE, through this surface's own submit — not through a
+   * scheduler with a send path of its own, which would be a fourth place that
+   * starts a turn. Before this, a job published to the bus, switched surface,
+   * and nothing ran it.
+   */
+  useScheduledPrompt('cowork', handleSubmit);
 
   handleSubmitRef.current = handleSubmit;
 

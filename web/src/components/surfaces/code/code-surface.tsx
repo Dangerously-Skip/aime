@@ -21,6 +21,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
+import { handleBrowserToolChunk } from "@/lib/sse/browser-tool-chunk";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import { useMemoryStore } from "@/stores/memory-store";
@@ -84,6 +85,7 @@ import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
+import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
@@ -898,6 +900,39 @@ export function CodeSurface() {
       // meant three of them were silently dropped on most surfaces.
       if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Code' })) return;
 
+      /*
+       * THE SHARED RELAY, which Code was supposed to be using already.
+       *
+       * `lib/sse/browser-tool-chunk` exists because copying forty lines is how
+       * two implementations of one idea drift apart — and Code kept its inline
+       * copy anyway, so the shared module's own comment ("shared with Code
+       * rather than copied") was aspirational.
+       *
+       * The drift was already real: the shared path grew tab handling and this
+       * one never did, while `browserMcpToolNames()` mounts new_tab/switch_tab/
+       * close_tab for EVERY surface with a webview. Code therefore offered three
+       * tools whose only possible answer was "Unknown tool" — DR-21's retry loop,
+       * reintroduced by the change that was meant to end it.
+       *
+       * Code has ONE preview view, so its tab callbacks say so actionably rather
+       * than pretending: the shared module turns an absent `tabs` into "this
+       * surface shows a single page, not tabs — use navigate".
+       */
+      if (
+        handleBrowserToolChunk(event, {
+          chatId,
+          webview: previewWebviewRef.current,
+          consoleBuffer: consoleBufferRef.current,
+          addToolCall,
+          updateToolResult,
+          noWebviewMessage:
+            'The preview panel is not open, so there is no page to act on. Write an HTML file or start a dev server first, or use WebFetch to read a URL.',
+          surface: 'CodeSurface',
+        })
+      ) {
+        return;
+      }
+
       // The chunks whose handling is identical across surfaces, recorded once in
       // lib/sse/core-chunks. `skip` names what this surface still owns — see the
       // note there; it is a visible migration step, not a permanent carve-out.
@@ -995,52 +1030,6 @@ export function CodeSurface() {
           if (toolResult && !event.is_error) {
             const detected = detectServerUrl(toolResult);
             if (detected) { previewPathRef.current = null; setPreviewUrl(detected.url); }
-          }
-          break;
-        }
-        case "browser_tool_use": {
-          const browserToolId = event.toolUseId as string;
-          const browserToolName = event.name as string;
-          const browserToolInput = (event.input as Record<string, unknown>) || {};
-
-          // Show tool call in UI
-          addToolCall(chatId, {
-            id: browserToolId,
-            name: browserToolName,
-            input: browserToolInput,
-            status: "running",
-            startTime: Date.now(),
-          });
-
-          // Execute in preview webview and POST result back (async, non-blocking)
-          const wv = previewWebviewRef.current;
-          if (!wv) {
-            const errOutput = 'Preview panel is not open. Write an HTML file or start a dev server first.';
-            updateToolResult(chatId, browserToolId, errOutput, true);
-            fetch('/api/chat/browser-tool-result', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ toolUseId: browserToolId, output: errOutput, isError: true }),
-            }).catch((err) => console.error('[CodeSurface] Failed to POST browser tool result:', err));
-          } else {
-            executeToolInWebview(wv, browserToolName, browserToolInput, consoleBufferRef.current)
-              .then((browserResult) => {
-                updateToolResult(chatId, browserToolId, browserResult.message, !browserResult.success);
-                return fetch('/api/chat/browser-tool-result', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ toolUseId: browserToolId, output: browserResult.message, isError: !browserResult.success }),
-                });
-              })
-              .catch((err) => {
-                const errMsg = err instanceof Error ? err.message : String(err);
-                updateToolResult(chatId, browserToolId, `Browser tool error: ${errMsg}`, true);
-                fetch('/api/chat/browser-tool-result', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ toolUseId: browserToolId, output: `Browser tool error: ${errMsg}`, isError: true }),
-                }).catch(() => {});
-              });
           }
           break;
         }
@@ -1301,6 +1290,14 @@ export function CodeSurface() {
       disableBashTool,
     ]
   );
+
+  /*
+   * A due cron job runs HERE, through this surface's own submit — not through a
+   * scheduler with a send path of its own, which would be a fourth place that
+   * starts a turn. Before this, a job published to the bus, switched surface,
+   * and nothing ran it.
+   */
+  useScheduledPrompt('code', handleSubmit);
 
   const handleVoiceTranscript = useCallback(
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),

@@ -2,6 +2,12 @@
 
 import { useEffect, useRef } from 'react';
 import { useWidgetStore } from '@/stores/widget-store';
+import { useSettingsStore } from '@/stores/settings-store';
+import { useElectron } from '@/hooks/use-electron';
+import { judgeChange } from '@/lib/widgets/unchanged';
+import { changeHeadline } from '@/lib/widgets/describe-change';
+import { decideAlert, type PendingAlert } from '@/lib/widgets/alerting';
+import { APP_NAME } from '@/config/branding';
 import type { Widget } from '@/lib/widgets/widget';
 
 /**
@@ -21,6 +27,20 @@ import type { Widget } from '@/lib/widgets/widget';
  * IPC boundary. Manual refreshes (the tile button) still run client-initiated.
  */
 export function useWidgetRefresh() {
+  const quietHours = useSettingsStore((s) => s.quietHours) ?? null;
+  const { showNotification } = useElectron();
+  /*
+   * Held in a ref so the pull effect does not re-register when the notifier
+   * identity changes. The listener discipline this hook already documents.
+   */
+  const notifyRef = useRef(showNotification);
+  // In an effect, not during render: React forbids touching a ref while
+  // rendering. Lint only flagged the identical line in `use-scheduled-prompt`,
+  // so this one was a latent copy of the same mistake.
+  useEffect(() => {
+    notifyRef.current = showNotification;
+  });
+
   const pushInFlight = useRef(false);
   const lastPushed = useRef<string>('');
 
@@ -38,14 +58,44 @@ export function useWidgetRefresh() {
 
         const server = new Map(data.widgets.map((w) => [w.id, w]));
         const local = useWidgetStore.getState().widgets;
+        /*
+         * Collect what CHANGED while we were away, then alert ONCE.
+         *
+         * Per-widget notification here would fan out: three briefings scheduled
+         * for 9am become three toasts, and the third is where the feature gets
+         * switched off. Coalescing is the whole reason both OpenClaw and Hermes
+         * survive as proactive agents.
+         */
+        const pending: PendingAlert[] = [];
         for (const widget of local) {
           const remote = server.get(widget.id);
           // Newer refreshedAt wins: the scheduler rendered while we were away.
           if (remote && (remote.refreshedAt ?? 0) > (widget.refreshedAt ?? 0)) {
+            const previous = widget.render ?? null;
             useWidgetStore.getState().updateWidget(widget.id, {
               render: remote.render,
               refreshedAt: remote.refreshedAt,
             });
+            /*
+             * Only tiles whose CONTENT moved, and only those asked to
+             * interrupt. The unread mark is unconditional and handled by
+             * `isUnread` — quiet hours and this toggle govern interruption, not
+             * record, so a muted widget still shows "new".
+             */
+            const change = judgeChange(previous, remote.render ?? null);
+            if (change.changed && widget.notifyOnChange) {
+              pending.push({
+                widgetId: widget.id,
+                headline: changeHeadline(widget.title, previous, remote.render ?? null),
+              });
+            }
+          }
+        }
+
+        if (pending.length > 0 && !cancelled) {
+          const decision = decideAlert(pending, { notify: true, quietHours }, new Date(), APP_NAME);
+          if (decision.deliver) {
+            notifyRef.current(decision.digest.title, decision.digest.body);
           }
         }
       } catch {

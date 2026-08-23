@@ -5,6 +5,9 @@ import { WidgetTile } from './widget-tile';
 import { useWidgetStore } from '@/stores/widget-store';
 import { useRunStore } from '@/stores/run-store';
 import type { Widget } from '@/lib/widgets/widget';
+import { useConversationStore } from '@/stores/conversation-store';
+import { useChatStore } from '@/stores/chat-store';
+import { useAppStore } from '@/stores/app-store';
 
 const widget = (over: Partial<Widget> = {}): Widget => ({
   id: 'w1',
@@ -123,5 +126,60 @@ describe('WidgetTile', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Re-run' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/widgets/refresh');
+  });
+});
+
+describe('asking about a tile', () => {
+  /*
+   * A widget is glanceable and MUTE — you can see three cameras are underpriced
+   * and you cannot ask which to bid on. Starting a conversation is the one thing
+   * a heartbeat could do that a schedule cannot, and this is how the widget
+   * model gets it back without a second proactive mechanism.
+   */
+  const widget = {
+    id: 'w1',
+    title: 'Camera watchlist',
+    recipe: 'track camera ROI on allbids',
+    render: { type: 'metric', label: 'Best ROI', value: '98%' },
+    refreshedAt: Date.now(),
+    enabled: true,
+    createdAt: 0,
+  } as never;
+
+  it('offers a way to ask', () => {
+    render(<WidgetTile widget={widget} />);
+    expect(screen.getByLabelText('Ask about this')).toBeTruthy();
+  });
+
+  it('opens a chat seeded with the card and its recipe', async () => {
+    render(<WidgetTile widget={widget} />);
+    fireEvent.click(screen.getByLabelText('Ask about this'));
+
+    const convs = useConversationStore.getState().conversations;
+    const created = convs.find((c) => c.title === 'Camera watchlist');
+    expect(created, 'no conversation was created').toBeTruthy();
+    expect(created!.surface).toBe('chat');
+
+    const messages = useChatStore.getState().messages[created!.id] ?? [];
+    expect(messages).toHaveLength(1);
+    // The card's content AND where it came from — an agent without the recipe
+    // invents a provenance, which is an uncited claim one layer up.
+    expect(messages[0].content).toContain('Best ROI');
+    expect(messages[0].content).toContain('track camera ROI on allbids');
+  });
+
+  it('seeds it as the ASSISTANT, not as the user', () => {
+    // The tile is something the agent produced. Seeding it as a user turn would
+    // have the user apparently say something they never typed.
+    render(<WidgetTile widget={widget} />);
+    fireEvent.click(screen.getByLabelText('Ask about this'));
+    const created = useConversationStore.getState().conversations.find((c) => c.title === 'Camera watchlist')!;
+    expect(useChatStore.getState().messages[created.id][0].role).toBe('assistant');
+  });
+
+  it('switches to the Chat surface, so the conversation is actually visible', () => {
+    render(<WidgetTile widget={widget} />);
+    fireEvent.click(screen.getByLabelText('Ask about this'));
+    expect(useAppStore.getState().activeSurface).toBe('chat');
   });
 });

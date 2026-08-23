@@ -25,15 +25,25 @@ import {
  * agent's actual loop, and nothing below the model is faked.
  */
 
-/** A page with the shapes that broke it: nested roles, hidden and zero-size nodes. */
+/*
+ * A page with the shapes that broke it: nested roles, hidden nodes — and TEXT
+ * NESTED INSIDE its interactive element, because that is how real markup is
+ * written and the text-only version hid a serious bug.
+ *
+ * A "leaves only" label rule gave a button with a span inside it NO label at
+ * all, so the model saw an unlabelled button and could not tell what it did.
+ * This suite passed throughout, because its fixture was unrealistic. Note also
+ * that HTML comments cannot go in this template: `<!--` and `-->` are legacy
+ * comment syntax in JavaScript and silently break the parse.
+ */
 const PAGE = `<!doctype html>
 <html><body>
   <h1>Camera listings</h1>
   <nav><a href="#one" id="first">Nikon FM</a></nav>
   <main>
     <ul>
-      <li><a href="#two">Bessaflex TM</a></li>
-      <li><button id="bid" onclick="document.title='BID PLACED'">Place bid</button></li>
+      <li><a href="#two"><span>Bessaflex TM</span></a></li>
+      <li><button id="bid" onclick="document.title='BID PLACED'"><span>Place bid</span></button></li>
     </ul>
     <input id="q" aria-label="Search listings" />
     <select id="sort"><option value="roi">ROI</option><option value="price">Price</option></select>
@@ -68,6 +78,14 @@ test.describe('the ref round trip, in a real engine', () => {
      */
     const sayingBid = tree.split('\n').filter((l) => /Place bid/.test(l));
     expect(sayingBid, 'the label is repeated up the ancestor chain').toHaveLength(1);
+
+    /*
+     * AND IT IS ON THE BUTTON. Both halves matter and they pull in opposite
+     * directions: containers must not borrow their subtree's text, while a
+     * button must take its name FROM its content however deeply nested. The
+     * ARIA "name from content" role set is exactly that line.
+     */
+    expect(bidLine, 'the button line has a ref but no label').toMatch(/\[button\] "Place bid"/);
 
     // 3. RESOLVE + CLICK, the way the `click` tool does.
     const result = await page.evaluate(

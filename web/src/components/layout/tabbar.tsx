@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import { useAppStore, type Surface } from "@/stores/app-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useContextBusStore } from "@/stores/context-bus-store";
+import { useWidgetStore } from "@/stores/widget-store";
+import { unreadCount as unreadCountOf } from "@/lib/widgets/unread";
 import {
   PanelLeftClose,
   PanelLeft,
@@ -26,6 +28,7 @@ interface TabbarProps {
 
 export function Tabbar({ isElectron = false }: TabbarProps) {
   const activeSurface = useAppStore((s) => s.activeSurface);
+  const unreadWidgets = useWidgetStore((s) => unreadCountOf(s.widgets));
   const setActiveSurface = useAppStore((s) => s.setActiveSurface);
   const sidebarVisible = useAppStore((s) => s.sidebarVisible);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -111,9 +114,22 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
       >
         {SURFACES.map((surface) => {
           const isActive = activeSurface === surface.id;
-          const unreadCount = busEvents.filter(
-            e => !e.consumed && (e.priority === 'p0' || e.priority === 'p1') && (!e.targetSurface || e.targetSurface === surface.id)
-          ).length;
+          const unreadCount =
+            busEvents.filter(
+              e => !e.consumed && (e.priority === 'p0' || e.priority === 'p1') && (!e.targetSurface || e.targetSurface === surface.id)
+            ).length +
+            /*
+             * Unread briefings, which live on Assistant.
+             *
+             * WITHOUT THIS THE MARK IS USELESS. A scheduled briefing lands while
+             * you are on Code or Browser — that is the entire point of scheduling
+             * it — and a badge only visible once you are already looking at the
+             * Assistant surface tells you nothing you did not know.
+             *
+             * The per-tile "new" chip and this dot read the same state, so they
+             * cannot disagree about whether there is news.
+             */
+            (surface.id === 'assistant' ? unreadWidgets : 0);
           return (
             <button
               key={surface.id}

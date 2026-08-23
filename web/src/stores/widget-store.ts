@@ -5,6 +5,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Widget } from '@/lib/widgets/widget';
 import type { WidgetNode } from '@/lib/widgets/catalog';
+import { seenValue } from '@/lib/widgets/unread';
 
 /**
  * Cockpit widgets (`aime:widgets`). A widget is a stored RECIPE plus its last
@@ -28,6 +29,13 @@ interface WidgetActions {
   setEnabled: (id: string, enabled: boolean) => void;
   /** Store a successful refresh result. */
   setRender: (id: string, node: WidgetNode, refreshedAt: number) => void;
+  /**
+   * Record that the user has LOOKED at this tile's current content.
+   *
+   * Stores a fingerprint rather than setting a boolean, so an unchanged refresh
+   * afterwards cannot clear news the user never read — see `unread.ts`.
+   */
+  markSeen: (id: string) => void;
   getWidget: (id: string) => Widget | undefined;
 }
 
@@ -50,6 +58,13 @@ export const useWidgetStore = create<WidgetStore>()(
 
       removeWidget: (id) =>
         set((state) => ({ widgets: state.widgets.filter((w) => w.id !== id) })),
+
+      markSeen: (id) =>
+        set((state) => ({
+          widgets: state.widgets.map((w) =>
+            w.id === id ? { ...w, seenFingerprint: seenValue(w) } : w,
+          ),
+        })),
 
       setEnabled: (id, enabled) =>
         set((state) => ({

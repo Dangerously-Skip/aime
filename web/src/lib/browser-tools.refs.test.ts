@@ -268,3 +268,49 @@ describe('the tools the model is offered address by ref', () => {
     for (const m of mentioned) expect(names.has(m), `${m} is referenced but not a tool`).toBe(true);
   });
 });
+
+describe('the quick-ask loop still works — it addresses by plain number', () => {
+  /*
+   * THE BRANCH THAT WAS UNREACHABLE. Schemas now declare `ref: string`, so the
+   * quick-ask loop — whose page state still numbers elements `[12]` — sends
+   * `ref: "12"`. That fell through as a VERSIONED ref and produced "no snapshot
+   * has been taken of this page" on a page it had just described, so the loop
+   * looked broken by the change that was supposed to leave it alone.
+   *
+   * Versioned refs always contain a colon, so a bare number is unambiguous.
+   */
+  it('a bare numeric ref resolves against the legacy index', () => {
+    mark();
+    const n = document.querySelector('#bid')!.getAttribute('data-agent-index')!;
+    expect(resolve(`LEGACY:${n}`).el).toBe(document.querySelector('#bid'));
+  });
+
+  it('refOf routes a bare number to the legacy path', async () => {
+    // Through the REAL executor, because the translation lives in `refOf` and a
+    // direct call to the resolver would skip it.
+    mark();
+    const n = document.querySelector('#bid')!.getAttribute('data-agent-index')!;
+    const calls: string[] = [];
+    const wv = {
+      executeJavaScript: async (code: string) => {
+        calls.push(code);
+        return new Function(`return (function(){ ${code.replace(/^\s*\(function\(\) \{/, '').replace(/\}\)\(\)\s*$/, '')} })()`)();
+      },
+      loadURL: async () => {}, goBack: () => {}, goForward: () => {}, reload: () => {},
+      getURL: () => 'about:blank',
+      capturePage: async () => ({ toDataURL: () => '' }),
+    };
+    const { executeToolInWebview } = await import('./browser-tools');
+    const result = await executeToolInWebview(wv as never, 'click', { ref: n });
+    expect(calls[0]).toContain(`LEGACY:${n}`);
+    expect(result.success, result.message).toBe(true);
+  });
+
+  it('a versioned ref is NOT treated as legacy', () => {
+    // The two must stay distinguishable, or a real ref goes down the index path.
+    mark();
+    const ref = document.querySelector('#bid')!.getAttribute('data-agent-ref')!;
+    expect(ref).toContain(':');
+    expect(resolve(ref).el).toBe(document.querySelector('#bid'));
+  });
+});
