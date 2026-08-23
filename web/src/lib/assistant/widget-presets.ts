@@ -1,4 +1,5 @@
 import type { AssistantCard } from '@/stores/assistant-store';
+import { resolveWidgetPresetConfig, type WidgetPresetConfig } from './widget-config';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 
 /**
@@ -23,12 +24,17 @@ const ONE_HOUR = 60 * 60_000;
 
 // ── World clock — pure computation ─────────────────────────────────────────────
 
-const ZONES: Array<{ label: string; tz: string }> = [
-  { label: 'Sydney', tz: 'Australia/Sydney' },
-  { label: 'San Francisco', tz: 'America/Los_Angeles' },
-  { label: 'London', tz: 'Europe/London' },
-  { label: 'Singapore', tz: 'Asia/Singapore' },
-];
+/*
+ * FROM CONFIG, not from here.
+ *
+ * These lists were one person's: Sydney/SF/London/Singapore, Sydney's latitude
+ * and longitude, and a single mid-cap holding of the author's former employer.
+ * In an open-source product where the Assistant surface is among the first
+ * things a new user sees, every card was confidently wrong about their life.
+ *
+ * `widget-config.ts` derives defaults from the user's own time zone and lets
+ * them be edited. Kept here only as the shape a caller passes in.
+ */
 
 function formatInZone(tz: string): string {
   // Intl handles DST automatically.
@@ -40,7 +46,8 @@ function formatInZone(tz: string): string {
   }).format(new Date());
 }
 
-async function renderWorldClock(): Promise<A2UIDocument> {
+async function renderWorldClock(config?: WidgetPresetConfig): Promise<A2UIDocument> {
+  const zones = (config ?? resolveWidgetPresetConfig(null)).clocks;
   return {
     version: '1',
     title: 'World clock',
@@ -48,7 +55,7 @@ async function renderWorldClock(): Promise<A2UIDocument> {
       {
         type: 'stat',
         id: 'clocks',
-        stats: ZONES.map((z) => ({ label: z.label, value: formatInZone(z.tz) })),
+        stats: zones.map((z) => ({ label: z.label, value: formatInZone(z.tz) })),
       },
     ],
   };
@@ -66,12 +73,14 @@ const WEATHER_CODES: Record<number, string> = {
   95: '⛈', 96: '⛈', 99: '⛈',
 };
 
-async function renderWeather(): Promise<A2UIDocument> {
-  // Sydney by default; could read from settings later.
-  const url = 'https://api.open-meteo.com/v1/forecast?latitude=-33.87&longitude=151.21&current=temperature_2m,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&timezone=auto&forecast_days=1';
+async function renderWeather(config?: WidgetPresetConfig): Promise<A2UIDocument> {
+  // Where the USER is — see widget-config. This read Sydney's coordinates, with
+  // a comment saying it "could read from settings later".
+  const where = (config ?? resolveWidgetPresetConfig(null)).weather;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${where.latitude}&longitude=${where.longitude}&current=temperature_2m,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&timezone=auto&forecast_days=1`;
   const fallback: A2UIDocument = {
     version: '1',
-    title: 'Weather · Sydney',
+    title: `Weather · ${where.label}`,
     components: [
       {
         type: 'stat',
@@ -89,7 +98,7 @@ async function renderWeather(): Promise<A2UIDocument> {
     const emoji = (code !== undefined && WEATHER_CODES[code]) || '🌡';
     return {
       version: '1',
-      title: 'Weather · Sydney',
+      title: `Weather · ${where.label}`,
       components: [
         {
           type: 'stat',
@@ -109,11 +118,6 @@ async function renderWeather(): Promise<A2UIDocument> {
 
 // ── Stock ticker — Yahoo Finance public chart API ─────────────────────────────
 
-const TICKERS: Array<{ symbol: string; label: string }> = [
-  { symbol: 'NHF.AX', label: 'NHF (nib)' },
-  { symbol: '%5EAXJO', label: 'ASX 200' },
-  { symbol: 'AUDUSD=X', label: 'AUD/USD' },
-];
 
 async function fetchQuote(symbol: string): Promise<{ value: string; trend: 'up' | 'down' | 'neutral'; trendValue: string } | null> {
   try {
@@ -137,8 +141,9 @@ async function fetchQuote(symbol: string): Promise<{ value: string; trend: 'up' 
   }
 }
 
-async function renderStockTicker(): Promise<A2UIDocument> {
-  const quotes = await Promise.all(TICKERS.map((t) => fetchQuote(t.symbol)));
+async function renderStockTicker(config?: WidgetPresetConfig): Promise<A2UIDocument> {
+  const tickers = (config ?? resolveWidgetPresetConfig(null)).tickers;
+  const quotes = await Promise.all(tickers.map((t) => fetchQuote(t.symbol)));
   return {
     version: '1',
     title: 'Markets',
@@ -146,7 +151,7 @@ async function renderStockTicker(): Promise<A2UIDocument> {
       {
         type: 'stat',
         id: 'tickers',
-        stats: TICKERS.map((t, i) => {
+        stats: tickers.map((t, i) => {
           const q = quotes[i];
           if (!q) return { label: t.label, value: '—' };
           return { label: t.label, value: q.value, trend: q.trend, trendValue: q.trendValue };
@@ -164,7 +169,7 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
     kind: 'weather',
     label: 'Weather',
     icon: 'cloud-sun',
-    description: 'Sydney current conditions, refreshed every 15 min',
+    description: 'Current conditions where you are, refreshed every 15 min',
     refreshIntervalMs: FIFTEEN_MIN,
     fetchAndRender: renderWeather,
   },
@@ -173,7 +178,7 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
     kind: 'stock_ticker',
     label: 'Stock ticker',
     icon: 'trending-up',
-    description: 'NHF, ASX 200, AUD/USD — refreshed every 15 min',
+    description: 'Markets you follow, refreshed every 15 min',
     refreshIntervalMs: FIFTEEN_MIN,
     fetchAndRender: renderStockTicker,
   },
@@ -182,7 +187,7 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
     kind: 'world_clock',
     label: 'World clock',
     icon: 'globe-2',
-    description: 'Sydney · SF · London · Singapore — refreshed hourly',
+    description: 'Your zone and three others, refreshed hourly',
     refreshIntervalMs: ONE_HOUR,
     fetchAndRender: renderWorldClock,
   },
