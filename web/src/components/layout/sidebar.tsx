@@ -38,7 +38,7 @@ declare global {
   }
 }
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
-import { useHeartbeatStore } from "@/stores/heartbeat-store";
+import { useAssistantStore } from "@/stores/assistant-store";
 
 function getInitials(displayName: string, fullName: string): string {
   const name = displayName || fullName;
@@ -61,9 +61,16 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const displayName = useSettingsStore((s) => s.displayName);
   const fullName = useSettingsStore((s) => s.fullName);
-  const heartbeatPanelOpen = useAppStore((s) => s.heartbeatPanelOpen);
-  const setHeartbeatPanelOpen = useAppStore((s) => s.setHeartbeatPanelOpen);
-  const heartbeatUnreadCount = useHeartbeatStore((s) => s.entries.filter((e) => e.unread).length);
+  const activityFeedOpen = useAppStore((s) => s.activityFeedOpen);
+  const setActivityFeedOpen = useAppStore((s) => s.setActivityFeedOpen);
+  /*
+   * UNREAD CARDS, which is what this button opens.
+   *
+   * It counted `useHeartbeatStore` entries — a store nothing has written to
+   * since `runSilentHeartbeat` was disabled. So the badge was permanently zero
+   * while the panel beside it filled with unread standing-order results.
+   */
+  const unreadCards = useAssistantStore((s) => s.cards.filter((c) => c.unread).length);
 
   // FeedlyBackly widget — loads with hidden launcher, triggered via sidebar Flag button.
   // Note: their API may return 500s intermittently (server-side issue on their end).
@@ -238,14 +245,14 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
           </button>
           {/* Updates / heartbeat button */}
           <button
-            onClick={() => setHeartbeatPanelOpen(!heartbeatPanelOpen)}
+            onClick={() => setActivityFeedOpen(!activityFeedOpen)}
             title="Updates"
             className="relative p-1.5 rounded-md text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
           >
             <Heart className="h-3.5 w-3.5" />
-            {heartbeatUnreadCount > 0 && (
+            {unreadCards > 0 && (
               <span className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center">
-                {heartbeatUnreadCount > 9 ? "9+" : heartbeatUnreadCount}
+                {unreadCards > 9 ? "9+" : unreadCards}
               </span>
             )}
           </button>

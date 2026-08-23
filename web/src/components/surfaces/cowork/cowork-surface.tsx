@@ -92,7 +92,6 @@ import {
   isValidSidebarEntry,
   categorizeToolCall,
 } from "@/lib/artifact-tracker";
-import { useHeartbeatStore } from "@/stores/heartbeat-store";
 import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
 import {
   parseSlashCommand,
@@ -1578,96 +1577,6 @@ export function CoworkSurface() {
   );
 
   // Fire a background agent run on the cowork surface (used by heartbeat + cron)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentionally retained dead code; see the note below the runSilentHeartbeat definition
-  const fireBackgroundRun = useCallback(
-    (prompt: string) => {
-      const bgId = crypto.randomUUID();
-      addConversation({
-        id: bgId,
-        title: `[auto] ${prompt.slice(0, 40)}`,
-        surface: 'cowork',
-        lastMessage: prompt,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        isBackground: true,
-      });
-      addMessage(bgId, { id: crypto.randomUUID(), role: 'user', content: prompt, timestamp: Date.now() });
-      addMessage(bgId, { id: crypto.randomUUID(), role: 'assistant', content: '', timestamp: Date.now(), isLoading: true, isStreaming: true });
-      startStreaming(bgId);
-      const route = resolveRoute();
-      // Open the run record before the turn starts so an immediate failure is
-      // still attributed rather than lost.
-      runRecorder.begin({ trigger: 'hook', model: route?.model ?? undefined });
-      void sendMessage(prompt, bgId, 'cowork', route?.model ?? null, {
-        // A background run is still the same user's setup. Listing a subset here
-        // meant a standing order produced unthemed decks and searched with the
-        // wrong provider, in a path nobody watches while it happens.
-        ...turnContext(),
-        providerConfig: route?.providerConfig,
-      });
-    },
-    [addConversation, addMessage, startStreaming, sendMessage, runRecorder, resolveRoute, turnContext]
-  );
-
-  // Silent heartbeat runner — fetches /api/chat/chat with a throwaway ID, stores result in heartbeat-store
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- intentionally retained dead code; see the note below this definition
-  const runSilentHeartbeat = useCallback(
-    async (prompt: string) => {
-      try {
-        const hbId = `hb-${crypto.randomUUID()}`;
-        const route = resolveRoute(getSurfaceRoute('chat').capability);
-        // Open the run record before the turn starts so an immediate failure is
-        // still attributed rather than lost. This site streams the raw fetch
-        // itself, so it also closes the record by hand below.
-        runRecorder.begin({ trigger: 'heartbeat', model: route?.model ?? undefined });
-        const resp = await fetch('/api/chat/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: prompt, chatId: hbId, surface: 'chat', model: route?.model ?? null, apiKey: anthropicApiKey || undefined, ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}) }),
-        });
-        if (!resp.ok || !resp.body) {
-          runRecorder.fail(resp.ok ? 'empty response body' : `HTTP ${resp.status}`);
-          return;
-        }
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let text = '';
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const event = JSON.parse(line.slice(6));
-              if (event.type === 'text' && typeof event.content === 'string') {
-                text += event.content;
-              }
-            } catch {
-              // ignore parse errors
-            }
-          }
-        }
-        const summary = text.trim();
-        if (summary) {
-          useHeartbeatStore.getState().addEntry({
-            summary,
-            type: 'heartbeat',
-            unread: true,
-            timestamp: Date.now(),
-          });
-        }
-        runRecorder.succeed();
-      } catch (e) {
-        // silent — no UI impact, but the run still records the failure
-        runRecorder.fail(e instanceof Error ? e.message : String(e));
-      }
-    },
-    [runRecorder, resolveRoute, anthropicApiKey]
-  );
 
   // Cron and heartbeat hooks removed — standing order engine in the Assistant
   // surface now handles all scheduled/recurring tasks.

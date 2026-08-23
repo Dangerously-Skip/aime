@@ -1,3 +1,19 @@
+/**
+ * The ACTIVITY FEED — results that have arrived, newest first.
+ *
+ * Renamed from `HeartbeatPanel`, which it never was: it reads `useAssistantStore`
+ * and renders cards and activity entries. It has no connection to the heartbeat
+ * store, whose entries nothing has created since `runSilentHeartbeat` was
+ * disabled.
+ *
+ * The name mattered more than a name usually does. It made the app look like it
+ * had a heartbeat feature — a panel, a sidebar unread count, settings for
+ * interval and modes — when the only live thing behind any of it was this feed
+ * of standing-order results.
+ *
+ * In the event/state split this is the EVENT side: things that happened,
+ * accumulating, read and dismissed. State lives in widgets.
+ */
 "use client";
 
 import { useAppStore } from "@/stores/app-store";
@@ -104,9 +120,9 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
 
 // ── Main Panel ───────────────────────────────────────────────────────────────
 
-export function HeartbeatPanel() {
-  const heartbeatPanelOpen = useAppStore((s) => s.heartbeatPanelOpen);
-  const setHeartbeatPanelOpen = useAppStore((s) => s.setHeartbeatPanelOpen);
+export function ActivityFeedPanel() {
+  const activityFeedOpen = useAppStore((s) => s.activityFeedOpen);
+  const setActivityFeedOpen = useAppStore((s) => s.setActivityFeedOpen);
   const setActiveSurface = useAppStore((s) => s.setActiveSurface);
 
   const cards = useAssistantStore((s) => s.cards);
@@ -131,14 +147,14 @@ export function HeartbeatPanel() {
 
   const handleViewCard = () => {
     setActiveSurface('assistant');
-    setHeartbeatPanelOpen(false);
+    setActivityFeedOpen(false);
   };
 
   return (
     <Sheet
-      open={heartbeatPanelOpen}
+      open={activityFeedOpen}
       onOpenChange={(o) => {
-        if (!o) setHeartbeatPanelOpen(false);
+        if (!o) setActivityFeedOpen(false);
       }}
     >
       <SheetContent
@@ -177,7 +193,7 @@ export function HeartbeatPanel() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => { setActiveSurface('assistant'); setHeartbeatPanelOpen(false); }}
+              onClick={() => { setActiveSurface('assistant'); setActivityFeedOpen(false); }}
             >
               Go to Assistant
             </Button>
@@ -220,7 +236,7 @@ export function HeartbeatPanel() {
 
               {/* Link to full assistant */}
               <button
-                onClick={() => { setActiveSurface('assistant'); setHeartbeatPanelOpen(false); }}
+                onClick={() => { setActiveSurface('assistant'); setActivityFeedOpen(false); }}
                 className="w-full text-xs text-muted-foreground hover:text-foreground py-2 border-t border-border/30 flex items-center justify-center gap-1 transition-colors"
               >
                 View all in Assistant <ChevronRight className="h-3 w-3" />
