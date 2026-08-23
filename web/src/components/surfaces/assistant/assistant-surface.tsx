@@ -59,6 +59,7 @@ import { Cockpit } from "./cockpit";
 import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
+import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -614,6 +615,14 @@ export function AssistantSurface() {
     },
     [handleSubmit, handleAbort, isStreaming]
   );
+
+  /*
+   * A due cron job runs HERE, through this surface's own submit — not through a
+   * scheduler with a send path of its own, which would be a fourth place that
+   * starts a turn. Before this, a job published to the bus, switched surface,
+   * and nothing ran it.
+   */
+  useScheduledPrompt('assistant', handleSubmit);
 
   const handleCardAction = useCallback((action: A2UIAction) => {
     console.log('[Assistant] Card action:', action);

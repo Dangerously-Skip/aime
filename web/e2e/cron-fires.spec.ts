@@ -99,6 +99,39 @@ test.describe('a due cron job reaches its surface', () => {
     await expect(page.getByPlaceholder('Enter URL or search...')).toBeVisible({ timeout: 10_000 });
   });
 
+  test('THE JOB ACTUALLY RUNS — a turn starts on the target surface', async ({ page }) => {
+    /*
+     * The half this suite proved and did not: it asserted the surface switch and
+     * `lastRun`, both of which worked, while nothing executed the prompt.
+     *
+     * The job published to the context bus and the call site said "the surface
+     * named by the job owns actually running it" — but nothing subscribed. Code
+     * and Cowork fold unconsumed bus events into the NEXT HUMAN MESSAGE; chat,
+     * browser and assistant never read the bus at all.
+     *
+     * A started turn is observable without a provider: the surface POSTs to its
+     * chat route. Watching the network is the difference between "the UI moved"
+     * and "the work began".
+     */
+    const posts: string[] = [];
+    await page.route('**/api/chat/**', async (route) => {
+      posts.push(route.request().url());
+      // Answer with a minimal SSE stream so the surface does not error out.
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: 'data: {"type":"done"}\n\n',
+      });
+    });
+
+    await page.evaluate(() => {
+      (window as unknown as { __fireTick: (ts: number) => void }).__fireTick(Date.now());
+    });
+
+    await expect.poll(() => posts.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    expect(posts.join(' '), 'the turn did not go to the browser surface').toContain('/api/chat/browser');
+  });
+
   test('the job is marked as run, so it does not fire again', async ({ page }) => {
     /*
      * `markRan` is the first thing the tick handler does, so a recorded

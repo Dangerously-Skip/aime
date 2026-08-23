@@ -214,7 +214,12 @@ describe('the session actually feeds the log — the half that was untested', ()
       onRetrieval: (t) => log.recordFrom(t),
       query: async function* () {
         yield { type: 'tool_use', name: 'SearchWeb', input: { query: 'nikon fm price' } };
-        yield { type: 'tool_result', content: '1. https://ebay.com/itm/123\n2. https://dpreview.com/x' };
+        /*
+         * `result`, which is what the provider actually yields. This said
+         * `content`, matching the bug in session.ts rather than the provider —
+         * so both agreed and nothing from a tool's ANSWER was ever logged.
+         */
+        yield { type: 'tool_result', result: '1. https://ebay.com/itm/123\n2. https://dpreview.com/x' };
         yield { type: 'text', content: 'done' };
       },
     });
@@ -231,7 +236,7 @@ describe('the session actually feeds the log — the half that was untested', ()
       onRetrieval: (t) => log.recordFrom(t),
       query: async function* () {
         yield { type: 'tool_use', name: 'Bash', input: { command: './check.sh' } };
-        yield { type: 'tool_result', content: 'exit 0' };
+        yield { type: 'tool_result', result: 'exit 0' };
         yield { type: 'text', content: 'done' };
       },
     });

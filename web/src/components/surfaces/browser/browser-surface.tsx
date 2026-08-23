@@ -23,6 +23,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Message } from "@/stores/chat-store";
 import { ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
+import { useScratchDir } from "@/hooks/use-scratch-dir";
+import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
@@ -134,6 +136,11 @@ export function BrowserSurface() {
 const providers = useProviderStore((s) => s.providers);
 const tierModels = useSettingsStore((s) => s.tierModels);
 const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
+  /*
+   * Somewhere for the agent to write. Browser has no folder picker, so this is
+   * the only writable location it has — see the `cwd` note at the send site.
+   */
+  const scratchDir = useScratchDir(chatId);
   const isStreaming = useBrowserStore((s) => s.isStreaming);
   const loopPhase = useBrowserStore((s) => s.loopPhase);
   const addMessage = useBrowserStore((s) => s.addMessage);
@@ -517,6 +524,12 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
             open: handleNewTab,
             switch: handleSwitchTab,
             close: handleCloseTab,
+            /*
+             * The SAME order the model was shown in the page state, so the
+             * index it picks maps to the tab it meant. Read fresh on each call
+             * rather than captured: a tab opened mid-turn has to be reachable.
+             */
+            list: () => useBrowserStore.getState().getTabsForChat(chatId).map((t) => ({ id: t.id })),
           },
         })
       ) {
@@ -864,10 +877,30 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
          * dies.
          */
         browserToolsAvailable: !!wv,
+        /*
+         * A PLACE TO WRITE. Browser has Write and Edit auto-approved and a
+         * prompt telling it to accumulate findings in a file — with no `cwd`,
+         * those land in the SERVER PROCESS's working directory, which is the
+         * repo root in dev and anybody's guess in a packaged app.
+         *
+         * The scratch dir is the honest home for it: per-conversation, created
+         * on demand, and the same fallback Cowork uses when it has no folder.
+         */
+        cwd: scratchDir || undefined,
         apiKey: anthropicApiKey || undefined,
         providerConfig: route?.providerConfig,
+        /*
+         * `.slice(0, -2)` — the same as every other surface, and it was missing.
+         *
+         * The user turn and the empty assistant placeholder are pushed to the
+         * store BEFORE this call, so an unsliced history sends the current
+         * message twice: once as history, once as the prompt. The history copy
+         * also lacks the `<context>` prefix, so the model sees two subtly
+         * different versions of the same request and has to guess which is
+         * current.
+         */
         history: stripMessagesForHistory(
-          (useBrowserStore.getState().messages[id] ?? []) as Message[],
+          ((useBrowserStore.getState().messages[id] ?? []) as Message[]).slice(0, -2),
         ),
         memories: memoriesStr || undefined,
         sessionControls: sessionControls ?? undefined,
@@ -877,6 +910,14 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     // missing, so chained slash commands applied against a stale value.
     [providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext, attachments, sessionControls]
   );
+
+  /*
+   * A due cron job runs HERE, through this surface's own submit — not through a
+   * scheduler with a send path of its own, which would be a fourth place that
+   * starts a turn. Before this, a job published to the bus, switched surface,
+   * and nothing ran it.
+   */
+  useScheduledPrompt('browser', handleAgentSubmit);
 
   const handleVoiceTranscript = useCallback(
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),

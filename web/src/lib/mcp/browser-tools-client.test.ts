@@ -47,11 +47,25 @@ describe('Code declares it only when the preview is open', () => {
   });
 
   it('can actually execute what it declares', () => {
-    // The other half: a declaration is only honest if the surface handles the
-    // resulting tool calls. Code's handler predates this work.
-    expect(code).toContain('browser_tool_use');
-    expect(code).toContain('executeToolInWebview');
-    expect(code).toContain('/api/chat/browser-tool-result');
+    /*
+     * The other half: a declaration is only honest if the surface handles the
+     * resulting tool calls.
+     *
+     * This used to look for an inline `browser_tool_use` case, `executeToolInWebview`
+     * and the relay URL — all three of which Code had, in a private copy of the
+     * shared module. That copy is the defect: it never grew tab handling, while
+     * `browserMcpToolNames()` mounts new_tab/switch_tab/close_tab for every
+     * surface with a webview, so Code offered three tools whose only possible
+     * answer was "Unknown tool".
+     *
+     * Delegating is now the stronger form of the same guarantee, since the
+     * shared handler is itself tested — and `browser-relay-shared.test.ts`
+     * forbids any surface growing a fourth copy.
+     */
+    expect(code).toContain('handleBrowserToolChunk');
+    expect(code, 'Code has an inline copy of the relay again').not.toMatch(
+      /case\s+["']browser_tool_use["']/,
+    );
   });
 });
 

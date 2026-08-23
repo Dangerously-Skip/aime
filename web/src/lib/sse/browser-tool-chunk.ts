@@ -22,8 +22,15 @@ import { executeToolInWebview, type WebviewRef, type ConsoleLogBuffer } from '..
 
 export interface BrowserToolChunkContext {
   chatId: string;
-  /** Null when no webview can serve the call — reported to the model as an error. */
-  webview: (HTMLElement & WebviewRef) | null;
+  /**
+   * Null when no webview can serve the call — reported to the model as an error.
+   *
+   * `WebviewRef`, not `HTMLElement & WebviewRef`: that is all
+   * `executeToolInWebview` needs, and demanding the element type excluded Code
+   * (whose preview ref is a plain `WebviewRef`) from using this module at all —
+   * which is part of why it kept an inline copy.
+   */
+  webview: WebviewRef | null;
   consoleBuffer?: ConsoleLogBuffer;
   addToolCall: (
     chatId: string,
@@ -59,6 +66,8 @@ export interface BrowserToolChunkContext {
     open: (url: string) => Promise<unknown>;
     switch: (tabId: string) => Promise<unknown>;
     close: (tabId: string) => Promise<unknown>;
+    /** Open tabs in the order the model was shown them, for index → id. */
+    list: () => Array<{ id: string }>;
   };
 }
 
@@ -114,10 +123,41 @@ export function handleBrowserToolChunk(
       void postResult(toolUseId, message, true, ctx.surface);
       return true;
     }
+    /*
+     * INDEX IN, ID OUT — the translation this path was missing.
+     *
+     * The schemas offer `tab_index`: a 0-based position in the open-tabs list,
+     * because that is what the model can see. The surface callbacks take a tab
+     * UUID, because that is what identifies a tab as the list changes under it.
+     * This read `input.tab_id`, which no schema declares, so every switch and
+     * close received '' and failed — the quick-ask loop does this translation
+     * and the shared path did not.
+     *
+     * An out-of-range index is reported as such rather than passed on as an
+     * empty id: "tab 7 does not exist, there are 3" is actionable, and a silent
+     * failure is what a retry loop is made of.
+     */
+    const tabs = ctx.tabs.list();
+    const wantsIndex = name === 'switch_tab' || name === 'close_tab';
+    let index = -1;
+    if (wantsIndex) {
+      const raw = input.tab_index ?? input.tabIndex ?? input.index;
+      index = typeof raw === 'number' ? raw : Number.parseInt(String(raw ?? ''), 10);
+      if (!Number.isInteger(index) || index < 0 || index >= tabs.length) {
+        const message =
+          `${name} failed: there ${tabs.length === 1 ? 'is 1 open tab' : `are ${tabs.length} open tabs`}, ` +
+          `so index ${Number.isInteger(index) ? index : String(input.tab_index ?? '?')} does not exist. ` +
+          `Open tabs are numbered from 0${tabs.length ? ` to ${tabs.length - 1}` : ''}.`;
+        ctx.updateToolResult(ctx.chatId, toolUseId, message, true);
+        void postResult(toolUseId, message, true, ctx.surface);
+        return true;
+      }
+    }
+
     const run =
       name === 'new_tab' ? ctx.tabs.open(String(input.url ?? ''))
-      : name === 'switch_tab' ? ctx.tabs.switch(String(input.tab_id ?? input.tabId ?? ''))
-      : ctx.tabs.close(String(input.tab_id ?? input.tabId ?? ''));
+      : name === 'switch_tab' ? ctx.tabs.switch(tabs[index].id)
+      : ctx.tabs.close(tabs[index].id);
 
     void run
       .then((outcome) => {

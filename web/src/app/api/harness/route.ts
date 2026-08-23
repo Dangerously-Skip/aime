@@ -182,10 +182,18 @@ export async function POST(request: NextRequest) {
      * are the budget and the no-progress detector.
      */
     maxTurns: TURN_BACKSTOP.unattended,
-    query: ({ prompt, chatId, maxTurns, cwd }) =>
+    query: ({ prompt, chatId, maxTurns, cwd, maxBudgetUsd }) =>
       provider.query({
         prompt,
         chatId,
+        /*
+         * FORWARDED, which it was not. The in-session cap was computed, passed
+         * to this lambda, and dropped on the floor — so the only thing bounding
+         * spend was the between-sessions check, which is why a run reported
+         * "$7.57 of $3.00". The guard's own test mocks `query`, i.e. exactly the
+         * boundary it exists to prove.
+         */
+        maxBudgetUsd: maxBudgetUsd ?? undefined,
         userId: `harness_${conversationId}`,
         mcpServers,
         model: exec.model,

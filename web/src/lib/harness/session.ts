@@ -303,7 +303,18 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
            * the run never named itself, and reading one of those results is
            * exactly as much "the run saw this page" as navigating to it.
            */
-          if (typeof chunk.content === 'string') deps.onRetrieval?.(chunk.content);
+          /*
+           * `result`, not `content`. The provider yields
+           * `{type:'tool_result', result, tool_use_id}` — reading `content` here
+           * meant NOTHING from a tool's answer was ever logged, so a run that
+           * genuinely fetched a page had no record of it and the citation gate
+           * could flip a legitimate pass to a failure. The test fabricated the
+           * wrong chunk shape and so agreed with the bug.
+           */
+          const payload = (chunk as { result?: unknown }).result ?? chunk.content;
+          if (payload !== undefined && payload !== null) {
+            deps.onRetrieval?.(typeof payload === 'string' ? payload : JSON.stringify(payload));
+          }
         } else if (chunk.type === 'error') {
           error = typeof chunk.content === 'string' ? chunk.content : 'provider error';
         } else if (chunk.type === 'usage') {

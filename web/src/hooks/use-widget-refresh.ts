@@ -34,7 +34,12 @@ export function useWidgetRefresh() {
    * identity changes. The listener discipline this hook already documents.
    */
   const notifyRef = useRef(showNotification);
-  notifyRef.current = showNotification;
+  // In an effect, not during render: React forbids touching a ref while
+  // rendering. Lint only flagged the identical line in `use-scheduled-prompt`,
+  // so this one was a latent copy of the same mistake.
+  useEffect(() => {
+    notifyRef.current = showNotification;
+  });
 
   const pushInFlight = useRef(false);
   const lastPushed = useRef<string>('');
