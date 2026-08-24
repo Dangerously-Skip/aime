@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 import { useCron } from "@/hooks/use-cron";
+import { useCronMigration } from "@/hooks/use-cron-migration";
 import { useExecutionManifest } from "@/hooks/use-execution-manifest";
 import { useAppStore } from "@/stores/app-store";
 import { useContextBusStore } from "@/stores/context-bus-store";
@@ -60,6 +61,15 @@ export function Schedulers() {
     },
     [setActiveSurface],
   );
+
+  /*
+   * Move cron jobs into the order manifest, once (DR-24 step 4).
+   *
+   * Before `useCron`, so a migrated job is in the manifest before the ticker's
+   * next pull — though the dual read means either order is safe, which is the
+   * point of having built it first.
+   */
+  useCronMigration();
 
   useCron(onFire);
 
