@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useCronStore } from '@/stores/cron-store';
 import { useSettingsStore, type HeartbeatModes } from '@/stores/settings-store';
 import { useConnectorStore } from '@/stores/connector-store';
 import { CONNECTOR_REGISTRY } from '@/lib/connectors/registry';

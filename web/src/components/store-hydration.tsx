@@ -13,7 +13,6 @@ import { useProjectStore } from "@/stores/project-store";
 import { useProviderStore } from "@/stores/provider-store";
 import { useMemoryStore } from "@/stores/memory-store";
 import { useConnectorStore } from "@/stores/connector-store";
-import { useCronStore } from "@/stores/cron-store";
 import { openStorageGate } from "@/lib/gated-storage";
 import { isHydrationApplying } from "@/lib/hydration-signal";
 
@@ -157,7 +156,6 @@ export function StoreHydration({ children }: { children: React.ReactNode }) {
       useProviderStore.persist.rehydrate(),
       useMemoryStore.persist.rehydrate(),
       useConnectorStore.persist.rehydrate(),
-      useCronStore.persist.rehydrate(),
     ]).then((results) => {
       // Log any individual failures
       results.forEach((r, i) => {

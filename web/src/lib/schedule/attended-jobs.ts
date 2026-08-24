@@ -22,17 +22,6 @@ import type { SchedulableJob } from './due';
  * against, arriving from the other direction.
  */
 
-/** A cron job as the browser store holds it. */
-export interface LegacyCronJob {
-  id: string;
-  expression: string;
-  prompt: string;
-  surfaceId: string;
-  projectId?: string;
-  lastRun: number | null;
-  enabled: boolean;
-}
-
 /** What the ticker needs, whichever store it came from. */
 export interface AttendedJob extends SchedulableJob {
   id: string;
@@ -40,8 +29,6 @@ export interface AttendedJob extends SchedulableJob {
   surfaceId: string;
   /** Present when the job belongs to a project. */
   projectId?: string;
-  /** Which store this came from, so the caller knows where to write `lastRun`. */
-  source: 'manifest' | 'cron-store';
 }
 
 /** A manifest order, narrowed to what this module reads. */
@@ -59,24 +46,6 @@ export interface ManifestOrderLike {
   expiresAt?: number;
 }
 
-/** A legacy cron job in the shared job shape. */
-export function fromCronJob(job: LegacyCronJob): AttendedJob {
-  return {
-    id: job.id,
-    prompt: job.prompt,
-    surfaceId: job.surfaceId,
-    projectId: job.projectId,
-    source: 'cron-store',
-    // `enabled` is the cron store's spelling of `status`.
-    status: job.enabled ? 'active' : 'paused',
-    trigger: { type: 'cron', expression: job.expression },
-    lastRun: job.lastRun ?? undefined,
-    // The cron store has never counted runs or capped them; absent is correct
-    // rather than zero-with-a-cap, which would read as "capped at zero".
-    runCount: 0,
-  };
-}
-
 /** A manifest order in the shared job shape. */
 export function fromManifestOrder(order: ManifestOrderLike): AttendedJob {
   return {
@@ -84,7 +53,6 @@ export function fromManifestOrder(order: ManifestOrderLike): AttendedJob {
     prompt: order.instruction,
     surfaceId: order.surfaceId ?? '',
     projectId: order.projectId,
-    source: 'manifest',
     status: order.status,
     trigger: order.trigger,
     lastRun: order.lastRun,
@@ -101,12 +69,6 @@ export function fromManifestOrder(order: ManifestOrderLike): AttendedJob {
  * the server's, and picking one up here is the double-fire this whole ownership
  * split exists to prevent.
  */
-export function attendedJobs(
-  orders: ManifestOrderLike[],
-  cronJobs: LegacyCronJob[],
-): AttendedJob[] {
-  const fromManifest = orders.filter((o) => o.attended === true).map(fromManifestOrder);
-  const claimed = new Set(fromManifest.map((j) => j.id));
-  const legacy = cronJobs.filter((j) => !claimed.has(j.id)).map(fromCronJob);
-  return [...fromManifest, ...legacy];
+export function attendedJobs(orders: ManifestOrderLike[]): AttendedJob[] {
+  return orders.filter((o) => o.attended === true).map(fromManifestOrder);
 }

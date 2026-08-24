@@ -68,9 +68,8 @@ describe('creating', () => {
   it('the new job is picked up by the ticker', async () => {
     // End to end through the real merge: created here, ticked there.
     await createAttendedJob(NEW);
-    const ticked = attendedJobs(written(), []);
+    const ticked = attendedJobs(written());
     expect(ticked).toHaveLength(1);
-    expect(ticked[0].source).toBe('manifest');
     expect(ticked[0].surfaceId).toBe('browser');
   });
 });
