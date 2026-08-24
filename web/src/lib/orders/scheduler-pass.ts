@@ -63,6 +63,19 @@ export async function runDueOrders(now: number, execute: ExecuteFn): Promise<str
 
   for (const order of orders) {
     if (inFlight.has(order.id)) continue;
+    /*
+     * ATTENDED JOBS ARE NOT OURS (DR-24 D-1).
+     *
+     * They run in the renderer, against a visible surface, and this ticker has
+     * no surface to drive. Running one here would not merely be wrong — it
+     * would be a SECOND runner for the same job, so a job with the window open
+     * fires twice: once here and once in the renderer. Real money, and on a
+     * browsing job, real actions taken twice.
+     *
+     * Checked before `isOrderDue` on purpose: whether we own it is a cheaper and
+     * more fundamental question than whether it is time.
+     */
+    if (order.attended) continue;
     if (!isOrderDue(order, now)) continue;
 
     inFlight.add(order.id);
