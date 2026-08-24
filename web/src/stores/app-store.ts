@@ -23,7 +23,7 @@ interface AppState {
   selectedSkillId: string | null;
   selectedConnectorId: string | null;
   selectedAgentName: string | null;
-  heartbeatPanelOpen: boolean;
+  activityFeedOpen: boolean;
 }
 
 interface AppActions {
@@ -39,7 +39,7 @@ interface AppActions {
   setSelectedSkillId: (id: string | null) => void;
   setSelectedConnectorId: (id: string | null) => void;
   setSelectedAgentName: (name: string | null) => void;
-  setHeartbeatPanelOpen: (open: boolean) => void;
+  setActivityFeedOpen: (open: boolean) => void;
 }
 
 export type AppStore = AppState & AppActions;
@@ -58,7 +58,7 @@ export const useAppStore = create<AppStore>()(
       selectedSkillId: null,
       selectedConnectorId: null,
       selectedAgentName: null,
-      heartbeatPanelOpen: false,
+      activityFeedOpen: false,
 
       // Actions
       setActiveSurface: (surface) => set({ activeSurface: surface }),
@@ -73,7 +73,7 @@ export const useAppStore = create<AppStore>()(
       setSelectedSkillId: (id) => set({ selectedSkillId: id }),
       setSelectedConnectorId: (id) => set({ selectedConnectorId: id }),
       setSelectedAgentName: (name) => set({ selectedAgentName: name }),
-      setHeartbeatPanelOpen: (open) => set({ heartbeatPanelOpen: open }),
+      setActivityFeedOpen: (open) => set({ activityFeedOpen: open }),
     }),
     {
       name: 'aime:app',

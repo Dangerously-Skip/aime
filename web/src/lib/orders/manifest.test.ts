@@ -111,38 +111,56 @@ describe('inbox', () => {
 });
 
 describe('isOrderDue', () => {
-  const cron = (expr: string, now: Date) => expr === '* * * * *' && now.getTime() > 0;
-
+  /*
+   * NO INJECTED MATCHER ANY MORE (DR-24 step 1).
+   *
+   * These passed a fake `cron` that returned true for one hardcoded expression,
+   * which meant they never exercised the real matcher — the boundary the rule
+   * exists to enforce. `matchesCron` is pure and now importable from
+   * `lib/schedule/due`, so the tests use REAL cron expressions and the third
+   * argument is gone.
+   */
   it('interval orders fire immediately when never run, then wait', () => {
-    expect(isOrderDue(order(), Date.now(), null)).toBe(true);
-    expect(isOrderDue(order({ lastRun: Date.now() - 60_000 }), Date.now(), null)).toBe(false);
-    expect(isOrderDue(order({ lastRun: Date.now() - 31 * 60_000 }), Date.now(), null)).toBe(true);
+    expect(isOrderDue(order(), Date.now())).toBe(true);
+    expect(isOrderDue(order({ lastRun: Date.now() - 60_000 }), Date.now())).toBe(false);
+    expect(isOrderDue(order({ lastRun: Date.now() - 31 * 60_000 }), Date.now())).toBe(true);
   });
 
   it('gates on status, expiry and max executions', () => {
-    expect(isOrderDue(order({ status: 'paused' }), Date.now(), null)).toBe(false);
-    expect(isOrderDue(order({ expiresAt: 1 }), Date.now(), null)).toBe(false);
-    expect(isOrderDue(order({ maxExecutions: 2, runCount: 2 }), Date.now(), null)).toBe(false);
+    expect(isOrderDue(order({ status: 'paused' }), Date.now())).toBe(false);
+    expect(isOrderDue(order({ expiresAt: 1 }), Date.now())).toBe(false);
+    expect(isOrderDue(order({ maxExecutions: 2, runCount: 2 }), Date.now())).toBe(false);
   });
 
-  it('cron orders need the matcher and guard against same-minute double-fire', () => {
+  it('cron orders match the real expression and guard same-minute double-fire', () => {
     const o = order({ trigger: { type: 'cron', expression: '* * * * *' } });
-    // A FIXED instant, 30s into a minute. With Date.now() this failed roughly 8%
-    // of runs: when the real clock landed in the first 5 seconds of a minute,
-    // `now - 5_000` fell into the PREVIOUS minute, so the same-minute guard
-    // correctly did not apply and the assertion below was simply wrong. The code
-    // was right; the test's assumption was not.
+    /*
+     * A FIXED instant, 30s into a minute. With Date.now() this failed roughly 8%
+     * of runs: when the real clock landed in the first 5 seconds of a minute,
+     * `now - 5_000` fell into the PREVIOUS minute, so the same-minute guard
+     * correctly did not apply and the assertion below was simply wrong. The code
+     * was right; the test's assumption was not.
+     */
     const now = new Date('2026-07-27T12:34:30.000Z').getTime();
-    expect(isOrderDue(o, now, cron)).toBe(true);
-    expect(isOrderDue(o, now, null)).toBe(false); // matcher unavailable ⇒ skip, not crash
-    expect(isOrderDue({ ...o, lastRun: now - 5_000 }, now, cron)).toBe(false); // same minute
-
+    expect(isOrderDue(o, now)).toBe(true);
+    expect(isOrderDue({ ...o, lastRun: now - 5_000 }, now)).toBe(false); // same minute
     // …and the guard really is minute-scoped: a run a minute ago is due again.
-    expect(isOrderDue({ ...o, lastRun: now - 60_000 }, now, cron)).toBe(true);
+    expect(isOrderDue({ ...o, lastRun: now - 60_000 }, now)).toBe(true);
+  });
+
+  it('a cron expression that does NOT match is not due', () => {
+    // The half a fake matcher could never check: the real parser saying no.
+    const at = new Date('2026-07-27T12:34:30.000Z').getTime();
+    expect(isOrderDue(order({ trigger: { type: 'cron', expression: '0 3 * * *' } }), at)).toBe(false);
+  });
+
+  it('a malformed cron expression is not due, rather than throwing', () => {
+    const at = new Date('2026-07-27T12:34:30.000Z').getTime();
+    expect(isOrderDue(order({ trigger: { type: 'cron', expression: 'nonsense' } }), at)).toBe(false);
   });
 
   it('event triggers are never fired by the clock', () => {
-    expect(isOrderDue(order({ trigger: { type: 'event', event: 'push' } }), Date.now(), null)).toBe(false);
+    expect(isOrderDue(order({ trigger: { type: 'event', event: 'push' } }), Date.now())).toBe(false);
   });
 });
 

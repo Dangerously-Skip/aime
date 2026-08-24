@@ -1,5 +1,6 @@
-import type { AssistantCard } from '@/stores/assistant-store';
-import type { A2UIDocument } from '@/lib/a2ui/types';
+import type { Widget } from '@/lib/widgets/widget';
+import { resolveWidgetPresetConfig, type WidgetPresetConfig } from './widget-config';
+import type { WidgetNode } from '@/lib/widgets/catalog';
 
 /**
  * Widget preset = a self-contained dashboard tile. Instead of round-tripping
@@ -15,7 +16,7 @@ export interface WidgetPreset {
   icon: string;
   description: string;
   refreshIntervalMs: number;
-  fetchAndRender(): Promise<A2UIDocument>;
+  fetchAndRender(config?: WidgetPresetConfig): Promise<WidgetNode>;
 }
 
 const FIFTEEN_MIN = 15 * 60_000;
@@ -23,12 +24,17 @@ const ONE_HOUR = 60 * 60_000;
 
 // ── World clock — pure computation ─────────────────────────────────────────────
 
-const ZONES: Array<{ label: string; tz: string }> = [
-  { label: 'Sydney', tz: 'Australia/Sydney' },
-  { label: 'San Francisco', tz: 'America/Los_Angeles' },
-  { label: 'London', tz: 'Europe/London' },
-  { label: 'Singapore', tz: 'Asia/Singapore' },
-];
+/*
+ * FROM CONFIG, not from here.
+ *
+ * These lists were one person's: Sydney/SF/London/Singapore, Sydney's latitude
+ * and longitude, and a single mid-cap holding of the author's former employer.
+ * In an open-source product where the Assistant surface is among the first
+ * things a new user sees, every card was confidently wrong about their life.
+ *
+ * `widget-config.ts` derives defaults from the user's own time zone and lets
+ * them be edited. Kept here only as the shape a caller passes in.
+ */
 
 function formatInZone(tz: string): string {
   // Intl handles DST automatically.
@@ -40,17 +46,11 @@ function formatInZone(tz: string): string {
   }).format(new Date());
 }
 
-async function renderWorldClock(): Promise<A2UIDocument> {
+async function renderWorldClock(config?: WidgetPresetConfig): Promise<WidgetNode> {
+  const zones = (config ?? resolveWidgetPresetConfig(null)).clocks;
   return {
-    version: '1',
-    title: 'World clock',
-    components: [
-      {
-        type: 'stat',
-        id: 'clocks',
-        stats: ZONES.map((z) => ({ label: z.label, value: formatInZone(z.tz) })),
-      },
-    ],
+    type: 'statGrid',
+    items: zones.map((z) => ({ label: z.label, value: formatInZone(z.tz) })),
   };
 }
 
@@ -66,19 +66,14 @@ const WEATHER_CODES: Record<number, string> = {
   95: '⛈', 96: '⛈', 99: '⛈',
 };
 
-async function renderWeather(): Promise<A2UIDocument> {
-  // Sydney by default; could read from settings later.
-  const url = 'https://api.open-meteo.com/v1/forecast?latitude=-33.87&longitude=151.21&current=temperature_2m,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&timezone=auto&forecast_days=1';
-  const fallback: A2UIDocument = {
-    version: '1',
-    title: 'Weather · Sydney',
-    components: [
-      {
-        type: 'stat',
-        id: 'now',
-        stats: [{ label: 'Status', value: 'Unavailable' }],
-      },
-    ],
+async function renderWeather(config?: WidgetPresetConfig): Promise<WidgetNode> {
+  // Where the USER is — see widget-config. This read Sydney's coordinates, with
+  // a comment saying it "could read from settings later".
+  const where = (config ?? resolveWidgetPresetConfig(null)).weather;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${where.latitude}&longitude=${where.longitude}&current=temperature_2m,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&timezone=auto&forecast_days=1`;
+  const fallback: WidgetNode = {
+    type: 'statGrid',
+    items: [{ label: 'Status', value: 'Unavailable' }],
   };
   try {
     const res = await fetch(url);
@@ -88,18 +83,11 @@ async function renderWeather(): Promise<A2UIDocument> {
     const code = current.weather_code as number | undefined;
     const emoji = (code !== undefined && WEATHER_CODES[code]) || '🌡';
     return {
-      version: '1',
-      title: 'Weather · Sydney',
-      components: [
-        {
-          type: 'stat',
-          id: 'now',
-          stats: [
-            { label: 'Now', value: `${Math.round(current.temperature_2m ?? 0)}°C` },
-            { label: 'Wind', value: `${Math.round(current.wind_speed_10m ?? 0)} km/h` },
-            { label: 'Sky', value: emoji },
-          ],
-        },
+      type: 'statGrid',
+      items: [
+        { label: 'Now', value: `${Math.round(current.temperature_2m ?? 0)}°C` },
+        { label: 'Wind', value: `${Math.round(current.wind_speed_10m ?? 0)} km/h` },
+        { label: 'Sky', value: emoji },
       ],
     };
   } catch {
@@ -109,11 +97,6 @@ async function renderWeather(): Promise<A2UIDocument> {
 
 // ── Stock ticker — Yahoo Finance public chart API ─────────────────────────────
 
-const TICKERS: Array<{ symbol: string; label: string }> = [
-  { symbol: 'NHF.AX', label: 'NHF (nib)' },
-  { symbol: '%5EAXJO', label: 'ASX 200' },
-  { symbol: 'AUDUSD=X', label: 'AUD/USD' },
-];
 
 async function fetchQuote(symbol: string): Promise<{ value: string; trend: 'up' | 'down' | 'neutral'; trendValue: string } | null> {
   try {
@@ -137,22 +120,17 @@ async function fetchQuote(symbol: string): Promise<{ value: string; trend: 'up' 
   }
 }
 
-async function renderStockTicker(): Promise<A2UIDocument> {
-  const quotes = await Promise.all(TICKERS.map((t) => fetchQuote(t.symbol)));
+async function renderStockTicker(config?: WidgetPresetConfig): Promise<WidgetNode> {
+  const tickers = (config ?? resolveWidgetPresetConfig(null)).tickers;
+  const quotes = await Promise.all(tickers.map((t) => fetchQuote(t.symbol)));
   return {
-    version: '1',
-    title: 'Markets',
-    components: [
-      {
-        type: 'stat',
-        id: 'tickers',
-        stats: TICKERS.map((t, i) => {
-          const q = quotes[i];
-          if (!q) return { label: t.label, value: '—' };
-          return { label: t.label, value: q.value, trend: q.trend, trendValue: q.trendValue };
-        }),
-      },
-    ],
+    type: 'statGrid',
+    items: tickers.map((t, i) => {
+      const q = quotes[i];
+      if (!q) return { label: t.label, value: '—' };
+      // `state`/`delta` is the widget catalog's spelling of trend.
+      return { label: t.label, value: q.value, state: q.trend, delta: q.trendValue };
+    }),
   };
 }
 
@@ -164,7 +142,7 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
     kind: 'weather',
     label: 'Weather',
     icon: 'cloud-sun',
-    description: 'Sydney current conditions, refreshed every 15 min',
+    description: 'Current conditions where you are, refreshed every 15 min',
     refreshIntervalMs: FIFTEEN_MIN,
     fetchAndRender: renderWeather,
   },
@@ -173,7 +151,7 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
     kind: 'stock_ticker',
     label: 'Stock ticker',
     icon: 'trending-up',
-    description: 'NHF, ASX 200, AUD/USD — refreshed every 15 min',
+    description: 'Markets you follow, refreshed every 15 min',
     refreshIntervalMs: FIFTEEN_MIN,
     fetchAndRender: renderStockTicker,
   },
@@ -182,24 +160,62 @@ export const WIDGET_PRESETS: WidgetPreset[] = [
     kind: 'world_clock',
     label: 'World clock',
     icon: 'globe-2',
-    description: 'Sydney · SF · London · Singapore — refreshed hourly',
+    description: 'Your zone and three others, refreshed hourly',
     refreshIntervalMs: ONE_HOUR,
     fetchAndRender: renderWorldClock,
   },
 ];
+
+/**
+ * Run a widget's built-in fetcher.
+ *
+ * Returns null for a widget with no `refreshKind` — that one goes down the agent
+ * path, and this must not guess on its behalf.
+ */
+export async function refreshByKind(
+  refreshKind: string | undefined,
+  config?: WidgetPresetConfig,
+): Promise<WidgetNode | null> {
+  const preset = WIDGET_PRESETS.find(
+    (p) =>
+      (refreshKind === 'tickers' && p.kind === 'stock_ticker') ||
+      (refreshKind === 'clocks' && p.kind === 'world_clock') ||
+      (refreshKind === 'weather' && p.kind === 'weather'),
+  );
+  if (!preset) return null;
+  return preset.fetchAndRender(config);
+}
 
 export function getWidgetPreset(kind: string): WidgetPreset | undefined {
   return WIDGET_PRESETS.find((p) => p.kind === kind);
 }
 
 /** Build an AssistantCard payload for a preset. */
-export function buildWidgetCard(preset: WidgetPreset): Omit<AssistantCard, 'id' | 'timestamp' | 'unread' | 'pinned'> {
+/**
+ * A preset, as a WIDGET.
+ *
+ * Presets used to build an `AssistantCard` with a `widget:` block bolted on, so
+ * a stock ticker — which is STATE, one current value replaced on refresh — lived
+ * in the event feed alongside things that happened. It could not be edited,
+ * rescheduled, or asked about, and none of the unread/digest/quiet-hours work
+ * applied to it, because all of that was built for the other widget system.
+ *
+ * Now it is the same object as any widget you create, differing only in HOW it
+ * refreshes: a built-in fetcher instead of an agent run. Free, instant, and
+ * editable like everything else.
+ */
+export function buildPresetWidget(preset: WidgetPreset): Omit<Widget, 'id' | 'createdAt'> {
   return {
     title: preset.label,
-    summary: 'Loading…',
-    widget: {
-      kind: preset.kind,
-      refreshIntervalMs: preset.refreshIntervalMs,
-    },
+    // A recipe for the agent path to fall back on, and the honest description of
+    // what the tile is for if a user later switches it to agent refresh.
+    recipe: preset.description,
+    refreshKind: preset.kind === 'stock_ticker' ? 'tickers'
+      : preset.kind === 'world_clock' ? 'clocks'
+      : 'weather',
+    refreshEverySeconds: Math.round(preset.refreshIntervalMs / 1000),
+    render: null,
+    enabled: true,
   };
 }
+

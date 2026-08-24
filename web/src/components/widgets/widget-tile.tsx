@@ -12,6 +12,8 @@ import { WidgetRenderer } from "./widget-renderer";
 import { Button } from "@/components/ui/button";
 import { Loader2, RefreshCw, Trash2, Pause, Play, MessageSquare, Bell, BellOff } from "lucide-react";
 import { isUnread } from "@/lib/widgets/unread";
+import { refreshByKind } from "@/lib/assistant/widget-presets";
+import { resolveWidgetPresetConfig } from "@/lib/assistant/widget-config";
 import { useAppStore } from "@/stores/app-store";
 import { useChatStore } from "@/stores/chat-store";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -38,6 +40,8 @@ export function WidgetTile({
   const setEnabled = useWidgetStore((s) => s.setEnabled);
   const removeWidget = useWidgetStore((s) => s.removeWidget);
   const markSeen = useWidgetStore((s) => s.markSeen);
+  // Where the user is / what they follow. Defaults derive from their time zone.
+  const presetConfig = useMemo(() => resolveWidgetPresetConfig(null), []);
   const updateWidget = useWidgetStore((s) => s.updateWidget);
   const addConversation = useConversationStore((s) => s.addConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
@@ -65,6 +69,28 @@ export function WidgetTile({
   }, []);
 
   const refresh = useCallback(async () => {
+    /*
+     * DETERMINISTIC FIRST. A widget with a `refreshKind` has a built-in fetcher:
+     * a stock price should never cost a model call, and the fetch is faster and
+     * more reliable than asking an agent to go and look.
+     *
+     * This is the axis that used to be decided by authorship — shipped things
+     * got fetchers, user things got agents — and is now a property of the
+     * widget, so a built-in can be edited and a custom one could have a fetcher.
+     */
+    if (widget.refreshKind) {
+      setBusy(true);
+      try {
+        const node = await refreshByKind(widget.refreshKind, presetConfig);
+        if (node) setRender(widget.id, node, Date.now());
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     if (busy) return;
     setBusy(true);
     setError(null);

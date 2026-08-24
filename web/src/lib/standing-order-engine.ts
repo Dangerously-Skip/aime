@@ -5,6 +5,7 @@
 
 import { matchesCron } from '@/stores/cron-store';
 import type { StandingOrder } from '@/stores/assistant-store';
+import { isJobDue } from '@/lib/schedule/due';
 
 /**
  * Parse an interval expression like "5m", "1h", "30s" into milliseconds.
@@ -31,45 +32,20 @@ export function evaluateStandingOrders(
   orders: StandingOrder[],
   now: Date = new Date()
 ): StandingOrder[] {
+  /*
+   * ONE RULE, SHARED WITH THE SERVER TICKER (DR-24 step 1).
+   *
+   * This function's body was reimplemented line for line in
+   * `orders/scheduler-pass.ts`, which said so in a comment and explained that it
+   * had to, because this module pulls in a `'use client'` zustand store.
+   *
+   * That was a module-boundary problem, not a domain one: the rule is pure, and
+   * only its address was wrong. It lives in `lib/schedule/due.ts` now, which
+   * imports nothing, and both tickers call it. Two copies of one due-check is a
+   * divergence waiting to be found by a user whose job fires twice or never.
+   */
   const nowMs = now.getTime();
-  const matched: StandingOrder[] = [];
-
-  for (const order of orders) {
-    // Skip non-active orders
-    if (order.status !== 'active') continue;
-
-    // Check expiry
-    if (order.expiresAt && nowMs >= order.expiresAt) continue;
-
-    // Check max executions
-    if (order.maxExecutions && order.runCount >= order.maxExecutions) continue;
-
-    // Check trigger
-    const { trigger } = order;
-
-    if (trigger.type === 'cron' && trigger.expression) {
-      if (matchesCron(trigger.expression, now)) {
-        // Prevent double-firing within the same minute
-        if (order.lastRun) {
-          const lastRunMinute = Math.floor(order.lastRun / 60000);
-          const nowMinute = Math.floor(nowMs / 60000);
-          if (lastRunMinute === nowMinute) continue;
-        }
-        matched.push(order);
-      }
-    } else if (trigger.type === 'interval' && trigger.expression) {
-      const intervalMs = parseInterval(trigger.expression);
-      if (intervalMs && (!order.lastRun || nowMs - order.lastRun >= intervalMs)) {
-        matched.push(order);
-      }
-    } else if (trigger.type === 'event') {
-      // Event triggers are handled externally (webhooks, connector polling)
-      // They set a flag that the engine checks — placeholder for now
-      continue;
-    }
-  }
-
-  return matched;
+  return orders.filter((order) => isJobDue(order, nowMs));
 }
 
 /**

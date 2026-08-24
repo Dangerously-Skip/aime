@@ -13,7 +13,7 @@ beforeEach(() => {
     selectedSkillId: null,
     selectedConnectorId: null,
     selectedAgentName: null,
-    heartbeatPanelOpen: false,
+    activityFeedOpen: false,
   });
 });
 

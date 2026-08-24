@@ -5,7 +5,6 @@ import { useAssistantStore, type StandingOrder, type AssistantCard } from "@/sto
 import { useSettingsStore } from "@/stores/settings-store";
 import { useHydrated } from "@/components/store-hydration";
 import { useStandingOrders } from "@/hooks/use-standing-orders";
-import { useAssistantWidgets } from "@/hooks/use-assistant-widgets";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -39,7 +38,7 @@ import {
   Globe2,
   type LucideIcon,
 } from "lucide-react";
-import { WIDGET_PRESETS, buildWidgetCard } from "@/lib/assistant/widget-presets";
+import { WIDGET_PRESETS, buildPresetWidget } from "@/lib/assistant/widget-presets";
 
 const TEMPLATE_ICONS: Record<string, LucideIcon> = {
   sun: Sun, moon: Moon, timer: Timer, hammer: Hammer,
@@ -60,6 +59,7 @@ import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
 import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
+import { useWidgetStore } from "@/stores/widget-store";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -455,6 +455,9 @@ export function AssistantSurface() {
   const orders = useAssistantStore((s) => s.orders);
   const cards = useAssistantStore((s) => s.cards);
   const addCard = useAssistantStore((s) => s.addCard);
+  // Presets are WIDGETS now, not cards — state belongs in the Cockpit, not the
+  // event feed. See `buildPresetWidget`.
+  const addWidget = useWidgetStore((s) => s.addWidget);
   const addOrder = useAssistantStore((s) => s.addOrder);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
 
@@ -470,7 +473,6 @@ export function AssistantSurface() {
   useWidgetRefresh();
 
   // Auto-refresh dashboard widgets on the heartbeat
-  useAssistantWidgets();
 
   // Clear selection when the selected order is deleted
   useEffect(() => {
@@ -778,7 +780,7 @@ export function AssistantSurface() {
                         <button
                           key={preset.id}
                           className="flex flex-col items-center gap-1.5 text-center p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                          onClick={() => addCard(buildWidgetCard(preset))}
+                          onClick={() => addWidget({ ...buildPresetWidget(preset), id: crypto.randomUUID(), createdAt: Date.now() })}
                           title={preset.description}
                         >
                           <Icon className="h-4 w-4 text-muted-foreground" />
@@ -800,7 +802,7 @@ export function AssistantSurface() {
                       <button
                         key={preset.id}
                         className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                        onClick={() => addCard(buildWidgetCard(preset))}
+                        onClick={() => addWidget({ ...buildPresetWidget(preset), id: crypto.randomUUID(), createdAt: Date.now() })}
                         title={preset.description}
                       >
                         <Icon className="h-3 w-3" />

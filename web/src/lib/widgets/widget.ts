@@ -15,6 +15,26 @@ export interface Widget {
   title: string;
   /** The stored natural-language instruction, re-run on each refresh. */
   recipe: string;
+  /**
+   * HOW this widget refreshes — deterministically, or by asking an agent.
+   *
+   * Two axes were conflated before, and splitting them is the whole point of
+   * this change. "Who authored it" decided everything: things we shipped got a
+   * built-in fetcher and lived in the activity feed as cards; things you made
+   * got an agent and lived in the Cockpit. So you could not have a cheap custom
+   * widget or a smart built-in one, and identical objects had two homes.
+   *
+   * The real axes are independent:
+   *   - EVENT vs STATE — a widget is state; the activity feed is events.
+   *   - DETERMINISTIC vs AGENT — this field.
+   *
+   * A stock price should never cost a model call. "Rank my PRs by staleness"
+   * needs one. That is a property of the refresh, not a different kind of thing.
+   *
+   * Absent ⇒ agent, using `recipe`. That keeps every existing widget working
+   * without a migration.
+   */
+  refreshKind?: 'weather' | 'tickers' | 'clocks';
   /** Last successfully rendered node. Null until the first refresh lands. */
   render: WidgetNode | null;
   refreshedAt?: number;

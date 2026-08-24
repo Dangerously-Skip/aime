@@ -18,7 +18,7 @@ import { ProjectCreate } from "@/components/projects/project-create";
 import { CustomizeView } from "@/components/customize/customize-view";
 import { UpdateBanner } from "@/components/shared/update-banner";
 import { ReminderModal } from "@/components/shared/reminder-modal";
-import { HeartbeatPanel } from "./heartbeat-panel";
+import { ActivityFeedPanel } from "./activity-feed-panel";
 
 export function AppShell() {
   // Minute-tick schedulers, mounted once. See schedulers.tsx for why they live
@@ -194,7 +194,7 @@ export function AppShell() {
 
       <UpdateBanner />
       <ReminderModal />
-      <HeartbeatPanel />
+      <ActivityFeedPanel />
 
       {editingProjectId && (
         <ProjectSettings

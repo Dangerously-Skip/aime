@@ -183,3 +183,51 @@ describe('asking about a tile', () => {
     expect(useAppStore.getState().activeSurface).toBe('chat');
   });
 });
+
+describe('a preset widget refreshes without a model call', () => {
+  /*
+   * THE SABOTAGE THAT PASSED. `refreshByKind` was tested and `buildPresetWidget`
+   * was tested, and nothing checked that the TILE dispatches to the fetcher —
+   * so making every widget take the agent path broke no test while quietly
+   * charging a model call to render a clock.
+   */
+  const presetWidget = {
+    id: 'w-clock',
+    title: 'World clock',
+    recipe: 'your zone and three others',
+    refreshKind: 'clocks',
+    render: null,
+    enabled: true,
+    createdAt: 0,
+  } as never;
+
+  it('calls no API route — the fetch is local computation', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    // In the STORE, not just as a prop: `setRender` looks the widget up by id.
+    useWidgetStore.setState({ widgets: [presetWidget] } as never);
+    render(<WidgetTile widget={presetWidget} />);
+    fireEvent.click(screen.getByTitle('Refresh now'));
+    await waitFor(() =>
+      expect(useWidgetStore.getState().widgets.find((w) => w.id === 'w-clock')?.render).toBeTruthy(),
+    );
+    // The agent path POSTs to /api/widgets/refresh. A clock must not.
+    const posted = fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/'));
+    expect(posted, 'a deterministic widget called the agent').toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it('an agent widget DOES go to the refresh route', async () => {
+    // The complement: dispatching everything to the fetcher would silently
+    // ignore a custom widget's recipe.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ node: { type: 'text', text: 'ok' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<WidgetTile widget={{ ...(presetWidget as object), id: 'w-agent', refreshKind: undefined } as never} />);
+    fireEvent.click(screen.getByTitle('Refresh now'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/widgets/refresh');
+    vi.unstubAllGlobals();
+  });
+});
