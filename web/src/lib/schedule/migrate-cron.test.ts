@@ -138,3 +138,27 @@ describe('the handover, end to end', () => {
     expect(ticked.map((j) => j.id).sort()).toEqual(['done', 'pending']);
   });
 });
+
+describe('a project schedule stays with its project', () => {
+  /*
+   * Cron jobs have always carried `projectId` and orders had not. Migrating
+   * without it would orphan every per-project schedule — still firing, invisible
+   * in the project that owns them, which is the worst of both.
+   */
+  it('carries projectId across the migration', () => {
+    const o = cronJobToOrder(cronJob({ projectId: 'proj-1' }), NOW);
+    expect(o.projectId).toBe('proj-1');
+  });
+
+  it('survives the round trip into the ticker list', () => {
+    const job = cronJob({ id: 'p', projectId: 'proj-1' });
+    const [merged] = attendedJobs([cronJobToOrder(job, NOW)], []);
+    expect(merged.projectId).toBe('proj-1');
+  });
+
+  it('a job with no project has none, rather than an empty string', () => {
+    // The project view filters on equality, so '' would match nothing and read
+    // as the job having vanished.
+    expect(cronJobToOrder(cronJob(), NOW).projectId).toBeUndefined();
+  });
+});
