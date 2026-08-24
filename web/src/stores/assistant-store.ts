@@ -44,16 +44,12 @@ export interface AssistantCard {
   timestamp: number;
   unread: boolean;
   pinned: boolean;
-  /**
-   * When set, this card is a dashboard widget. Refresh logic lives in the
-   * `useAssistantWidgets` hook which dispatches by `widget.kind` to the
-   * corresponding preset's client-side fetcher (no LLM round-trip).
+  /*
+   * The `widget:` block is GONE. A card carried one so a stock ticker could
+   * live in the event feed and refresh itself — state wearing an event's
+   * clothes. Presets are widgets now, in the Cockpit, where "unread" means
+   * changed since you looked rather than "not yet read".
    */
-  widget?: {
-    kind: string;
-    refreshIntervalMs: number;
-    lastRefreshedAt?: number;
-  };
 }
 
 // ── Activity Log ─────────────────────────────────────────────────────────────
@@ -190,11 +186,9 @@ export const useAssistantStore = create<AssistantStore>()(
 
       addCard: (card) => {
         const id = crypto.randomUUID();
-        // Widgets default to pinned so they persist as dashboard tiles.
-        const isWidget = !!card.widget;
         set((state) => ({
           cards: [
-            { ...card, id, timestamp: Date.now(), unread: !isWidget, pinned: isWidget },
+            { ...card, id, timestamp: Date.now(), unread: !false, pinned: false },
             ...state.cards,
           ],
         }));

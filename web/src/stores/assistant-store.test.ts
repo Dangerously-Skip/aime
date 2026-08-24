@@ -85,13 +85,6 @@ describe('card feed', () => {
     expect(cards[0].pinned).toBe(false);
   });
 
-  it('widget cards default to pinned and read', () => {
-    store().addCard({ title: 'CPU', widget: { kind: 'cpu', refreshIntervalMs: 60000 } });
-    const [card] = store().cards;
-    expect(card.pinned).toBe(true);
-    expect(card.unread).toBe(false);
-  });
-
   it('markAllRead clears unread flags', () => {
     store().addCard({ title: 'a' });
     store().addCard({ title: 'b' });
