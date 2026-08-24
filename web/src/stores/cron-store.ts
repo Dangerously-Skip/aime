@@ -77,51 +77,16 @@ export const useCronStore = create<CronStore>()(
   )
 );
 
-/**
- * Simple cron expression matcher.
- * Supports: minute hour dom month dow (standard 5-field cron)
- * Returns true if the given date matches the expression.
+/*
+ * `matchesCron` LIVES IN `lib/schedule/due.ts` NOW.
+ *
+ * It is a pure function and it was sitting in a `'use client'` store, so the
+ * server-side scheduler could not import it without dragging zustand into the
+ * server bundle — and worked around that with a defensive dynamic import that
+ * skipped cron orders for a whole tick if it failed.
+ *
+ * Re-exported here because callers already import it from this module and there
+ * is no reason to churn them.
  */
-export function matchesCron(expression: string, date: Date = new Date()): boolean {
-  try {
-    const parts = expression.trim().split(/\s+/);
-    if (parts.length !== 5) return false;
-    const [min, hour, dom, month, dow] = parts;
+export { matchesCron } from '@/lib/schedule/due';
 
-    const matches = (field: string, value: number): boolean => {
-      if (field === '*') return true;
-      // Comma-separated list
-      if (field.includes(',')) {
-        return field.split(',').some((f) => matches(f.trim(), value));
-      }
-      // Step values: */5, 0-59/5
-      if (field.includes('/')) {
-        const [range, step] = field.split('/');
-        const stepNum = parseInt(step, 10);
-        if (isNaN(stepNum)) return false;
-        const [start, end] = range === '*'
-          ? [0, 59]
-          : range.split('-').map(Number);
-        if (value < start || value > end) return false;
-        return (value - start) % stepNum === 0;
-      }
-      // Range: 0-5
-      if (field.includes('-')) {
-        const [start, end] = field.split('-').map(Number);
-        return value >= start && value <= end;
-      }
-      // Exact value
-      return parseInt(field, 10) === value;
-    };
-
-    return (
-      matches(min, date.getMinutes()) &&
-      matches(hour, date.getHours()) &&
-      matches(dom, date.getDate()) &&
-      matches(month, date.getMonth() + 1) &&
-      matches(dow, date.getDay())
-    );
-  } catch {
-    return false;
-  }
-}

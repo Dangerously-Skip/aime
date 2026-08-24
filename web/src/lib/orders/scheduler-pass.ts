@@ -11,6 +11,7 @@
  * rather than crashing the scheduler.
  */
 import { readOrderManifest, patchManifestOrder, appendInbox, type ManifestOrder } from './manifest';
+import { isJobDue } from '@/lib/schedule/due';
 import type { OrderExecutionResult } from './execute-service';
 
 /** Interval parsing identical to the engine's ("5m", "1h", "30s", "2 days"). */
@@ -27,36 +28,23 @@ function parseIntervalMs(expression: string): number | null {
   }
 }
 
-type CronMatcher = (expression: string, now: Date) => boolean;
 
-async function loadCronMatcher(): Promise<CronMatcher | null> {
-  try {
-    const { matchesCron } = await import('@/stores/cron-store');
-    return matchesCron;
-  } catch {
-    return null;
-  }
-}
 
-/** Is this order due at `now`? Pure given the injected cron matcher. */
-export function isOrderDue(order: ManifestOrder, nowMs: number, cron: CronMatcher | null): boolean {
-  if (order.status !== 'active') return false;
-  if (order.expiresAt && nowMs >= order.expiresAt) return false;
-  if (order.maxExecutions && order.runCount >= order.maxExecutions) return false;
-
-  const { trigger } = order;
-  if (trigger.type === 'cron' && trigger.expression) {
-    if (!cron || !cron(trigger.expression, new Date(nowMs))) return false;
-    // Same-minute double-fire guard, matching the engine.
-    if (order.lastRun && Math.floor(order.lastRun / 60_000) === Math.floor(nowMs / 60_000)) return false;
-    return true;
-  }
-  if (trigger.type === 'interval' && trigger.expression) {
-    const intervalMs = parseIntervalMs(trigger.expression);
-    return Boolean(intervalMs && (!order.lastRun || nowMs - order.lastRun >= intervalMs));
-  }
-  // Event triggers are fired externally, never by the clock.
-  return false;
+/**
+ * Is this order due? Delegates to the shared rule (DR-24 step 1).
+ *
+ * This function used to reimplement `evaluateStandingOrders` line for line, with
+ * a comment explaining that it had to because the engine pulls in a `'use
+ * client'` store. The rule now lives in `lib/schedule/due.ts`, which imports
+ * nothing, so both tickers share one implementation and the dynamic
+ * `matchesCron` load — which skipped cron orders for a whole tick when it
+ * failed — is gone.
+ *
+ * Kept as a named wrapper rather than inlined: the manifest's `ManifestOrder` is
+ * the caller's vocabulary, and this is where the two meet.
+ */
+export function isOrderDue(order: ManifestOrder, nowMs: number): boolean {
+  return isJobDue(order, nowMs);
 }
 
 type ExecuteFn = (order: ManifestOrder) => Promise<OrderExecutionResult>;
@@ -71,12 +59,11 @@ const inFlight = new Set<string>();
 export async function runDueOrders(now: number, execute: ExecuteFn): Promise<string[]> {
   const orders = await readOrderManifest();
   if (!orders.length) return [];
-  const cron = await loadCronMatcher();
   const acted: string[] = [];
 
   for (const order of orders) {
     if (inFlight.has(order.id)) continue;
-    if (!isOrderDue(order, now, cron)) continue;
+    if (!isOrderDue(order, now)) continue;
 
     inFlight.add(order.id);
     acted.push(order.id);
