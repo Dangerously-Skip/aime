@@ -28,6 +28,7 @@ export interface LegacyCronJob {
   expression: string;
   prompt: string;
   surfaceId: string;
+  projectId?: string;
   lastRun: number | null;
   enabled: boolean;
 }
@@ -37,6 +38,8 @@ export interface AttendedJob extends SchedulableJob {
   id: string;
   prompt: string;
   surfaceId: string;
+  /** Present when the job belongs to a project. */
+  projectId?: string;
   /** Which store this came from, so the caller knows where to write `lastRun`. */
   source: 'manifest' | 'cron-store';
 }
@@ -47,6 +50,7 @@ export interface ManifestOrderLike {
   instruction: string;
   attended?: boolean;
   surfaceId?: string;
+  projectId?: string;
   trigger: { type: 'cron' | 'interval' | 'event'; expression?: string };
   status: string;
   lastRun?: number;
@@ -61,6 +65,7 @@ export function fromCronJob(job: LegacyCronJob): AttendedJob {
     id: job.id,
     prompt: job.prompt,
     surfaceId: job.surfaceId,
+    projectId: job.projectId,
     source: 'cron-store',
     // `enabled` is the cron store's spelling of `status`.
     status: job.enabled ? 'active' : 'paused',
@@ -78,6 +83,7 @@ export function fromManifestOrder(order: ManifestOrderLike): AttendedJob {
     id: order.id,
     prompt: order.instruction,
     surfaceId: order.surfaceId ?? '',
+    projectId: order.projectId,
     source: 'manifest',
     status: order.status,
     trigger: order.trigger,

@@ -55,6 +55,7 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { useAttendedJobs } from '@/hooks/use-attended-jobs';
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
@@ -164,10 +165,14 @@ export function ProjectDetail({
   const providers = useProviderStore((s) => s.providers);
 
   const allCronJobs = useCronStore((s) => s.jobs);
-  const cronJobs = useMemo(() => allCronJobs.filter((j) => j.projectId === projectId), [allCronJobs, projectId]);
-  const addCronJob = useCronStore((s) => s.addJob);
-  const removeCronJob = useCronStore((s) => s.removeJob);
-  const toggleCronJob = useCronStore((s) => s.toggleJob);
+  // Both stores (DR-24 step 5) — see `useAttendedJobs`.
+  const {
+    jobs: allAttendedJobs,
+    create: createAttended,
+    remove: removeAttended,
+    setEnabled: setAttendedEnabled,
+  } = useAttendedJobs();
+  const cronJobs = useMemo(() => allAttendedJobs.filter((j) => j.projectId === projectId), [allAttendedJobs, projectId]);
 
   const [inputValue, setInputValue] = useState("");
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
@@ -398,7 +403,9 @@ export function ProjectDetail({
       body: JSON.stringify({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface }),
     });
     if (!res.ok) { const d = await res.json() as { error?: string }; setCronError(d.error ?? "Invalid"); return; }
-    addCronJob({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface, projectId, enabled: true });
+    // A round trip now; a failure must be visible rather than silently losing
+    // the schedule the user just described.
+    void createAttended({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface, projectId });
     setCronExpr(""); setCronPrompt(""); setAddingCron(false);
   }
 
@@ -705,17 +712,17 @@ export function ProjectDetail({
                 {cronJobs.map((job) => (
                   <div key={job.id} className="flex items-start gap-3 px-5 py-3">
                     <button
-                      onClick={() => toggleCronJob(job.id)}
+                      onClick={() => void setAttendedEnabled(job.id, job.status !== 'active')}
                       className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                      title={job.enabled ? "Disable" : "Enable"}
+                      title={(job.status === 'active') ? "Disable" : "Enable"}
                     >
-                      {job.enabled
+                      {(job.status === 'active')
                         ? <ToggleRight className="h-4 w-4 text-primary" />
                         : <ToggleLeft className="h-4 w-4" />
                       }
                     </button>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-mono text-muted-foreground">{job.expression}</p>
+                      <p className="text-xs font-mono text-muted-foreground">{job.trigger.expression}</p>
                       <p className="text-sm mt-0.5 truncate">{job.prompt}</p>
                       <div className="flex items-center gap-2 mt-1">
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{job.surfaceId}</span>
@@ -724,13 +731,13 @@ export function ProjectDetail({
                             last run {formatTimeAgo(job.lastRun)}
                           </span>
                         )}
-                        {!job.enabled && (
+                        {!(job.status === 'active') && (
                           <span className="text-[10px] text-muted-foreground italic">disabled</span>
                         )}
                       </div>
                     </div>
                     <button
-                      onClick={() => removeCronJob(job.id)}
+                      onClick={() => void removeAttended(job.id)}
                       className="shrink-0 text-muted-foreground hover:text-destructive transition-colors mt-0.5"
                     >
                       <Trash2 className="h-3.5 w-3.5" />

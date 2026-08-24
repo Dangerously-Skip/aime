@@ -46,6 +46,14 @@ export interface ManifestOrder {
   attended?: boolean;
   /** Which surface an attended job drives. Meaningless when unattended. */
   surfaceId?: string;
+  /**
+   * The project this job belongs to, when it was created from one.
+   *
+   * Cron jobs have always had this and orders have not, so migrating without it
+   * would orphan every per-project schedule: still firing, but invisible in the
+   * project that owns them.
+   */
+  projectId?: string;
   maxExecutions?: number;
   expiresAt?: number;
   state: Record<string, unknown>;

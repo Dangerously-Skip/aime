@@ -21,14 +21,18 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '@/stores/app-store';
 import { DoctorPanel } from './doctor-panel';
+import { useAttendedJobs } from '@/hooks/use-attended-jobs';
 
 // ── Cron panel ────────────────────────────────────────────────────────────────
 
 function CronPanel() {
-  const jobs = useCronStore((s) => s.jobs);
-  const addJob = useCronStore((s) => s.addJob);
-  const removeJob = useCronStore((s) => s.removeJob);
-  const toggleJob = useCronStore((s) => s.toggleJob);
+  /*
+   * BOTH STORES (DR-24 step 5). This listed and wrote the browser cron store, so
+   * moving only the writes would have created jobs the panel could not show.
+   * `useAttendedJobs` does both over the same dual read the ticker uses, which
+   * is what makes the list a user edits the list that actually fires.
+   */
+  const { jobs, create, setEnabled, remove } = useAttendedJobs();
 
   const [expr, setExpr] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -60,7 +64,16 @@ function CronPanel() {
       return;
     }
 
-    addJob({ expression: expr.trim(), prompt: prompt.trim(), surfaceId, enabled: true });
+    /*
+     * A round trip now, where the store call could not fail. Reporting the
+     * failure is the whole difference: silently losing the job the user just
+     * described is the worst outcome available here.
+     */
+    const id = await create({ expression: expr.trim(), prompt: prompt.trim(), surfaceId });
+    if (!id) {
+      setError('Could not save the job. Check that the app is running and try again.');
+      return;
+    }
     setExpr('');
     setPrompt('');
     setAdding(false);
@@ -130,12 +143,15 @@ function CronPanel() {
         {jobs.map((job) => (
           <div key={job.id} className="flex items-start gap-3 p-3 border border-border rounded-lg">
             <Switch
-              checked={job.enabled}
-              onCheckedChange={() => toggleJob(job.id)}
+              checked={job.status === 'active'}
+              aria-label={`${job.status === 'active' ? 'Pause' : 'Resume'} this job`}
+              onCheckedChange={() => void setEnabled(job.id, job.status !== 'active')}
               className="mt-0.5 shrink-0"
             />
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-mono text-muted-foreground">{job.expression}</p>
+              {/* `trigger.expression` — the unified shape carries interval and
+                  event triggers too, which a cron job never could. */}
+              <p className="text-xs font-mono text-muted-foreground">{job.trigger.expression}</p>
               <p className="text-xs mt-0.5 truncate">{job.prompt}</p>
               <div className="flex gap-1.5 mt-1">
                 <Badge variant="secondary" className="text-[10px] h-4 px-1">{job.surfaceId}</Badge>
@@ -150,7 +166,7 @@ function CronPanel() {
               size="icon"
               variant="ghost"
               className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
-              onClick={() => removeJob(job.id)}
+              onClick={() => void remove(job.id)}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>

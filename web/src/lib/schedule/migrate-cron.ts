@@ -36,6 +36,9 @@ export function cronJobToOrder(job: LegacyCronJob, nowMs: number): ManifestOrder
     instruction: job.prompt,
     attended: true,
     surfaceId: job.surfaceId,
+    // Without this every per-project schedule is orphaned by the migration:
+    // still firing, invisible in the project that owns it.
+    projectId: job.projectId,
     trigger: { type: 'cron', expression: job.expression },
     status: job.enabled ? 'active' : 'paused',
     /*
