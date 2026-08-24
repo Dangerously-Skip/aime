@@ -160,6 +160,71 @@ test.describe('a due cron job reaches its surface', () => {
   });
 });
 
+test.describe('an ATTENDED job in the manifest fires too', () => {
+  /*
+   * DR-24 step 3: the renderer reads BOTH stores so the migration has no window
+   * where a job lives somewhere nothing ticks.
+   *
+   * Removing the manifest read broke no test and no e2e — the suite seeded only
+   * the cron store, so it could not tell the difference. This seeds the manifest
+   * instead, which is where jobs will live after step 4.
+   */
+  test.beforeEach(async ({ page, request }) => {
+    await page.addInitScript(
+      ([key, value]) => window.localStorage.setItem(key, value),
+      ['aime:settings', JSON.stringify({ state: { onboardingComplete: true }, version: 6 })],
+    );
+    // Deliberately NO cron-store seed: the manifest must carry this alone.
+    await page.addInitScript(() => {
+      const listeners: ((ts: number) => void)[] = [];
+      (window as unknown as Record<string, unknown>).electronAPI = {
+        onMinuteTick: (cb: (ts: number) => void) => {
+          listeners.push(cb);
+          return () => listeners.splice(listeners.indexOf(cb), 1);
+        },
+      };
+      (window as unknown as Record<string, unknown>).__fireTick = (ts: number) =>
+        listeners.forEach((l) => l(ts));
+      localStorage.setItem('aime:cron', JSON.stringify({ state: { jobs: [] }, version: 0 }));
+    });
+
+    await request.put('/api/schedule/orders', {
+      data: {
+        orders: [{
+          id: 'attended-1',
+          instruction: 'Re-price the watchlist',
+          attended: true,
+          surfaceId: 'browser',
+          trigger: { type: 'cron', expression: '* * * * *' },
+          notifyVia: 'card',
+          state: {},
+          status: 'active',
+          runCount: 0,
+          errorCount: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        }],
+      },
+    });
+
+    await page.goto('/');
+    await expect(page.getByText('New Chat').first()).toBeVisible({ timeout: 30_000 });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await request.put('/api/schedule/orders', { data: { orders: [] } });
+  });
+
+  test('an attended manifest job reaches its surface', async ({ page }) => {
+    // The manifest is pulled between ticks, so give the first pull a moment.
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => {
+      (window as unknown as { __fireTick: (ts: number) => void }).__fireTick(Date.now());
+    });
+    await expect(page.getByPlaceholder('Enter URL or search...')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
 test.describe('a job that is not due stays put', () => {
   /*
    * Its own block, with its own seed. Sharing the outer `beforeEach` meant the

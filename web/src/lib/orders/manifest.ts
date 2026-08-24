@@ -21,6 +21,31 @@ export interface ManifestOrder {
   completionCondition?: string;
   agentName?: string;
   notifyVia: string;
+  /**
+   * ATTENDED — runs in the renderer, against a visible surface.
+   *
+   * The one real difference between a cron job and a standing order, and the
+   * reason unifying them must not simply delete the renderer implementation
+   * (DR-24 D-1):
+   *
+   *   attended    the renderer owns it. It can drive a surface and use the
+   *               browser webview, and it cannot run with the window closed.
+   *               "At 9am open Browser and check my watchlist" is only
+   *               meaningful here.
+   *   unattended  the server owns it. It survives the window closing and posts
+   *               its result to the activity feed.
+   *
+   * OWNERSHIP IS EXCLUSIVE AND MUST STAY SO. Two tickers over one manifest is a
+   * job that fires twice — real money, and on a browsing job, real actions. The
+   * server pass skips attended jobs; the renderer skips unattended ones. The
+   * widget scheduler already documents this pattern ("with the scheduler on, the
+   * SERVER owns interval execution") and it is the one to copy.
+   *
+   * Absent ⇒ UNATTENDED, because every order that exists today is one.
+   */
+  attended?: boolean;
+  /** Which surface an attended job drives. Meaningless when unattended. */
+  surfaceId?: string;
   maxExecutions?: number;
   expiresAt?: number;
   state: Record<string, unknown>;
