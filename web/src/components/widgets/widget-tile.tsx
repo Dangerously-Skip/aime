@@ -29,6 +29,14 @@ import { widgetConversationSeed } from "@/lib/widgets/widget-to-text";
  * - the stored node is re-validated through parseWidget on EVERY render — we
  *   don't trust our own stored bytes.
  */
+/**
+ * Widgets that have already had their one automatic first render this session.
+ *
+ * Module scope deliberately: it must outlive the tile's mount, which is exactly
+ * what it is guarding against.
+ */
+const autoRendered = new Set<string>();
+
 export function WidgetTile({
   widget,
   onViewRuns,
@@ -118,6 +126,26 @@ export function WidgetTile({
       setBusy(false);
     }
   }, [busy, widget, setRender]);
+
+  /*
+   * A BRAND-NEW WIDGET RENDERS ITSELF, ONCE.
+   *
+   * Without this, creating one lands you on a tile reading "Not rendered yet —
+   * refresh to populate", and waiting up to two minutes for the server tick to
+   * pick it up. Both are honest and both read as broken: the user asked for a
+   * weather widget and got a box saying there is no weather.
+   *
+   * ONCE PER SESSION PER WIDGET, tracked outside React. `!widget.render` alone
+   * would re-fire on every remount — and the Assistant surface stays mounted and
+   * remounts its tiles on tab changes — so a widget whose recipe genuinely fails
+   * would spend a model call each time the user looked at it. The Set means one
+   * attempt; after that the error and the refresh button are the user's move.
+   */
+  useEffect(() => {
+    if (widget.render || autoRendered.has(widget.id)) return;
+    autoRendered.add(widget.id);
+    void refresh();
+  }, [widget.render, widget.id, refresh]);
 
   const onAction = useCallback(
     (action: WidgetActionName) => {

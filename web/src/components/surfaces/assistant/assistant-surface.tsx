@@ -56,7 +56,6 @@ import { OrderEditor } from "./order-editor";
 import { exportOrdersToJson } from "@/lib/standing-order-yaml";
 import { Cockpit } from "./cockpit";
 import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
-import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 import { useWidgetStore } from "@/stores/widget-store";
@@ -458,6 +457,27 @@ export function AssistantSurface() {
   // Presets are WIDGETS now, not cards — state belongs in the Cockpit, not the
   // event feed. See `buildPresetWidget`.
   const addWidget = useWidgetStore((s) => s.addWidget);
+
+  /**
+   * Add a preset, and GO TO WHERE IT LANDED.
+   *
+   * These buttons live in the Activity empty state and used to add a card right
+   * there. Since presets became widgets they land in the Cockpit instead — so
+   * clicking one appeared to do nothing at all, because the thing you just made
+   * is on the other tab.
+   *
+   * Reported as "dashboards aren't working". They were working; they were
+   * invisible, which from the outside is the same thing. Moving where a feature
+   * lands without moving the user with it is the same defect as building one
+   * nothing renders.
+   */
+  const addPresetWidget = useCallback(
+    (preset: (typeof WIDGET_PRESETS)[number]) => {
+      addWidget({ ...buildPresetWidget(preset), id: crypto.randomUUID(), createdAt: Date.now() });
+      setView('cockpit');
+    },
+    [addWidget],
+  );
   const addOrder = useAssistantStore((s) => s.addOrder);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
 
@@ -780,7 +800,7 @@ export function AssistantSurface() {
                         <button
                           key={preset.id}
                           className="flex flex-col items-center gap-1.5 text-center p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                          onClick={() => addWidget({ ...buildPresetWidget(preset), id: crypto.randomUUID(), createdAt: Date.now() })}
+                          onClick={() => addPresetWidget(preset)}
                           title={preset.description}
                         >
                           <Icon className="h-4 w-4 text-muted-foreground" />

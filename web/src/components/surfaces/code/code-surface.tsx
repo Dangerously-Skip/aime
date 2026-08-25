@@ -84,7 +84,6 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { handleWidgetCreateEvent } from "@/lib/widgets/handle-create-event";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 
 /** This surface's routing capability — a fixed property of the surface. */
