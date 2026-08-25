@@ -567,7 +567,7 @@ export function ChatSurface() {
    * starts a turn. Before this, a job published to the bus, switched surface,
    * and nothing ran it.
    */
-  useScheduledPrompt('chat', handleSubmit);
+  useScheduledPrompt('chat', handleSubmit, () => useChatStore.getState().isStreaming);
 
   const handleRetry = useCallback(() => {
     if (!chatId || isStreaming) return;

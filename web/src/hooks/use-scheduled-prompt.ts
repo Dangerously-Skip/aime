@@ -3,6 +3,9 @@
 import { useEffect, useRef } from 'react';
 import { useContextBusStore } from '@/stores/context-bus-store';
 
+/** How often a busy surface re-checks for room to run its due job. */
+const BUSY_RETRY_MS = 5_000;
+
 /**
  * Run a scheduled prompt on the surface it was addressed to.
  *
@@ -30,6 +33,18 @@ import { useContextBusStore } from '@/stores/context-bus-store';
 export function useScheduledPrompt(
   surfaceId: string,
   submit: (prompt: string) => void | Promise<void>,
+  /**
+   * When the surface is mid-turn, the job WAITS instead of firing. Consuming
+   * and then dropping was the old behaviour by accident: submit early-returned
+   * on its streaming guard AFTER this hook had already marked the event
+   * consumed — so a standing order firing during a long unattended run was
+   * lost, permanently for one-shot orders. Not consuming means the event stays
+   * on the bus and is picked up the moment the surface frees (re-checked every
+   * few seconds below, and on any bus change).
+   */
+  isBusy?: () => boolean,
+  /** Test seam: how often a busy surface re-checks. */
+  opts?: { retryMs?: number },
 ): void {
   /*
    * Held in a ref so this effect subscribes once. `submit` is a new function on
@@ -37,6 +52,8 @@ export function useScheduledPrompt(
    * a job once per accumulated subscription.
    */
   const submitRef = useRef(submit);
+  const isBusyRef = useRef(isBusy);
+  const retryMsRef = useRef(opts?.retryMs);
   /*
    * Assigned in an effect, not during render — React forbids touching a ref
    * while rendering, and under concurrent rendering a render that is thrown away
@@ -47,28 +64,48 @@ export function useScheduledPrompt(
    */
   useEffect(() => {
     submitRef.current = submit;
+    isBusyRef.current = isBusy;
+    retryMsRef.current = opts?.retryMs;
   });
 
   const events = useContextBusStore((s) => s.events);
 
   useEffect(() => {
     if (!surfaceId) return;
-    const due = events.find(
-      (e) =>
-        !e.consumed &&
-        e.targetSurface === surfaceId &&
-        typeof (e.payload as { prompt?: unknown } | undefined)?.prompt === 'string' &&
-        typeof (e.payload as { cronJobId?: unknown } | undefined)?.cronJobId === 'string',
-    );
-    if (!due) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const prompt = (due.payload as { prompt: string }).prompt;
+    const tryRun = () => {
+      if (cancelled) return;
+      const due = events.find(
+        (e) =>
+          !e.consumed &&
+          e.targetSurface === surfaceId &&
+          typeof (e.payload as { prompt?: unknown } | undefined)?.prompt === 'string' &&
+          typeof (e.payload as { cronJobId?: unknown } | undefined)?.cronJobId === 'string',
+      );
+      if (!due) return;
 
-    // Consume FIRST — see the note above about doubling a run.
-    useContextBusStore.getState().consume(due.id);
+      // Busy surfaces defer rather than drop — see the isBusy note above.
+      if (isBusyRef.current?.()) {
+        retryTimer = setTimeout(tryRun, retryMsRef.current ?? BUSY_RETRY_MS);
+        return;
+      }
 
-    void Promise.resolve(submitRef.current(prompt)).catch((err) => {
-      console.error(`[cron] ${surfaceId} failed to run a scheduled prompt:`, err);
-    });
+      const prompt = (due.payload as { prompt: string }).prompt;
+
+      // Consume FIRST — see the note above about doubling a run.
+      useContextBusStore.getState().consume(due.id);
+
+      void Promise.resolve(submitRef.current(prompt)).catch((err) => {
+        console.error(`[cron] ${surfaceId} failed to run a scheduled prompt:`, err);
+      });
+    };
+
+    tryRun();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [events, surfaceId]);
 }

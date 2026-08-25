@@ -917,7 +917,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
    * starts a turn. Before this, a job published to the bus, switched surface,
    * and nothing ran it.
    */
-  useScheduledPrompt('browser', handleAgentSubmit);
+  useScheduledPrompt('browser', handleAgentSubmit, () => useBrowserStore.getState().isStreaming);
 
   const handleVoiceTranscript = useCallback(
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { waitForAnswer, resolveAnswer } from './pending-questions';
+import { waitForAnswer, resolveAnswer, QUESTION_TIMEOUT_MS } from './pending-questions';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -25,13 +25,24 @@ describe('pending questions bridge', () => {
     expect(resolveAnswer('q2', {})).toBe(false);
   });
 
-  it('times out after 5 minutes of no answer', async () => {
+  it('times out after 4 minutes of no answer', async () => {
     const pending = waitForAnswer('q3');
     const assertion = expect(pending).rejects.toThrow('timed out');
-    vi.advanceTimersByTime(300_001);
+    vi.advanceTimersByTime(240_001);
     await assertion;
 
     expect(resolveAnswer('q3', {})).toBe(false); // entry cleaned up
+  });
+
+  it('the park budget stays under every surface silence timer', () => {
+    /*
+     * While parked, nothing streams — so the route's silence timer keeps
+     * running. The browser surface's budget is 300s; a park cap at or above it
+     * let the timer cancel a turn AS the user answered. If this fails because
+     * a surface budget dropped below the cap, tighten the cap or raise the
+     * budget — one of the two numbers has to move.
+     */
+    expect(QUESTION_TIMEOUT_MS).toBeLessThan(300_000);
   });
 
   it('keeps concurrent questions independent', async () => {
