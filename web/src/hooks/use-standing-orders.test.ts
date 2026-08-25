@@ -192,3 +192,88 @@ describe('applyInboxEntry', () => {
     expect(useAssistantStore.getState().activity[0]).toMatchObject({ type: 'order-error' });
   });
 });
+
+describe('the mirror must not delete attended jobs', () => {
+  /**
+   * A REGRESSION TEST FOR SILENT DATA LOSS.
+   *
+   * This hook mirrors the assistant store's orders to the manifest with a
+   * WHOLESALE PUT. That was safe for as long as it was the only writer, and
+   * stopped being safe the moment attended jobs — cron jobs, in their new home —
+   * moved into the same file (DR-24). The mirror then deleted every scheduled
+   * job the assistant store had never heard of, which is all of them.
+   *
+   * It presented as FLAKY TESTS, not as data loss: a seeded job kept vanishing
+   * mid-run and a different two or three specs failed each time. Nothing about
+   * the code looked wrong, and the unit suite passed throughout.
+   *
+   * The cron e2e catches it, but only incidentally and only serially. A bug that
+   * deletes a user's automation deserves a test that names it.
+   */
+  const attendedJob: ManifestOrder = {
+    id: 'attended-1',
+    instruction: 'Re-price the watchlist',
+    attended: true,
+    surfaceId: 'browser',
+    trigger: { type: 'cron', expression: '0 9 * * *' },
+    notifyVia: 'surface',
+    state: {},
+    status: 'active',
+    runCount: 0,
+    errorCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  } as ManifestOrder;
+
+  /** The orders the mirror actually wrote. */
+  const pushed = () => {
+    const put = calls('/api/schedule/orders', 'PUT')[0];
+    return put ? JSON.parse((put[1] as RequestInit).body as string).orders : null;
+  };
+
+  it('keeps an attended job the assistant store has never heard of', async () => {
+    serve({ manifest: [attendedJob] });
+    // Something in the assistant store, so the mirror has a reason to push.
+    useAssistantStore.setState({
+      orders: [{ id: 'o1', instruction: 'unattended thing', trigger: { type: 'cron', expression: '0 8 * * *' }, notifyVia: 'card', status: 'active', runCount: 0, createdAt: 1 }],
+    } as never);
+
+    renderHook(() => useStandingOrders());
+    await waitFor(() => expect(pushed()).toBeTruthy());
+
+    const ids = pushed().map((o: { id: string }) => o.id);
+    expect(ids, 'the mirror deleted the attended job').toContain('attended-1');
+    expect(ids).toContain('o1');
+  });
+
+  it('does not push at all when the manifest cannot be read', async () => {
+    /*
+     * The other half. Pushing a partial list after a failed read would delete
+     * the user's schedule; losing one mirror cycle is invisible and recoverable.
+     */
+    fetchMock.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/inbox')) return new Response(JSON.stringify({ entries: [] }), { status: 200 });
+      if (u.includes('/api/schedule/orders') && (init?.method ?? 'GET') === 'GET') {
+        /*
+         * VALID JSON with a 500 — the case that actually distinguishes.
+         *
+         * An unparseable body makes `.json()` throw, so the catch saves us by
+         * accident and the test cannot tell whether the status is checked at
+         * all. A server that answers badly but coherently is both the realistic
+         * failure and the one that used to slip through: `if (current.ok)` left
+         * `attended` empty and pushed anyway.
+         */
+        return new Response(JSON.stringify({ error: 'unavailable' }), { status: 500 });
+      }
+      return new Response('{"ok":true}', { status: 200 });
+    });
+    useAssistantStore.setState({
+      orders: [{ id: 'o1', instruction: 'x', trigger: { type: 'cron', expression: '0 8 * * *' }, notifyVia: 'card', status: 'active', runCount: 0, createdAt: 1 }],
+    } as never);
+
+    renderHook(() => useStandingOrders());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(pushed(), 'it wrote a partial list after failing to read').toBeNull();
+  });
+});
