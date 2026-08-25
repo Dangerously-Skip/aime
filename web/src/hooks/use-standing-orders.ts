@@ -157,10 +157,17 @@ export function useStandingOrders() {
         let attended: unknown[] = [];
         try {
           const current = await fetch('/api/schedule/orders');
-          if (current.ok) {
-            const body = (await current.json()) as { orders?: Array<{ attended?: boolean }> };
-            attended = (body.orders ?? []).filter((o) => o.attended === true);
-          }
+          /*
+           * A NON-OK RESPONSE IS ALSO "cannot read", and treating it as an empty
+           * manifest was the same bug one level down: `if (current.ok)` left
+           * `attended` empty on a 500 and then pushed anyway, deleting exactly
+           * the jobs this guard exists to protect. Only a THROWN error was
+           * handled, which covers a dropped connection and not a server that
+           * answers badly.
+           */
+          if (!current.ok) throw new Error(`manifest read failed: ${current.status}`);
+          const body = (await current.json()) as { orders?: Array<{ attended?: boolean }> };
+          attended = (body.orders ?? []).filter((o) => o.attended === true);
         } catch {
           /*
            * Could not read. Push nothing rather than replace with a partial
