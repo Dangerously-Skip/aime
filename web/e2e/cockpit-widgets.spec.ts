@@ -137,15 +137,34 @@ test.describe('every button on a tile', () => {
   const tile = (page: Page) =>
     page.locator('div').filter({ hasText: /^Solo widget/ }).first();
 
-  test('DELETE removes the widget — two clicks, and the first one shows', async ({ page }) => {
-    const del = page.getByRole('button', { name: 'Delete widget' });
-    await del.click();
+  test('DELETE works AT HUMAN PACE — the version that was actually broken', async ({ page }) => {
+    /*
+     * The previous test clicked twice ~50ms apart and passed while the feature
+     * was unusable. Arming only tinted a 12px icon inside a 20px square and
+     * disarmed after 3s, so the sequence a person performs — click, look for
+     * feedback, find none, click again — re-armed instead of deleting.
+     *
+     * Reported three times. A confirmation step tested only at machine speed
+     * has not been tested at all, so this one PAUSES like a person does.
+     */
+    await page.getByRole('button', { name: 'Delete widget' }).click();
 
-    // The armed state must be visible, or the two-click design is just a
-    // button that does nothing.
-    await expect(page.getByRole('button', { name: /click again to delete/i })).toBeVisible();
+    // It must say the word. A colour change on an icon this small is not a
+    // state the user can be asked to confirm.
+    const confirm = page.getByRole('button', { name: 'Confirm delete' });
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toHaveText(/delete\?/i);
 
-    await page.getByRole('button', { name: /click again to delete/i }).click();
+    /*
+     * PAST THE OLD 3s WINDOW, deliberately. At 2.5s this assertion passed
+     * against the broken timing too — under the old limit, so it proved only
+     * that some window existed. A regression test whose input does not cross
+     * the boundary tests nothing about the boundary.
+     */
+    await page.waitForTimeout(3_800);
+    await expect(confirm, 'disarmed before a human could read it and act').toBeVisible();
+
+    await confirm.click();
     await expect(page.getByText('Solo widget')).toHaveCount(0);
 
     // And it STAYS deleted — a pull that re-added it would be the real
@@ -154,11 +173,11 @@ test.describe('every button on a tile', () => {
     await expect(page.getByText('Solo widget')).toHaveCount(0);
   });
 
-  test('delete DISARMS if you walk away — no accidental second click later', async ({ page }) => {
+  test('delete DISARMS eventually — a forgotten click cannot delete later', async ({ page }) => {
     await page.getByRole('button', { name: 'Delete widget' }).click();
-    await expect(page.getByRole('button', { name: /click again to delete/i })).toBeVisible();
-    // The disarm timer is 3s.
-    await expect(page.getByRole('button', { name: 'Delete widget' })).toBeVisible({ timeout: 6_000 });
+    await expect(page.getByRole('button', { name: 'Confirm delete' })).toBeVisible();
+    // 5s window; back to the plain icon after it.
+    await expect(page.getByRole('button', { name: 'Delete widget' })).toBeVisible({ timeout: 9_000 });
     await expect(page.getByText('Solo widget')).toHaveCount(1);
   });
 
@@ -238,6 +257,19 @@ test.describe('the Cockpit header and grid controls', () => {
     await page.getByRole('button', { name: 'Create', exact: true }).click();
 
     await expect(page.getByText('Count open PRs')).toBeVisible();
+  });
+
+  test('a QUICK-ADD preset appears immediately, on this same screen', async ({ page }) => {
+    /*
+     * The whole three-round saga in one assertion. These buttons used to be on
+     * the Activity tab and created widgets the Cockpit displayed, so clicking
+     * one did nothing you could see.
+     */
+    await page.getByRole('button', { name: /world clock/i }).click();
+    // The TILE, not the button that made it — both carry the same text.
+    await expect(page.getByRole('paragraph').filter({ hasText: 'World clock' })).toBeVisible({
+      timeout: 10_000,
+    });
   });
 
   test('CANCEL on the form creates nothing', async ({ page }) => {

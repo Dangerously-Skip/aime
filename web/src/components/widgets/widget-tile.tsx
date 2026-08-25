@@ -202,10 +202,28 @@ export function WidgetTile({
     setActiveSurface("chat");
   };
 
+  /*
+   * Two clicks, and the first one has to be IMPOSSIBLE TO MISS.
+   *
+   * Reported three times as "I still can't delete widget", and the button was
+   * working the whole time. Arming changed a 12px trash icon from grey to red
+   * inside a 20px square, and disarmed after 3 seconds. So the sequence a human
+   * actually performs — click, look for feedback, find almost none, click again
+   * a few seconds later — re-arms instead of deleting, for ever.
+   *
+   * The e2e passed because Playwright's second click lands ~50ms after the
+   * first. That is the tell: a confirmation step tested only at machine speed
+   * has not been tested at all. What matters is whether a person can SEE the
+   * state they are being asked to confirm, and how long they get.
+   *
+   * So the armed state now says the word, and the window is 5s rather than 3s —
+   * long enough to read it and decide, short enough that a click you have
+   * forgotten about cannot delete anything later.
+   */
   const handleDelete = () => {
     if (!armed) {
       setArmed(true);
-      disarmTimer.current = setTimeout(() => setArmed(false), 3_000);
+      disarmTimer.current = setTimeout(() => setArmed(false), 5_000);
       return;
     }
     removeWidget(widget.id);
@@ -329,15 +347,29 @@ export function WidgetTile({
         >
           {widget.enabled ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
         </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          className={`h-5 w-5 ${armed ? "text-red-600 dark:text-red-400" : ""}`}
-          title={armed ? "Click again to delete" : "Delete widget"}
-          onClick={handleDelete}
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
+        {armed ? (
+          <Button
+            size="sm"
+            variant="destructive"
+            className="h-5 shrink-0 px-1.5 text-[10px] font-semibold"
+            title="Click again to delete"
+            aria-label="Confirm delete"
+            onClick={handleDelete}
+          >
+            Delete?
+          </Button>
+        ) : (
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-5 w-5"
+            title="Delete widget"
+            aria-label="Delete widget"
+            onClick={handleDelete}
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        )}
       </div>
 
       {editing && (

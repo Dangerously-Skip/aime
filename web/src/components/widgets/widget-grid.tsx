@@ -7,7 +7,15 @@ import type { Widget } from "@/lib/widgets/widget";
 import { WidgetTile } from "./widget-tile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus } from "lucide-react";
+import { Plus, Bot, CloudSun, TrendingUp, Globe2 } from "lucide-react";
+import { WIDGET_PRESETS, buildPresetWidget } from "@/lib/assistant/widget-presets";
+
+/** The preset icons, by the name each preset declares. */
+const PRESET_ICONS: Record<string, typeof Bot> = {
+  "cloud-sun": CloudSun,
+  "trending-up": TrendingUp,
+  "globe-2": Globe2,
+};
 
 /**
  * The Cockpit's widget grid. CSS-columns masonry (the Burnbox trick): tiles
@@ -55,11 +63,48 @@ export function WidgetGrid({ onViewRuns }: { onViewRuns?: (goalId: string) => vo
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Widgets
         </h3>
-        {!adding && (
-          <Button size="sm" variant="ghost" className="ml-auto h-6 text-xs" onClick={() => setAdding(true)}>
-            <Plus className="mr-1 h-3 w-3" /> New widget
-          </Button>
-        )}
+        {/*
+          * QUICK-ADD LIVES HERE, next to the things it creates.
+          *
+          * These were on the ACTIVITY tab — twice, in fact: once in its empty
+          * state and once as a toolbar above the feed. Since presets became
+          * widgets they landed in the Cockpit, so Activity had two ways to add
+          * a thing it could not show, and the two tabs read as the same screen
+          * with different furniture.
+          *
+          * The split the codebase already documents is EVENT vs STATE: Activity
+          * is what happened, the Cockpit is what is currently true. A widget is
+          * state. Putting the buttons here is that rule applied, and it removes
+          * the cross-tab navigation the previous fix needed — you cannot land
+          * somewhere you are not, if there is only one place.
+          */}
+        <div className="ml-auto flex items-center gap-1.5">
+          {WIDGET_PRESETS.map((preset) => {
+            const Icon = PRESET_ICONS[preset.icon] ?? Bot;
+            return (
+              <button
+                key={preset.id}
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                onClick={() =>
+                  addWidget({
+                    ...buildPresetWidget(preset),
+                    id: globalThis.crypto.randomUUID(),
+                    createdAt: Date.now(),
+                  })
+                }
+                title={preset.description}
+              >
+                <Icon className="h-3 w-3" />
+                {preset.label}
+              </button>
+            );
+          })}
+          {!adding && (
+            <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setAdding(true)}>
+              <Plus className="mr-1 h-3 w-3" /> New widget
+            </Button>
+          )}
+        </div>
       </div>
 
       {adding && (
