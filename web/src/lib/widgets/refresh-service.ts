@@ -58,6 +58,67 @@ export async function refreshWidget(
   const goal = widgetToGoal(widget);
 
   /*
+   * DETERMINISTIC WIDGETS NEVER REACH A MODEL — including on their schedule.
+   *
+   * The tile's manual refresh already branched on `refreshKind` and called the
+   * built-in fetcher. This did not, so the SCHEDULED path — the one that runs
+   * unattended, every 15 minutes, for every weather and ticker tile — went to
+   * the agent instead. Three consequences, all of them live:
+   *
+   *   - Cost. `Widget.refreshKind`'s own doc says "a stock price should never
+   *     cost a model call". It did, on every tick, per tile.
+   *   - Correctness. Without web access the recipe ("Current conditions where
+   *     you are") can only be answered from model weights, so the tile reported
+   *     invented weather with the same confidence as the real fetcher's.
+   *   - Config. A user who sets their weather to Lisbon would have it honoured
+   *     by the button and ignored by the schedule.
+   *
+   * A run is still recorded, because a refresh still happened and the Cockpit's
+   * history and failure streaks should show it. Cost is genuinely zero and the
+   * model is named `deterministic` rather than left blank — a blank reads as
+   * missing data, and this is a fact about how the tile works.
+   */
+  if (widget.refreshKind) {
+    const { refreshByKind } = await import('@/lib/assistant/widget-presets');
+    const { resolveWidgetPresetConfig } = await import('@/lib/assistant/widget-config');
+    let run: Run = startRun({
+      id: globalThis.crypto.randomUUID(),
+      now: Date.now(),
+      goalId: goal.id,
+      trigger,
+      surfaceId: 'assistant',
+      model: 'deterministic',
+    });
+    try {
+      const node = await refreshByKind(widget.refreshKind, resolveWidgetPresetConfig(widget.config));
+      if (!node) {
+        run = finishRun(run, {
+          now: Date.now(),
+          status: 'failed',
+          error: `No built-in fetcher for "${widget.refreshKind}"`,
+        });
+        await appendRun(run).catch(() => false);
+        return { node: null, run, error: run.error, status: 502 };
+      }
+      run = finishRun(run, {
+        now: Date.now(),
+        status: 'succeeded',
+        deliverables: [{ kind: 'widget', title: widget.title, data: node }],
+      });
+      await appendRun(run).catch(() => false);
+      return { node, run, status: 200 };
+    } catch (err) {
+      run = finishRun(run, {
+        now: Date.now(),
+        status: 'failed',
+        error: err instanceof Error ? err.message : 'Refresh failed',
+      });
+      await appendRun(run).catch(() => false);
+      return { node: null, run, error: run.error, status: 502 };
+    }
+  }
+
+  /*
    * THE MODEL THE USER ACTUALLY CONFIGURED, or none.
    *
    * This read `opts.model ?? 'haiku'`, with credentials from

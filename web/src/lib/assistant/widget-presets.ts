@@ -73,7 +73,10 @@ async function renderWeather(config?: WidgetPresetConfig): Promise<WidgetNode> {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${where.latitude}&longitude=${where.longitude}&current=temperature_2m,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&timezone=auto&forecast_days=1`;
   const fallback: WidgetNode = {
     type: 'statGrid',
-    items: [{ label: 'Status', value: 'Unavailable' }],
+    items: [
+      { label: 'Where', value: where.label },
+      { label: 'Status', value: 'Unavailable' },
+    ],
   };
   try {
     const res = await fetch(url);
@@ -85,6 +88,20 @@ async function renderWeather(config?: WidgetPresetConfig): Promise<WidgetNode> {
     return {
       type: 'statGrid',
       items: [
+        /*
+         * THE PLACE, FIRST.
+         *
+         * The tile computed `where.label` and then rendered three numbers
+         * without it — so four weather widgets looked identical and none of
+         * them said what they were of. Reported as "weather seems to just be
+         * showing weather for wherever it decides to show weather", which is
+         * precisely what an unlabelled temperature is.
+         *
+         * A forecast whose location you cannot see is not a weaker forecast,
+         * it is an unreadable one — you cannot tell a correct answer from a
+         * wrong one, which is the same failure as an uncited claim.
+         */
+        { label: 'Where', value: where.label },
         { label: 'Now', value: `${Math.round(current.temperature_2m ?? 0)}°C` },
         { label: 'Wind', value: `${Math.round(current.wind_speed_10m ?? 0)} km/h` },
         { label: 'Sky', value: emoji },
@@ -100,11 +117,27 @@ async function renderWeather(config?: WidgetPresetConfig): Promise<WidgetNode> {
 
 async function fetchQuote(symbol: string): Promise<{ value: string; trend: 'up' | 'down' | 'neutral'; trendValue: string } | null> {
   try {
-    // Proxy through our local API — Yahoo blocks browser CORS.
-    const res = await fetch(`/api/widget/stock?symbol=${encodeURIComponent(symbol)}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const result = data?.chart?.result?.[0];
+    /*
+     * IN THE BROWSER, through our proxy — Yahoo blocks browser CORS.
+     * ON THE SERVER, directly: there is no CORS, and a relative `/api/...` URL
+     * does not resolve in the scheduler process. That is why a ticker refreshed
+     * on its schedule used to come back empty while the same tile refreshed by
+     * hand worked.
+     */
+    let data: unknown;
+    if (typeof window === 'undefined') {
+      const { fetchYahooChart } = await import('@/lib/widgets/quote-upstream');
+      const result = await fetchYahooChart(symbol);
+      if (result.error) return null;
+      data = result.data;
+    } else {
+      const res = await fetch(`/api/widget/stock?symbol=${encodeURIComponent(symbol)}`);
+      if (!res.ok) return null;
+      data = await res.json();
+    }
+    const result = (data as { chart?: { result?: Array<Record<string, unknown>> } })?.chart?.result?.[0] as
+      | { indicators?: { quote?: Array<{ close?: Array<number | null> }> } }
+      | undefined;
     const closes: number[] | undefined = result?.indicators?.quote?.[0]?.close?.filter((x: number | null) => x !== null);
     if (!closes || closes.length < 2) return null;
     const last = closes[closes.length - 1];

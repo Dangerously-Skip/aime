@@ -9,8 +9,9 @@ import type { Widget } from "@/lib/widgets/widget";
 import type { Run } from "@/lib/runs/types";
 import { formatRelative } from "@/lib/runs/format";
 import { WidgetRenderer } from "./widget-renderer";
+import { WidgetConfigEditor } from "./widget-config-editor";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, Trash2, Pause, Play, MessageSquare, Bell, BellOff } from "lucide-react";
+import { Loader2, RefreshCw, Trash2, Pause, Play, MessageSquare, Bell, BellOff, Settings2 } from "lucide-react";
 import { isUnread } from "@/lib/widgets/unread";
 import { refreshByKind } from "@/lib/assistant/widget-presets";
 import { resolveWidgetPresetConfig } from "@/lib/assistant/widget-config";
@@ -49,7 +50,15 @@ export function WidgetTile({
   const removeWidget = useWidgetStore((s) => s.removeWidget);
   const markSeen = useWidgetStore((s) => s.markSeen);
   // Where the user is / what they follow. Defaults derive from their time zone.
-  const presetConfig = useMemo(() => resolveWidgetPresetConfig(null), []);
+  /*
+   * THE WIDGET'S OWN CONFIG, not a literal null.
+   *
+   * This passed `null` — so `resolveWidgetPresetConfig` merged stored settings
+   * over defaults on every render and there were never any stored settings to
+   * merge. Four weather tiles could only ever show one place, and the "edit UI"
+   * the config module described did not exist.
+   */
+  const presetConfig = useMemo(() => resolveWidgetPresetConfig(widget.config), [widget.config]);
   const updateWidget = useWidgetStore((s) => s.updateWidget);
   const addConversation = useConversationStore((s) => s.addConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
@@ -213,6 +222,25 @@ export function WidgetTile({
    * right direction: a badge that lingers is a nuisance, one that vanishes loses
    * the news.
    */
+  const [editing, setEditing] = useState(false);
+  /*
+   * "Refresh once the saved config has actually reached me."
+   *
+   * `refresh` closes over `presetConfig`, which is derived from the `widget`
+   * prop. Calling it straight after `updateWidget` would use the OLD config —
+   * the store write has not round-tripped through the parent yet — so the tile
+   * would re-render the city you just replaced and look like the save failed.
+   */
+  const [pendingRefresh, setPendingRefresh] = useState(false);
+  useEffect(() => {
+    if (!pendingRefresh) return;
+    setPendingRefresh(false);
+    void refresh();
+    // `refresh` is intentionally omitted: it changes identity with every
+    // `busy` flip, and re-running this on that would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRefresh, widget.config]);
+
   const unread = isUnread(widget);
   useEffect(() => {
     if (!unread) return;
@@ -270,6 +298,18 @@ export function WidgetTile({
         >
           <MessageSquare className="h-3 w-3" />
         </Button>
+        {widget.refreshKind && (
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-5 w-5"
+            title={editing ? "Close settings" : "Configure what this shows"}
+            aria-label="Configure what this shows"
+            onClick={() => setEditing((v) => !v)}
+          >
+            <Settings2 className="h-3 w-3" />
+          </Button>
+        )}
         <Button
           size="icon"
           variant="ghost"
@@ -299,6 +339,27 @@ export function WidgetTile({
           <Trash2 className="h-3 w-3" />
         </Button>
       </div>
+
+      {editing && (
+        <WidgetConfigEditor
+          widget={widget}
+          onCancel={() => setEditing(false)}
+          onSave={(config) => {
+            /*
+             * Save, then REFRESH — otherwise you change your weather to Lisbon
+             * and the tile keeps showing the old city until its schedule comes
+             * round, which reads as the setting not having taken.
+             *
+             * The refresh reads `widget.config` through props on the next
+             * render, so it is sequenced behind the store write rather than
+             * racing it.
+             */
+            updateWidget(widget.id, { config: { ...widget.config, ...config } });
+            setEditing(false);
+            setPendingRefresh(true);
+          }}
+        />
+      )}
 
       <div className="p-3">
         {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}

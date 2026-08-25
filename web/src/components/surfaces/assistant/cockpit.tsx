@@ -305,7 +305,19 @@ export function Cockpit() {
   ).length;
 
   return (
-    <div className="flex h-full flex-col">
+    /*
+     * `min-h-0` on BOTH, and neither is cosmetic.
+     *
+     * A flex item defaults to `min-height: auto`, meaning it refuses to shrink
+     * below its content. So the ScrollArea below grew to the full height of
+     * every widget, the Cockpit overflowed the window, and the tiles past the
+     * fold were simply clipped — with no scrollbar, because the thing that was
+     * meant to scroll had been sized to fit instead.
+     *
+     * Reported as "I can't scroll widgets". A ScrollArea only scrolls when
+     * something upstream tells it how tall it is allowed to be.
+     */
+    <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-3 border-b border-border px-5 py-3">
         <Activity className="h-4 w-4 text-muted-foreground" />
         <h2 className="text-sm font-semibold">Cockpit</h2>
@@ -331,7 +343,7 @@ export function Cockpit() {
         </div>
       </header>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-5 p-5">
           <WidgetGrid />
 
