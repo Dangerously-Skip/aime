@@ -41,10 +41,50 @@ describe('WidgetTile', () => {
     expect(screen.getByText('2')).toBeTruthy();
   });
 
-  it('shows an empty state for a never-rendered widget', () => {
-    render(<WidgetTile widget={widget({ render: null, refreshedAt: undefined })} />);
+  /*
+   * A NEVER-RENDERED WIDGET RENDERS ITSELF.
+   *
+   * This used to assert the opposite — that a fresh widget shows "Not rendered
+   * yet — refresh to populate" and waits. That was honest and it read as broken:
+   * "dashboards aren't working" was reported against exactly this, a preset
+   * created correctly and sitting empty.
+   *
+   * The empty state is still reachable and still tested below; it is now what
+   * you see AFTER an attempt, not INSTEAD of one.
+   *
+   * Ids are unique per test on purpose: the once-per-session guard is module
+   * scope (that is the point of it), so a reused id would silently suppress the
+   * second test's auto-render and it would pass by not running.
+   */
+  it('a fresh widget starts generating on its own, without being asked', async () => {
+    fetchMock.mockImplementation(() => new Promise(() => {})); // never settles: stay busy
+    render(<WidgetTile widget={widget({ id: 'fresh-1', render: null, refreshedAt: undefined })} />);
+    await waitFor(() => expect(screen.getByText(/Generating/i)).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledWith('/api/widgets/refresh', expect.anything());
+  });
+
+  it('falls back to the empty state when that first attempt fails', async () => {
+    fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'no provider configured' }) });
+    render(<WidgetTile widget={widget({ id: 'fresh-2', render: null, refreshedAt: undefined })} />);
+    await waitFor(() => expect(screen.getByText(/no provider configured/i)).toBeTruthy());
     expect(screen.getByText(/Not rendered yet/i)).toBeTruthy();
     expect(screen.getByText(/never run/i)).toBeTruthy();
+  });
+
+  it('does not re-attempt on remount — one model call, not one per glance', async () => {
+    fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'still broken' }) });
+    const w = widget({ id: 'fresh-3', render: null, refreshedAt: undefined });
+    const { unmount } = render(<WidgetTile widget={w} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    unmount();
+    render(<WidgetTile widget={w} />);
+    await waitFor(() => expect(screen.getByText(/Not rendered yet/i)).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an already-rendered widget alone', () => {
+    render(<WidgetTile widget={widget({ id: 'has-render-1' })} />);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   // We do not trust our own stored bytes — they came from a model.
