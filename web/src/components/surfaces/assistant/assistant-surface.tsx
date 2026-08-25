@@ -46,6 +46,8 @@ import { TemplateDialog } from "./template-dialog";
 import { OrderEditor } from "./order-editor";
 import { exportOrdersToJson } from "@/lib/standing-order-yaml";
 import { Cockpit } from "./cockpit";
+import { RunLog } from "@/components/runs/run-log";
+import { useRunLog } from "@/components/runs/use-run-log";
 import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
@@ -460,6 +462,14 @@ export function AssistantSurface() {
   useStandingOrders();
   useWidgetRefresh();
 
+  /*
+   * The same runs the Cockpit reads, from the same hook. Two fetches of the
+   * same log would drift the moment one of them refreshed and the other did
+   * not — and a cost total that disagrees with the rows under it is worse than
+   * either number alone.
+   */
+  const { runs, now: runsNow, loading: runsLoading } = useRunLog();
+
   // Auto-refresh dashboard widgets on the heartbeat
 
   // Clear selection when the selected order is deleted
@@ -763,6 +773,16 @@ export function AssistantSurface() {
                 <CardFeed cards={cards} onAction={handleCardAction} onReply={handleCardReply} />
               </>
             )}
+
+            {/*
+              * OUTSIDE the empty-state branch on purpose.
+              *
+              * A workspace with no assistant cards can still have hundreds of
+              * runs behind it, and showing only prompt suggestions there is a
+              * large part of why this tab and the Cockpit read as the same
+              * screen: neither was showing what had actually happened.
+              */}
+            <RunLog runs={runs} now={runsNow} loading={runsLoading} />
           </div>
         </ScrollArea>
         </>

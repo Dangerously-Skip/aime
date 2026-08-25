@@ -54,20 +54,18 @@ afterEach(() => {
 });
 
 describe('Cockpit', () => {
-  it('shows empty states before anything exists', async () => {
+  it('shows an empty state before anything exists', async () => {
     render(<Cockpit />);
     expect(await screen.findByText(/No goals yet/i)).toBeTruthy();
-    await waitFor(() => expect(screen.getByText(/No runs recorded yet/i)).toBeTruthy());
   });
 
-  // The core promise: runs from the durable log appear even though the client
-  // store is empty — i.e. work done while the window was closed is visible.
-  it('renders runs from the durable log, not just the session store', async () => {
-    serveRuns([run({ id: 'from-disk', goalId: null, trigger: 'chat' })]);
-    render(<Cockpit />);
-    await waitFor(() => expect(screen.getAllByText('Succeeded').length).toBeGreaterThan(0));
-    expect(useRunStore.getState().runs).toHaveLength(0); // proves it came from the log
-  });
+  /*
+   * The ad-hoc run log — its empty state, its rows, expansion, and the
+   * unmet/verified labels — moved to `run-log.test.tsx` with the feature. A
+   * finished one-off run is an event and lives on the Activity tab now; what
+   * stays here is what the Cockpit still claims: goals, their health, and the
+   * spend total in the header.
+   */
 
   it('surfaces total spend — the number the reference tools cannot show', async () => {
     serveRuns([
@@ -126,20 +124,6 @@ describe('Cockpit', () => {
     await waitFor(() => expect(screen.getByText(/1 running/i)).toBeTruthy());
     // counted once, not twice
     expect(screen.getByText(/^1 runs$/)).toBeTruthy();
-  });
-
-  it('expands a failed run to reveal its error', async () => {
-    serveRuns([run({ id: 'bad', goalId: null, status: 'failed', error: 'upstream 502' })]);
-    render(<Cockpit />);
-    await waitFor(() => expect(screen.getAllByText('Failed').length).toBeGreaterThan(0));
-    fireEvent.click(screen.getByText('Failed').closest('button')!);
-    expect(await screen.findByText('upstream 502')).toBeTruthy();
-  });
-
-  it('survives the log being unreachable', async () => {
-    fetchMock.mockRejectedValue(new Error('offline'));
-    render(<Cockpit />);
-    await waitFor(() => expect(screen.getByText(/No runs recorded yet/i)).toBeTruthy());
   });
 
   // Standing orders are already goals; the Cockpit must reflect what the user
@@ -212,41 +196,6 @@ describe('Cockpit', () => {
     render(<Cockpit />);
     const dot = await screen.findByTitle('Paused');
     expect(dot).toBeTruthy();
-  });
-
-  // C4: the state no reference tool surfaces — it ran fine and did not do the job.
-  it('shows a clean-but-unmet run as "Ran, but unmet", not as a success', async () => {
-    serveRuns([
-      run({
-        id: 'unmet',
-        goalId: null,
-        status: 'succeeded',
-        verification: { passed: false, note: 'no message was posted' },
-      }),
-    ]);
-    render(<Cockpit />);
-    expect(await screen.findByText('Ran, but unmet')).toBeTruthy();
-    expect(screen.queryByText('Succeeded')).toBeNull();
-  });
-
-  it('reveals the verifier reasoning when expanded', async () => {
-    serveRuns([
-      run({
-        id: 'unmet',
-        goalId: null,
-        status: 'succeeded',
-        verification: { passed: false, note: 'no message was posted' },
-      }),
-    ]);
-    render(<Cockpit />);
-    fireEvent.click((await screen.findByText('Ran, but unmet')).closest('button')!);
-    expect(await screen.findByText(/Criteria not met: no message was posted/i)).toBeTruthy();
-  });
-
-  it('labels a verified run as Verified', async () => {
-    serveRuns([run({ id: 'ok', goalId: null, verification: { passed: true, note: 'found it' } })]);
-    render(<Cockpit />);
-    expect(await screen.findByText('Verified')).toBeTruthy();
   });
 
   // A goal whose latest run achieved nothing must not read as healthy.
