@@ -33,23 +33,14 @@ import {
   BookOpen,
   GitPullRequest,
   ListChecks,
-  CloudSun,
-  TrendingUp,
-  Globe2,
   type LucideIcon,
 } from "lucide-react";
-import { WIDGET_PRESETS, buildPresetWidget } from "@/lib/assistant/widget-presets";
 
 const TEMPLATE_ICONS: Record<string, LucideIcon> = {
   sun: Sun, moon: Moon, timer: Timer, hammer: Hammer,
   'book-open': BookOpen, 'git-pull-request': GitPullRequest,
 };
 
-const WIDGET_ICONS: Record<string, LucideIcon> = {
-  'cloud-sun': CloudSun,
-  'trending-up': TrendingUp,
-  'globe-2': Globe2,
-};
 import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/standing-order-templates";
 import { TemplateDialog } from "./template-dialog";
 import { OrderEditor } from "./order-editor";
@@ -58,7 +49,6 @@ import { Cockpit } from "./cockpit";
 import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
-import { useWidgetStore } from "@/stores/widget-store";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -454,30 +444,8 @@ export function AssistantSurface() {
   const orders = useAssistantStore((s) => s.orders);
   const cards = useAssistantStore((s) => s.cards);
   const addCard = useAssistantStore((s) => s.addCard);
-  // Presets are WIDGETS now, not cards — state belongs in the Cockpit, not the
-  // event feed. See `buildPresetWidget`.
-  const addWidget = useWidgetStore((s) => s.addWidget);
 
-  /**
-   * Add a preset, and GO TO WHERE IT LANDED.
-   *
-   * These buttons live in the Activity empty state and used to add a card right
-   * there. Since presets became widgets they land in the Cockpit instead — so
-   * clicking one appeared to do nothing at all, because the thing you just made
-   * is on the other tab.
-   *
-   * Reported as "dashboards aren't working". They were working; they were
-   * invisible, which from the outside is the same thing. Moving where a feature
-   * lands without moving the user with it is the same defect as building one
-   * nothing renders.
-   */
-  const addPresetWidget = useCallback(
-    (preset: (typeof WIDGET_PRESETS)[number]) => {
-      addWidget({ ...buildPresetWidget(preset), id: crypto.randomUUID(), createdAt: Date.now() });
-      setView('cockpit');
-    },
-    [addWidget],
-  );
+
   const addOrder = useAssistantStore((s) => s.addOrder);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
 
@@ -789,48 +757,9 @@ export function AssistantSurface() {
                     </div>
                   </button>
                 </div>
-
-                {/* Dashboard widgets */}
-                <div className="mt-8 max-w-md w-full">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 text-center">Dashboard widgets</h3>
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    {WIDGET_PRESETS.map((preset) => {
-                      const Icon = WIDGET_ICONS[preset.icon] ?? Bot;
-                      return (
-                        <button
-                          key={preset.id}
-                          className="flex flex-col items-center gap-1.5 text-center p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                          onClick={() => addPresetWidget(preset)}
-                          title={preset.description}
-                        >
-                          <Icon className="h-4 w-4 text-muted-foreground" />
-                          <span className="font-medium">{preset.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
             ) : (
               <>
-                {/* Add widget toolbar */}
-                <div className="flex items-center justify-end mb-3 gap-1.5">
-                  <span className="text-[11px] text-muted-foreground mr-1">Add widget:</span>
-                  {WIDGET_PRESETS.map((preset) => {
-                    const Icon = WIDGET_ICONS[preset.icon] ?? Bot;
-                    return (
-                      <button
-                        key={preset.id}
-                        className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                        onClick={() => addWidget({ ...buildPresetWidget(preset), id: crypto.randomUUID(), createdAt: Date.now() })}
-                        title={preset.description}
-                      >
-                        <Icon className="h-3 w-3" />
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
                 <CardFeed cards={cards} onAction={handleCardAction} onReply={handleCardReply} />
               </>
             )}

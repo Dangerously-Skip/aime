@@ -67,6 +67,28 @@ const ASSIGNED_LITERAL =
 describe('no hardcoded credentials in tracked source', () => {
   const files = trackedSourceFiles();
 
+  /**
+   * Read a tracked file, or skip it if it is gone.
+   *
+   * `git ls-files` lists what is TRACKED, which includes a file deleted in the
+   * working tree but not yet staged. Reading it threw ENOENT, and because that
+   * happened inside the scan the failure was reported as the secret check
+   * failing — so deleting a test file produced "contains no known provider key
+   * prefixes: FAILED".
+   *
+   * On a security gate that is worse than noise: it trains you to see this
+   * check go red for reasons that are not secrets. A file that does not exist
+   * cannot contain a credential, so skipping is correct as well as quiet.
+   */
+  function readTracked(f: string): string | null {
+    try {
+      return readFileSync(resolve(repoRoot, f), 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
   it('finds source files to scan', () => {
     // Without this, a broken `git ls-files` would make every check below pass by
     // scanning nothing at all.
@@ -77,7 +99,8 @@ describe('no hardcoded credentials in tracked source', () => {
     const hits: string[] = [];
     for (const f of files) {
       if (FIXTURE_ALLOWLIST.has(f)) continue;
-      const text = readFileSync(resolve(repoRoot, f), 'utf8');
+      const text = readTracked(f);
+      if (text === null) continue;
       for (const [prefix, minLen] of PROVIDER_PREFIXES) {
         const re = new RegExp(`${prefix}[A-Za-z0-9_\\-]{${minLen},}`);
         if (re.test(text)) hits.push(`${f}: ${prefix}…`);
@@ -95,7 +118,8 @@ describe('no hardcoded credentials in tracked source', () => {
     const hits: string[] = [];
     for (const f of files) {
       if (FIXTURE_ALLOWLIST.has(f)) continue;
-      const text = readFileSync(resolve(repoRoot, f), 'utf8');
+      const text = readTracked(f);
+      if (text === null) continue;
       for (const m of text.matchAll(ASSIGNED_LITERAL)) {
         hits.push(`${f}: ${m[0].slice(0, 40)}…`);
       }
@@ -110,7 +134,8 @@ describe('no hardcoded credentials in tracked source', () => {
       'web/src/components/layout/sidebar.tsx',
       'web/src/app/api/feedlybackly/[...path]/route.ts',
     ]) {
-      const text = readFileSync(resolve(repoRoot, f), 'utf8');
+      const text = readTracked(f);
+      if (text === null) continue;
       expect(text, `${f} still hardcodes the key`).not.toMatch(/['"`]fb_[A-Za-z0-9]{20,}/);
       expect(text).toMatch(/process\.env\./);
     }
