@@ -1295,8 +1295,15 @@ export function CodeSurface() {
    * scheduler with a send path of its own, which would be a fourth place that
    * starts a turn. Before this, a job published to the bus, switched surface,
    * and nothing ran it.
+   *
+   * The busy guard is load-bearing here in a way it is not elsewhere: without
+   * it, a job firing mid-turn called sendMessage, whose registry aborts the
+   * previous stream as 'superseded' — tearing down the user's running turn
+   * (mid-build, mid-refactor) silently, because 'superseded' deliberately
+   * reports nothing. A long-running task and a standing order on overlapping
+   * schedules is the normal case, not an edge case.
    */
-  useScheduledPrompt('code', handleSubmit);
+  useScheduledPrompt('code', handleSubmit, () => useCodeStore.getState().isStreaming);
 
   const handleVoiceTranscript = useCallback(
     (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),

@@ -12,6 +12,7 @@ import { loadICloudCredentials } from '../icloud/credentials';
 import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
+import { toolDeadlineMs, isNetworkTool } from './tool-deadlines';
 import { getSurfaceConfig } from '../surfaces';
 import { internalAuthEnv } from '../auth/internal-credential';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
@@ -2295,35 +2296,38 @@ export class ClaudeProvider extends BaseProvider {
       this.abortControllers.set(abortKey, abortController);
     }
 
-    // Per-tool watchdog: abort the query if any single tool runs past
-    // TOOL_DEADLINE_MS. The SDK exposes no per-tool timeout — `interrupt()`,
+    // Per-tool watchdog: abort the query if any single tool runs past its
+    // class's deadline. The SDK exposes no per-tool timeout — `interrupt()`,
     // `close()` and `stopTask()` are the only cancellation levers, and none of
-    // them cancels one tool and continues — and WebFetch in particular can hang
-    // for many minutes when its model-backed summarization step is slow. Without
-    // this, a single hung tool freezes the session until the user aborts.
+    // them cancels one tool and continues — and a hung tool freezes the session
+    // until the user aborts.
     //
     // THE ONLY per-tool deadline in the app, and deliberately so. A second one
     // ran in the browser for a while, which could not work: a client abort tears
     // down a `fetch` and leaves this subprocess running to completion. It was
     // deleted rather than re-tuned.
     //
-    // 90_000 was below the runtime of the tools this comment itself calls slow.
-    // A WebFetch measured at 120.5s returned correct and complete; killing the
-    // QUERY for it cost the whole turn, including an already-written deck, to
-    // save 30 seconds. `timeout-ordering.test.ts` holds this below every
-    // surface's queryTimeoutSecs and above that observed WebFetch.
-    const TOOL_DEADLINE_MS = 180_000;
+    // Deadlines are PER TOOL CLASS (see tool-deadlines.ts). One flat 180s for
+    // every tool killed the work the tool surfaces exist for: a Bash build or
+    // test suite legitimately runs longer than that, nothing streams while a
+    // tool runs, so the flat timer could not tell it from a hung fetch — and it
+    // aborted the whole turn, including everything already produced, to stop
+    // one tool. Network/MCP tools keep the tight 180s budget (elapsed silence
+    // is real evidence there); local tools get the surface's own silence budget
+    // minus headroom, so a genuinely hung command is still named by THIS
+    // watchdog — with the tool in the message — before the route's generic
+    // timeout can fire.
     const activeTools = new Map<string, { name: string; startedAt: number }>();
     // Use a single-element array so TS doesn't narrow to `never` —
     // the assignment below happens inside an interval callback which
     // isn't visible to TS's control-flow analysis.
-    const watchdogTrip: Array<{ name: string; elapsedMs: number }> = [];
+    const watchdogTrip: Array<{ name: string; elapsedMs: number; network: boolean }> = [];
     const watchdog = setInterval(() => {
       const now = Date.now();
       // While the turn is blocked on a human decision the SDK loop is paused, so
       // NO active tool can finish and elapsed wall-clock time stops being
       // evidence of a hang. Roll their clocks forward rather than accusing them:
-      // this is what stops the 90s deadline from aborting an approval prompt, an
+      // this is what stops the deadline from aborting an approval prompt, an
       // AskUserQuestion or an OAuth round trip that a user takes a minute over.
       if (awaitingHuman.size > 0) {
         for (const info of activeTools.values()) info.startedAt = now;
@@ -2331,9 +2335,13 @@ export class ClaudeProvider extends BaseProvider {
       }
       for (const [id, info] of activeTools) {
         const elapsed = now - info.startedAt;
-        if (elapsed > TOOL_DEADLINE_MS) {
+        if (elapsed > toolDeadlineMs(info.name, surfaceConfig?.queryTimeoutSecs)) {
           console.warn(`[Claude] Tool ${info.name} (id=${id}) hung ${(elapsed / 1000).toFixed(0)}s, aborting query`);
-          watchdogTrip.push({ name: info.name, elapsedMs: elapsed });
+          watchdogTrip.push({
+            name: info.name,
+            elapsedMs: elapsed,
+            network: isNetworkTool(info.name),
+          });
           abortController.abort();
           activeTools.clear();
           break;
@@ -2694,10 +2702,16 @@ export class ClaudeProvider extends BaseProvider {
         const trip = watchdogTrip[0];
         if (trip) {
           // Surface the watchdog reason so the user sees what hung
-          // instead of a generic "aborted" — the abort here was ours.
+          // instead of a generic "aborted" — the abort here was ours. The
+          // advice differs by class: a hung remote call is worth retrying, but
+          // "try again" for a build that had been succeeding for nine minutes
+          // is exactly wrong — that advice belongs to the network class alone.
+          const advice = trip.network
+            ? 'The remote call hung. Try again or rephrase.'
+            : 'The command outlived its budget and was stopped; split long builds or test runs into smaller steps.';
           yield {
             type: 'error',
-            message: `Tool "${trip.name}" exceeded ${(trip.elapsedMs / 1000).toFixed(0)}s and was aborted. The downstream call (e.g. WebFetch's gateway-side summarization) hung. Try again or rephrase.`,
+            message: `Tool "${trip.name}" was stopped after ${(trip.elapsedMs / 1000).toFixed(0)}s without returning. ${advice} Work already produced above is kept.`,
             provider: this.name,
           };
         }

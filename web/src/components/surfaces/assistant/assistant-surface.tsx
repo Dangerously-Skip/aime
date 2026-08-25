@@ -50,7 +50,12 @@ import { RunLog } from "@/components/runs/run-log";
 import { useRunLog } from "@/components/runs/use-run-log";
 import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
+import { readTurnEvents } from "@/lib/sse/turn-events";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
+import { resolveSendRoute } from "@/lib/models/client-options";
+import { getSurfaceRoute } from "@/lib/models/surface-routes";
+import { useProviderStore } from "@/stores/provider-store";
+import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -432,6 +437,14 @@ function StatusBar({ orders }: { orders: StandingOrder[] }) {
 
 // ── Main Surface ─────────────────────────────────────────────────────────────
 
+const CAPABILITY = getSurfaceRoute("assistant").capability;
+
+/**
+ * Same budget, same reasoning as use-sse-stream: the server heartbeats every
+ * ~15s, so 120s without a byte means the connection is dead.
+ */
+const STREAM_INACTIVITY_TIMEOUT_MS = 120_000;
+
 export function AssistantSurface() {
   const hydrated = useHydrated();
   const [inputValue, setInputValue] = useState("");
@@ -442,14 +455,26 @@ export function AssistantSurface() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [activeTemplate, setActiveTemplate] = useState<StandingOrderTemplate | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /**
+   * Mirrored for callbacks that must read it without re-subscribing — the
+   * scheduled-prompt hook holds its guard in a ref, so a stale closure here
+   * would let a job fire mid-turn.
+   */
+  const isStreamingRef = useRef(false);
 
   const orders = useAssistantStore((s) => s.orders);
   const cards = useAssistantStore((s) => s.cards);
   const addCard = useAssistantStore((s) => s.addCard);
+  const updateCard = useAssistantStore((s) => s.updateCard);
 
 
   const addOrder = useAssistantStore((s) => s.addOrder);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  // The route comes from the SAME `resolveSendRoute` chokepoint every other
+  // surface uses — see the comment at the fetch below.
+  const providers = useProviderStore((s) => s.providers);
+  const tierModels = useSettingsStore((s) => s.tierModels);
+  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
 
   // Hydrate store on mount
   useEffect(() => {
@@ -507,102 +532,150 @@ export function AssistantSurface() {
     }
   }, [hydrated]);
 
-  const handleSubmit = useCallback(async () => {
-    if (!inputValue.trim() || isStreaming) return;
-    const prompt = inputValue.trim();
+  /**
+   * The prompt arrives as the ARGUMENT when a scheduled job fires —
+   * `useScheduledPrompt` dispatches it that way, and discarding the argument to
+   * read the composer instead meant a job firing with an empty composer was
+   * consumed from the bus and silently did nothing (or ran whatever stale text
+   * happened to be sitting in it). A typed submit passes nothing and reads the
+   * composer.
+   */
+  const handleSubmit = useCallback(async (scheduledPrompt?: string) => {
+    const prompt = (scheduledPrompt ?? inputValue).trim();
+    if (!prompt || isStreaming) return;
     setInputValue("");
     setIsStreaming(true);
+    isStreamingRef.current = true;
 
-    // Add a "thinking" card
-    addCard({ title: prompt, summary: 'Thinking...' });
+    // THE chokepoint: whatever the user configured in Settings (tier grid +
+    // BYOK providers) decides where this turn runs, exactly as on every other
+    // surface. It used to post a hardcoded `model: 'sonnet'`, which skipped
+    // registry resolution server-side entirely — so the tier grid never
+    // governed this surface, and a BYOK/OpenRouter-only user had a dead
+    // surface while every other one worked. Omitted when it resolves to
+    // nothing, leaving the server's own fallback in charge.
+    const route = resolveSendRoute(null, providers, {
+      capability: CAPABILITY,
+      tierModels,
+      hasAnthropicKey,
+      hasBedrock,
+      known: builtinAccessKnown,
+    });
+
+    // Capture the card ID. `addCard` PREPENDS, so an index-0 update races any
+    // standing-order card landing mid-stream (`useStandingOrders` runs on this
+    // same surface): the streamed text would land on whichever card was newest.
+    const cardId = addCard({ title: prompt, summary: 'Thinking...' });
 
     const controller = new AbortController();
     abortRef.current = controller;
 
     try {
       const chatId = `assistant-${Date.now()}`;
+      // No question/connector card UI on this surface, so the turn must never
+      // be parked waiting for one. `canRelayToClient` defaults to TRUE, which
+      // meant the provider was handed onInputRequest/onConnectorRequest and
+      // would block for 300s on an approval nobody could answer. Declaring
+      // false takes the documented "cannot ask" path: canUseTool refuses and
+      // tells the agent to say what it would have done.
       const response = await fetch('/api/chat/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // No question/connector card UI on this surface, so the turn must never
-          // be parked waiting for one. `canRelayToClient` defaults to TRUE, which
-          // meant the provider was handed onInputRequest/onConnectorRequest and
-          // would block for 300s on an approval nobody could answer. Declaring
-          // false takes the documented "cannot ask" path: canUseTool refuses and
-          // tells the agent to say what it would have done.
           canRelayToClient: false,
           message: prompt,
           chatId,
-          model: 'sonnet',
+          ...(route?.model ? { model: route.model } : {}),
+          ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}),
           apiKey: anthropicApiKey || undefined,
         }),
         signal: controller.signal,
       });
 
       if (!response.ok || !response.body) {
-        // Update the thinking card with error
-        useAssistantStore.setState((s) => ({
-          cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: `Error: ${response.statusText}` } : c),
-        }));
+        // The body carries the server's own words (auth failures, unknown
+        // surfaces); statusText is frequently empty in fetch.
+        const body = (await response.json().catch(() => ({}))) as { error?: string };
+        updateCard(cardId, {
+          summary: body.error ?? `Request failed (${response.status}).`,
+          unread: true,
+        });
         setIsStreaming(false);
         return;
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
       let fullText = '';
+      /** Set by an SSE `error` event; reported once the stream ends. */
+      let streamError: string | null = null;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-            if (event.type === 'text' && typeof event.content === 'string') {
-              fullText += event.content;
-              // Update the first card with streamed text
-              useAssistantStore.setState((s) => ({
-                cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: fullText } : c),
-              }));
-            } else if (handleAgnosticChunk(event as Record<string, unknown>, {
-              chatId: '',
-              surface: 'Assistant',
-              // This surface owns the order feed, so a created order shows there
-              // rather than as a toast. The only genuinely surface-specific part.
-              notifyVia: 'assistant',
-            })) {
-              // handled centrally — see lib/sse/agnostic-chunks
-            }
-          } catch { /* ignore parse errors */ }
-        }
-      }
+      /*
+       * The client-side backstop every other surface gets from use-sse-stream:
+       * without it a wedged stream (sleep, black-holed TCP) left this surface
+       * streaming forever, and — because scheduled prompts defer while busy —
+       * every later standing-order run queued behind a dead connection. Safe
+       * against long tool runs: the server sends heartbeat comments ~15s, so
+       * only genuine silence trips it.
+       */
+      await readTurnEvents(
+        response.body,
+        (event) => {
+          if (event.type === 'text' && typeof event.content === 'string') {
+            fullText += event.content;
+            updateCard(cardId, { summary: fullText });
+          } else if (
+            event.type === 'error' &&
+            typeof event.message === 'string' &&
+            event.message
+          ) {
+            /*
+             * Every server-side failure arrives here — watchdog kills,
+             * silence timeouts, model/auth errors. Dropped, they left the card
+             * saying "Thinking..." forever on exactly the surface whose work
+             * runs unattended. Kept aside rather than written straight into
+             * the summary so a late text chunk cannot overwrite the error
+             * away; the final update below composes both.
+             */
+            streamError = event.message;
+          } else if (handleAgnosticChunk(event as Record<string, unknown>, {
+            chatId,
+            surface: 'Assistant',
+            // This surface owns the order feed, so a created order shows there
+            // rather than as a toast. The only genuinely surface-specific part.
+            notifyVia: 'assistant',
+          })) {
+            // handled centrally — see lib/sse/agnostic-chunks
+          }
+        },
+        { inactivityTimeoutMs: STREAM_INACTIVITY_TIMEOUT_MS },
+      );
 
-      // Final update — replace summary with completed text
-      if (fullText) {
-        useAssistantStore.setState((s) => ({
-          cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: fullText, unread: true } : c),
-        }));
+      // Final update — completed text, or the error, or both when a run failed
+      // after producing something worth keeping.
+      if (streamError) {
+        updateCard(cardId, {
+          summary: fullText ? `${fullText}\n\n_${streamError}_` : `Error: ${streamError}`,
+          unread: true,
+        });
+      } else if (fullText) {
+        updateCard(cardId, { summary: fullText, unread: true });
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
-      useAssistantStore.setState((s) => ({
-        cards: s.cards.map((c, i) => i === 0 ? { ...c, summary: `Error: ${err instanceof Error ? err.message : String(err)}` } : c),
-      }));
+      updateCard(cardId, {
+        summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        unread: true,
+      });
     } finally {
       setIsStreaming(false);
+      isStreamingRef.current = false;
       abortRef.current = null;
     }
-  }, [inputValue, isStreaming, anthropicApiKey, addCard]);
+  }, [inputValue, isStreaming, anthropicApiKey, addCard, updateCard, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown]);
 
   const handleAbort = useCallback(() => {
     abortRef.current?.abort();
     setIsStreaming(false);
+    isStreamingRef.current = false;
   }, []);
 
   const handleKeyDown = useCallback(
@@ -620,9 +693,9 @@ export function AssistantSurface() {
    * A due cron job runs HERE, through this surface's own submit — not through a
    * scheduler with a send path of its own, which would be a fourth place that
    * starts a turn. Before this, a job published to the bus, switched surface,
-   * and nothing ran it.
+   * and nothing ran it. Busy (streaming) defers the job instead of dropping it.
    */
-  useScheduledPrompt('assistant', handleSubmit);
+  useScheduledPrompt('assistant', handleSubmit, () => isStreamingRef.current);
 
   const handleCardAction = useCallback((action: A2UIAction) => {
     console.log('[Assistant] Card action:', action);
@@ -635,13 +708,15 @@ export function AssistantSurface() {
     // Find the card to get context
     const card = useAssistantStore.getState().cards.find((c) => c.id === cardId);
     const context = card ? `Regarding "${card.title}": ` : '';
-    setInputValue(context + text);
-    // Auto-submit
-    setTimeout(() => {
-      const btn = document.querySelector('[data-assistant-submit]') as HTMLButtonElement;
-      btn?.click();
-    }, 50);
-  }, []);
+    /*
+     * Submit directly with the prompt as the argument. This used to set the
+     * composer and click `[data-assistant-submit]` after 50ms — which raced
+     * React's state flush (a disabled button swallows the reply) and, if a
+     * turn had started in between, clicked what is then the STOP button,
+     * aborting a live run.
+     */
+    void handleSubmit(context + text);
+  }, [handleSubmit]);
 
   return (
     <div className="flex h-full bg-background">
@@ -700,7 +775,9 @@ export function AssistantSurface() {
                   size="icon"
                   data-assistant-submit
                   className={`h-8 w-8 rounded-lg ${isStreaming ? 'bg-destructive hover:bg-destructive/80' : 'bg-primary hover:bg-primary/80'}`}
-                  onClick={isStreaming ? handleAbort : handleSubmit}
+                  // Wrapped: a bare handler reference would receive the click
+                  // event as `scheduledPrompt`.
+                  onClick={isStreaming ? handleAbort : () => handleSubmit()}
                   disabled={!isStreaming && !inputValue.trim()}
                 >
                   {isStreaming ? <Square className="h-3.5 w-3.5" /> : <ArrowUp className="h-4 w-4" />}

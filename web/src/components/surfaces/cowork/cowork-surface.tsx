@@ -1561,7 +1561,7 @@ export function CoworkSurface() {
    * starts a turn. Before this, a job published to the bus, switched surface,
    * and nothing ran it.
    */
-  useScheduledPrompt('cowork', handleSubmit);
+  useScheduledPrompt('cowork', handleSubmit, () => useCoworkStore.getState().isStreaming);
 
   handleSubmitRef.current = handleSubmit;
 

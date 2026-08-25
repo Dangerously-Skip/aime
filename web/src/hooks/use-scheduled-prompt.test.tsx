@@ -119,3 +119,39 @@ describe('running it exactly once', () => {
     expect(submit).toHaveBeenLastCalledWith('second');
   });
 });
+
+describe('a busy surface defers the job instead of dropping it', () => {
+  it('does not submit or consume while busy', () => {
+    const submit = vi.fn();
+    renderHook(() =>
+      useScheduledPrompt('chat', submit, () => true, { retryMs: 10 }),
+    );
+    act(() => { fireCron('chat', 'while busy'); });
+    expect(submit).not.toHaveBeenCalled();
+    // The event must still be unconsumed: consuming it here is what made a
+    // job firing mid-turn vanish permanently.
+    expect(useContextBusStore.getState().events[0].consumed).toBe(false);
+  });
+
+  it('runs the deferred job once the surface frees up', async () => {
+    let busy = true;
+    const submit = vi.fn();
+    renderHook(() =>
+      useScheduledPrompt('chat', submit, () => busy, { retryMs: 10 }),
+    );
+    act(() => { fireCron('chat', 'queued work'); });
+    await new Promise((r) => setTimeout(r, 50)); // several retries, all busy
+    expect(submit).not.toHaveBeenCalled();
+
+    busy = false;
+    await waitFor(() => expect(submit).toHaveBeenCalledWith('queued work'));
+    expect(useContextBusStore.getState().events[0].consumed).toBe(true);
+  });
+
+  it('an absent guard behaves as not-busy (existing callers unchanged)', async () => {
+    const submit = vi.fn();
+    renderHook(() => useScheduledPrompt('browser', submit));
+    act(() => { fireCron('browser', 'no guard'); });
+    await waitFor(() => expect(submit).toHaveBeenCalledWith('no guard'));
+  });
+});

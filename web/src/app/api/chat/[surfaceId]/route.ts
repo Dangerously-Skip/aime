@@ -1044,6 +1044,10 @@ export async function POST(
       let lastChunkMs = Date.now();
       /** Named so the resume loop can re-arm the same behaviour, not a copy. */
       const fireQueryTimeout = async () => {
+        // One shot. Chunks that land between the abort and the stream closing
+        // are skipped downstream, but a timer re-armed in that window would
+        // fire a SECOND error onto an ended response.
+        if (queryTimedOut) return;
         queryTimedOut = true;
         const silentSecs = Math.round((Date.now() - lastChunkMs) / 1000);
         console.warn(`[CHAT] No output for ${silentSecs}s (limit ${timeoutSecs}s) — aborting`);
@@ -1221,22 +1225,17 @@ export async function POST(
                   attachments: undefined,
                 },
           )) {
-          // A chunk is a sign of life — see `noteActivity`.
-          noteActivity();
-          if (chunk.type === 'tool_use') {
-            console.log('[SSE] Sending tool_use:', chunk.name);
-            toolCallCount++;
-          }
-          if (chunk.type === 'text') {
-            console.log('[SSE] Sending text chunk, length:', chunk.content?.length || 0);
-            const text = (chunk.content as string) || '';
-            collectedResponse += text;
-            outputChars += text.length;
-          }
-          // The turn's real usage, forwarded by the provider from the SDK's
-          // terminal result message. Captured rather than relayed: the client
-          // reads usage off the `done` event, and two sources for one number is
-          // how they drift apart.
+          /*
+           * The turn's real usage, forwarded by the provider from the SDK's
+           * terminal result message. Captured rather than relayed: the client
+           * reads usage off the `done` event, and two sources for one number is
+           * how they drift apart.
+           *
+           * ABOVE the timeout gate on purpose: a terminal result that lands in
+           * the window between the silence abort and the iterator exhausting is
+           * exactly the usage worth capturing — without it the final `done`
+           * prices the whole turn from characters/4.
+           */
           if (chunk.type === 'usage') {
             /*
              * Summed, not replaced. A resumed turn is several SDK queries and
@@ -1282,6 +1281,28 @@ export async function POST(
             continue;
           }
           /*
+           * After the silence timeout fires, the error is already on the wire.
+           * The abort takes a moment to land, and the provider keeps emitting
+           * until it does — relaying those chunks appended content BELOW the
+           * error line, as if the run were still going, and counting them as
+           * activity would re-arm the timer for a second spurious error.
+           * Nothing after an error reaches the client. (Usage above is still
+           * captured — it prices the turn that just ended.)
+           */
+          if (queryTimedOut) continue;
+          // A chunk is a sign of life — see `noteActivity`.
+          noteActivity();
+          if (chunk.type === 'tool_use') {
+            console.log('[SSE] Sending tool_use:', chunk.name);
+            toolCallCount++;
+          }
+          if (chunk.type === 'text') {
+            console.log('[SSE] Sending text chunk, length:', chunk.content?.length || 0);
+            const text = (chunk.content as string) || '';
+            collectedResponse += text;
+            outputChars += text.length;
+          }
+          /*
            * A ceiling we can pick up from. Swallowed rather than relayed: the
            * provider's note tells the user to say "continue", which would be
            * wrong advice when we are about to do it for them.
@@ -1316,28 +1337,13 @@ export async function POST(
             resumes++;
             console.log(`[CHAT] Turn ceiling reached; resuming (${resumes}/${MAX_RESUMES})`);
             /*
-             * Re-arm the wall-clock timer for the leg we are about to start.
-             *
-             * It is one-shot, and its only teeth are `provider.abort()` — which
-             * looks the chat up in a controller map the provider DELETES when a
-             * segment ends and does not re-register until ~1-2s of async setup
-             * into the next one. So a turn that resumed near the deadline could
-             * have the timer fire during that window, find no controller, and
-             * return false: the client is told "timed out" while the SDK
-             * subprocess runs on with no wall-clock bound at all.
-             *
-             * Re-arming against the ORIGINAL deadline, not a fresh full
-             * timeout — resuming must not buy more wall-clock than the surface
-             * allows.
-             */
-            /*
              * A resume is activity, so it gets the full silence budget rather
-             * than the remainder of a wall clock. Under the old semantics this
-             * deliberately did NOT refresh the deadline — "resuming must not
-             * buy more wall-clock than the surface allows" — which was right
-             * for a total-duration bound and is wrong for a silence one: the
-             * boundary between legs is the single moment we have the clearest
-             * possible evidence the run is alive.
+             * than the remainder of a wall clock. An earlier version
+             * deliberately did NOT refresh the deadline here — "resuming must
+             * not buy more wall-clock than the surface allows" — which was
+             * right for a total-duration bound and is wrong for a silence one:
+             * the boundary between legs is the single moment we have the
+             * clearest possible evidence the run is alive.
              */
             noteActivity();
           }
