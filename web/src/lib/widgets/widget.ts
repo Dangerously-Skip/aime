@@ -9,6 +9,7 @@
  */
 import type { Goal } from '@/lib/runs/types';
 import type { WidgetNode } from './catalog';
+import type { WidgetPresetConfig } from '@/lib/assistant/widget-config';
 
 export interface Widget {
   id: string;
@@ -35,6 +36,18 @@ export interface Widget {
    * without a migration.
    */
   refreshKind?: 'weather' | 'tickers' | 'clocks';
+  /**
+   * What a deterministic widget shows — the city, the symbols, the zones.
+   *
+   * ON THE WIDGET, not in global settings, because the question "which city?"
+   * has as many answers as you have weather tiles. A single global location
+   * would make the second one pointless.
+   *
+   * Absent ⇒ the defaults derived from the user's own time zone. Partial by
+   * design: editing your tickers must not also freeze your clocks at whatever
+   * they happened to be that day.
+   */
+  config?: Partial<WidgetPresetConfig>;
   /** Last successfully rendered node. Null until the first refresh lands. */
   render: WidgetNode | null;
   refreshedAt?: number;
