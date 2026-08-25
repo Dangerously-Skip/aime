@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useCronStore } from '@/stores/cron-store';
 import { isJobDue } from '@/lib/schedule/due';
 import { attendedJobs, type ManifestOrderLike } from '@/lib/schedule/attended-jobs';
+import { markOrderRan } from '@/lib/schedule/write';
 
 // ElectronAPI type is declared globally in use-electron.ts
 
@@ -58,32 +58,39 @@ export function useCron(
 
     const handler = (ts: number) => {
       /*
-       * BOTH STORES, manifest preferred (DR-24 step 3).
-       *
-       * Cron jobs are in localStorage and standing orders are on disk, and the
-       * migration moves the former into the latter. Reading both means no
-       * intermediate state exists where a job lives somewhere nothing ticks —
-       * including a rollback, where the manifest is empty and this falls
-       * straight back to the store it always used.
+       * ONE STORE (DR-24 step 6). This briefly read the browser cron store as
+       * well, while a migration moved jobs across; there turned out to be no
+       * data worth migrating, so the compatibility layer came out.
        *
        * The read is async and the tick is not, so the manifest is fetched into
-       * a ref between ticks; a tick that arrives before the first fetch simply
-       * sees the cron store, which is the pre-migration behaviour anyway.
+       * a ref between ticks. A tick arriving before the first fetch sees an
+       * empty list and does nothing, which is correct: no jobs are known yet.
        */
-      const { jobs: cronJobs, markRan } = useCronStore.getState();
-      const jobs = attendedJobs(manifestRef.current, cronJobs);
+      const jobs = attendedJobs(manifestRef.current);
 
       for (const job of jobs) {
         // ONE due-check, shared with the server ticker (step 1).
         if (!isJobDue(job, ts)) continue;
+
         /*
-         * Stamp BEFORE firing, and only where the job actually lives. A manifest
-         * job's `lastRun` is the server's record to keep; writing it here would
-         * need a round trip the tick cannot wait for, so step 4 moves that with
-         * the migration. Until then a migrated job relies on the same-minute
-         * guard against the value the manifest already holds.
+         * STAMP LOCALLY FIRST, PERSIST AFTER — and the order is the point.
+         *
+         * `lastRun` is what the same-minute guard reads, and that guard exists
+         * because a tick CAN arrive twice inside one minute (a resumed laptop,
+         * two listeners, a slow tick). Waiting for the round trip before firing
+         * would delay every job by a request; not updating the ref at all would
+         * leave the guard reading a stale value until the next 60s refresh, so
+         * a double tick fires the job twice.
+         *
+         * So the in-memory copy moves immediately and the write follows. If the
+         * write fails the job may run once more after a refresh — which is the
+         * right way round: a job that runs twice is visible, and one silently
+         * marked as run is not.
          */
-        if (job.source === 'cron-store') markRan(job.id);
+        const order = manifestRef.current.find((o) => o.id === job.id);
+        if (order) order.lastRun = ts;
+        void markOrderRan(job.id, ts);
+
         onFireRef.current({ id: job.id, prompt: job.prompt, surfaceId: job.surfaceId });
       }
     };

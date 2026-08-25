@@ -2,7 +2,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { parseQuarryCron, scheduleFromQuarryCron } from './quarry-cron';
 import { useAssistantStore } from '@/stores/assistant-store';
-import { useCronStore } from '@/stores/cron-store';
 
 /**
  * `QUARRY_CRON:<expression>:<prompt>` is how the model schedules a reminder
@@ -16,7 +15,6 @@ import { useCronStore } from '@/stores/cron-store';
 
 beforeEach(() => {
   useAssistantStore.setState({ orders: [], cards: [] } as never);
-  useCronStore.setState({ jobs: [] } as never);
 });
 
 describe('parseQuarryCron', () => {
@@ -82,12 +80,19 @@ describe('scheduleFromQuarryCron', () => {
     expect(useAssistantStore.getState().orders).toHaveLength(1);
   });
 
-  it('respects an existing cron job with the same expression and prompt', () => {
-    useCronStore.setState({
-      jobs: [{ id: 'j1', expression: '0 9 * * *', prompt: 'stand-up', surfaceId: 'cowork', enabled: true }],
-    } as never);
-    expect(scheduleFromQuarryCron('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'command')).toBe(false);
-    expect(useAssistantStore.getState().orders).toHaveLength(0);
+  it('does not schedule a duplicate of an order that already exists', () => {
+    /*
+     * The dedup this protects is unchanged; what it checks AGAINST is not. It
+     * used to seed a browser cron store, because the same job could be written
+     * to either place. That store is gone (DR-24 step 6) and the write was
+     * always order-based, so the check now has one thing to look at — which is
+     * the point of the removal.
+     */
+    scheduleFromQuarryCron('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'command');
+    expect(useAssistantStore.getState().orders).toHaveLength(1);
+
+    expect(scheduleFromQuarryCron('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'output')).toBe(false);
+    expect(useAssistantStore.getState().orders, 'the same reminder was scheduled twice').toHaveLength(1);
   });
 
   it('still schedules a genuinely different reminder', () => {

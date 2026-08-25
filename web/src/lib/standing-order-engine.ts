@@ -3,7 +3,7 @@
  * Evaluates which standing orders should fire based on their trigger type and current time.
  */
 
-import { matchesCron } from '@/stores/cron-store';
+import { matchesCron } from '@/lib/schedule/due';
 import type { StandingOrder } from '@/stores/assistant-store';
 import { isJobDue } from '@/lib/schedule/due';
 

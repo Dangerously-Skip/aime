@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchesCron } from './cron-store';
+import { matchesCron } from './due';
 
 /** Build a local Date: 2026-07-20 is a Monday. */
 const at = (hour: number, minute: number, opts: { dom?: number; month?: number } = {}) =>

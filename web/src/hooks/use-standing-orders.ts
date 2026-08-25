@@ -141,10 +141,40 @@ export function useStandingOrders() {
       if (snapshot === lastPushed.current) return;
       pushInFlight.current = true;
       try {
+        /*
+         * PRESERVE ATTENDED JOBS. This mirror replaces the whole manifest with
+         * the assistant store's orders, which was safe while it was the only
+         * writer — and stopped being safe when attended jobs moved in (DR-24).
+         *
+         * The file now has two owners: this mirrors UNATTENDED standing orders,
+         * and `lib/schedule/write` maintains ATTENDED ones. A wholesale replace
+         * deletes every scheduled job the assistant store has never heard of,
+         * which is all of them.
+         *
+         * Found by an e2e whose seeded job kept vanishing — it read as flaky
+         * until the second writer turned up.
+         */
+        let attended: unknown[] = [];
+        try {
+          const current = await fetch('/api/schedule/orders');
+          if (current.ok) {
+            const body = (await current.json()) as { orders?: Array<{ attended?: boolean }> };
+            attended = (body.orders ?? []).filter((o) => o.attended === true);
+          }
+        } catch {
+          /*
+           * Could not read. Push nothing rather than replace with a partial
+           * list: losing this cycle's mirror is invisible and recoverable,
+           * whereas deleting the user's scheduled jobs is neither.
+           */
+          pushInFlight.current = false;
+          return;
+        }
+
         await fetch('/api/schedule/orders', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orders }),
+          body: JSON.stringify({ orders: [...orders, ...attended] }),
         });
         lastPushed.current = snapshot;
       } catch {

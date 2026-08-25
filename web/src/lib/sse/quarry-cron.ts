@@ -1,7 +1,6 @@
 'use client';
 
 import { useAssistantStore } from '@/stores/assistant-store';
-import { useCronStore } from '@/stores/cron-store';
 
 /**
  * `QUARRY_CRON:<expression>:<prompt>` — the marker the model echoes through a
@@ -63,11 +62,12 @@ export function scheduleFromQuarryCron(text: unknown, surface: string, source: s
   const parsed = parseQuarryCron(text);
   if (!parsed) return false;
 
-  const already = useCronStore
-    .getState()
-    .jobs.some((j) => j.expression === parsed.expression && j.prompt === parsed.prompt);
-  if (already) return false;
-
+  /*
+   * ONE dedup check now, against orders. There were two — this also consulted a
+   * browser cron store, back when the same job could be written to either. That
+   * store is gone (DR-24 step 6) and the write below was always order-based, so
+   * the second check had nothing left to find.
+   */
   const orders = useAssistantStore.getState().orders;
   if (orders.some((o) => o.instruction === parsed.prompt && o.trigger.expression === parsed.expression)) {
     return false;

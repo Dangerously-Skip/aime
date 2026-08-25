@@ -106,6 +106,26 @@ export async function setJobEnabled(id: string, enabled: boolean): Promise<boole
   return writeOrders(next);
 }
 
+/**
+ * Record that a job just ran.
+ *
+ * Called from the tick handler, which cannot await it: the in-memory copy is
+ * updated first so the same-minute guard holds immediately, and this persists
+ * the same value for the next launch. A failure means the job may run once more
+ * after a refresh, which is the right way round — a job that runs twice is
+ * visible, one silently marked as run is not.
+ */
+export async function markOrderRan(id: string, ranAtMs: number): Promise<boolean> {
+  const existing = await readOrders();
+  if (existing === null) return false;
+  const next = existing.map((o) =>
+    o.id === id
+      ? { ...o, lastRun: ranAtMs, runCount: (o.runCount ?? 0) + 1, updatedAt: ranAtMs }
+      : o,
+  );
+  return writeOrders(next);
+}
+
 /** Delete. Returns false when the write did not land. */
 export async function deleteJob(id: string): Promise<boolean> {
   const existing = await readOrders();

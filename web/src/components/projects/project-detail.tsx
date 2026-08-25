@@ -39,7 +39,6 @@ import {
   Users,
   Bot,
 } from "lucide-react";
-import { useCronStore } from "@/stores/cron-store";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -164,7 +163,6 @@ export function ProjectDetail({
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
 
-  const allCronJobs = useCronStore((s) => s.jobs);
   // Both stores (DR-24 step 5) — see `useAttendedJobs`.
   const {
     jobs: allAttendedJobs,

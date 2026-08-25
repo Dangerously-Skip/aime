@@ -26,7 +26,6 @@ import { summarizeConversation } from "@/lib/memory/summarizer";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { sendConversationCompletedEvent, sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
-import { useCronStore } from "@/stores/cron-store";
 import { useScratchDir } from "@/hooks/use-scratch-dir";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { useFileDrop } from "@/hooks/use-file-drop";
