@@ -1014,19 +1014,65 @@ export async function POST(
       const streamStartMs = Date.now();
       let queryTimedOut = false;
 
-      // Auto-abort after surface-specific timeout
+      /*
+       * THE TIMEOUT MEASURES SILENCE, NOT DURATION.
+       *
+       * This was wall-clock: armed once at stream start and never reset, so a
+       * run was killed at the deadline no matter how well it was going. A code
+       * review that had been streaming findings for ten minutes died mid
+       * sentence, and was told "Try a simpler request or break it into steps" —
+       * advice that is exactly wrong for a request that was working.
+       *
+       * Long is not the same as stuck. The thing worth aborting is a run that
+       * has stopped producing anything: a wedged subprocess, a tool that never
+       * returns, a provider holding the connection open. Every one of those is
+       * visible as SILENCE, and none of them is visible as elapsed time.
+       *
+       * So the timer re-arms on every chunk. `queryTimeoutSecs` now means "no
+       * output for this long", which is why the numbers are unchanged — the
+       * same 600 that used to cut off productive work is generous as a silence
+       * budget, and moving semantics and thresholds in one change would leave
+       * neither testable.
+       *
+       * WHAT STILL BOUNDS A RUN THAT NEVER STOPS TALKING: `maxBudgetUsd`, and
+       * the turn ceiling. Spend is the real ceiling and always was — a wall
+       * clock was only ever a proxy for it, and a bad one, since it punished
+       * slow-but-cheap work and let fast-and-expensive work through.
+       */
       const timeoutSecs = surfaceConfig.queryTimeoutSecs || 0;
       let queryTimer: ReturnType<typeof setTimeout> | null = null;
+      let lastChunkMs = Date.now();
       /** Named so the resume loop can re-arm the same behaviour, not a copy. */
       const fireQueryTimeout = async () => {
         queryTimedOut = true;
-        console.warn(`[CHAT] Query timeout after ${timeoutSecs}s — aborting`);
+        const silentSecs = Math.round((Date.now() - lastChunkMs) / 1000);
+        console.warn(`[CHAT] No output for ${silentSecs}s (limit ${timeoutSecs}s) — aborting`);
         try {
           provider.abort(chatId as string, surfaceId);
         } catch (e) {
           console.error('[CHAT] Abort on timeout failed:', e);
         }
-        await sse.writeEvent({ type: 'error', message: `Query timed out after ${timeoutSecs} seconds. Try a simpler request or break it into steps.` });
+        /*
+         * Says what actually happened. "Timed out after 600 seconds" described
+         * a run that had been working the whole time, and the advice that
+         * followed sent the user off to simplify a request that was fine.
+         */
+        await sse.writeEvent({
+          type: 'error',
+          message:
+            `The run stopped producing output for ${timeoutSecs} seconds and was cancelled. ` +
+            `Anything already produced above is kept.`,
+        });
+      };
+      /**
+       * Re-arm the silence timer. Called on every chunk, so the deadline is
+       * always measured from the last sign of life rather than from the start.
+       */
+      const noteActivity = () => {
+        if (timeoutSecs <= 0) return;
+        lastChunkMs = Date.now();
+        if (queryTimer) clearTimeout(queryTimer);
+        queryTimer = setTimeout(fireQueryTimeout, timeoutSecs * 1000);
       };
       if (timeoutSecs > 0) {
         queryTimer = setTimeout(fireQueryTimeout, timeoutSecs * 1000);
@@ -1175,6 +1221,8 @@ export async function POST(
                   attachments: undefined,
                 },
           )) {
+          // A chunk is a sign of life — see `noteActivity`.
+          noteActivity();
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);
             toolCallCount++;
@@ -1282,20 +1330,16 @@ export async function POST(
              * timeout — resuming must not buy more wall-clock than the surface
              * allows.
              */
-            if (queryTimer) clearTimeout(queryTimer);
-            if (timeoutSecs > 0) {
-              const remainingMs = timeoutSecs * 1000 - (Date.now() - streamStartMs);
-              if (remainingMs <= 0) {
-                queryTimedOut = true;
-                resumeRun = false;
-                await sse.writeEvent({
-                  type: 'error',
-                  message: `Query timed out after ${timeoutSecs} seconds. Try a simpler request or break it into steps.`,
-                });
-              } else {
-                queryTimer = setTimeout(fireQueryTimeout, remainingMs);
-              }
-            }
+            /*
+             * A resume is activity, so it gets the full silence budget rather
+             * than the remainder of a wall clock. Under the old semantics this
+             * deliberately did NOT refresh the deadline — "resuming must not
+             * buy more wall-clock than the surface allows" — which was right
+             * for a total-duration bound and is wrong for a silence one: the
+             * boundary between legs is the single moment we have the clearest
+             * possible evidence the run is alive.
+             */
+            noteActivity();
           }
         } while (resumeRun);
       } catch (streamError: unknown) {
