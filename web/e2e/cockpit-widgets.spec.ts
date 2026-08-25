@@ -236,6 +236,32 @@ test.describe('every button on a tile', () => {
   });
 });
 
+test.describe('runs are on the Activity tab, not the Cockpit', () => {
+  /*
+   * "cockpit panel is showing both the widgets and the activity… shouldn't
+   * activity be on the activity tab?" — yes. A finished run is an event, and
+   * the Cockpit is for what is currently true.
+   */
+  test.beforeEach(async ({ page, request }) => {
+    await request.post('/api/telemetry/events', { data: {} }).catch(() => {});
+    await prepare(page, [widget('e2e-runs', 'Runs widget')]);
+    await openCockpit(page);
+  });
+
+  test('the Cockpit has widgets and scheduled work, and no Recent activity', async ({ page }) => {
+    await expect(page.getByRole('heading', { name: 'Widgets' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Scheduled work' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Recent activity' })).toHaveCount(0);
+  });
+
+  test('the Activity tab has Recent activity, and no widget grid', async ({ page }) => {
+    await page.getByRole('button', { name: 'Activity', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Recent activity' })).toBeVisible();
+    // The other half of the split — the two tabs must not be the same screen.
+    await expect(page.getByRole('heading', { name: 'Widgets' })).toHaveCount(0);
+  });
+});
+
 test.describe('the Cockpit header and grid controls', () => {
   test.beforeEach(async ({ page }) => {
     await prepare(page, [widget('e2e-hdr', 'Header widget')]);
