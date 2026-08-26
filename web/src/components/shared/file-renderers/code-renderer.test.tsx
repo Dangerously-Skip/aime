@@ -111,3 +111,66 @@ describe('CodeRenderer — the highlight.js path', () => {
     expect(el.textContent).toBe('const x = 1;');
   });
 });
+
+describe('CodeRenderer — dotfiles whose identity is the basename', () => {
+  it('ini and makefile really are in the common bundle', () => {
+    // Pins the premise of the mappings below, the way the dockerfile test
+    // pins its own absence: if these ever leave the bundle, the env path
+    // silently degrades to escaped plain text and this says so.
+    expect(hljs.listLanguages()).toContain('ini');
+    expect(hljs.listLanguages()).toContain('makefile');
+  });
+
+  it.each(['.env.example', '.env.local', '.env'])(
+    '%s renders as ini, not auto-detected pseudo-markdown',
+    (filename) => {
+      const env = [
+        '# —— Model access (configure ONE of these)',
+        '# ' + '='.repeat(40),
+        '# ANTHROPIC_API_KEY=your-api-key-here',
+        'CLAUDE_CODE_USE_BEDROCK=1',
+        '',
+      ].join('\n');
+      render(<CodeRenderer content={env} ext={'.bogus'} name={filename} />);
+
+      const el = output();
+      // The whole reported bug: highlightAuto scored an env file as
+      // markdown-ish, italicising comment blocks and wrapping the `====`
+      // separator runs into fake horizontal rules. As ini, comments are
+      // comments and assignments are attributes — no emphasis spans.
+      expect(el.className).toContain('language-ini');
+      expect(el.querySelectorAll('.hljs-emphasis').length).toBe(0);
+      expect(el.querySelectorAll('.hljs-comment').length).toBeGreaterThan(0);
+      expect(el.textContent).toBe(env);
+    },
+  );
+
+  it('gitignore-style files render as ini too', () => {
+    render(
+      <CodeRenderer content={'# deps\nnode_modules/\n.env\n'} ext="" name=".gitignore" />,
+    );
+    expect(output().className).toContain('language-ini');
+  });
+
+  it('plain-text extensions skip highlighting entirely', () => {
+    const log = ['2026-08-26 INFO started', '---- 2026-08-26 ----'].join('\n');
+    render(<CodeRenderer content={log} ext=".log" name="build.log" />);
+    const el = output();
+    expect(el.className).not.toContain('language-');
+    // No hljs spans at all — nothing was "detected".
+    expect(el.querySelector('span')).toBeNull();
+    expect(el.textContent).toBe(log);
+  });
+});
+
+describe('CodeRenderer — no nested card chrome in the viewer pane', () => {
+  it('the pre is not its own floating box', () => {
+    // The pane is already padded inside dockview's rounded panel group; the
+    // old `rounded-lg bg-muted/40 p-4` drew a box-in-box-in-box.
+    render(<CodeRenderer content={'x=1'} ext=".env" name=".env" />);
+    const pre = output().closest('pre')!;
+    expect(pre.className).not.toContain('rounded-lg');
+    expect(pre.className).not.toContain('bg-muted');
+    expect(pre.className).not.toContain('p-4');
+  });
+});
