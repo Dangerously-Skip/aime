@@ -218,7 +218,13 @@ jobs:
 
   create-release:
     needs: [build-mac, build-win]
-    runs-on: [self-hosted, linux]
+    # Publishing is a download-artifacts-and-upload step — minutes-light and
+    # latency-tolerant, exactly the wrong thing to queue on the production
+    # box. The first real release watched this job flap: picked up by a
+    # self-hosted runner under load 29, interrupted, re-queued, indefinitely.
+    # Elastic pool, same fallback convention as ci.yml. (mac/win builds stay
+    # on their OS runners; only this job moves.)
+    runs-on: ${{ vars.FAST_RUNNER || 'self-hosted' }}
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
