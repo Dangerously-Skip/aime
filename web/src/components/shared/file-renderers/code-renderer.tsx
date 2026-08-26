@@ -11,6 +11,9 @@ import { useIsDarkTheme } from "@/hooks/use-dark-theme";
 interface CodeRendererProps {
   content: string;
   ext: string;
+  /** Full file name — dotfiles like `.env.example` carry their real identity
+   *  in the BASENAME, not the extension (`getExt` returns ".example"). */
+  name?: string;
 }
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -47,14 +50,43 @@ const EXT_TO_LANG: Record<string, string> = {
 };
 
 /**
+ * Files whose identity lives in their BASENAME. `.env.example` was the reported
+ * case: ext `.example` matches nothing, so it fell to highlight.js AUTO-detect,
+ * which scored an env file as markdown-ish and rendered every comment block in
+ * italic emphasis with the `# ====` separator runs wrapping into fake
+ * horizontal rules. KEY=value files are ini — comments and assignments
+ * highlight correctly.
+ */
+const BASENAME_TO_LANG: Array<[RegExp, string]> = [
+  [/^\.env($|\.)/, "ini"], // .env, .env.local, .env.example, .env.production…
+  [/^\.git(ignore|modules|attributes|config)$/, "ini"],
+  [/^\.editorconfig$/, "ini"],
+  [/^\.npmrc$|^\.nvmrc$|^\.node-version$|^\.tool-versions$/, "ini"],
+  [/^(dockerfile|containerfile)$/i, "dockerfile"],
+  [/^makefile$/i, "makefile"],
+];
+
+/**
+ * Plain text that must never go near auto-detect: certificates, logs, locks.
+ * Highlighting these adds nothing and (as with .env.example) invents emphasis.
+ */
+const PLAIN_EXTS = new Set([".txt", ".log", ".lock", ".pem", ".crt", ".cer", ".key", ".pub"]);
+
+/**
  * Syntax-highlighted code viewer.
  *
  * Loads highlight.js for the matching language (or auto-detects), injects the
  * appropriate light/dark theme stylesheet at first render, and re-highlights
  * on content change. Theme follows the app's `<html class="dark">` toggle.
  */
-export function CodeRenderer({ content, ext }: CodeRendererProps) {
-  const lang = EXT_TO_LANG[ext] || "";
+export function CodeRenderer({ content, ext, name }: CodeRendererProps) {
+  const baseLang = name
+    ? BASENAME_TO_LANG.find(([re]) => re.test(name))?.[1]
+    : undefined;
+  // Basename wins over extension (`.env.example`'s ext is ".example"), then the
+  // extension map. Plain set beats everything but an explicit basename match.
+  const lang = baseLang ?? (PLAIN_EXTS.has(ext) ? "" : EXT_TO_LANG[ext] || "");
+  const isPlain = !baseLang && !lang && PLAIN_EXTS.has(ext);
   const isDark = useIsDarkTheme();
 
   /**
@@ -90,6 +122,10 @@ export function CodeRenderer({ content, ext }: CodeRendererProps) {
   // contents and the innerHTML below.
   const highlighted = useMemo(() => {
     try {
+      // Plain text skips hljs entirely: auto-detect on non-code (certificates,
+      // logs, .env before the basename map existed) invents emphasis spans and
+      // reads as broken markdown rather than as the file's actual content.
+      if (isPlain) return escapeHtml(content);
       if (lang) {
         return hljs.highlight(content, { language: lang, ignoreIllegals: true }).value;
       }
@@ -97,10 +133,16 @@ export function CodeRenderer({ content, ext }: CodeRendererProps) {
     } catch {
       return escapeHtml(content);
     }
-  }, [content, lang]);
+  }, [content, lang, isPlain]);
 
   return (
-    <pre className="rounded-lg bg-muted/40 p-4 text-xs leading-relaxed overflow-x-auto font-mono whitespace-pre-wrap break-words">
+    /*
+     * No card chrome. This renders inside the viewer pane, which is already
+     * padded and already sits in dockview's rounded panel group — the old
+     * `rounded-lg bg-muted/40 p-4` drew a box-in-box-in-box ("weird embedded
+     * framing"), with the file's content floating in a nested grey card.
+     */
+    <pre className="text-xs leading-relaxed overflow-x-auto font-mono whitespace-pre-wrap break-words">
       <code
         data-testid="code-renderer-output"
         className={`hljs ${lang ? `language-${lang}` : ""}`}
