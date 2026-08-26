@@ -48,15 +48,35 @@ jobs:
         working-directory: web
         run: node scripts/resolve-standalone-links.js
 
-      - name: Build macOS artifacts
+      # Signing env vars exist ONLY when the secrets exist. Exporting them
+      # unconditionally as empty strings made electron-builder treat CSC_LINK
+      # as a cert PATH — resolved against the cwd, so the build died with
+      # "⨯ <project dir> not a file" at exactly the signing step. Absent env
+      # var = ad-hoc/unsigned build, which is the documented skip path.
+      - name: Configure macOS signing (only when secrets exist)
         working-directory: web
-        # Signing/notarization is skipped when the Apple secrets are not set.
         env:
-          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$MAC_CERT_P12" ]; then
+            {
+              echo "CSC_LINK=$MAC_CERT_P12"
+              echo "CSC_KEY_PASSWORD=$MAC_CERT_PASSWORD"
+              echo "APPLE_ID=$APPLE_ID"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+            echo "Signing secrets present — build will be signed and notarized."
+          else
+            echo "No signing secrets — building unsigned."
+          fi
+
+      - name: Build macOS artifacts
+        working-directory: web
         run: |
           ulimit -n 65536
           npx electron-builder --mac --publish never
@@ -130,11 +150,27 @@ jobs:
         working-directory: web
         run: node scripts/resolve-standalone-links.js
 
+      # Same empty-CSC_LINK trap as the macOS job: an env var that EXISTS but
+      # is empty is treated as a cert file path and kills the build.
+      - name: Configure Windows signing (only when secrets exist)
+        working-directory: web
+        shell: bash
+        env:
+          WIN_CERT_PFX: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+        run: |
+          if [ -n "$WIN_CERT_PFX" ]; then
+            {
+              echo "CSC_LINK=$WIN_CERT_PFX"
+              echo "CSC_KEY_PASSWORD=$WIN_CERT_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "Signing secrets present — build will be signed."
+          else
+            echo "No signing secrets — building unsigned."
+          fi
+
       - name: Build Windows artifacts
         working-directory: web
-        env:
-          CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 || '' }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD || '' }}
         run: npx electron-builder --win --publish never
 
       - name: Strip per-arch entries from latest.yml

@@ -54,7 +54,7 @@ const EMPTY_LOAD: FileLoadState = {
  * diff rendering).
  */
 export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
-  const { activeTab } = useCodeWorkspace(workspace);
+  const { activeTab, openTab } = useCodeWorkspace(workspace);
   const [load, setLoad] = useState<FileLoadState>(EMPTY_LOAD);
   const [overrideLarge, setOverrideLarge] = useState(false);
 
@@ -71,6 +71,29 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
     if (typeof window !== "undefined" && window.electronAPI?.openPath) {
       void window.electronAPI.openPath(p);
     }
+  };
+
+  /**
+   * Diff the open file against HEAD (or the workspace base branch).
+   *
+   * The diff pipeline has existed since Phase 2 — `git:diff` IPC, DiffViewer,
+   * alt-click in the tree, the M-badge — all of it behind gestures nobody
+   * could discover. This button is the visible door: the same call the tree's
+   * alt-click makes, one keystroke-free click from the file you are reading.
+   * Falls back to a store diff tab in the legacy non-dockview layout, where
+   * the viewer-pane stub renders it.
+   */
+  const openDiff = (p: string) => {
+    if (typeof window !== "undefined") {
+      const ideOpenDiff = (window as unknown as Record<string, unknown>).__ideOpenDiff as
+        | ((path: string) => void)
+        | undefined;
+      if (ideOpenDiff) {
+        ideOpenDiff(p);
+        return;
+      }
+    }
+    openTab({ id: `diff:${p}`, kind: "diff", path: p, pinned: false });
   };
 
   // `forcedPath` (from a per-file dockview tab) wins. Falls back to the
@@ -252,6 +275,7 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
       copyAck={copyAck}
       onCopyPath={copyPath}
       onOpenExternal={() => path && openExternal(path)}
+      onDiff={() => path && openDiff(path)}
       onEdit={startEdit}
       onCancelEdit={cancelEdit}
       onSave={save}
@@ -292,6 +316,7 @@ interface FileEditorProps {
   copyAck: boolean;
   onCopyPath: () => void;
   onOpenExternal: () => void;
+  onDiff: () => void;
   onEdit: () => void;
   onCancelEdit: () => void;
   onSave: () => void;
@@ -313,6 +338,7 @@ function FileEditor({
   copyAck,
   onCopyPath,
   onOpenExternal,
+  onDiff,
   onEdit,
   onCancelEdit,
   onSave,
@@ -361,6 +387,7 @@ function FileEditor({
           title={copyAck ? "Copied!" : "Copy path"}
           icon={copyAck ? Check : Copy}
         />
+        <ToolbarBtn onClick={onDiff} title="Diff vs HEAD (⌥-click in the tree does the same)" icon={GitCompare} />
         <ToolbarBtn
           onClick={() => setFindOpen((v) => !v)}
           title="Find in file (⌘F)"
