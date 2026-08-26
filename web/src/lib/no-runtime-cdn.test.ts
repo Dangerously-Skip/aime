@@ -61,9 +61,20 @@ describe('assets are served locally, not from a CDN', () => {
 
   /** And are replaced on a fresh clone, where `public/` may not carry them. */
   it('postinstall copies them, so a fresh clone works', () => {
+    // The hook delegates to scripts/postinstall.js (a cross-platform fs.*
+    // copy — the old shell chain ran `cp`/`mkdir -p` through cmd.exe and
+    // killed `npm ci` on the Windows release runner). The copies live THERE
+    // now, so that is what this asserts.
     const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-    expect(pkg.scripts.postinstall).toContain('highlight.js/styles/github.css');
-    expect(pkg.scripts.postinstall).toContain('github-dark.css');
+    expect(pkg.scripts.postinstall).toMatch(/node scripts\/postinstall\.js/);
+    const script = fs.readFileSync(
+      path.resolve(process.cwd(), 'scripts/postinstall.js'),
+      'utf-8',
+    );
+    expect(script).toContain('highlight.js');
+    expect(script).toContain('github.css');
+    expect(script).toContain('github-dark.css');
+    expect(script).toContain('pdf.worker.min.mjs');
   });
 
   it('the renderer points at the local copies', () => {
