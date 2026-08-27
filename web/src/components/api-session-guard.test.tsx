@@ -75,21 +75,46 @@ describe('ApiSessionGuard', () => {
       expect(window.location.href).toContain('t=fresh-token'),
     );
     expect(api.getApiToken).toHaveBeenCalledTimes(1);
-    expect(sessionStorage.getItem('aime:api-session-retried')).toBe('1');
+    // The TOKEN is remembered, not a count — see below for why.
+    expect(sessionStorage.getItem('aime:api-session-tried-token')).toBe('fresh-token');
   });
 
-  it('does not loop: a 401 after the retry flag is set only reports', async () => {
+  it('does not loop: a 401 after retrying THE SAME token only reports', async () => {
     installElectron('stale-token');
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    sessionStorage.setItem('aime:api-session-retried', '1');
+    sessionStorage.setItem('aime:api-session-tried-token', 'stale-token');
     window.fetch = stubFetch(() => 401) as typeof window.fetch;
     render(<ApiSessionGuard />);
 
     await window.fetch('/api/runs');
     await window.fetch('/api/runs');
+    await vi.waitFor(() => expect(err).toHaveBeenCalled());
     expect(window.location.href).not.toContain('t=');
-    expect(err).toHaveBeenCalledTimes(1);
     expect(err.mock.calls[0][0]).toContain('Restart the app');
+  });
+
+  it('HEALS A SECOND DIVERGENCE — the ceiling the boolean flag imposed', async () => {
+    /*
+     * The bug this replaced. A window open across two dev-server restarts
+     * healed the first and was permanently dead to the second: the flag was
+     * already set, so nothing retried and every /api call 401'd until someone
+     * thought to quit the app.
+     *
+     * Reported as the Design gallery rendering unstyled — a 401 on a
+     * `<link rel=stylesheet>` is dropped silently, so a dead session shows up
+     * as a bland theme rather than as an error.
+     *
+     * A DIFFERENT token must always get its attempt; only a repeat of the same
+     * one is refused, which is the loop the guard actually exists to prevent.
+     */
+    installElectron('second-token');
+    sessionStorage.setItem('aime:api-session-tried-token', 'first-token');
+    window.fetch = stubFetch(() => 401) as typeof window.fetch;
+    render(<ApiSessionGuard />);
+
+    await window.fetch('/api/runs');
+    await vi.waitFor(() => expect(window.location.href).toContain('t=second-token'));
+    expect(sessionStorage.getItem('aime:api-session-tried-token')).toBe('second-token');
   });
 
   it('ignores 401s from other origins — that is not a session problem', async () => {
