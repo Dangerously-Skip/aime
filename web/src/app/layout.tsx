@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import { APP_NAME, APP_DESCRIPTION } from "@/config/branding";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StoreHydration } from "@/components/store-hydration";
+import { ApiSessionGuard } from "@/components/api-session-guard";
 import "./globals.css";
 import { preHydrationThemeScript } from "@/lib/themes/app-themes";
 
@@ -38,6 +39,7 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased`}
       >
+        <ApiSessionGuard />
         <StoreHydration>
           <TooltipProvider>
             {children}

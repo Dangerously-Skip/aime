@@ -16,6 +16,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("electronAPI", {
   selectFolder: () => ipcRenderer.invoke("select-folder"),
   getUserName: () => ipcRenderer.invoke("get-user-name"),
+  getApiToken: () => ipcRenderer.invoke("get-api-token"),
   getHomeDir: () => ipcRenderer.invoke("get-home-dir"),
   openPath: (path) => ipcRenderer.invoke("open-path", path),
   readFile: (path) => ipcRenderer.invoke("read-file", path),

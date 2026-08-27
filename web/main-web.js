@@ -1287,6 +1287,22 @@ ipcMain.handle("get-user-name", () => {
   return os.userInfo().username;
 });
 
+/*
+ * The renderer's self-heal path for a dead API session (see
+ * components/api-session-guard.tsx). The window's HttpOnly cookie goes stale
+ * when halves of the app restart apart — a dev-server respawn minted a fresh
+ * AIME_API_TOKEN while the window kept the old cookie, and every /api call
+ * 401'd forever with no recovery. Handing the CURRENT token back to the
+ * renderer lets it re-run the same ?t= exchange the launch path uses.
+ *
+ * No new exposure: the token already rides `?t=` into this window on every
+ * launch, the preload bridge is the app's own code, and without this the only
+ * recovery was a full restart the user had to discover for themselves.
+ */
+ipcMain.handle("get-api-token", () => {
+  return API_TOKEN;
+});
+
 ipcMain.handle("get-home-dir", () => os.homedir());
 
 ipcMain.on("get-app-version", (event) => {
