@@ -109,9 +109,43 @@ const TOOL_NAME: Record<Exclude<SearchToolKind, 'none'>, string> = {
   native: 'WebSearch',
 };
 
+/**
+ * A LIVE BROWSER IS A SEARCH ENGINE, and this prompt used to deny it.
+ *
+ * The no-search branch below is correct for Chat, Cowork and Code, and was
+ * handed verbatim to the BROWSER surface — a surface whose entire purpose is
+ * driving a real browser the user is watching. It says there is no search
+ * engine "in this environment", forbids reaching Google "by any means", and
+ * ends by telling the model to ask the user for a link.
+ *
+ * So it did. Asked to "search dogs", with Google already open in front of it
+ * and `navigate`, `snapshot` and `click` among its sixty-six tools, the agent
+ * replied "I can't run a general web search here — there's no search engine
+ * available in this environment" and offered to search the user's iCloud mail
+ * instead, because `MailSearch` and `ContactsSearch` were the only tools with
+ * "Search" in the name. It called nothing. It was not confused about its tools;
+ * it was obeying its instructions.
+ *
+ * The prohibitions are still right about what they were aimed at: `curl` and
+ * `Bash` scraping a results page gets you a bot wall and raw markup. Navigating
+ * a real browser to a search engine is not that — it is a person's browser
+ * loading a page, with its session, its cookies and its JavaScript.
+ *
+ * `browser` therefore rewrites both branches rather than appending to them. An
+ * appended "but you do have a browser" leaves the contradiction in the prompt
+ * and makes the model pick, which is the failure mode this module already
+ * documents from the other direction.
+ */
+export interface WebSearchPromptOpts {
+  /** A live, user-visible browser this run can actually drive. */
+  browser?: boolean;
+}
+
 export function webSearchPrompt(
   tool: SearchToolKind = hasWebSearchMcp() ? 'mcp-searxng' : 'none',
+  opts: WebSearchPromptOpts = {},
 ): string {
+  if (opts.browser) return browserWebPrompt(tool);
   if (tool !== 'none') {
     const name = TOOL_NAME[tool];
     const others = Object.values(TOOL_NAME).filter((n) => n !== name);
@@ -136,6 +170,30 @@ There is NO search engine available in this environment — no search server is 
 }
 
 /**
+ * The web-access section for a run that can drive a real browser.
+ *
+ * One text for both search states, differing only in whether a search API is
+ * also on hand — because the ordering advice is the same either way and two
+ * near-identical strings is how the swap in `correctWebSearchSection` starts
+ * matching the wrong one.
+ */
+function browserWebPrompt(tool: SearchToolKind): string {
+  const api =
+    tool === 'none'
+      ? `There is no search API mounted on this run, which does not mean you cannot search. `
+      : `You also have a search API (tool: \`${TOOL_NAME[tool]}\`), which is faster when you only need links and snippets. `;
+
+  return `## Web access
+**You are driving a real browser, so you always have web search: navigate to a search engine and read the results.** ${api}Never tell the user you are unable to search — you are looking at the tool that does it.
+
+- To search: \`navigate\` to a search engine, \`snapshot\` the results, and read them. Follow a result by clicking its ref, or by navigating to the URL you read off the page.
+- **Take the URLs from the page you are on.** That is the whole difference between this and guessing: a link you read out of a results page is a fact, and a URL you remember is not. Do NOT recall a URL whose path encodes an article title, a ranking or a date — you cannot tell a remembered slug from an invented one, and neither can the user.
+- \`FetchUrl\` is still the cheaper way to READ a static page once you have its address. Use the browser when the page needs a session, a login, a filter, a click, or scripts that only run in a real browser.
+- Do NOT use \`Bash\` with \`curl\` or \`wget\` to fetch a search engine. That is what gets blocked and returns raw markup; the browser you are holding does not have that problem.
+- If a search returns nothing useful, refine the query and search again. Say what you searched for and what you found, so the user can see the basis for your answer.`;
+}
+
+/**
  * Swap the web-access section for the one that matches reality.
  *
  * The surface configs are built before the provider knows what search this run
@@ -151,14 +209,27 @@ There is NO search engine available in this environment — no search server is 
  * tool is the same class of bug as the reverse, and the reverse is what sent it
  * off inventing URLs.
  */
-export function correctWebSearchSection(prompt: string, tool: SearchToolKind): string {
-  // Still an EXACT swap, now across every variant this module can emit: find
-  // whichever one the config baked in and replace it with the truth. Anything
-  // it does not recognise is left alone rather than half-rewritten.
-  for (const other of SEARCH_TOOL_KINDS) {
-    if (other === tool) continue;
-    const wrong = webSearchPrompt(other);
-    if (prompt.includes(wrong)) return prompt.replace(wrong, webSearchPrompt(tool));
+export function correctWebSearchSection(
+  prompt: string,
+  tool: SearchToolKind,
+  opts: WebSearchPromptOpts = {},
+): string {
+  /*
+   * Still an EXACT swap, now across every variant this module can emit —
+   * INCLUDING THE BROWSER ONES, and including the case where only the browser
+   * flag changed. A surface config is built before anyone knows whether this
+   * run has a live webview, so the browser surface bakes in the no-browser text
+   * and this is the only place that can correct it. Missing that pairing is how
+   * the wrong prompt survived: the swap looked exhaustive because it covered
+   * every SEARCH state, and browser-ness was not one of them.
+   */
+  const right = webSearchPrompt(tool, opts);
+  for (const browser of [false, true]) {
+    for (const other of SEARCH_TOOL_KINDS) {
+      const wrong = webSearchPrompt(other, { browser });
+      if (wrong === right) continue;
+      if (prompt.includes(wrong)) return prompt.replace(wrong, right);
+    }
   }
   return prompt;
 }

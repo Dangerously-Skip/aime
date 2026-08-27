@@ -234,6 +234,24 @@ export class ClaudeProvider extends BaseProvider {
      * the allow-list is assembled first and needs the same answer.
      */
     const browserToolsServable = browserToolsAvailable === true && !!onBrowserToolUse;
+    /*
+     * LOGGED, because until now nothing said. `[CHAT] Surface tools:` prints
+     * the surface's STATIC allow-list, which never contains the browser tools —
+     * they are appended here — so a log that looks like the answer is not one.
+     *
+     * Diagnosing "the browser agent doesn't know it's a browser agent" meant
+     * dumping the SDK options to find out whether `navigate` had been mounted
+     * at all. Both halves are named because they fail for different reasons: no
+     * webview is the client not declaring one, no relay is a background or
+     * subagent run that cannot reach a client at all.
+     */
+    console.log(
+      `[Claude] browser tools: ${
+        browserToolsServable
+          ? 'servable'
+          : `withheld (webview=${browserToolsAvailable === true ? 'yes' : 'no'} relay=${onBrowserToolUse ? 'yes' : 'no'})`
+      }`,
+    );
 
     // Merge: explicit params > surface config > constructor defaults
     const allowedTools = [
@@ -484,15 +502,28 @@ export class ClaudeProvider extends BaseProvider {
      */
     const browserNote = browserToolsPrompt(browserToolsServable);
     const extraNotes = themeNote + imageNote + (browserNote ? `\n\n${browserNote}` : '');
+    /*
+     * The web-access section depends on the BROWSER as well as the search
+     * backend, and this is the only place that knows both.
+     *
+     * A surface config is built before anyone knows whether the run has a live
+     * webview, so `browser-config.ts` bakes in the no-browser text — which, on
+     * a stock install with no search provider, says "there is NO search engine
+     * available in this environment" and "do not try to reach Google by any
+     * means". Handed to the surface that IS a browser, that is not a slightly
+     * wrong prompt: it is an instruction to refuse the surface's whole purpose,
+     * and the agent followed it.
+     */
+    const searchOpts = { browser: browserToolsServable };
     const systemPrompt = (() => {
       if (typeof rawSystemPrompt === 'string') {
-        return correctWebSearchSection(rawSystemPrompt, searchTool) + extraNotes;
+        return correctWebSearchSection(rawSystemPrompt, searchTool, searchOpts) + extraNotes;
       }
       if (rawSystemPrompt && typeof rawSystemPrompt === 'object' && 'append' in rawSystemPrompt) {
         const a = (rawSystemPrompt as { append?: string }).append;
         return {
           ...rawSystemPrompt,
-          append: (a ? correctWebSearchSection(a, searchTool) : '') + extraNotes,
+          append: (a ? correctWebSearchSection(a, searchTool, searchOpts) : '') + extraNotes,
         };
       }
       /**
