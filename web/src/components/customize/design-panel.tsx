@@ -65,15 +65,71 @@ interface DeckTheme {
  * `srcDoc` rather than a src URL so there is no per-theme route, and
  * `pointer-events-none` so the card stays clickable through the frame.
  *
+ * THE CSS IS INLINED, NOT LINKED, and that is the fourth fix to these previews.
+ * They used `<link rel="stylesheet" href="/api/themes/asset?...">`, and every
+ * `/api` route requires the local session cookie — which a `sandbox=""` iframe,
+ * having an opaque origin, does not send once the cookie is stale. The browser
+ * drops a 401'd stylesheet WITHOUT an error anyone can see, so the gallery
+ * rendered as unstyled HTML: tiny serif text in the corner of a transparent
+ * box, which reads as thirty-six boring themes rather than as a broken request.
+ *
+ * The parent page holds the credential and its fetches self-heal
+ * (`ApiSessionGuard`), so fetching there and handing the frame finished text
+ * removes the dependency entirely: the iframe now makes NO same-origin request
+ * at all, a failure is something this component can SEE and say, and the
+ * sandbox stays maximal. Webfonts still load — they are Google Fonts, which
+ * need no credential.
+ *
  * `is-active` on the slide is load-bearing and easy to miss: base.css ships
  * `.slide{opacity:0}` and reveals the current one via `.slide.is-active`, a
  * class `runtime.js` normally adds. The runtime is deliberately not loaded here
  * (and the sandbox blocks scripts anyway), so without it every preview rendered
  * as an empty coloured rectangle — the theme's background and nothing else.
  */
+/**
+ * Stylesheet text by asset path, fetched once and shared by all 36 cards.
+ *
+ * Module scope so `base.css` and `fonts.css` are fetched once rather than
+ * thirty-six times. Promises, not strings, so cards mounting in the same tick
+ * share one request instead of racing.
+ */
+const cssCache = new Map<string, Promise<string>>();
+
+function loadCss(file: string): Promise<string> {
+  const key = file;
+  const hit = cssCache.get(key);
+  if (hit) return hit;
+  const p = fetch(`/api/themes/asset?file=${encodeURIComponent(file)}`)
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
+    .catch((e) => {
+      // Do not cache a failure: the session guard may reload with a fresh
+      // token, and a cached rejection would outlive the problem.
+      cssCache.delete(key);
+      throw e;
+    });
+  cssCache.set(key, p);
+  return p;
+}
+
 function ThemePreview({ id }: { id: string }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
+  const [css, setCss] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([loadCss('fonts.css'), loadCss('base.css'), loadCss(`themes/${id}.css`)])
+      .then(([fonts, base, theme]) => {
+        if (alive) setCss(`${fonts}\n${base}\n${theme}`);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [id]);
 
   /**
    * Scale is measured, not expressed in CSS, because CSS cannot express it: a
@@ -91,13 +147,9 @@ function ThemePreview({ id }: { id: string }) {
     return () => ro.disconnect();
   }, []);
 
-  const css = (f: string) => `/api/themes/asset?file=${encodeURIComponent(f)}`;
-
   const srcDoc = `<!doctype html>
 <html><head><meta charset="utf-8">
-<link rel="stylesheet" href="${css('fonts.css')}">
-<link rel="stylesheet" href="${css('base.css')}">
-<link rel="stylesheet" href="${css(`themes/${id}.css`)}">
+<style>${css ?? ''}</style>
 <style>
   /* The deck renders at its true 1280x720 here and the IFRAME ELEMENT is
      scaled from outside. The obvious in-frame version —
@@ -127,7 +179,17 @@ function ThemePreview({ id }: { id: string }) {
       ref={wrapRef}
       className="pointer-events-none aspect-video w-full overflow-hidden rounded-md"
     >
-      {scale > 0 && (
+      {failed && (
+        /*
+         * Visible, because the alternative is what shipped: a silent 401 and a
+         * preview that looks like a plain theme. A design gallery that cannot
+         * load its designs must say so rather than show you something else.
+         */
+        <div className="flex h-full items-center justify-center rounded-md border border-dashed border-border/60 px-2 text-center text-[10px] text-muted-foreground">
+          Preview unavailable
+        </div>
+      )}
+      {scale > 0 && css !== null && (
         <iframe
           title=""
           aria-hidden
