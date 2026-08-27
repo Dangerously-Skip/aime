@@ -3021,3 +3021,78 @@ describe('the pptx plugin is withheld from the SDK when a theme is set', () => {
     expect(names).toContain('ppt');
   });
 });
+
+/**
+ * THE BROWSER SURFACE IS NEVER TOLD IT CANNOT SEARCH.
+ *
+ * End of the chain the unit tests cover in pieces: the surface config bakes in
+ * the no-browser web-access text, and only the PROVIDER knows whether this run
+ * has a live webview. If it fails to pass that through, the browser agent is
+ * handed "There is NO search engine available in this environment" and "do not
+ * try to reach Google by any means" — which is what happened, and the agent
+ * complied while looking at Google with `navigate` in its tool list.
+ */
+describe('web access on a run that has a browser', () => {
+  const promptOf = (systemPrompt: unknown): string =>
+    typeof systemPrompt === 'string'
+      ? systemPrompt
+      : ((systemPrompt as { append?: string })?.append ?? '');
+
+  /** A run the way the Browser surface makes one: webview declared AND relayable. */
+  const browserRun = {
+    surfaceId: 'browser',
+    browserToolsAvailable: true,
+    onBrowserToolUse: async () => ({ ok: true }),
+  } as unknown as Partial<QueryParams>;
+
+  it('does not tell a browser run there is no search engine', async () => {
+    const provider = new ClaudeProvider();
+    const { options } = await captureOptions(provider, browserRun);
+
+    expect(
+      promptOf(options.systemPrompt),
+      'the browser agent was told it cannot search',
+    ).not.toMatch(/NO search engine available in this environment/);
+  });
+
+  it('tells it to navigate to one instead', async () => {
+    const provider = new ClaudeProvider();
+    const { options } = await captureOptions(provider, browserRun);
+    const text = promptOf(options.systemPrompt);
+
+    expect(text).toMatch(/navigate to a search engine/i);
+    expect(text).toMatch(/always have web search/i);
+  });
+
+  it('STILL refuses search on a run with no webview', async () => {
+    /*
+     * The other half, and the one a careless fix breaks: Chat, Cowork and Code
+     * genuinely cannot search without a provider, and telling them they can is
+     * the same defect pointing the other way — this module's own history is a
+     * model told it had a search tool that was never mounted.
+     */
+    const provider = new ClaudeProvider();
+    const { options } = await captureOptions(provider, { surfaceId: 'browser' });
+
+    /*
+     * Asserted on the BROWSER wording, not on the no-search text: whether this
+     * environment has a search backend is a separate axis that the test runner
+     * does not control, and my first version of this asserted the no-search
+     * branch and failed for that reason rather than for a real one.
+     */
+    expect(promptOf(options.systemPrompt)).not.toMatch(/always have web search/i);
+    expect(promptOf(options.systemPrompt)).not.toMatch(/navigate to a search engine/i);
+  });
+
+  it('a declared webview with no relay handler does not count', async () => {
+    // `browserToolsServable` needs both. A flag alone would register tools
+    // nothing can execute — the loop the whole gate exists to prevent.
+    const provider = new ClaudeProvider();
+    const { options } = await captureOptions(provider, {
+      surfaceId: 'browser',
+      browserToolsAvailable: true,
+    } as unknown as Partial<QueryParams>);
+
+    expect(promptOf(options.systemPrompt)).not.toMatch(/always have web search/i);
+  });
+});
