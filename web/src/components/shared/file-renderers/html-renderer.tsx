@@ -115,19 +115,28 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
    * sits on the deck's own container, which is focusable and takes focus when
    * you click it, so it fires only when the deck is what you are using.
    */
+  const deckRef = useRef<HTMLDivElement>(null);
+
+  /** Which way a key moves the deck, or 0 if it is not ours. */
+  const deltaFor = (key: string) =>
+    key === "ArrowRight" || key === "PageDown" || key === " "
+      ? 1
+      : key === "ArrowLeft" || key === "PageUp"
+        ? -1
+        : 0;
+
+  /** A key typed into a field is never deck navigation. */
+  const isTypingTarget = (el: Element | null) =>
+    !!el &&
+    (el.tagName === "INPUT" ||
+      el.tagName === "TEXTAREA" ||
+      el.tagName === "SELECT" ||
+      (el as HTMLElement).isContentEditable);
+
   const onDeckKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      // Never steal keys from a field. The share panel's recipient input lives
-      // inside this container.
-      const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-
-      const delta =
-        e.key === "ArrowRight" || e.key === "PageDown" || e.key === " "
-          ? 1
-          : e.key === "ArrowLeft" || e.key === "PageUp"
-            ? -1
-            : 0;
+      if (isTypingTarget(e.target as Element)) return;
+      const delta = deltaFor(e.key);
       if (!delta) return;
       // Space and PageDown scroll a pane by default; arrows move a list.
       e.preventDefault();
@@ -135,6 +144,46 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
     },
     [step],
   );
+
+  /*
+   * ALSO LISTEN WHEN NOTHING IS FOCUSED.
+   *
+   * The container handler covers the case where you have clicked inside the
+   * panel, and clicking the SLIDE puts focus in the frame where `runtime.js`
+   * handles the keys itself. Neither covers the ordinary one: open a deck and
+   * press the right arrow without clicking anything first. Focus is still on
+   * `<body>`, the event never enters this subtree, and the key reaches nobody —
+   * which is exactly what "arrow keys aren't working" meant, and why fixing
+   * only the container did not fix it.
+   *
+   * The guard is what keeps this from being the window-level listener that
+   * breaks everything else: it acts ONLY when focus is nowhere in particular
+   * (`body`, or nothing). The moment the user is in a text field, a tree item,
+   * a button in another panel — anything focusable — this stands down and that
+   * component keeps its arrow keys.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const active = document.activeElement;
+      const unfocused = !active || active === document.body;
+      // Inside our own panel the React handler above already ran.
+      if (!unfocused) return;
+      if (isTypingTarget(active)) return;
+      const delta = deltaFor(e.key);
+      if (!delta) return;
+      /*
+       * Only if this deck is actually on screen. Surfaces stay mounted while
+       * hidden in this app, so a deck in a background tab would otherwise
+       * answer keys meant for whatever the user is looking at.
+       */
+      const box = deckRef.current;
+      if (!box || box.offsetParent === null) return;
+      e.preventDefault();
+      step(delta);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [step]);
 
   const deckStorage = useSettingsStore((st) => st.deckStorage);
   const [sharing, setSharing] = useState(false);
@@ -241,6 +290,7 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
 
   return (
     <div
+      ref={deckRef}
       className="flex h-full min-h-0 flex-col gap-2 p-2 outline-none"
       /*
        * `tabIndex={-1}`: focusable by click and by script, but not a stop on
