@@ -34,6 +34,15 @@ let posted: Array<Record<string, unknown>>;
 beforeEach(() => {
   posted = [];
   // jsdom has no ResizeObserver; the deck uses one to scale the frame to its box.
+  // jsdom reports offsetParent as null for everything, so "is it on screen"
+  // would be false for a deck that plainly is. Visible by default here; the
+  // hidden case is driven explicitly below.
+  Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+    configurable: true,
+    get() {
+      return document.body;
+    },
+  });
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -59,6 +68,19 @@ afterEach(() => {
 
 const props = { content: DECK, encoding: 'utf-8', ext: '.html', name: 'deck.html', path: '/tmp/deck.html', onOpenExternal: () => {} };
 
+/**
+ * Press a key the way a browser does: at the element that has focus.
+ *
+ * The first version of these dispatched onto the container while `<body>` was
+ * still the active element — a state no browser produces — and that made the
+ * container handler and the document handler both fire, which read as a
+ * double-step bug that does not exist.
+ */
+function press(el: HTMLElement, key: string) {
+  el.focus();
+  fireEvent.keyDown(el, { key });
+}
+
 /** The focusable deck region — the panel root. */
 function deckRegion(): HTMLElement {
   const frame = document.querySelector('iframe') as HTMLIFrameElement;
@@ -70,27 +92,27 @@ function deckRegion(): HTMLElement {
 describe('deck keyboard navigation', () => {
   it('ArrowRight steps forward', () => {
     render(<HtmlRenderer {...props} />);
-    fireEvent.keyDown(deckRegion(), { key: 'ArrowRight' });
+    press(deckRegion(), 'ArrowRight');
     expect(posted).toContainEqual({ type: 'deck:step', delta: 1 });
   });
 
   it('ArrowLeft steps back', () => {
     render(<HtmlRenderer {...props} />);
-    fireEvent.keyDown(deckRegion(), { key: 'ArrowLeft' });
+    press(deckRegion(), 'ArrowLeft');
     expect(posted).toContainEqual({ type: 'deck:step', delta: -1 });
   });
 
   it('PageDown and Space also advance — the keys presenters actually press', () => {
     render(<HtmlRenderer {...props} />);
-    fireEvent.keyDown(deckRegion(), { key: 'PageDown' });
-    fireEvent.keyDown(deckRegion(), { key: ' ' });
+    press(deckRegion(), 'PageDown');
+    press(deckRegion(), ' ');
     expect(posted.filter((m) => m.delta === 1)).toHaveLength(2);
   });
 
   it('ignores keys it does not own', () => {
     render(<HtmlRenderer {...props} />);
     for (const key of ['a', 'Enter', 'Escape', 'ArrowUp', 'Tab']) {
-      fireEvent.keyDown(deckRegion(), { key });
+      press(deckRegion(), key);
     }
     expect(posted).toHaveLength(0);
   });
@@ -104,6 +126,7 @@ describe('deck keyboard navigation', () => {
     render(<HtmlRenderer {...props} />);
     const input = document.createElement('input');
     deckRegion().appendChild(input);
+    input.focus();
     fireEvent.keyDown(input, { key: 'ArrowRight' });
     expect(posted).toHaveLength(0);
   });
@@ -127,5 +150,62 @@ describe('deck keyboard navigation', () => {
     render(<HtmlRenderer {...props} />);
     fireEvent.click(screen.getByLabelText('Next slide'));
     expect(posted).toContainEqual({ type: 'deck:step', delta: 1 });
+  });
+});
+
+describe('the key that arrives with nothing focused', () => {
+  /*
+   * THE CASE THE FIRST FIX MISSED, and the reason "arrow keys still aren't
+   * working" came back. The container handler only fires once you have clicked
+   * inside the panel, and clicking the slide puts focus in the frame where
+   * runtime.js takes over. Neither covers the ordinary path: open a deck, press
+   * the right arrow. Focus is on `<body>`, the event never enters the subtree,
+   * and the key reaches nobody.
+   *
+   * These fire on `document` with `document.activeElement === body`, which is
+   * what a real browser does on a fresh panel — and what the previous tests,
+   * all of which dispatched onto the container, could never have caught.
+   */
+  it('advances the deck', () => {
+    render(<HtmlRenderer {...props} />);
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    expect(posted).toContainEqual({ type: 'deck:step', delta: 1 });
+  });
+
+  it('goes back', () => {
+    render(<HtmlRenderer {...props} />);
+    fireEvent.keyDown(document.body, { key: 'ArrowLeft' });
+    expect(posted).toContainEqual({ type: 'deck:step', delta: -1 });
+  });
+
+  it('STANDS DOWN when anything at all is focused', () => {
+    /*
+     * The guard that keeps this from being the window-level listener that
+     * steals arrows from the file tree and every text field in the app. If
+     * something has focus, that component owns the key.
+     */
+    render(<HtmlRenderer {...props} />);
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    input.focus();
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    expect(posted).toHaveLength(0);
+    input.remove();
+  });
+
+  it('ignores a deck that is not on screen', () => {
+    /*
+     * Surfaces stay mounted while hidden in this app, so a deck in a background
+     * tab would otherwise answer keys meant for whatever is actually visible.
+     * jsdom reports `offsetParent` as null for everything, so this asserts the
+     * guard EXISTS by driving the visible case through a stub — see the
+     * container tests for the behaviour itself.
+     */
+    const spy = vi.spyOn(HTMLElement.prototype, 'offsetParent', 'get').mockReturnValue(null);
+    render(<HtmlRenderer {...props} />);
+    fireEvent.keyDown(document.body, { key: 'ArrowRight' });
+    expect(posted).toHaveLength(0);
+    spy.mockRestore();
   });
 });
