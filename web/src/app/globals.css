@@ -537,6 +537,102 @@ code {
 .hljs-type { color: #C08B30; }
 .hljs-attr { color: #D97756; }
 
+/*
+ * THE FILE VIEWER IS NOT A CODE BLOCK.
+ *
+ * `pre { background: var(--muted); border; radius; padding }` and
+ * `.hljs { background: … !important }` exist for MARKDOWN code blocks in chat,
+ * where a fenced block should read as an inset object inside prose. The file
+ * viewer inherits both by element selector, so an open file was drawn as a
+ * #252522 box inside a #332E2B bordered box inside the #262624 panel — "a dark
+ * gray box, inside a lighter gray box inside a dark almost black box".
+ *
+ * `code-renderer.tsx` already carries a comment saying it deliberately renders
+ * "No card chrome", and it does: it dropped its own `rounded-lg bg-muted/40
+ * p-4`. That was true of the component and false of the page, because the
+ * chrome it was avoiding is applied by two rules it cannot see. A component
+ * cannot opt out of a global element selector, so the opt-out belongs here.
+ *
+ * The file IS the panel's content. It gets the panel's background, no border,
+ * and its padding from `.file-viewer-body` — which is the one place that should
+ * decide it.
+ */
+.file-viewer-body pre,
+.diff-viewer-body pre {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+
+.file-viewer-body .hljs,
+.diff-viewer-body .hljs,
+.dark .file-viewer-body .hljs,
+.dark .diff-viewer-body .hljs,
+.max .file-viewer-body .hljs,
+.max .diff-viewer-body .hljs,
+.zara .file-viewer-body .hljs,
+.zara .diff-viewer-body .hljs {
+  /* `!important` only because the rules it overrides are `!important` too —
+     the theme overrides above had to win against highlight.js's own stylesheet. */
+  background: transparent !important;
+}
+
+/*
+ * The two layers of the highlighted editor, sized ONCE.
+ *
+ * The overlay and the textarea must agree on every metric that affects where a
+ * character lands, or the coloured copy separates from the caret as you type —
+ * and the drift is invisible until someone opens a file with long lines. Set
+ * here, on one class both elements carry, because duplicating them on two
+ * elements is precisely how they come apart.
+ */
+.hl-editor-layer {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  letter-spacing: normal;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  border: 0;
+  background: transparent;
+}
+
+/* The overlay's own `code` must not re-introduce a box or a font. */
+.hl-editor-layer > code {
+  font: inherit;
+  background: transparent !important;
+  padding: 0;
+  display: block;
+}
+
+/*
+ * MOTION THAT NEVER STOPS.
+ *
+ * The empty-state mascot ran a 2.4s translate/rotate loop for as long as the
+ * surface was open, and the thinking mark span forever beside every streaming
+ * reply. In a workspace people sit in all day, an animation with no end state
+ * is not personality — it is something in the corner of your eye that never
+ * settles, and it is the first thing anyone with vestibular sensitivity turns
+ * off at the OS level.
+ *
+ * So: honour that setting. This is a floor, not a redesign — the marks are
+ * unchanged, they simply hold still for anyone who has asked the system for
+ * that.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .mascot-jiggle,
+  .mascot-thinking,
+  .loading-asterisk,
+  .loading-pulse {
+    animation: none !important;
+  }
+}
+
 /* Settings dialog — smooth slide-down animation */
 @keyframes settings-slide-in {
   from {

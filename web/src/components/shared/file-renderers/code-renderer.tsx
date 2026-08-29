@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import hljs from "highlight.js/lib/common";
+import { resolveHljsLanguage } from "./hljs-language";
 // The one tested escaper. This file carried a private copy that differed only in
 // the apostrophe entity (&#039; vs &#39; — both valid references for '), and it
 // was the guard on a `dangerouslySetInnerHTML` sink with no test of its own.
@@ -16,62 +17,6 @@ interface CodeRendererProps {
   name?: string;
 }
 
-const EXT_TO_LANG: Record<string, string> = {
-  ".js": "javascript",
-  ".jsx": "javascript",
-  ".ts": "typescript",
-  ".tsx": "typescript",
-  ".py": "python",
-  ".rb": "ruby",
-  ".go": "go",
-  ".rs": "rust",
-  ".java": "java",
-  ".c": "c",
-  ".cpp": "cpp",
-  ".h": "c",
-  ".css": "css",
-  ".scss": "scss",
-  ".html": "xml",
-  ".xml": "xml",
-  ".json": "json",
-  ".yaml": "yaml",
-  ".yml": "yaml",
-  ".toml": "ini",
-  ".sql": "sql",
-  ".sh": "bash",
-  ".bash": "bash",
-  ".zsh": "bash",
-  ".dockerfile": "dockerfile",
-  ".graphql": "graphql",
-  ".swift": "swift",
-  ".kt": "kotlin",
-  ".md": "markdown",
-  ".mdx": "markdown",
-};
-
-/**
- * Files whose identity lives in their BASENAME. `.env.example` was the reported
- * case: ext `.example` matches nothing, so it fell to highlight.js AUTO-detect,
- * which scored an env file as markdown-ish and rendered every comment block in
- * italic emphasis with the `# ====` separator runs wrapping into fake
- * horizontal rules. KEY=value files are ini — comments and assignments
- * highlight correctly.
- */
-const BASENAME_TO_LANG: Array<[RegExp, string]> = [
-  [/^\.env($|\.)/, "ini"], // .env, .env.local, .env.example, .env.production…
-  [/^\.git(ignore|modules|attributes|config)$/, "ini"],
-  [/^\.editorconfig$/, "ini"],
-  [/^\.npmrc$|^\.nvmrc$|^\.node-version$|^\.tool-versions$/, "ini"],
-  [/^(dockerfile|containerfile)$/i, "dockerfile"],
-  [/^makefile$/i, "makefile"],
-];
-
-/**
- * Plain text that must never go near auto-detect: certificates, logs, locks.
- * Highlighting these adds nothing and (as with .env.example) invents emphasis.
- */
-const PLAIN_EXTS = new Set([".txt", ".log", ".lock", ".pem", ".crt", ".cer", ".key", ".pub"]);
-
 /**
  * Syntax-highlighted code viewer.
  *
@@ -80,13 +25,8 @@ const PLAIN_EXTS = new Set([".txt", ".log", ".lock", ".pem", ".crt", ".cer", ".k
  * on content change. Theme follows the app's `<html class="dark">` toggle.
  */
 export function CodeRenderer({ content, ext, name }: CodeRendererProps) {
-  const baseLang = name
-    ? BASENAME_TO_LANG.find(([re]) => re.test(name))?.[1]
-    : undefined;
-  // Basename wins over extension (`.env.example`'s ext is ".example"), then the
-  // extension map. Plain set beats everything but an explicit basename match.
-  const lang = baseLang ?? (PLAIN_EXTS.has(ext) ? "" : EXT_TO_LANG[ext] || "");
-  const isPlain = !baseLang && !lang && PLAIN_EXTS.has(ext);
+  // Shared with the editor — see `hljs-language.ts`.
+  const { lang, isPlain } = resolveHljsLanguage({ ext, name });
   const isDark = useIsDarkTheme();
 
   /**

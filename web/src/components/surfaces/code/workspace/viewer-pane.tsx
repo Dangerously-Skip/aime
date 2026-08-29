@@ -18,6 +18,7 @@ import {
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { readFile, writeFile } from "@/lib/code-workspace/ipc";
 import { getRenderer, UNPRINTABLE_BINARY_EXTS } from "@/components/shared/file-renderers";
+import { HighlightedEditor } from "./highlighted-editor";
 import { Button } from "@/components/ui/button";
 import { getExt, MAX_AUTO_LOAD_BYTES } from "@/lib/code-workspace/fs-tree";
 
@@ -281,12 +282,17 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
       onSave={save}
     >
       {editing ? (
-        <textarea
+        /*
+         * Editing keeps the colours. This was a bare `<textarea>`, so clicking
+         * the pencil turned a highlighted file into one flat colour — silently,
+         * because a plain textarea reads as deliberate rather than broken.
+         */
+        <HighlightedEditor
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          spellCheck={false}
-          className="h-full w-full resize-none bg-transparent font-mono text-[12.5px] leading-[1.55] text-foreground/90 outline-none px-3.5 py-3"
+          onChange={setDraft}
+          ext={ext}
           autoFocus
+          className="file-viewer-body"
         />
       ) : Renderer ? (
         <div className="file-viewer-body h-full overflow-auto px-3.5 py-3">
