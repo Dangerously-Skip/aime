@@ -91,9 +91,50 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
-  const step = (delta: number) => {
+  const step = useCallback((delta: number) => {
     frameRef.current?.contentWindow?.postMessage({ type: "deck:step", delta }, "*");
-  };
+  }, []);
+
+  /**
+   * Arrow keys move the deck.
+   *
+   * The bridge could always do this — `deck:step` dispatches a real keydown
+   * inside the frame, where runtime.js is listening — but nothing in the PARENT
+   * ever listened, so the keys only worked in full screen. Reported as "arrow
+   * keys aren't working on slides in the panel view".
+   *
+   * WHY NOT JUST FOCUS THE IFRAME. The frame is sandboxed to an opaque origin
+   * on purpose (`allow-scripts` without `allow-same-origin`, because this HTML
+   * is model-written from web pages). We cannot reach into it to focus it, and
+   * even when the user clicks the slide the key events belong to the frame's
+   * document, not ours. So the parent listens for itself and forwards.
+   *
+   * SCOPED TO THIS PANEL, deliberately. A window-level listener would take the
+   * arrow keys away from the file tree, the editor and every text field in the
+   * app — the classic way a viewer breaks the rest of a workspace. The handler
+   * sits on the deck's own container, which is focusable and takes focus when
+   * you click it, so it fires only when the deck is what you are using.
+   */
+  const onDeckKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Never steal keys from a field. The share panel's recipient input lives
+      // inside this container.
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+
+      const delta =
+        e.key === "ArrowRight" || e.key === "PageDown" || e.key === " "
+          ? 1
+          : e.key === "ArrowLeft" || e.key === "PageUp"
+            ? -1
+            : 0;
+      if (!delta) return;
+      // Space and PageDown scroll a pane by default; arrows move a list.
+      e.preventDefault();
+      step(delta);
+    },
+    [step],
+  );
 
   const deckStorage = useSettingsStore((st) => st.deckStorage);
   const [sharing, setSharing] = useState(false);
@@ -199,7 +240,26 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2 p-2">
+    <div
+      className="flex h-full min-h-0 flex-col gap-2 p-2 outline-none"
+      /*
+       * `tabIndex={-1}`: focusable by click and by script, but not a stop on
+       * the tab order — a deck is not a control, and adding it to the sequence
+       * would put a silent stop between the file tree and the buttons below.
+       */
+      tabIndex={-1}
+      onKeyDown={onDeckKeyDown}
+      /*
+       * Clicking the slide focuses this container. Without it the click lands
+       * on the iframe, focus goes into a document we cannot see, and the next
+       * arrow key reaches nobody at all.
+       */
+      onMouseDown={(e) => {
+        if (!(e.target as HTMLElement)?.closest("input, textarea, button")) {
+          e.currentTarget.focus({ preventScroll: true });
+        }
+      }}
+    >
       <div
         ref={boxRef}
         className="relative w-full overflow-hidden rounded-lg border border-border bg-black/20"
