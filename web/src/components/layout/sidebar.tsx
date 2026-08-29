@@ -9,16 +9,7 @@ import { SidebarChats } from "./sidebar-chats";
 import { SidebarProjects } from "./sidebar-projects";
 import { SidebarProjectDetail } from "./sidebar-project-detail";
 import { SidebarCustomize } from "./sidebar-customize";
-import {
-  Settings,
-  Plus,
-  Search,
-  Sparkles,
-  MessageCircle,
-  FolderKanban,
-  Flag,
-  Heart,
-} from "lucide-react";
+import { Flag, FolderKanban, Heart, MessageCircle, Plus, Search, Settings, Wrench } from "lucide-react";
 
 // FeedlyBackly widget globals
 declare global {
@@ -172,7 +163,10 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
               : "text-sidebar-foreground hover:bg-sidebar-accent/50"
           }`}
         >
-          <Sparkles className="h-3.5 w-3.5" />
+          {/* A wrench, not sparkles: Customize is where you configure skills,
+              connectors and plugins, and sparkles reads as "AI magic" — the one
+              thing this panel is not. */}
+          <Wrench className="h-3.5 w-3.5" />
           <span>Customize</span>
         </button>
 
