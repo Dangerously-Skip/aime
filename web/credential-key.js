@@ -29,6 +29,9 @@ const crypto = require('crypto');
  * @param {(msg: string) => void} [deps.warn]
  * @returns {string} 64-char hex key.
  */
+/** A minted key: 64 lowercase-or-uppercase hex characters. */
+const KEY_RE = /^[0-9a-f]{64}$/i;
+
 function readOrCreateKey({ keyPath, safeStorage, warn = () => {} }) {
   const encryptionOk = safeStorage.isEncryptionAvailable();
 
@@ -37,12 +40,36 @@ function readOrCreateKey({ keyPath, safeStorage, warn = () => {} }) {
     // A key written while the keyring was unavailable is plain utf-8, so it must
     // still be readable once the keyring comes back — otherwise a laptop that
     // booted once without a keyring would orphan its own credentials.
-    if (!encryptionOk) return stored.toString('utf-8');
+    if (!encryptionOk) {
+      const plain = stored.toString('utf-8');
+      if (KEY_RE.test(plain)) return plain;
+      /*
+       * ENCRYPTED FILE, KEYRING DOWN. This returned the ciphertext decoded as
+       * utf-8 — a string that is not a key, handed back as though it were.
+       *
+       * The distinction matters because the keyring going down is usually
+       * TEMPORARY. macOS returned `errAuthorizationInternal (-60008)` on one
+       * boot here, `isEncryptionAvailable()` went false for that process, and
+       * this handed back garbage; the dev launcher's regex rejected it and the
+       * whole session ran with no credential storage, telling the user "requires
+       * the desktop app" while they sat in the desktop app.
+       *
+       * Failing loudly is what lets the caller RETRY. Returning a wrong key
+       * cannot be retried, because nothing downstream can tell it is wrong.
+       */
+      const err = new Error(
+        `credential-master.key at ${keyPath} is encrypted and the OS keyring is unavailable — ` +
+          'this is usually transient; retry before concluding the key is lost',
+      );
+      err.code = 'KEYRING_UNAVAILABLE';
+      err.retryable = true;
+      throw err;
+    }
     try {
       return safeStorage.decryptString(stored);
     } catch {
       const asPlain = stored.toString('utf-8');
-      if (/^[0-9a-f]{64}$/i.test(asPlain)) {
+      if (KEY_RE.test(asPlain)) {
         warn('Credential master key was stored unencrypted; re-wrapping it with the OS keyring.');
         fs.writeFileSync(keyPath, safeStorage.encryptString(asPlain), { mode: 0o600 });
         return asPlain;

@@ -99,3 +99,72 @@ describe('readOrCreateKey', () => {
     expect(existsSync(keyPath())).toBe(false);
   });
 });
+
+/**
+ * A KEYRING BLIP MUST NOT LOOK LIKE A KEY.
+ *
+ * macOS returned `errAuthorizationInternal (-60008)` from the keychain on one
+ * boot here. `safeStorage.isEncryptionAvailable()` went false for that process,
+ * and this function read the ENCRYPTED key file, decoded the ciphertext as
+ * utf-8, and returned it as though it were the key.
+ *
+ * The dev launcher's hex check rejected the garbage, so nothing was corrupted —
+ * but the session then ran with no credential storage at all, telling the user
+ * "Credential storage is unavailable (requires the desktop app)" while they sat
+ * inside the desktop app looking at a key they had just pasted.
+ *
+ * The keyring going down is usually TEMPORARY, and a caller can retry a throw.
+ * It cannot retry a wrong value, because nothing downstream can tell it is
+ * wrong. That is the whole distinction being tested here.
+ */
+describe('readOrCreateKey when the OS keyring is unavailable', () => {
+  const keyringDown = { isEncryptionAvailable: () => false };
+
+  it('throws a RETRYABLE error rather than returning ciphertext as a key', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'credkey-'));
+    const keyPath = join(dir, 'credential-master.key');
+    // What an encrypted key file actually is: bytes that are not hex text.
+    writeFileSync(keyPath, Buffer.from([0x76, 0x31, 0x00, 0xff, 0xfe, 0x01, 0x02, 0x03]));
+
+    let thrown = null;
+    try {
+      readOrCreateKey({ keyPath, safeStorage: keyringDown });
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeTruthy();
+    expect(thrown.code).toBe('KEYRING_UNAVAILABLE');
+    expect(thrown.retryable).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('STILL reads a key written while the keyring was down', () => {
+    /*
+     * The case the old branch existed for, and it must survive: a laptop that
+     * booted once without a keyring wrote its key in plain utf-8, and orphaning
+     * that would lose every credential the user has.
+     */
+    const dir = mkdtempSync(join(tmpdir(), 'credkey-'));
+    const keyPath = join(dir, 'credential-master.key');
+    const hex = 'a'.repeat(64);
+    writeFileSync(keyPath, Buffer.from(hex, 'utf-8'));
+
+    expect(readOrCreateKey({ keyPath, safeStorage: keyringDown })).toBe(hex);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('still creates a fresh key when there is no file at all', () => {
+    // A first run during a keyring outage must not be blocked — it has nothing
+    // to lose, and the unencrypted-write path already handles it.
+    const dir = mkdtempSync(join(tmpdir(), 'credkey-'));
+    const keyPath = join(dir, 'credential-master.key');
+    const warns = [];
+
+    const key = readOrCreateKey({ keyPath, safeStorage: keyringDown, warn: (m) => warns.push(m) });
+
+    expect(key).toMatch(/^[0-9a-f]{64}$/);
+    expect(warns.join(' ')).toMatch(/keyring unavailable/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

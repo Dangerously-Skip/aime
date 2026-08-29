@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getCredentialStore, CredentialStoreUnavailable } from '@/lib/models/credentials';
+import { getCredentialStore, CredentialStoreUnavailable, CREDENTIAL_STORE_UNAVAILABLE_MESSAGE } from '@/lib/models/credentials';
 
 export const runtime = 'nodejs';
 
@@ -16,7 +16,7 @@ export const runtime = 'nodejs';
 function unavailable(err: unknown): Response | null {
   if (err instanceof CredentialStoreUnavailable) {
     return Response.json(
-      { error: 'Credential storage is unavailable (requires the desktop app).' },
+      { error: CREDENTIAL_STORE_UNAVAILABLE_MESSAGE },
       { status: 503 },
     );
   }

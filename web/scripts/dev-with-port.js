@@ -74,26 +74,74 @@ function waitForPort(port, timeout = 60000) {
  *
  * Failure is non-fatal and reported: dev still boots, credentials stay unavailable.
  */
-function mintCredentialKey(webDir) {
+function mintOnce(webDir) {
   return new Promise((resolve) => {
     let electronBin;
     try {
       electronBin = require('electron');
-    } catch {
-      return resolve(null);
+    } catch (e) {
+      return resolve({ key: null, reason: `electron not installed: ${e.message}` });
     }
     const proc = spawn(electronBin, [path.join(__dirname, 'mint-cred-key.js')], {
-      stdio: ['ignore', 'pipe', 'inherit'],
+      // stderr CAPTURED, not inherited. It used to go straight to the console,
+      // where Chromium's own noise buried it — the run that prompted this
+      // printed a macOS `errAuthorizationInternal (-60008)` keychain error four
+      // lines above "Could not mint", and the two read as unrelated.
+      stdio: ['ignore', 'pipe', 'pipe'],
       cwd: webDir,
     });
     let out = '';
+    let err = '';
     proc.stdout.on('data', (d) => { out += d.toString(); });
-    proc.on('error', () => resolve(null));
-    proc.on('close', () => {
-      const key = out.trim();
-      resolve(/^[0-9a-f]{64}$/i.test(key) ? key : null);
+    proc.stderr.on('data', (d) => { err += d.toString(); });
+    proc.on('error', (e) => resolve({ key: null, reason: e.message }));
+    proc.on('close', (code) => {
+      /*
+       * SCAN for the key rather than requiring stdout to be exactly it.
+       * Electron writes to stdout when it feels like it, and an exact match
+       * turns any stray line into "no credentials for this whole session".
+       */
+      const found = out.match(/[0-9a-f]{64}/i);
+      resolve(
+        found
+          ? { key: found[0], reason: null }
+          : { key: null, reason: err.trim() || `exit ${code} with no key on stdout` },
+      );
     });
   });
+}
+
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Mint the credential master key, RETRYING — because the failure is transient.
+ *
+ * One attempt used to decide the whole session. macOS returned
+ * `errAuthorizationInternal (-60008)` from the keychain on a single boot,
+ * `safeStorage` went unavailable for that process, no key was minted, and every
+ * BYOK read and write 503'd for hours with "Credential storage is unavailable
+ * (requires the desktop app)" — while the user was inside the desktop app,
+ * looking at a key they had just pasted.
+ *
+ * Nothing about that state is recoverable from the UI: the server is a sibling
+ * process started before Electron and has no way to be handed a key later, so a
+ * blip at second zero costs a full restart the user has no reason to suspect.
+ * Three tries a second apart is cheap insurance against an OS hiccup.
+ */
+async function mintCredentialKey(webDir) {
+  let last = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const result = await mintOnce(webDir);
+    if (result.key) {
+      if (attempt > 1) {
+        console.log(`[dev-with-port] Credential master key minted on attempt ${attempt}`);
+      }
+      return result.key;
+    }
+    last = result.reason;
+    if (attempt < 3) await delay(attempt * 1000);
+  }
+  return { failed: true, reason: last };
 }
 
 (async () => {
@@ -137,11 +185,20 @@ function mintCredentialKey(webDir) {
 
   const webDir = path.join(__dirname, '..');
 
-  const credKey = await mintCredentialKey(webDir);
+  const minted = await mintCredentialKey(webDir);
+  const credKey = typeof minted === 'string' ? minted : null;
   if (credKey) {
     console.log('[dev-with-port] Credential master key ready — BYOK storage enabled');
   } else {
-    console.warn('[dev-with-port] Could not mint the credential master key — saving API keys will fail');
+    // The REASON, and what it costs. "Could not mint" on its own sent someone
+    // looking at API-key settings instead of at the keychain.
+    console.warn(
+      `\n[dev-with-port] Could not mint the credential master key after 3 attempts.\n` +
+      `  Reason: ${(minted && minted.reason) || 'unknown'}\n` +
+      `  Saving or reading BYOK API keys will fail for this session with\n` +
+      `  "Credential storage is unavailable". Quit and re-run \`npm run electron:dev\`;\n` +
+      `  if it persists, the OS keyring is refusing this app.\n`,
+    );
   }
 
   // The local API's launch token. Minted here rather than in main-web.js
