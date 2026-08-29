@@ -48,6 +48,24 @@ export interface CredentialStore {
 }
 
 /** Raised when the store can't be used (missing/invalid key). */
+/**
+ * What to tell the user when the server has no master key.
+ *
+ * It used to say "requires the desktop app" — which is true of `next dev` run
+ * by hand and actively misleading everywhere else, because the way people
+ * actually hit this is INSIDE the desktop app: the key is minted at launch by a
+ * throwaway Electron process, and if the OS keyring hiccups at that moment
+ * (macOS `errAuthorizationInternal`, seen once here) the server runs keyless for
+ * the rest of the session. Being told to use the desktop app while sitting in
+ * the desktop app sends you to look at your API keys, which are fine.
+ *
+ * So it names the condition and the fix, and covers both cases honestly.
+ */
+export const CREDENTIAL_STORE_UNAVAILABLE_MESSAGE =
+  'Credential storage is unavailable: this server has no master key, so API keys cannot be ' +
+  'read or saved. Restart the app to mint one. (Running `next dev` outside the desktop app ' +
+  'has no keyring and will always show this.)';
+
 export class CredentialStoreUnavailable extends Error {
   constructor(message: string) {
     super(message);

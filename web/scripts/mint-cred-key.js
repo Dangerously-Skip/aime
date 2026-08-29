@@ -29,8 +29,13 @@ app.whenReady().then(() => {
       safeStorage,
       warn: (msg) => process.stderr.write(`[mint-cred-key] ${msg}\n`),
     });
-    process.stdout.write(key);
-    app.exit(0);
+    /*
+     * Flush BEFORE exiting. `process.stdout` is a pipe here (the launcher
+     * captures it), and writes to a pipe are asynchronous — `app.exit()` tears
+     * the process down without draining them. It works for 64 bytes almost
+     * every time, which is the worst property a race can have.
+     */
+    process.stdout.write(key, () => app.exit(0));
   } catch (err) {
     process.stderr.write(`[mint-cred-key] ${err.message}\n`);
     app.exit(1);
