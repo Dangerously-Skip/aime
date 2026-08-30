@@ -157,3 +157,46 @@ describe('a stopped run says it has stopped — to the model, not just the user'
     expect(stopLine('complete')).toMatch(/no\s+verifier running/i);
   });
 });
+
+/**
+ * A RESTART MUST NOT RE-NARRATE THE RUN.
+ *
+ * "It needs a decision from you" appeared three times for ONE parked question
+ * with one id. The dedupe set is a `useRef` — per MOUNT — while the messages are
+ * persisted, so every app restart found an empty set and a full conversation and
+ * posted the whole transcript again. I had restarted the app three times.
+ *
+ * The line's id is now derived from its key, so the persisted conversation is
+ * itself the record of what has been said.
+ */
+const STATUS_WITH_QUESTION = {
+  running: false,
+  runIndex: 1,
+  goal: { objective: 'Compare taps' },
+  ledger: { tasks: [] },
+  run: null,
+  decision: null,
+  events: [],
+  question: { id: 'q-1', question: 'Which finish?' },
+} as never;
+
+describe('transcript line identity', () => {
+  it('is stable for the same key, so the store can dedupe it', () => {
+    const a = transcriptLines(STATUS_WITH_QUESTION);
+    const b = transcriptLines(STATUS_WITH_QUESTION);
+    expect(a.map((l) => l.key)).toEqual(b.map((l) => l.key));
+  });
+
+  it('keys the question on its id, not its text', () => {
+    // Two runs asking the same thing are two questions; the same question
+    // polled twice is one.
+    const line = transcriptLines(STATUS_WITH_QUESTION).find((l) => l.key.includes(':question:'));
+    expect(line?.key).toContain('q-1');
+  });
+
+  it('separates runs, so a second goal still narrates', () => {
+    const first = transcriptLines(STATUS_WITH_QUESTION);
+    const second = transcriptLines({ ...(STATUS_WITH_QUESTION as object), runIndex: 2 } as never);
+    expect(first[0].key).not.toBe(second[0].key);
+  });
+});

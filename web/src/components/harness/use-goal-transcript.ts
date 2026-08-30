@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { useChatStore } from '@/stores/chat-store';
 import type { Message } from '@/stores/chat-store';
 
 /**
@@ -41,9 +42,16 @@ export interface TranscriptStatus {
   question?: { id: string; question: string } | null;
 }
 
-function line(content: string): Message {
+/**
+ * A transcript line, with an id DERIVED FROM ITS KEY.
+ *
+ * It was `Math.random()`, which made every posting unique and left the
+ * persisted chat as the only record of what had been said. See
+ * `useGoalTranscript` for why that mattered.
+ */
+function line(key: string, content: string): Message {
   return {
-    id: `goal_${Math.random().toString(36).slice(2)}`,
+    id: `goal:${key}`,
     role: 'assistant',
     content,
     timestamp: Date.now(),
@@ -130,8 +138,20 @@ export function useGoalTranscript(
   folder: string | null,
   addMessage: (chatId: string, message: Message) => void,
 ): void {
-  // Keys already posted. A ref, not state: appending must not re-render, and the
-  // set has to survive the poll it was populated by.
+  /*
+   * Keys already posted. A ref, not state: appending must not re-render, and
+   * the set has to survive the poll that populated it.
+   *
+   * A REF IS PER-MOUNT AND THE MESSAGES ARE PERSISTED, which is the whole bug
+   * this now guards against. Restart the app and the ref is empty while the
+   * chat still holds every line, so the entire transcript was posted again —
+   * "It needs a decision from you" three times over, for one parked question
+   * with one id, because the app had been restarted three times.
+   *
+   * So the store is consulted as well: a line whose id is already in the
+   * conversation is not re-posted. The ref stays because it is cheaper within a
+   * session and covers lines added by this same tick.
+   */
   const seen = useRef<Set<string>>(new Set());
   const lastChat = useRef<string>('');
 
@@ -152,10 +172,16 @@ export function useGoalTranscript(
         if (!res.ok || cancelled) return;
         const status = (await res.json()) as TranscriptStatus;
         if (cancelled) return;
+        // What the conversation ALREADY says, so a restart does not repeat it.
+        const existing = new Set(
+          (useChatStore.getState().messages[chatId] ?? []).map((m: Message) => m.id),
+        );
         for (const l of transcriptLines(status)) {
           if (seen.current.has(l.key)) continue;
           seen.current.add(l.key);
-          addMessage(chatId, line(l.content));
+          const msg = line(l.key, l.content);
+          if (existing.has(msg.id)) continue;
+          addMessage(chatId, msg);
         }
       } catch {
         // A failed poll is not worth a message; the next one is 3s away.

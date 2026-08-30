@@ -1,3 +1,4 @@
+import { parseQuestionFields, type QuestionField } from './question-fields';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { PROGRESS_FILE, type Goal, type Task } from './ledger';
@@ -42,7 +43,9 @@ export const QUESTION_MARKER = 'STATUS: QUESTION';
  * expensive mistake is reading "no answer" as "yes".
  */
 /** The question a session ended on, if it ended on one. */
-export function parseSessionQuestion(text: string): { question: string; options: string[] } | null {
+export function parseSessionQuestion(
+  text: string,
+): { question: string; options: string[]; fields: QuestionField[] } | null {
   const tail = text.slice(-2000);
   const at = tail.lastIndexOf(QUESTION_MARKER);
   if (at === -1) return null;
@@ -50,6 +53,30 @@ export function parseSessionQuestion(text: string): { question: string; options:
   // A marker with nothing after it is not a question; treating it as one would
   // park the run on a blank prompt.
   if (!asked) return null;
+
+  /*
+   * THE MULTI-FIELD FORM FIRST — see `question-fields.ts`.
+   *
+   * A session with five things to ask could only put them in the question TEXT,
+   * because this took `.split('\n')[0]`. The result was a paragraph and two
+   * generic buttons, and the user retyping answers the model had just
+   * enumerated.
+   *
+   * The one-line form still parses underneath, so sessions written against it
+   * keep working and a single question needs no ceremony.
+   */
+  const fields = parseQuestionFields(asked);
+  if (fields.length > 1) {
+    const first = asked.split('\n')[0].trim();
+    return {
+      // A heading if the session wrote one above the fields; otherwise the
+      // fields speak for themselves.
+      question: /^Q:/.test(first) ? 'A few details before this can continue' : first.slice(0, 300),
+      options: [],
+      fields,
+    };
+  }
+
   const line = asked.split('\n')[0].slice(0, 700);
 
   /*
@@ -67,6 +94,7 @@ export function parseSessionQuestion(text: string): { question: string; options:
       .map((o) => o.trim())
       .filter((o) => o !== '')
       .slice(0, 5),
+    fields: [],
   };
 }
 
@@ -174,6 +202,21 @@ export function buildSessionPrompt(parts: PromptParts): string {
     `  not use it to check work you could do. ALWAYS offer the alternatives after`,
     `  \`||\` so they can be clicked — for example:`,
     `  ${QUESTION_MARKER} Which total should this compute? || gross | net`,
+    '',
+    `  NEEDING SEVERAL ANSWERS? Ask them as separate lines, one per decision.`,
+    `  Do NOT write five questions into one sentence and ask "what are your`,
+    `  answers to the above" — the user then has to retype what you already`,
+    `  enumerated, and you have to parse it back out. Each line gets its own`,
+    `  control:`,
+    '',
+    `  ${QUESTION_MARKER}`,
+    `  Q: Installation || DIY | Plumber`,
+    `  Q: Under-bench space in mm ||`,
+    `  Q: [] Which finishes would you consider? || Chrome | Brushed | Matte black`,
+    `  Q: ... Anything else the installer should know?`,
+    '',
+    `  Options after \`||\` become buttons; none makes it a text box. \`[]\` allows`,
+    `  several answers, \`...\` gives a larger box for a longer one.`,
     '',
     `Saying neither counts as ${INCOMPLETE_MARKER}.`,
     '',
@@ -368,6 +411,7 @@ export function createSessionRunner(deps: SessionDeps): SessionRunner {
     return {
       question: asked?.question ?? null,
       questionOptions: asked?.options ?? [],
+      questionFields: asked?.fields ?? [],
       revision: parseRevision(text),
       costUsd,
       // The summary is what a human reads later, so keep the model's own words
