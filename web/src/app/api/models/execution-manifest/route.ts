@@ -43,11 +43,21 @@ export async function POST(request: NextRequest) {
     .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
     .map((r) => ({
       capability: String(r.capability ?? ''),
-      tier: String(r.tier ?? ''),
       model: typeof r.model === 'string' ? r.model : null,
       providerConfig: r.providerConfig,
     }))
-    .filter((r) => r.capability && r.tier);
+    /*
+     * CAPABILITY ONLY. This also required a `tier`, which `buildManifest` does
+     * not take and the publisher does not send — so EVERY route was discarded,
+     * the manifest came out empty, and the "nothing resolvable, left the old one
+     * alone" branch returned 200. The client saw success, never retried, and no
+     * manifest was ever written.
+     *
+     * Downstream that reads as "No model is configured for this capability" on
+     * every widget refresh and every scheduled order, on an account with four
+     * models configured in the tier grid.
+     */
+    .filter((r) => r.capability);
 
   const manifest = buildManifest(entries, new Date().toISOString());
 

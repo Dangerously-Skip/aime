@@ -54,3 +54,83 @@ describe('the fetch replacement is listed wherever the built-in was', () => {
     expect(deny).toMatch(/'WebFetch'/);
   });
 });
+
+/**
+ * AN AIME TOOL MUST BE LISTED BY ITS REAL NAME.
+ *
+ * The in-process MCP server is called `aime`, so the SDK knows its tools as
+ * `mcp__aime__StandingOrderCreate`. The Assistant surface listed five of them
+ * bare — `'StandingOrderCreate'` — which matches nothing, so its OWN core tools
+ * were never auto-approved.
+ *
+ * That is invisible on four of the five surfaces, because they run `acceptEdits`
+ * or `bypassPermissions` and an unlisted tool is allowed anyway. The Assistant
+ * is the one on `permissionMode: 'default'`, where an unlisted tool PROMPTS —
+ * so the mistake only has consequences exactly where it was made. Asked for a
+ * daily-goals checklist widget, the model reported "both calls hit a permission
+ * issue", fell back to `CronCreate`, and retried: three duplicate standing
+ * orders and no widget.
+ *
+ * Derived from the provider rather than hardcoded, so a tool added to the
+ * server is covered without anyone remembering this file exists.
+ */
+describe('aime MCP tools are listed by their prefixed name', () => {
+  const provider = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/lib/providers/claude-provider.ts'),
+    'utf-8',
+  );
+
+  /** Every tool registered on the in-process `aime` server. */
+  const registered = (): string[] => {
+    const start = provider.indexOf('createSdkMcpServer({');
+    expect(start, 'the aime MCP server moved').toBeGreaterThan(-1);
+    const body = provider.slice(start);
+    return [...new Set([...body.matchAll(/\(tool as any\)\(\s*'([A-Za-z_][A-Za-z0-9_]*)'/g)].map((m) => m[1]))];
+  };
+
+  it('finds the server and its tools', () => {
+    // Without this the checks below pass by matching nothing.
+    const names = registered();
+    expect(names.length).toBeGreaterThan(5);
+    expect(names).toContain('StandingOrderCreate');
+    expect(names).toContain('WidgetCreate');
+  });
+
+  it('no surface lists one of them unprefixed', () => {
+    const names = registered();
+    const offenders: string[] = [];
+
+    for (const s of surfaces()) {
+      // Only the strings inside `allowedTools`, so prose in a system prompt
+      // naming a tool is not mistaken for a listing.
+      const list = /allowedTools:\s*\[([\s\S]*?)\]/.exec(s.src)?.[1] ?? '';
+      const listed = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+      for (const bare of listed) {
+        if (names.includes(bare)) offenders.push(`${s.name}: '${bare}' should be 'mcp__aime__${bare}'`);
+      }
+    }
+
+    expect(offenders, 'these match no tool, so they auto-approve nothing').toEqual([]);
+  });
+
+  it('the Assistant can create the things it exists to create', () => {
+    /*
+     * Specific, because this surface is the only one where being unlisted
+     * costs anything — and because "schedule a reminder" and "pin a widget"
+     * are the two things a user comes to it for.
+     */
+    const assistant = surfaces().find((s) => s.name === 'assistant')!;
+    for (const tool of ['StandingOrderCreate', 'WidgetCreate']) {
+      expect(assistant.src, `the Assistant cannot auto-approve ${tool}`).toContain(
+        `mcp__aime__${tool}`,
+      );
+    }
+  });
+
+  it('the Assistant is still the surface where this matters', () => {
+    // If it ever moves to bypassPermissions the above stops being load-bearing,
+    // and someone should notice here rather than discover it in a bug report.
+    const assistant = surfaces().find((s) => s.name === 'assistant')!;
+    expect(assistant.src).toMatch(/permissionMode:\s*'default'/);
+  });
+});

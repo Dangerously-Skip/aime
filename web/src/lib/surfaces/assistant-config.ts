@@ -8,8 +8,30 @@ export function getAssistantConfig(overrides: Partial<SurfaceConfig> = {}): Surf
     allowedTools: [
       'mcp__aime__FetchUrl', 'mcp__aime__MailSearch', 'mcp__aime__MailRead', 'mcp__aime__MailDraft', 'mcp__aime__CalendarEvents', 'mcp__aime__ContactsSearch',
       'WebSearch', 'WebFetch', 'mcp__aime__canvas',
-      'StandingOrderCreate', 'StandingOrderList',
-      'StandingOrderUpdate', 'StandingOrderCancel', 'StandingOrderHistory',
+      /*
+       * PREFIXED, like every other entry above — and they were not.
+       *
+       * These live on the in-process `aime` MCP server, so the SDK knows them
+       * as `mcp__aime__StandingOrderCreate`. Listed bare they match nothing, so
+       * the Assistant's OWN core tools were never auto-approved.
+       *
+       * That is invisible on every other surface, because they all run
+       * `acceptEdits` or `bypassPermissions` and an unlisted tool is allowed
+       * anyway. This is the ONE surface on `permissionMode: 'default'`, where an
+       * unlisted tool prompts — so the prompt is the whole behaviour, and when
+       * it did not land the model reported "both calls hit a permission issue",
+       * fell back to `CronCreate`, and retried, leaving three duplicate
+       * standing orders and no widget.
+       */
+      'mcp__aime__StandingOrderCreate', 'mcp__aime__StandingOrderList',
+      'mcp__aime__StandingOrderUpdate', 'mcp__aime__StandingOrderCancel',
+      'mcp__aime__StandingOrderHistory',
+      /*
+       * The Assistant is where a user asks for a widget — "I want a checklist
+       * in my cockpit" is this surface's job, and it could not do it. It only
+       * pins a tile to the user's own Cockpit.
+       */
+      'mcp__aime__WidgetCreate',
     ],
     permissionMode: 'default',
     systemPrompt: `You are the Personal Assistant for ${APP_NAME}. You help users schedule reminders, create standing orders, and manage recurring tasks.

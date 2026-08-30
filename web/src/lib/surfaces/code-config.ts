@@ -17,7 +17,7 @@ export function getCodeConfig(overrides: Partial<SurfaceConfig> = {}): SurfaceCo
       // this list is not auto-approved, so the skill silently never loaded.
       'Skill',
       'TodoWrite', 'AskUserQuestion', 'EnterWorktree',
-      'ExcelRead', 'ExcelWrite', 'ExcelEdit',
+      'mcp__aime__ExcelRead', 'mcp__aime__ExcelWrite', 'mcp__aime__ExcelEdit',
       'mcp__aime__SearchWeb', 'mcp__web-search__web_search',
     ],
     permissionMode: 'acceptEdits',
