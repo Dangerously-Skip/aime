@@ -209,3 +209,65 @@ describe('the key that arrives with nothing focused', () => {
     spy.mockRestore();
   });
 });
+
+describe('inside a modal sheet — where it was actually broken', () => {
+  /*
+   * THE REAL REPORT. The deck opens in a `Sheet`, and a dialog moves focus to
+   * its own wrapper when it opens. So `document.activeElement` is the sheet:
+   * never `<body>`, so the document listener stood down, and never inside the
+   * deck, so the container handler was not in the event path either — the deck
+   * is a DESCENDANT of the focused element, and a keydown travels UP from its
+   * target, not down.
+   *
+   * Two fixes in a row missed this because both tests focused either the deck
+   * or nothing. "Focus is on something that CONTAINS the deck" is a third
+   * shape, and it is the one every dialog produces.
+   */
+  function renderInSheet() {
+    const sheet = document.createElement('div');
+    sheet.tabIndex = -1;
+    document.body.appendChild(sheet);
+    const r = render(<HtmlRenderer {...props} />, { container: sheet });
+    sheet.focus();
+    return { sheet, ...r };
+  }
+
+  it('arrow keys work when the SHEET has focus', () => {
+    const { sheet } = renderInSheet();
+    expect(document.activeElement).toBe(sheet);
+    fireEvent.keyDown(sheet, { key: 'ArrowRight' });
+    expect(posted, 'the deck ignored a key while its own dialog had focus').toContainEqual({
+      type: 'deck:step',
+      delta: 1,
+    });
+  });
+
+  it('and going back', () => {
+    const { sheet } = renderInSheet();
+    fireEvent.keyDown(sheet, { key: 'ArrowLeft' });
+    expect(posted).toContainEqual({ type: 'deck:step', delta: -1 });
+  });
+
+  it('still stands down for a sibling that owns its own arrows', () => {
+    /*
+     * The guard has to stay meaningful: focus on something that does NOT
+     * contain the deck — a file tree, a list, another panel — keeps its keys.
+     */
+    renderInSheet();
+    const other = document.createElement('div');
+    other.tabIndex = -1;
+    document.body.appendChild(other);
+    other.focus();
+    fireEvent.keyDown(other, { key: 'ArrowRight' });
+    expect(posted).toHaveLength(0);
+    other.remove();
+  });
+
+  it('does not double-step when the container already handled it', () => {
+    // Both listeners see a key from inside the deck. The container calls
+    // preventDefault; the document listener must respect that.
+    render(<HtmlRenderer {...props} />);
+    press(deckRegion(), 'ArrowRight');
+    expect(posted).toHaveLength(1);
+  });
+});
