@@ -4,6 +4,7 @@ import { supportsNativeWebSearch } from '../search/native-search';
 import { validateServiceUrl } from '../mcp/url-guard';
 import { fetchUrl, describeFailure } from '../fetch-url';
 import { correctWebSearchSection, type SearchToolKind } from '../surfaces/shared/web-search-prompt';
+import { creationKey, recordOnce } from './pending-dedupe';
 import { themeInstruction } from '../themes/resolve';
 import { allowedPluginPaths } from '../themes/deck-format';
 import { imageInstruction } from '../images/prompt';
@@ -639,6 +640,14 @@ export class ClaudeProvider extends BaseProvider {
     const pendingCronJobs: Array<{ expression: string; prompt: string; surfaceId: string }> = [];
 
     // Per-request array to collect standing orders created via StandingOrderCreate
+    /*
+     * Keys created THIS RUN, so a repeated call is recognised as the retry it
+     * is. Per-run, declared beside the pending arrays, so nothing leaks between
+     * turns. See `pending-dedupe.ts`.
+     */
+    const seenOrderKeys = new Map<string, true>();
+    const seenWidgetKeys = new Map<string, true>();
+
     const pendingStandingOrders: Array<{
       instruction: string;
       trigger_type: string;
@@ -1131,8 +1140,16 @@ export class ClaudeProvider extends BaseProvider {
             expiresInHours: z.number().optional().describe('Auto-expire after this many hours'),
           },
           async (input: { instruction: string; trigger_type: string; expression: string; condition?: string; completionCondition?: string; agentName?: string; notifyVia?: string; maxExecutions?: number; expiresInHours?: number }) => {
-            pendingStandingOrders.push(input);
             const triggerDesc = input.trigger_type === 'cron' ? `cron: ${input.expression}` : `every ${input.expression}`;
+            const key = creationKey([input.instruction, input.trigger_type, input.expression]);
+            if (!recordOnce(seenOrderKeys, key, true).isNew) {
+              // Told the truth, not "created" a second time — a model told it
+              // succeeded twice has no reason to stop retrying.
+              return {
+                content: [{ type: 'text' as const, text: `That standing order already exists from this request ("${input.instruction}", ${triggerDesc}) — not creating a second one.` }],
+              };
+            }
+            pendingStandingOrders.push(input);
             return {
               content: [{ type: 'text' as const, text: `Standing order created: "${input.instruction}" (${triggerDesc}). It will appear in the Assistant surface sidebar and fire automatically.` }],
             };
@@ -1149,7 +1166,15 @@ export class ClaudeProvider extends BaseProvider {
             allowWeb: z.boolean().optional().describe('Whether refreshes may search/fetch the web'),
           },
           async (input: { title: string; recipe: string; refreshEvery?: string; allowWeb?: boolean }) => {
-            if (input.title && input.recipe) pendingWidgets.push(input);
+            if (input.title && input.recipe) {
+              const key = creationKey([input.title, input.recipe]);
+              if (!recordOnce(seenWidgetKeys, key, true).isNew) {
+                return {
+                  content: [{ type: 'text' as const, text: `A widget called "${input.title}" was already pinned by this request — not creating a second one.` }],
+                };
+              }
+              pendingWidgets.push(input);
+            }
             return {
               content: [{ type: 'text' as const, text: `Widget "${input.title}" pinned to the Cockpit${input.refreshEvery ? ` (refreshes every ${input.refreshEvery})` : ''}. It will populate on its first refresh.` }],
             };
@@ -2616,14 +2641,33 @@ export class ClaudeProvider extends BaseProvider {
                   const type = toolName.endsWith('WidgetCreate')
                     ? ('widget_create' as const)
                     : ('standing_order_create' as const);
-                  emittedEffects.add(effectKey(type, toolInput));
-                  console.log(`[Claude] ${toolName} tool use — emitting ${type} mid-stream`);
-                  yield {
-                    type,
-                    input: toolInput,
-                    id: block.id as string,
-                    provider: this.name,
-                  };
+                  /*
+                   * THE SAME EFFECT IS EMITTED ONCE PER TURN.
+                   *
+                   * This only ADDED to `emittedEffects`; the check existed
+                   * solely in `drainPending`, to stop a post-stream flush
+                   * repeating what already went out mid-stream. Two identical
+                   * tool calls therefore emitted twice, and one request that
+                   * retried left THREE standing orders and FOUR identical
+                   * widgets behind.
+                   *
+                   * The set already holds exactly the right identity — type
+                   * plus the tool's own input — so this is the missing read of
+                   * a guard that was already here, not a second mechanism.
+                   */
+                  const key = effectKey(type, toolInput);
+                  if (emittedEffects.has(key)) {
+                    console.log(`[Claude] ${toolName} repeated with identical input — not emitting again`);
+                  } else {
+                    emittedEffects.add(key);
+                    console.log(`[Claude] ${toolName} tool use — emitting ${type} mid-stream`);
+                    yield {
+                      type,
+                      input: toolInput,
+                      id: block.id as string,
+                      provider: this.name,
+                    };
+                  }
                 } else {
                   yield {
                     type: 'tool_use',
