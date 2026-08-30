@@ -80,11 +80,38 @@ export function useExecutionManifest(): void {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: payload,
-    }).catch(() => {
-      // Publishing is best-effort: a failure means scheduled work keeps the
-      // PREVIOUS manifest, which is the right fallback. Retry on the next
-      // change rather than looping here.
-      lastSent.current = '';
-    });
+    })
+      .then(async (res) => {
+        /*
+         * A 200 IS NOT NECESSARILY A SAVE. The route answers 200 with
+         * `{ ok: false, skipped }` when nothing resolvable survived parsing —
+         * deliberately, so a mid-hydration client cannot erase a good manifest.
+         *
+         * But `.catch` never fires for a 200, so a route that discarded
+         * everything looked identical to one that saved. That is how this sat
+         * unnoticed: the publisher published, the server dropped every entry,
+         * both sides believed it had worked, and the manifest was never
+         * written at all.
+         *
+         * We only reach here having already refused to send an all-null set, so
+         * a total discard is a real failure. Forgetting `lastSent` makes the
+         * next settings change retry instead of deduplicating against a payload
+         * that never landed.
+         */
+        const body = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+        if (!res.ok || body?.ok === false) {
+          lastSent.current = '';
+          console.warn(
+            '[AIME] The execution manifest was not saved, so scheduled work and widget ' +
+              'refreshes have no model. It will retry on the next settings change.',
+          );
+        }
+      })
+      .catch(() => {
+        // Publishing is best-effort: a failure means scheduled work keeps the
+        // PREVIOUS manifest, which is the right fallback. Retry on the next
+        // change rather than looping here.
+        lastSent.current = '';
+      });
   }, [providers, tierModels, hasAnthropicKey, hasBedrock, known]);
 }

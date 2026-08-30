@@ -115,12 +115,34 @@ function OrdersSidebar({
       <div className="mb-3">
         <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-3 mb-1">{label}</div>
         {items.map((order) => (
-          <button
+          /*
+           * A DIV WITH A BUTTON ROLE, not a <button>.
+           *
+           * The row carries its own Pause/Resume/Delete buttons, and HTML
+           * forbids a button inside a button — React reported it twice as a
+           * hydration error ("In HTML, <button> cannot be a descendant of
+           * <button>"), and the browser's own parser recovers by hoisting the
+           * inner ones OUT of the row, which is why they still worked.
+           *
+           * Keyboard behaviour is kept by hand because a div does not get it
+           * free: Enter and Space activate, and it is a tab stop.
+           */
+          <div
             key={order.id}
-            className={`w-full text-left px-3 py-2 text-sm hover:bg-muted/50 transition-colors flex items-start gap-2 group ${
+            role="button"
+            tabIndex={0}
+            aria-pressed={selectedOrderId === order.id}
+            className={`w-full cursor-pointer text-left px-3 py-2 text-sm hover:bg-muted/50 transition-colors flex items-start gap-2 group ${
               selectedOrderId === order.id ? 'bg-muted' : ''
             }`}
             onClick={() => onSelectOrder(selectedOrderId === order.id ? null : order.id)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              // Not when the key came from one of the nested controls.
+              if ((e.target as HTMLElement) !== e.currentTarget) return;
+              e.preventDefault();
+              onSelectOrder(selectedOrderId === order.id ? null : order.id);
+            }}
           >
             {statusIcon(order.status)}
             <div className="flex-1 min-w-0">
@@ -151,7 +173,7 @@ function OrdersSidebar({
                 <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
               </button>
             </div>
-          </button>
+          </div>
         ))}
       </div>
     );
