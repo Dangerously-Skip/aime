@@ -82,6 +82,44 @@ export interface PreparedDeck {
  * rather than a number the parent keeps separately — a second source of truth
  * for "which slide is showing" is how the theme previews once drifted.
  */
+/**
+ * Make the deck survive an ORIGIN-LESS frame — injected before `runtime.js`.
+ *
+ * `runtime.js` writes the current slide into the URL (`history.replaceState`
+ * with a `#/3` hash). The preview frame is `srcdoc` and sandboxed without
+ * `allow-same-origin`, so its origin is `null`, and `replaceState` throws:
+ *
+ *   SecurityError: A history state object with URL '…/#/1' cannot be created
+ *   in a document with origin 'null' and URL 'about:srcdoc'.
+ *
+ * That call sits in the MIDDLE of `goTo()`, so the throw abandons the rest of
+ * the navigation. Nothing moves — not from the buttons, not from the arrow
+ * keys, not from clicking. And opening the same file from disk works perfectly,
+ * because a `file://` document has a real origin.
+ *
+ * That combination is the whole diagnosis, and it is why three rounds spent on
+ * focus and key handling changed nothing: the parent was always delivering the
+ * event, and the frame was throwing before it could act on it.
+ *
+ * Wrapped rather than removed: where history DOES work — the exported deck, the
+ * full-screen window, the file opened directly — it keeps working, and only the
+ * environment that cannot support it swallows the error. A deck embedded in a
+ * panel has no address bar to reflect anyway.
+ */
+const HISTORY_SHIM = `<script>(function(){
+  try {
+    var h = window.history;
+    ['pushState','replaceState'].forEach(function(k){
+      var orig = h[k];
+      if (typeof orig !== 'function') return;
+      h[k] = function(){
+        try { return orig.apply(h, arguments); }
+        catch (e) { /* origin 'null' — nothing to reflect in a framed preview */ }
+      };
+    });
+  } catch (e) {}
+})();<\/script>`;
+
 const BRIDGE = `<script>(function(){
   function total(){ return document.querySelectorAll('.slide').length; }
   function index(){
@@ -105,11 +143,19 @@ const BRIDGE = `<script>(function(){
   document.addEventListener('keydown', function(){ setTimeout(report, 0); });
 })();<\/script>`;
 
-/** Insert the shim last, so `runtime.js` has already bound its handlers. */
+/**
+ * Bridge LAST, so `runtime.js` has already bound its handlers.
+ * History shim FIRST, so it is in place before `runtime.js` ever calls it.
+ */
 function withBridge(html: string): string {
-  return html.includes('</body>')
-    ? html.replace(/<\/body>/i, `${BRIDGE}</body>`)
-    : html + BRIDGE;
+  const withShim = html.includes('</head>')
+    ? html.replace(/<\/head>/i, `${HISTORY_SHIM}</head>`)
+    : html.includes('<body')
+      ? html.replace(/(<body[^>]*>)/i, `$1${HISTORY_SHIM}`)
+      : HISTORY_SHIM + html;
+  return withShim.includes('</body>')
+    ? withShim.replace(/<\/body>/i, `${BRIDGE}</body>`)
+    : withShim + BRIDGE;
 }
 
 /**
