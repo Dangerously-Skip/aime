@@ -121,9 +121,25 @@ const HISTORY_SHIM = `<script>(function(){
 })();<\/script>`;
 
 const BRIDGE = `<script>(function(){
-  function total(){ return document.querySelectorAll('.slide').length; }
+  /*
+   * SCOPED TO THE DECK, exactly as runtime.js is (deck.querySelectorAll).
+   *
+   * An unscoped document.querySelectorAll('.slide') counted 30 on a
+   * fifteen-slide deck: runtime.js clones slides for its own use, and the
+   * clones live outside .deck. The counter would then read "1 / 30" and the
+   * active-slide scan could match a clone rather than the slide on screen.
+   *
+   * The source has 15 <section class="slide">, which is what the parent's
+   * own regex counts — so the two would also disagree with each other, and the
+   * displayed total would change the moment the deck first reported.
+   */
+  function slides(){
+    var deck = document.querySelector('.deck');
+    return (deck || document).querySelectorAll('.slide');
+  }
+  function total(){ return slides().length; }
   function index(){
-    var s = document.querySelectorAll('.slide');
+    var s = slides();
     for (var i = 0; i < s.length; i++) if (s[i].classList.contains('is-active')) return i;
     return 0;
   }

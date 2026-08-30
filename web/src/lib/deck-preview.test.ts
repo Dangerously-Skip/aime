@@ -280,3 +280,56 @@ describe('images written next to the deck', () => {
     expect(rewritten).toBe(2);
   });
 });
+
+/**
+ * THE BRIDGE MUST PARSE, AND MUST COUNT THE SAME SLIDES AS runtime.js.
+ *
+ * Two hazards, both hit while writing it:
+ *
+ * 1. A BACKTICK IN A COMMENT inside the template literal terminates the string.
+ *    This codebase has been bitten by that repeatedly, and it surfaces as a
+ *    TypeScript parse error a long way from the cause.
+ *
+ * 2. An UNSCOPED `.slide` query counted 30 on a fifteen-slide deck, because
+ *    runtime.js clones slides and the clones live outside `.deck`. The counter
+ *    would read "1 / 30" and the active-slide scan could match a clone.
+ *
+ * That the deck NAVIGATES is not asserted here — it needs a real browser, and
+ * the failure it guards against only reproduces in Electron. See
+ * `deck-inline-assets.ts` for that measurement.
+ */
+describe('the injected bridge', () => {
+  const DECK = '<html><body><div class="deck"><section class="slide">a</section></div></body></html>';
+
+  /** The bridge script only — not the history shim, which is also a script. */
+  const bridgeBody = () => {
+    const out = prepareDeckForPreview(DECK).html;
+    const chunk = out
+      .split('<script>')
+      .find((c) => c.includes('deck:step'));
+    return (chunk ?? '').split('</script>')[0];
+  };
+
+  it('is valid JavaScript', () => {
+    const body = bridgeBody();
+    expect(body.length).toBeGreaterThan(100);
+    expect(() => new Function(body)).not.toThrow();
+  });
+
+  it('the history shim is valid JavaScript too', () => {
+    const out = prepareDeckForPreview(DECK).html;
+    const shim = (out.split('<script>').find((c) => c.includes('pushState')) ?? '').split('</script>')[0];
+    expect(shim).toContain('replaceState');
+    expect(() => new Function(shim)).not.toThrow();
+  });
+
+  it('scopes its slide query to the deck, as runtime.js does', () => {
+    const body = bridgeBody();
+    // Scoped, with `document` only as the fallback when there is no `.deck`.
+    expect(body).toContain("(deck || document).querySelectorAll('.slide')");
+    // And BOTH readers go through it — an unscoped one left behind in either
+    // is what counted 30 slides on a fifteen-slide deck.
+    expect(body).toMatch(/function total\(\)\{ return slides\(\)\.length; \}/);
+    expect(body).toMatch(/var s = slides\(\);/);
+  });
+});
