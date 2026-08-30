@@ -3166,3 +3166,95 @@ describe('a repeated creation in one turn', () => {
     expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(2);
   });
 });
+
+describe('a single CronCreate makes a single reminder', () => {
+  /*
+   * "it created 2 crons for 1 reminder" — and no model retry was involved.
+   *
+   * The handler pushes to `pendingCronJobs`, which `drainPending` emits at the
+   * end of the turn, AND the mid-stream branch emits when the tool_use block
+   * goes past. Widget and standing-order avoid that double by recording into
+   * `emittedEffects` in one place and checking it in the other. Cron was wired
+   * into NEITHER, so every call produced two.
+   *
+   * That is why the previous fix did not help: it was about repeated calls, and
+   * this needs only one.
+   */
+  const cronCall = (id: string, input: Record<string, unknown>) => ({
+    type: 'assistant' as const,
+    message: { content: [{ type: 'tool_use', name: 'mcp__aime__CronCreate', input, id }] },
+  });
+
+  const CRON = { expression: '17 8 31 8 *', prompt: 'Re-enrol Max in homeschool' };
+
+  /**
+   * Run a turn where the tool HANDLER actually fires, as the SDK does.
+   *
+   * My first version of this scripted only the `tool_use` block, so the MCP
+   * handler never ran, `pendingCronJobs` stayed empty, and just one of the two
+   * emitters could fire — the test could not see the double no matter what the
+   * code did, and it passed against the broken version. Both paths have to be
+   * exercised or this proves nothing.
+   */
+  async function turnWithRealHandler(input: Record<string, unknown>) {
+    queryMock.mockImplementation(async function* (args: { options: Record<string, unknown> }) {
+      const servers = (args.options.mcpServers ?? {}) as Record<
+        string,
+        { tools?: Array<{ name: string; handler: (i: unknown) => Promise<unknown> }> }
+      >;
+      const handler = Object.values(servers)
+        .flatMap((s) => s.tools ?? [])
+        .find((t) => t.name === 'CronCreate')?.handler;
+      expect(handler, 'CronCreate is not registered — this test proves nothing').toBeTruthy();
+
+      // The SDK invokes the handler, THEN surfaces the tool_use block.
+      await handler!(input);
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'mcp__aime__CronCreate', input, id: 'tu1' }] },
+      };
+    });
+    return run(new ClaudeProvider(), {});
+  }
+
+  it('ONE call emits ONE cron_create — handler AND stream block', async () => {
+    const chunks = await turnWithRealHandler(CRON);
+
+    const created = chunks.filter((c) => c.type === 'cron_create');
+    expect(created, `one request produced ${created.length} reminders`).toHaveLength(1);
+  });
+
+  it('and the surfaceId the handler fills in does not defeat the match', async () => {
+    // The two emitters see different objects: raw input vs the handler's copy
+    // with `surfaceId: 'cowork'` added. A JSON.stringify key would miss.
+    const chunks = await turnWithRealHandler(CRON);
+    expect(chunks.filter((c) => c.type === 'cron_create')).toHaveLength(1);
+  });
+
+  it('two identical calls still emit one', async () => {
+    scriptChunks([cronCall('t1', CRON), cronCall('t2', CRON)] as never);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.filter((c) => c.type === 'cron_create')).toHaveLength(1);
+  });
+
+  it('matches across the surfaceId the handler defaults in', async () => {
+    /*
+     * The two emitters see DIFFERENT objects for the same call: the mid-stream
+     * branch has the model's raw input, the drain has the handler's version
+     * with `surfaceId: 'cowork'` filled in. A `JSON.stringify` key would miss.
+     */
+    scriptChunks([cronCall('t1', { ...CRON, surfaceId: 'chat' })] as never);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.filter((c) => c.type === 'cron_create')).toHaveLength(1);
+  });
+
+  it('two genuinely different reminders still both land', async () => {
+    // The guard must stay narrow — two reminders in one turn is a real request.
+    scriptChunks([
+      cronCall('t1', CRON),
+      cronCall('t2', { expression: '0 9 * * *', prompt: 'Stand up' }),
+    ] as never);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.filter((c) => c.type === 'cron_create')).toHaveLength(2);
+  });
+});

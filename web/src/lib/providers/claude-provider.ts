@@ -684,6 +684,19 @@ export class ClaudeProvider extends BaseProvider {
      */
     const emittedEffects = new Set<string>();
     const effectKey = (type: string, input: unknown) => `${type}:${JSON.stringify(input)}`;
+    /*
+     * Cron gets a NORMALISED key rather than `JSON.stringify`.
+     *
+     * The two places that emit a cron see different objects for the same call:
+     * the mid-stream branch has the model's raw input, the drain has the
+     * handler's version with `surfaceId` defaulted in. `JSON.stringify` is also
+     * key-order sensitive, so two spellings of the same request would miss each
+     * other. Comparing the fields that decide what the reminder IS avoids both.
+     */
+    const cronKey = (input: unknown) => {
+      const c = (input ?? {}) as { expression?: string; prompt?: string };
+      return `cron_create:${creationKey([c.expression, c.prompt])}`;
+    };
     /**
      * Emit the client-side effects the in-process MCP tools queued, and empty the
      * queues so a second drain yields nothing.
@@ -700,6 +713,17 @@ export class ClaudeProvider extends BaseProvider {
      */
     function* drainPending(): Generator<StreamChunk> {
       for (const job of pendingCronJobs.splice(0)) {
+        /*
+         * The check the other two loops have had all along. Without it this
+         * re-emits what the mid-stream branch already sent, which is how one
+         * `CronCreate` became two reminders.
+         *
+         * The key is built from the HANDLER'S shape, which is the tool input
+         * plus the `surfaceId` default it fills in — so it is computed from the
+         * same object the mid-stream branch saw, not from the enriched one.
+         */
+        if (emittedEffects.has(cronKey(job))) continue;
+        emittedEffects.add(cronKey(job));
         yield { type: 'cron_create', input: job, id: `cron_${Date.now()}`, provider: providerName };
       }
       for (const order of pendingStandingOrders.splice(0)) {
@@ -2625,14 +2649,32 @@ export class ClaudeProvider extends BaseProvider {
                     provider: this.name,
                   };
                 } else if (toolName === 'CronCreate' || toolName.endsWith('__CronCreate') || toolName.endsWith(':CronCreate')) {
-                  // Intercept CronCreate (any server prefix) — emit cron_create SSE event
-                  console.log('[Claude] CronCreate tool use — emitting cron_create event, toolName:', toolName);
-                  yield {
-                    type: 'cron_create',
-                    input: toolInput,
-                    id: block.id as string,
-                    provider: this.name,
-                  };
+                  /*
+                   * ONE CALL, ONE CRON — and it used to be two.
+                   *
+                   * The handler pushes to `pendingCronJobs`, which `drainPending`
+                   * emits at the end of the turn, AND this emits when the
+                   * tool_use block goes past. Widget and standing-order avoid
+                   * the double by recording into `emittedEffects` here and
+                   * checking it there. Cron was the one of the three wired into
+                   * neither, so a SINGLE `CronCreate` produced two reminders —
+                   * no model retry required.
+                   *
+                   * Reported as "it created 2 crons for 1 reminder".
+                   */
+                  const key = cronKey(toolInput);
+                  if (emittedEffects.has(key)) {
+                    console.log('[Claude] CronCreate repeated with identical input — not emitting again');
+                  } else {
+                    emittedEffects.add(key);
+                    console.log('[Claude] CronCreate tool use — emitting cron_create event, toolName:', toolName);
+                    yield {
+                      type: 'cron_create',
+                      input: toolInput,
+                      id: block.id as string,
+                      provider: this.name,
+                    };
+                  }
                 } else if (/(?:^|__|:)(WidgetCreate|StandingOrderCreate)$/.test(toolName)) {
                   // Same treatment as CronCreate: emit while the client is still
                   // reading. The post-stream flush cannot help on a user Stop —
