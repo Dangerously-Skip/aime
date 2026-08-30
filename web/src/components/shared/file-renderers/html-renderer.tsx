@@ -164,10 +164,33 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The container handler above already dealt with it.
+      if (e.defaultPrevented) return;
       const active = document.activeElement;
-      const unfocused = !active || active === document.body;
-      // Inside our own panel the React handler above already ran.
-      if (!unfocused) return;
+      const box = deckRef.current;
+      if (!box) return;
+
+      /*
+       * WHOSE KEY IS IT? Three shapes count as "the deck's", and the middle one
+       * is what this fix is about.
+       *
+       *   nothing focused        — a freshly opened panel; focus is on <body>.
+       *   focus INSIDE the deck  — the container handler ran; we are the
+       *                            fallback if it did not preventDefault.
+       *   focus on an ANCESTOR   — the deck sits inside a modal Sheet, and a
+       *                            dialog moves focus to its own wrapper on
+       *                            open. `activeElement` is then never <body>
+       *                            and never inside the deck, so both earlier
+       *                            versions of this stood down and the arrows
+       *                            did nothing. The deck is a DESCENDANT of the
+       *                            focused element, which is exactly the case
+       *                            neither `contains` check covered.
+       */
+      const inert = !active || active === document.body;
+      const inside = !!active && box.contains(active);
+      const wrapping = !!active && active !== document.body && active.contains(box);
+      if (!inert && !inside && !wrapping) return;
+
       if (isTypingTarget(active)) return;
       const delta = deltaFor(e.key);
       if (!delta) return;
@@ -176,8 +199,7 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
        * hidden in this app, so a deck in a background tab would otherwise
        * answer keys meant for whatever the user is looking at.
        */
-      const box = deckRef.current;
-      if (!box || box.offsetParent === null) return;
+      if (box.offsetParent === null) return;
       e.preventDefault();
       step(delta);
     };
