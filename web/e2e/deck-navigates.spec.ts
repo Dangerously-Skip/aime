@@ -1,6 +1,10 @@
 import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+// STATIC, not `await import(...)`: Playwright transpiles a spec's top-level
+// imports, and a dynamic one reaches Node untransformed — `SyntaxError:
+// Unexpected token 'export'` on CI while passing locally.
+import { prepareDeckForPreview } from '../src/lib/deck-preview';
 
 /**
  * THE DECK ACTUALLY MOVES — buttons, keys, and the class on the slide.
@@ -97,7 +101,6 @@ async function driveDeck(page: Page, html: string, steps: number) {
 
 test('stepping twice moves the deck two slides', async ({ page }) => {
   await boot(page);
-  const { prepareDeckForPreview } = await import('../src/lib/deck-preview');
   const prepared = prepareDeckForPreview(rawDeck(), REAL_DECK).html;
 
   const { active, errors } = await driveDeck(page, prepared, 2);
