@@ -3096,3 +3096,73 @@ describe('web access on a run that has a browser', () => {
     expect(promptOf(options.systemPrompt)).not.toMatch(/always have web search/i);
   });
 });
+
+/**
+ * ONE REQUEST, ONE THING — at the layer where the duplicates were actually made.
+ *
+ * Asked for a daily goals checklist, a single turn left THREE standing orders
+ * and FOUR identical widgets. The trigger was a permission fault (the tools
+ * prompted for an approval that never came, so the model read each call as
+ * failed and tried again), but the reason it COST anything is here: the
+ * mid-stream emitter only ADDED to `emittedEffects`. The check lived solely in
+ * `drainPending`, to stop a post-stream flush repeating what had already gone
+ * out — so two identical tool calls emitted twice.
+ *
+ * Fixing the permission fault removes one cause and not the others: a resumed
+ * leg re-issuing work, a timeout the model did not see complete, or plain
+ * uncertainty after an ambiguous result all produce a repeat call.
+ */
+describe('a repeated creation in one turn', () => {
+  const widgetCall = (id: string, input: Record<string, unknown>) => ({
+    type: 'assistant' as const,
+    message: { content: [{ type: 'tool_use', name: 'mcp__aime__WidgetCreate', input, id }] },
+  });
+  const orderCall = (id: string, input: Record<string, unknown>) => ({
+    type: 'assistant' as const,
+    message: { content: [{ type: 'tool_use', name: 'mcp__aime__StandingOrderCreate', input, id }] },
+  });
+
+  const WIDGET = { title: "This Week's Goals", recipe: 'Checklist of this week goals' };
+  const ORDER = { instruction: 'Remind me of this week goals', trigger_type: 'cron', expression: '0 9 * * *' };
+
+  it('emits ONE widget_create for two identical calls', async () => {
+    scriptChunks([widgetCall('t1', WIDGET), widgetCall('t2', WIDGET)] as never);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    const created = chunks.filter((c) => c.type === 'widget_create');
+    expect(created, `got ${created.length} widgets from one request`).toHaveLength(1);
+  });
+
+  it('emits ONE standing_order_create for two identical calls', async () => {
+    scriptChunks([orderCall('t1', ORDER), orderCall('t2', ORDER)] as never);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(1);
+  });
+
+  it('still emits BOTH when the user genuinely asked for two', async () => {
+    /*
+     * The guard has to stay narrow. A turn that pins a weather tile and a
+     * ticker is two widgets, and collapsing those would be a worse bug than
+     * the one being fixed.
+     */
+    scriptChunks([
+      widgetCall('t1', WIDGET),
+      widgetCall('t2', { title: 'Markets', recipe: 'S&P and Nasdaq' }),
+    ] as never);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.filter((c) => c.type === 'widget_create')).toHaveLength(2);
+  });
+
+  it('a different schedule for the same instruction is a different order', async () => {
+    // Instruction alone would collapse "remind me at 9" and "remind me at 6".
+    scriptChunks([
+      orderCall('t1', ORDER),
+      orderCall('t2', { ...ORDER, expression: '0 18 * * *' }),
+    ] as never);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(2);
+  });
+});
