@@ -1,3 +1,4 @@
+import type { QuestionField } from './question-fields';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -31,6 +32,15 @@ export interface ParkedQuestion {
   question: string;
   /** Suggested answers. Free text is always allowed; these are a shortcut. */
   options: string[];
+  /*
+   * The parts of a multi-part question, one control each.
+   *
+   * Absent for a single question, which is most of them. See
+   * `question-fields.ts` for why the protocol grew this: a session with five
+   * things to ask could only write them into the question TEXT, and the user
+   * got a paragraph with two generic buttons.
+   */
+  fields?: QuestionField[];
   /** Why the loop could not decide this itself — shown with the question. */
   context: string;
   askedAt: string;
@@ -147,6 +157,8 @@ export interface ParkInput {
   revision?: unknown;
   question: string;
   options?: string[];
+  /** Parts of a multi-part question, one control each. */
+  fields?: QuestionField[];
   context?: string;
   nowIso?: () => string;
 }
@@ -170,6 +182,7 @@ export async function parkQuestion(dir: string, input: ParkInput): Promise<ParkR
     taskId: input.taskId ?? null,
     question: input.question.trim(),
     options: (input.options ?? []).filter((o) => o.trim() !== ''),
+    ...((input.fields ?? []).length ? { fields: input.fields } : {}),
     context: (input.context ?? '').trim(),
     askedAt: (input.nowIso ?? (() => new Date().toISOString()))(),
     answer: null,

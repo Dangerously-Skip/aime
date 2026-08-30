@@ -1,3 +1,4 @@
+import type { QuestionField } from './question-fields';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import {
@@ -103,6 +104,8 @@ export interface SessionOutcome {
   question?: string | null;
   /** Clickable alternatives the session offered with its question. */
   questionOptions?: string[];
+  /** Parts of a multi-part question — see `question-fields.ts`. */
+  questionFields?: QuestionField[];
   /** A proposed change to the plan, if the session found the plan wrong. */
   revision?: import('./revision').Revision | null;
   error?: string;
@@ -490,6 +493,8 @@ export async function runGoalLoop(opts: GoalLoopOptions): Promise<LoopResult> {
         taskId: task.id,
         question: outcome.question,
         options: outcome.questionOptions ?? [],
+        // One control per part, when the session asked for more than one thing.
+        fields: outcome.questionFields ?? [],
         /*
          * The summary UP TO the marker.
          *
