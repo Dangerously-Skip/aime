@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Share2 } from "lucide-react";
 import { useSettingsStore } from "@/stores/settings-store";
 import { prepareDeckForPreview, looksLikeDeck, countSlides } from "@/lib/deck-preview";
+import { inlineDeckAssets } from "@/lib/deck-inline-assets";
 
 /**
  * View a generated HTML page — and, when it is one of our decks, view it as a
@@ -35,8 +36,31 @@ interface HtmlRendererProps {
   onOpenExternal: (path: string) => void;
 }
 
+/**
+ * Asset text by URL, fetched once for the whole session.
+ *
+ * Every deck pulls the same `base.css` and `runtime.js`. Promises rather than
+ * strings so two decks opening in the same tick share one request, and a
+ * failure is never cached — the session guard may reload with a fresh token,
+ * and a cached rejection would outlive the problem.
+ */
+const assetCache = new Map<string, Promise<string>>();
+
+function fetchAssetText(url: string): Promise<string> {
+  const hit = assetCache.get(url);
+  if (hit) return hit;
+  const p = fetch(url)
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+    .catch((e) => {
+      assetCache.delete(url);
+      throw e;
+    });
+  assetCache.set(url, p);
+  return p;
+}
+
 export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRendererProps) {
-  const { html, isDeck, slides } = useMemo(() => {
+  const { html: linkedHtml, isDeck, slides } = useMemo(() => {
     const prepared = prepareDeckForPreview(content, path);
     return {
       html: prepared.html,
@@ -44,6 +68,29 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
       slides: countSlides(content),
     };
   }, [content, path]);
+
+  /*
+   * The frame gets the deck with its assets ALREADY IN IT.
+   *
+   * See `deck-inline-assets.ts`: the sandboxed frame cannot fetch the
+   * credentialed asset route in Electron, `runtime.js` never ran, and the deck
+   * was inert — no buttons, no keys, no clicks. Measured in the real app.
+   *
+   * `null` until they are in hand, rather than mounting the linked version
+   * first: that would start a load the frame cannot finish and then replace it,
+   * giving every deck two frames, one of them dead.
+   */
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    inlineDeckAssets(linkedHtml, fetchAssetText)
+      .then((h) => alive && setHtml(h))
+      // Worst case is the behaviour we already had, not a blank panel.
+      .catch(() => alive && setHtml(linkedHtml));
+    return () => {
+      alive = false;
+    };
+  }, [linkedHtml]);
 
   const frameRef = useRef<HTMLIFrameElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -301,7 +348,7 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
         <div ref={boxRef} className="flex-1 overflow-hidden rounded-lg border border-border">
           <iframe
             title={name}
-            srcDoc={html}
+            srcDoc={html ?? undefined}
             sandbox="allow-scripts"
             className="h-full w-full bg-white"
           />
@@ -340,7 +387,7 @@ export function HtmlRenderer({ content, name, path, onOpenExternal }: HtmlRender
         <iframe
           ref={frameRef}
           title={name}
-          srcDoc={html}
+          srcDoc={html ?? undefined}
           /*
            * `allow-scripts` WITHOUT `allow-same-origin`. The deck needs its
            * runtime, but the two together let sandboxed content remove its own
