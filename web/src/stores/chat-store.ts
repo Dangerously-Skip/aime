@@ -128,13 +128,30 @@ export const useChatStore = create<ChatStore>()(
       suggestions: {},
       canvasArtifacts: {},
 
+      /*
+       * IDEMPOTENT BY ID, and the check has to happen INSIDE `set`.
+       *
+       * `updateMessage` exists for changing a message, so adding one whose id
+       * is already present is always a bug — and it produced a real one: React
+       * "Encountered two children with the same key, goal:r1:question:…".
+       *
+       * The goal transcript posts lines with ids derived from their content so
+       * a restart cannot re-narrate a run. It checked the store first, but a
+       * read-then-write from a caller is not atomic: two polls in flight at
+       * once — or the Cowork and Code surfaces both mounted, which this app
+       * does deliberately — can each read "not present" and both append.
+       *
+       * Doing it here closes that for every caller rather than asking each one
+       * to remember, which is the same trade the local-API cookie makes.
+       */
       addMessage: (chatId, message) =>
-        set((state) => ({
-          messages: {
-            ...state.messages,
-            [chatId]: [...(state.messages[chatId] ?? []), message],
-          },
-        })),
+        set((state) => {
+          const existing = state.messages[chatId] ?? [];
+          if (existing.some((m) => m.id === message.id)) return state;
+          return {
+            messages: { ...state.messages, [chatId]: [...existing, message] },
+          };
+        }),
 
       updateMessage: (chatId, messageId, updates) =>
         set((state) => {
