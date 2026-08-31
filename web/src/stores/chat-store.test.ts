@@ -79,3 +79,61 @@ describe('chat-store — aborted streams finalise the turn', () => {
     expect(useChatStore.getState().messages['c1'].at(-1)!.isStreaming).toBe(true);
   });
 });
+
+/**
+ * TWO MESSAGES CANNOT SHARE AN ID.
+ *
+ * React reported "Encountered two children with the same key,
+ * `goal:r1:question:69dcd66df1a7b631`" — the goal transcript posts lines whose
+ * ids are derived from their content, so a restart cannot re-narrate a run.
+ *
+ * The hook checked the store before adding, but a read-then-write from a caller
+ * is not atomic. Two polls in flight at once — or the Cowork and Code surfaces
+ * both mounted, which this app does deliberately — can each read "not present"
+ * and both append. Doing it inside `set` is the only version that holds.
+ *
+ * `updateMessage` is how a message changes, so an add with an existing id is
+ * always a mistake and dropping it loses nothing.
+ */
+describe('addMessage is idempotent by id', () => {
+  const msg = (id: string, content: string) => ({
+    id,
+    role: 'assistant' as const,
+    content,
+    timestamp: 1,
+  });
+
+  beforeEach(() => useChatStore.setState({ messages: {} }));
+
+  it('adds the first and ignores the repeat', () => {
+    const { addMessage } = useChatStore.getState();
+    addMessage('c1', msg('goal:r1:question:abc', 'It needs a decision'));
+    addMessage('c1', msg('goal:r1:question:abc', 'It needs a decision'));
+
+    expect(useChatStore.getState().messages['c1']).toHaveLength(1);
+  });
+
+  it('keeps the FIRST, so a late duplicate cannot rewrite history', () => {
+    const { addMessage } = useChatStore.getState();
+    addMessage('c1', msg('m1', 'original'));
+    addMessage('c1', msg('m1', 'replacement'));
+
+    expect(useChatStore.getState().messages['c1'][0].content).toBe('original');
+  });
+
+  it('still appends genuinely different messages', () => {
+    const { addMessage } = useChatStore.getState();
+    addMessage('c1', msg('m1', 'one'));
+    addMessage('c1', msg('m2', 'two'));
+
+    expect(useChatStore.getState().messages['c1'].map((m) => m.id)).toEqual(['m1', 'm2']);
+  });
+
+  it('is per conversation — the same id in another chat is a different message', () => {
+    const { addMessage } = useChatStore.getState();
+    addMessage('c1', msg('m1', 'one'));
+    addMessage('c2', msg('m1', 'one'));
+
+    expect(useChatStore.getState().messages['c2']).toHaveLength(1);
+  });
+});
