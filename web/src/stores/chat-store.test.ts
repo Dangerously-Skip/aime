@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useChatStore, type Message } from './chat-store';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import { useChatStore, dedupeMessageIds, type Message } from './chat-store';
 import { notifyStreamAborted } from '@/lib/stream-registry';
 import type { ModelOption } from '@/lib/models/client-options';
 
@@ -135,5 +137,67 @@ describe('addMessage is idempotent by id', () => {
     addMessage('c2', msg('m1', 'one'));
 
     expect(useChatStore.getState().messages['c2']).toHaveLength(1);
+  });
+});
+
+/**
+ * DUPLICATES ALREADY ON DISK HAVE TO HEAL.
+ *
+ * Making `addMessage` refuse a duplicate id stopped NEW ones. It did nothing
+ * for conversations already holding them, and those render forever because
+ * React keys on the id — so the error count went UP rather than to zero: one
+ * new duplicate stopped being written while five old ones kept rendering.
+ *
+ * A guard on the writer is not a migration. This is the migration.
+ */
+describe('dedupeMessageIds', () => {
+  const m = (id: string, content = 'x') => ({
+    id,
+    role: 'assistant' as const,
+    content,
+    timestamp: 1,
+  });
+
+  it('keeps the first of each id and drops the rest', () => {
+    const out = dedupeMessageIds({
+      c1: [m('a', 'first'), m('b'), m('a', 'second'), m('a', 'third')],
+    });
+    expect(out.c1.map((x) => x.id)).toEqual(['a', 'b']);
+    expect(out.c1[0].content).toBe('first');
+  });
+
+  it('preserves order of what remains', () => {
+    // The transcript reads as a narrative; reordering it would be its own bug.
+    const out = dedupeMessageIds({ c1: [m('a'), m('b'), m('a'), m('c')] });
+    expect(out.c1.map((x) => x.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('is per conversation', () => {
+    const out = dedupeMessageIds({ c1: [m('a')], c2: [m('a')] });
+    expect(out.c1).toHaveLength(1);
+    expect(out.c2).toHaveLength(1);
+  });
+
+  it('returns the SAME object when there is nothing to fix', () => {
+    // Rehydration runs on every launch; a fresh object each time would make
+    // every conversation look changed to anything comparing by reference.
+    const input = { c1: [m('a'), m('b')] };
+    expect(dedupeMessageIds(input)).toBe(input);
+  });
+
+  it('survives an empty conversation', () => {
+    expect(dedupeMessageIds({ c1: [] }).c1).toEqual([]);
+  });
+});
+
+describe('the migration is actually wired into rehydration', () => {
+  it('onRehydrateStorage runs dedupeMessageIds', () => {
+    /*
+     * A pure function nothing calls is the shape this codebase keeps paying
+     * for. The unit tests above pass whether or not rehydration uses it, so
+     * this asserts the call site exists.
+     */
+    const src = readFileSync(resolve(process.cwd(), 'src/stores/chat-store.ts'), 'utf8');
+    expect(src).toMatch(/state\.messages = dedupeMessageIds\(/);
   });
 });

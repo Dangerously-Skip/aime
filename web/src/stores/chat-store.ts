@@ -73,6 +73,39 @@ export function cleanStaleStreamingFlags(messages: Record<string, Message[]>): R
   return changed ? cleaned : messages;
 }
 
+/**
+ * Drop messages that share an id with an earlier one in the same conversation.
+ *
+ * The store now refuses a duplicate id at write time, but conversations written
+ * BEFORE that guard still hold them — and they render forever, because React
+ * keys on the id: "Encountered two children with the same key,
+ * `goal:r1:question:69dcd66df1a7b631`". Fixing the writer does nothing for data
+ * already on disk, which is why the error count went UP rather than to zero: a
+ * new duplicate stopped being added while five old ones kept rendering.
+ *
+ * The FIRST occurrence wins, matching `addMessage`, so what is already on screen
+ * does not shift when the app reloads.
+ */
+export function dedupeMessageIds(
+  messages: Record<string, Message[]>,
+): Record<string, Message[]> {
+  let changed = false;
+  const cleaned: Record<string, Message[]> = {};
+  for (const [chatId, msgs] of Object.entries(messages)) {
+    const seen = new Set<string>();
+    const kept = msgs.filter((m) => {
+      if (seen.has(m.id)) {
+        changed = true;
+        return false;
+      }
+      seen.add(m.id);
+      return true;
+    });
+    cleaned[chatId] = kept;
+  }
+  return changed ? cleaned : messages;
+}
+
 interface ChatState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
@@ -346,7 +379,7 @@ export const useChatStore = create<ChatStore>()(
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
         if (state) {
-          state.messages = cleanStaleStreamingFlags(state.messages);
+          state.messages = dedupeMessageIds(cleanStaleStreamingFlags(state.messages));
           // Migrate persisted sessionControls to include effortLevel (added in v1.2.0)
           if (state.sessionControls) {
             for (const chatId of Object.keys(state.sessionControls)) {
