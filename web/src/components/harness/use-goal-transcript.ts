@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useChatStore } from '@/stores/chat-store';
 import type { Message } from '@/stores/chat-store';
 
 /**
@@ -172,16 +171,20 @@ export function useGoalTranscript(
         if (!res.ok || cancelled) return;
         const status = (await res.json()) as TranscriptStatus;
         if (cancelled) return;
-        // What the conversation ALREADY says, so a restart does not repeat it.
-        const existing = new Set(
-          (useChatStore.getState().messages[chatId] ?? []).map((m: Message) => m.id),
-        );
+        /*
+         * No pre-check against a store here — and there was one, against the
+         * WRONG store. This hook is called from Cowork and Code, each of which
+         * passes its OWN store's `addMessage`; the check read `useChatStore`,
+         * which never holds their messages, so it always saw "not present".
+         * Three fixes went into chat-store while the duplicates lived in
+         * cowork-store. Every message store's `addMessage` is now idempotent
+         * by id, which is the only place the guard can be both correct for
+         * all callers and atomic.
+         */
         for (const l of transcriptLines(status)) {
           if (seen.current.has(l.key)) continue;
           seen.current.add(l.key);
-          const msg = line(l.key, l.content);
-          if (existing.has(msg.id)) continue;
-          addMessage(chatId, msg);
+          addMessage(chatId, line(l.key, l.content));
         }
       } catch {
         // A failed poll is not worth a message; the next one is 3s away.

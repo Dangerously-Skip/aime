@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
-import { cleanStaleStreamingFlags } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags, dedupeMessageIds } from '@/stores/chat-store';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 import { withToolCall, withToolResult } from '@/lib/stores/tool-call-reducers';
 
@@ -74,13 +74,17 @@ export const useBrowserStore = create<BrowserStore>()(
       inspectorMode: false,
       pendingContext: [],
 
+      // Idempotent by id, inside `set` — see chat-store's addMessage for why.
+      // Every message store carries this: the goal transcript posts through
+      // whichever store owns the surface, and the guard was on only one of them.
       addMessage: (chatId, message) =>
-        set((state) => ({
-          messages: {
-            ...state.messages,
-            [chatId]: [...(state.messages[chatId] ?? []), message],
-          },
-        })),
+        set((state) => {
+          const existing = state.messages[chatId] ?? [];
+          if (existing.some((m) => m.id === message.id)) return state;
+          return {
+            messages: { ...state.messages, [chatId]: [...existing, message] },
+          };
+        }),
 
       updateMessage: (chatId, messageId, updates) =>
         set((state) => {
@@ -288,7 +292,7 @@ export const useBrowserStore = create<BrowserStore>()(
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
         if (state) {
-          state.messages = cleanStaleStreamingFlags(state.messages);
+          state.messages = dedupeMessageIds(cleanStaleStreamingFlags(state.messages));
         }
       },
     }
