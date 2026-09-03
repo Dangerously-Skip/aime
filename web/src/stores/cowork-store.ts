@@ -10,7 +10,7 @@ import {
   turnStartedAt,
 } from '@/lib/artifact-reconcile';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
-import { cleanStaleStreamingFlags } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags, dedupeMessageIds } from '@/stores/chat-store';
 import { type SessionControls } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
@@ -95,13 +95,17 @@ export const useCoworkStore = create<CoworkStore>()(
       lastActivityAt: {},
       searchGroups: {},
 
+      // Idempotent by id, inside `set` — see chat-store's addMessage for why.
+      // Every message store carries this: the goal transcript posts through
+      // whichever store owns the surface, and the guard was on only one of them.
       addMessage: (chatId, message) =>
-        set((state) => ({
-          messages: {
-            ...state.messages,
-            [chatId]: [...(state.messages[chatId] ?? []), message],
-          },
-        })),
+        set((state) => {
+          const existing = state.messages[chatId] ?? [];
+          if (existing.some((m) => m.id === message.id)) return state;
+          return {
+            messages: { ...state.messages, [chatId]: [...existing, message] },
+          };
+        }),
 
       updateMessage: (chatId, messageId, updates) =>
         set((state) => {
@@ -330,7 +334,7 @@ export const useCoworkStore = create<CoworkStore>()(
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
         if (state) {
-          state.messages = cleanStaleStreamingFlags(state.messages);
+          state.messages = dedupeMessageIds(cleanStaleStreamingFlags(state.messages));
           // Migrate persisted sessionControls to include effortLevel (added in v1.2.0)
           if (state.sessionControls) {
             for (const chatId of Object.keys(state.sessionControls)) {

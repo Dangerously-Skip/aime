@@ -6,7 +6,7 @@ import { getGatedStorage } from '@/lib/gated-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import type { ModelOption } from '@/lib/models/client-options';
-import { cleanStaleStreamingFlags } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags, dedupeMessageIds } from '@/stores/chat-store';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import { withToolCall, withToolResult } from '@/lib/stores/tool-call-reducers';
 
@@ -73,13 +73,17 @@ export const useCodeStore = create<CodeStore>()(
       planOpen: false,
       sessionControls: {},
 
+      // Idempotent by id, inside `set` — see chat-store's addMessage for why.
+      // Every message store carries this: the goal transcript posts through
+      // whichever store owns the surface, and the guard was on only one of them.
       addMessage: (chatId, message) =>
-        set((state) => ({
-          messages: {
-            ...state.messages,
-            [chatId]: [...(state.messages[chatId] ?? []), message],
-          },
-        })),
+        set((state) => {
+          const existing = state.messages[chatId] ?? [];
+          if (existing.some((m) => m.id === message.id)) return state;
+          return {
+            messages: { ...state.messages, [chatId]: [...existing, message] },
+          };
+        }),
 
       updateMessage: (chatId, messageId, updates) =>
         set((state) => {
@@ -200,7 +204,7 @@ export const useCodeStore = create<CodeStore>()(
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
-        if (state) state.messages = cleanStaleStreamingFlags(state.messages);
+        if (state) state.messages = dedupeMessageIds(cleanStaleStreamingFlags(state.messages));
       },
     }
   )
