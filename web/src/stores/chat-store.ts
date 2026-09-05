@@ -126,10 +126,31 @@ export function dedupeLegacyTranscriptRows(
   let changed = false;
   const cleaned: Record<string, Message[]> = {};
   for (const [chatId, msgs] of Object.entries(messages)) {
+    /*
+     * THE KEYED ROW WINS, not the first — measured, not assumed.
+     *
+     * Keep-first dropped the `goal:` row when a legacy `goal_` copy preceded
+     * it, and the transcript hook immediately re-posted it: the question was
+     * still parked, its keyed line was absent, and restoring exactly that is
+     * the hook's job. Net result on disk was one legacy row plus one keyed row
+     * with identical content — the line still painted twice.
+     *
+     * So: any legacy row whose content a keyed row already carries is dropped
+     * first; then what remains is deduped by content keeping the first. The
+     * keyed row is the durable identity going forward, and leaving it in place
+     * means the hook has nothing to restore.
+     */
+    const keyedContent = new Set(
+      msgs.filter((m) => m.id.startsWith('goal:')).map((m) => (m.content ?? '').trim()),
+    );
     const seenContent = new Set<string>();
     cleaned[chatId] = msgs.filter((m) => {
       if (!/^goal[_:]/.test(m.id)) return true;
       const key = (m.content ?? '').trim();
+      if (m.id.startsWith('goal_') && keyedContent.has(key)) {
+        changed = true;
+        return false;
+      }
       if (seenContent.has(key)) {
         changed = true;
         return false;
