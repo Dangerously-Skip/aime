@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { useChatStore, dedupeMessageIds, type Message } from './chat-store';
+import { useChatStore, dedupeMessageIds, dedupeLegacyTranscriptRows, type Message } from './chat-store';
 import { notifyStreamAborted } from '@/lib/stream-registry';
 import type { ModelOption } from '@/lib/models/client-options';
 
@@ -198,6 +198,44 @@ describe('the migration is actually wired into rehydration', () => {
      * this asserts the call site exists.
      */
     const src = readFileSync(resolve(process.cwd(), 'src/stores/chat-store.ts'), 'utf8');
-    expect(src).toMatch(/state\.messages = dedupeMessageIds\(/);
+    // Inside the rehydrate callback, whatever else wraps it.
+    expect(src).toMatch(/onRehydrateStorage[\s\S]{0,600}dedupeMessageIds\(/);
+  });
+});
+
+/**
+ * THE RESIDUE OF THE OLD MINTING.
+ *
+ * Read from the real app over CDP: one conversation held four rows with
+ * `goal_<random>` ids and one with the keyed id, all with identical content.
+ * The id dedupe left all five — correctly, they ARE distinct ids — and the
+ * user still saw the same line five times.
+ */
+describe('dedupeLegacyTranscriptRows', () => {
+  const row = (id: string, content: string) => ({ id, role: 'assistant' as const, content, timestamp: 1 });
+  const LINE = '**It needs a decision from you.** Which finish?';
+
+  it('keeps one of several identical transcript rows', () => {
+    const out = dedupeLegacyTranscriptRows({
+      c1: [row('goal_a1', LINE), row('goal_b2', LINE), row('goal_c3', LINE), row('goal:r1:question:x', LINE)],
+    });
+    expect(out.c1).toHaveLength(1);
+    expect(out.c1[0].id).toBe('goal_a1'); // first wins, nothing on screen shifts
+  });
+
+  it('NEVER touches ordinary messages, even identical ones', () => {
+    // A person can say "yes" twice. Only the transcript's own prefix is in scope.
+    const out = dedupeLegacyTranscriptRows({ c1: [row('m1', 'yes'), row('m2', 'yes')] });
+    expect(out.c1).toHaveLength(2);
+  });
+
+  it('keeps different transcript lines', () => {
+    const out = dedupeLegacyTranscriptRows({ c1: [row('goal_a', 'Session 1'), row('goal_b', 'Session 2')] });
+    expect(out.c1).toHaveLength(2);
+  });
+
+  it('is per conversation and returns the same object when clean', () => {
+    const input = { c1: [row('goal_a', LINE)], c2: [row('goal_b', LINE)] };
+    expect(dedupeLegacyTranscriptRows(input)).toBe(input);
   });
 });
