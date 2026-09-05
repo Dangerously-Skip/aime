@@ -10,7 +10,7 @@ import {
   turnStartedAt,
 } from '@/lib/artifact-reconcile';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
-import { cleanStaleStreamingFlags, dedupeMessageIds } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
 import { type SessionControls } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
@@ -334,7 +334,7 @@ export const useCoworkStore = create<CoworkStore>()(
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
         if (state) {
-          state.messages = dedupeMessageIds(cleanStaleStreamingFlags(state.messages));
+          state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));
           // Migrate persisted sessionControls to include effortLevel (added in v1.2.0)
           if (state.sessionControls) {
             for (const chatId of Object.keys(state.sessionControls)) {

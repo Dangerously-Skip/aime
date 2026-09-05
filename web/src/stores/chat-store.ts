@@ -106,6 +106,41 @@ export function dedupeMessageIds(
   return changed ? cleaned : messages;
 }
 
+/**
+ * Collapse repeated transcript rows the OLD minting left behind.
+ *
+ * Before #62, `use-goal-transcript` gave each line a `goal_<random>` id, so a
+ * restart re-posted the whole transcript with fresh ids: one parked question,
+ * four restarts, four identical "It needs a decision from you" rows. Those have
+ * DISTINCT ids, so `dedupeMessageIds` cannot see them by construction — they
+ * raise no React error, they are simply the clutter the user reported.
+ *
+ * NARROW ON PURPOSE. A content-based dedupe of chat messages in general would
+ * be wrong: a user can legitimately say the same thing twice. This touches only
+ * rows whose id the transcript hook minted (`goal_` then, `goal:` now), within
+ * one conversation, keeping the first. Nothing else has ever used that prefix.
+ */
+export function dedupeLegacyTranscriptRows(
+  messages: Record<string, Message[]>,
+): Record<string, Message[]> {
+  let changed = false;
+  const cleaned: Record<string, Message[]> = {};
+  for (const [chatId, msgs] of Object.entries(messages)) {
+    const seenContent = new Set<string>();
+    cleaned[chatId] = msgs.filter((m) => {
+      if (!/^goal[_:]/.test(m.id)) return true;
+      const key = (m.content ?? '').trim();
+      if (seenContent.has(key)) {
+        changed = true;
+        return false;
+      }
+      seenContent.add(key);
+      return true;
+    });
+  }
+  return changed ? cleaned : messages;
+}
+
 interface ChatState {
   messages: Record<string, Message[]>;
   currentChatId: string | null;
@@ -379,7 +414,7 @@ export const useChatStore = create<ChatStore>()(
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
         if (state) {
-          state.messages = dedupeMessageIds(cleanStaleStreamingFlags(state.messages));
+          state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));
           // Migrate persisted sessionControls to include effortLevel (added in v1.2.0)
           if (state.sessionControls) {
             for (const chatId of Object.keys(state.sessionControls)) {

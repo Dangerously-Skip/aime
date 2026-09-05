@@ -50,9 +50,18 @@ describe('every store that owns messages', () => {
     expect(offenders, 'addMessage appends unconditionally here').toEqual([]);
   });
 
+  it('collapses legacy transcript rows on rehydrate', () => {
+    // The `goal_<random>` residue has distinct ids, so the id dedupe cannot
+    // reach it. Every store that a goal can run on must run this too.
+    const offenders = messageStores()
+      .filter((s) => !/onRehydrateStorage[\s\S]{0,600}dedupeLegacyTranscriptRows\(/.test(s.src))
+      .map((s) => s.name);
+    expect(offenders, 'old transcript duplicates would keep painting here').toEqual([]);
+  });
+
   it('dedupes persisted messages on rehydrate', () => {
     const offenders = messageStores()
-      .filter((s) => !/state\.messages = dedupeMessageIds\(/.test(s.src))
+      .filter((s) => !/onRehydrateStorage[\s\S]{0,600}dedupeMessageIds\(/.test(s.src))
       .map((s) => s.name);
     expect(offenders, 'duplicates already on disk would render forever here').toEqual([]);
   });

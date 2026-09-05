@@ -6,7 +6,7 @@ import { getGatedStorage } from '@/lib/gated-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
 import type { ModelOption } from '@/lib/models/client-options';
-import { cleanStaleStreamingFlags, dedupeMessageIds } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import { withToolCall, withToolResult } from '@/lib/stores/tool-call-reducers';
 
@@ -204,7 +204,7 @@ export const useCodeStore = create<CodeStore>()(
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
-        if (state) state.messages = dedupeMessageIds(cleanStaleStreamingFlags(state.messages));
+        if (state) state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));
       },
     }
   )

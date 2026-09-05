@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
-import { cleanStaleStreamingFlags, dedupeMessageIds } from '@/stores/chat-store';
+import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 import { withToolCall, withToolResult } from '@/lib/stores/tool-call-reducers';
 
@@ -292,7 +292,7 @@ export const useBrowserStore = create<BrowserStore>()(
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
         if (state) {
-          state.messages = dedupeMessageIds(cleanStaleStreamingFlags(state.messages));
+          state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));
         }
       },
     }
