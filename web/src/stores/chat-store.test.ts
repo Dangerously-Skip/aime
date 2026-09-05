@@ -215,12 +215,23 @@ describe('dedupeLegacyTranscriptRows', () => {
   const row = (id: string, content: string) => ({ id, role: 'assistant' as const, content, timestamp: 1 });
   const LINE = '**It needs a decision from you.** Which finish?';
 
-  it('keeps one of several identical transcript rows', () => {
+  it('keeps ONE row, and it is the keyed one — measured against the real app', () => {
+    /*
+     * Keep-first shipped and left two rows on disk: it dropped the keyed row
+     * because a legacy copy came earlier, and the transcript hook re-posted
+     * the keyed line because the question was still parked. The keyed row is
+     * the identity the hook restores, so it is the one that has to survive.
+     */
     const out = dedupeLegacyTranscriptRows({
       c1: [row('goal_a1', LINE), row('goal_b2', LINE), row('goal_c3', LINE), row('goal:r1:question:x', LINE)],
     });
     expect(out.c1).toHaveLength(1);
-    expect(out.c1[0].id).toBe('goal_a1'); // first wins, nothing on screen shifts
+    expect(out.c1[0].id).toBe('goal:r1:question:x');
+  });
+
+  it('with only legacy rows, keeps the first', () => {
+    const out = dedupeLegacyTranscriptRows({ c1: [row('goal_a', LINE), row('goal_b', LINE)] });
+    expect(out.c1.map((m) => m.id)).toEqual(['goal_a']);
   });
 
   it('NEVER touches ordinary messages, even identical ones', () => {
