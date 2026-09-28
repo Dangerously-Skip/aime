@@ -57,8 +57,6 @@ import {
 
 /** Canvas tool name — intercepted to push A2UI documents to client. */
 const CANVAS_TOOL_NAME = 'canvas';
-/** Spawn-agent tool name — intercepted to fire a sub-agent HTTP request. */
-const SPAWN_AGENT_TOOL_NAME = 'spawn_agent';
 
 /**
  * Cached system:init data from the most recent session.
@@ -767,7 +765,7 @@ export class ClaudeProvider extends BaseProvider {
      * itself up by: the outcome is NOT passed through `updatedInput`, since
      * RequestConnector is an in-process MCP tool and the SDK zod-parses its
      * arguments and STRIPS unknown keys before the handler runs (verified by
-     * execution). The `__x` pattern works for AskUserQuestion, spawn_agent and
+     * execution). The `__x` pattern works for AskUserQuestion and
      * browser tools precisely because those are not MCP tools.
      *
      * It used to be `Map<connectorId, outcome>` with no delete — a last-write-wins
@@ -2126,33 +2124,6 @@ export class ClaudeProvider extends BaseProvider {
           };
         } finally {
           awaitingHuman.delete(toolUseID);
-        }
-      }
-
-      // ── Spawn agent ────────────────────────────────────────────────────
-      if (toolName === SPAWN_AGENT_TOOL_NAME) {
-        const task = typeof input.task === 'string' ? input.task : JSON.stringify(input);
-        const subSurfaceId = typeof input.surfaceId === 'string' ? input.surfaceId : (surfaceId ?? 'cowork');
-        const subModel = typeof input.model === 'string' ? input.model : null;
-        console.log('[Claude] Intercepting spawn_agent — task:', task.slice(0, 80));
-        try {
-          const res = await fetch('http://localhost:3000/api/subagent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ parentChatId: chatId, task, surfaceId: subSurfaceId, model: subModel, cwd, apiKey: apiKey || undefined }),
-          });
-          const data = await res.json() as { ok?: boolean; output?: string; error?: string };
-          const subOutput = data.ok ? (data.output ?? '') : `Sub-agent error: ${data.error}`;
-          return {
-            behavior: 'allow' as const,
-            updatedInput: { ...input, __spawn_agent_output: subOutput },
-          };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return {
-            behavior: 'allow' as const,
-            updatedInput: { ...input, __spawn_agent_output: `Failed to spawn sub-agent: ${msg}` },
-          };
         }
       }
 

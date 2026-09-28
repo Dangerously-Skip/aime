@@ -5,8 +5,7 @@ import { getBrowserConfig } from './browser-config';
  * A CAPABILITY THE MODEL IS NEVER TOLD ABOUT IS NOT A CAPABILITY.
  *
  * Routing this surface through the main chat path gave it subagents: `Agent` and
- * `Skill` are in its tool list, `spawn_agent` is intercepted by the provider and
- * relayed to /api/subagent, and the provider auto-approves them. All of that was
+ * `Skill` are in its tool list, and the provider auto-approves them. All of that was
  * true and none of it was in the system prompt, so the model had no reason to
  * reach for one — which is this codebase's recurring shape (wired, correct,
  * unreachable) expressed in prose rather than in code.

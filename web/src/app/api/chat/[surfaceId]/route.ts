@@ -59,7 +59,6 @@ const TOOL_PROFILES: Record<string, string[]> = {
 const PLUMBING_TOOLS = new Set([
   'AskUserQuestion',
   'Agent',
-  'spawn_agent',
   'TodoWrite',
   'mcp__aime__canvas',
   'mcp__aime__RequestConnector',

@@ -1656,29 +1656,17 @@ describe('canUseTool interception', () => {
     expect(result.updatedInput?.answers).toEqual({ choice: 'A' });
   });
 
-  it('injects sub-agent output for spawn_agent via the subagent API', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, output: 'sub-agent said hi' })),
-    );
+  it('no longer relays a `spawn_agent` call anywhere, least of all with the user’s key', async () => {
+    // It intercepted a tool nothing defined and POSTed the request's API key to
+    // a hardcoded http://localhost:3000. Subagents are the SDK's `Agent` tool.
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'p1', apiKey: 'sk-ant-secret' });
 
-    const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'parent1' });
     const result = await canUseTool('spawn_agent', { task: 'research things' }, { toolUseID: 's1' });
 
-    expect(result.behavior).toBe('allow');
-    expect(result.updatedInput?.__spawn_agent_output).toBe('sub-agent said hi');
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-    expect(body).toMatchObject({ parentChatId: 'parent1', task: 'research things' });
-  });
-
-  it('reports spawn_agent transport failures in the tool input instead of crashing', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
-
-    const { canUseTool } = await captureOptions(new ClaudeProvider(), {});
-    const result = await canUseTool('spawn_agent', { task: 'x' }, { toolUseID: 's1' });
-
-    expect(result.behavior).toBe('allow');
-    expect(result.updatedInput?.__spawn_agent_output).toContain('Failed to spawn');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.updatedInput).toBeUndefined();
   });
 });
 

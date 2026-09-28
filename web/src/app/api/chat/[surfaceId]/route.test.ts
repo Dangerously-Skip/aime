@@ -274,7 +274,7 @@ describe('provider parameter assembly', () => {
       // plus the in-app plumbing PLUMBING_TOOLS exempts: asking, delegating,
       // todos, canvas and the connector card. None acts on the world, and
       // TOOL_PROFILES never enumerated them.
-      'AskUserQuestion', 'Agent', 'spawn_agent', 'TodoWrite',
+      'AskUserQuestion', 'Agent', 'TodoWrite',
       'mcp__aime__canvas', 'mcp__aime__RequestConnector',
     ]);
     expect(allowed.length).toBeGreaterThan(0);
