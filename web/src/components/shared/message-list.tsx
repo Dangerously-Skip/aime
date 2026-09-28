@@ -95,17 +95,32 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
     return () => observer.disconnect();
   }, []);
 
-  // Scroll to bottom on conversation switch (messages go from 0 to >0)
-  useEffect(() => {
-    if (messages.length > 0) {
-      userScrolledUpRef.current = false;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- must run after mount: paired with the scrollIntoView DOM effect below
-      setUserScrolledUp(false);
-      requestAnimationFrame(() => {
-        endRef.current?.scrollIntoView({ behavior: "instant" });
-      });
+  /*
+   * Back to the bottom when the conversation changes, and when the user sends.
+   *
+   * It used to key on "messages went from none to some", so switching between
+   * two chats that both had messages left you wherever the previous one was
+   * scrolled — often mid-transcript — and once you had scrolled up to read,
+   * sending a new message did not follow it down: the reply streamed in out of
+   * sight. The newest user message is what "the user sent" looks like here.
+   */
+  let lastUserId: string | undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      lastUserId = messages[i].id;
+      break;
     }
-  }, [messages.length === 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
+  const hasMessages = messages.length > 0;
+  useEffect(() => {
+    if (!hasMessages) return;
+    userScrolledUpRef.current = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- must run after mount: paired with the scrollIntoView DOM effect below
+    setUserScrolledUp(false);
+    requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ behavior: "instant" });
+    });
+  }, [conversationId, lastUserId, hasMessages]);
 
   // Track user scroll position
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
