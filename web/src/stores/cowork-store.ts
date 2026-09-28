@@ -1,8 +1,9 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { createThrottledJSONStorage } from '@/lib/throttled-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import {
   findUnregisteredArtifacts,
@@ -384,7 +385,10 @@ export const useCoworkStore = create<CoworkStore>()(
     }),
     {
       name: 'aime:cowork',
-      storage: createJSONStorage(() => getGatedStorage()),
+      // Not per token: see lib/throttled-storage. Busy = any chat mid-turn.
+      storage: createThrottledJSONStorage(() => getGatedStorage(), {
+        isBusy: (): boolean => Object.keys(useCoworkStore.getState().streamingChats).length > 0,
+      }),
       partialize: (state) => ({
         messages: state.messages,
         currentChatId: state.currentChatId,
