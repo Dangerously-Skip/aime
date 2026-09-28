@@ -8,6 +8,7 @@ import type { CredentialField, ScannedModel } from "@/lib/models/providers";
 import { planProviderSetup, executeProviderSetup } from "@/lib/models/provider-setup";
 import { ProviderFields, providerHint } from "@/components/shared/provider-fields";
 import { saveCredentials } from "@/lib/models/credentials-client";
+import { APP_NAME } from "@/config/branding";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Check, KeyRound, Globe, HardDrive, Loader2, MoreHorizontal } from "lucide-react";
@@ -177,9 +178,15 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
         Back
       </button>
 
-      <h2 className="text-lg font-semibold">How should AIME reach a model?</h2>
-      <p className="mb-4 mt-1 text-sm text-muted-foreground">
-        Pick one to start — you can add more later in Settings → API Access.
+      <h2
+        id="onboarding-step-title"
+        tabIndex={-1}
+        className="text-center text-xl font-semibold tracking-tight outline-none"
+      >
+        How should {APP_NAME} reach a model?
+      </h2>
+      <p className="mb-4 mt-2 text-center text-sm text-muted-foreground">
+        Pick one to start — you can add more later in Settings → Models &amp; API keys.
       </p>
 
       {/*
@@ -300,8 +307,16 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
         </Button>
       </div>
 
-      <Button variant={configured ? "default" : "ghost"} onClick={onContinue} className="mt-3 w-full">
-        {configured ? "Continue" : "Skip — set up later"}
+      {/* One way forward. It used to read "Skip — set up later" until something
+          was configured, right above the wizard's own "Skip for now" — two
+          skips that did different things. Continuing with nothing set up is
+          fine: the Done step says so and offers the way back. */}
+      <Button
+        variant={configured || alreadyConfigured.size > 0 ? "default" : "outline"}
+        onClick={onContinue}
+        className="mt-3 w-full"
+      >
+        Continue
       </Button>
     </div>
   );

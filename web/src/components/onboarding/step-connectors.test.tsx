@@ -36,9 +36,14 @@ beforeEach(() => {
   provisionConnector.mockResolvedValue(undefined);
   useConnectorStore.setState({ connectorStates: {} });
   useSettingsStore.setState({ onboardingSkippedAt: null });
+  // The server holds a client id for every oauth2 connector unless a test says not.
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"clientId":"x"}', { status: 200 })));
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const renderStep = () =>
   render(
@@ -150,5 +155,21 @@ describe('StepConnectors — failures are reported, not swallowed', () => {
 
     await waitFor(() => expect(runMcpOAuthFlow).toHaveBeenCalled());
     expect(screen.queryByText(/canceled/i)).toBeNull();
+  });
+});
+
+describe('StepConnectors — only offers what this server can run', () => {
+  it('labels an oauth2 connector the server has no client for, instead of a Connect that cannot work', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"No OAuth credentials"}', { status: 500 })));
+    renderStep();
+    expect(await screen.findByText(/Requires an app registration/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Connect Microsoft 365 (Mail + Calendar)' })).toBeNull();
+    // API-key and MCP-OAuth connectors need nothing from the server.
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeTruthy();
+  });
+
+  it('says who Microsoft 365 works for before anyone clicks', () => {
+    renderStep();
+    expect(screen.getByText(/Work or school accounts only/)).toBeTruthy();
   });
 });

@@ -44,12 +44,13 @@ afterEach(() => {
 const noop = () => {};
 
 describe('StepProviders', () => {
-  it('offers the three provider paths and a skip', () => {
+  it('offers the three provider paths and a single way forward', () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
     expect(screen.getByText('Anthropic')).toBeTruthy();
     expect(screen.getByText('OpenRouter')).toBeTruthy();
     expect(screen.getByText(/Local \(Ollama/)).toBeTruthy();
-    expect(screen.getByText(/Skip — set up later/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeTruthy();
+    expect(screen.queryByText(/Skip — set up later/)).toBeNull();
   });
 
   it('Anthropic path saves the key AND mirrors it to the keychain', async () => {
@@ -107,7 +108,7 @@ describe('StepProviders', () => {
     expect(credCalls()).toHaveLength(0); // no key involved
   });
 
-  it('configuring flips the skip button into a Continue', async () => {
+  it('configuring makes Continue the primary button', async () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-ant-test' } });
     fireEvent.click(screen.getByText('Save & verify'));
