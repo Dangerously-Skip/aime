@@ -722,6 +722,37 @@ describe('memory extraction', () => {
   });
 });
 
+describe('document extraction', () => {
+  it('clears its 30s timeout once extraction settles', async () => {
+    // Regression: the timer stayed armed for the full 30s after every
+    // extraction, holding the handler's closure — attachment included.
+    const { mkdtemp, rm } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    const home = await mkdtemp(path.join(os.tmpdir(), 'aime-route-extract-'));
+    mocks.homeRef.value = home;
+    const setSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+    try {
+      await post('chat', {
+        message: 'read this',
+        chatId: 'extract-1',
+        attachments: [{ name: 'notes.md', content: Buffer.from('# hi').toString('base64'), type: 'text/markdown', category: 'document' }],
+      });
+      const extractionTimers = setSpy.mock.calls
+        .map((call, i) => ({ delay: call[1], handle: setSpy.mock.results[i]?.value }))
+        .filter((t) => t.delay === 30000);
+      expect(extractionTimers).toHaveLength(1);
+      expect(clearSpy.mock.calls.map((c) => c[0])).toContain(extractionTimers[0].handle);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+      mocks.homeRef.value = null;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('writing voice injection (P4)', () => {
   /**
    * The claim is that VOICE.md reaches the model. Asserting on the system prompt
