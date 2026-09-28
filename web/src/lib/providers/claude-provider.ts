@@ -14,6 +14,14 @@ import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { toolDeadlineMs, isNetworkTool } from './tool-deadlines';
+import {
+  classifyThrownTurnError,
+  cleanSdkErrorText,
+  codeForRetry,
+  codeForSdkError,
+  sdkErrorKindOf,
+} from './turn-errors';
+import { classifyTurnError, type TurnErrorCode } from '../sse/turn-error';
 import { getSurfaceConfig } from '../surfaces';
 import { internalAuthEnv } from '../auth/internal-credential';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
@@ -2429,6 +2437,27 @@ export class ClaudeProvider extends BaseProvider {
       }
     }, 5000);
 
+    /*
+     * A failed turn is reported ONCE, as a typed `error` chunk (see
+     * lib/sse/turn-error.ts), and the turn still ends with `done` so the client
+     * clears its streaming state.
+     *
+     * The SDK reports one failure up to three ways — a synthetic assistant
+     * message carrying `error`, an `is_error` result, and then a thrown "Claude
+     * Code returned an error result" — and all three used to reach the user: the
+     * first as assistant prose ("Not logged in · Please run /login", advice for
+     * a command this app does not have), the last as `**Error:** …` under it,
+     * and the turn still closed with an ordinary `done`. The first one to arrive
+     * wins; the others are recognised as the same failure.
+     */
+    let turnError: { code: TurnErrorCode; message: string } | null = null;
+    const failTurn = (code: TurnErrorCode, message: string): StreamChunk | null => {
+      if (turnError) return null;
+      turnError = { code, message };
+      console.warn(`[Claude] Turn failed (${code}):`, message);
+      return { type: 'error', message, code, provider: this.name };
+    };
+
     try {
       // Stream responses from Claude Agent SDK - matches server.js exactly
       for await (const chunk of query({
@@ -2491,6 +2520,19 @@ export class ClaudeProvider extends BaseProvider {
                */
               limitReason: c.subtype === 'error_max_turns' ? 'max_turns' : 'hard',
             };
+          } else if (c.is_error === true) {
+            /*
+             * A result that IS the failure — auth, billing, an exhausted retry
+             * budget — rather than a ceiling the run reached. Its text is the
+             * error, so it becomes the error chunk and is never streamed as
+             * assistant content. Usually an assistant `error` got here first,
+             * in which case this is the same failure and `failTurn` drops it.
+             */
+            const errors = Array.isArray(c.errors) ? (c.errors as unknown[]).filter((e) => typeof e === 'string') : [];
+            const text = (typeof c.result === 'string' && c.result) || errors.join('; ') || `The run ended with ${String(c.subtype)}`;
+            const status = typeof c.api_error_status === 'number' ? c.api_error_status : undefined;
+            const chunk = failTurn(classifyTurnError(text, status), cleanSdkErrorText(text) || text);
+            if (chunk) yield chunk;
           }
           /*
            * Consumed here. The branch that used to swallow this — the old
@@ -2505,9 +2547,43 @@ export class ClaudeProvider extends BaseProvider {
           continue;
         }
 
-        // Debug: log all system messages to find session_id
+        /*
+         * The SDK is about to retry a failed API call (429, 529, a dropped
+         * connection). Forwarded so the user sees "retrying in 8s" instead of a
+         * spinner that has gone quiet for no stated reason.
+         */
+        if (c.type === 'system' && c.subtype === 'api_retry') {
+          const status = typeof c.error_status === 'number' ? c.error_status : null;
+          const code = codeForRetry(c.error as string | undefined, status);
+          console.warn(`[Claude] API retry ${String(c.attempt)}/${String(c.max_retries)} (${code}) in ${String(c.retry_delay_ms)}ms`);
+          yield {
+            type: 'retry',
+            attempt: typeof c.attempt === 'number' ? c.attempt : 1,
+            delayMs: typeof c.retry_delay_ms === 'number' ? c.retry_delay_ms : 0,
+            code,
+            provider: this.name,
+          };
+          continue;
+        }
+
+        /*
+         * One line per system message. This used to pretty-print the whole
+         * object on every turn — the init message alone lists every tool, MCP
+         * server, skill and slash command, which buried everything else in the
+         * log.
+         */
         if (c.type === 'system') {
-          console.log('[Claude] System message:', JSON.stringify(c, null, 2));
+          if (c.subtype === 'init') {
+            const d = (c.data || c) as Record<string, unknown>;
+            const servers = Array.isArray(d.mcp_servers)
+              ? (d.mcp_servers as Array<{ name?: unknown }>).map((m) => String(m?.name ?? m)).join(', ')
+              : '';
+            console.log(
+              `[Claude] System init: model=${String(d.model ?? '?')} tools=${Array.isArray(d.tools) ? d.tools.length : 0} mcp=[${servers}]`,
+            );
+          } else {
+            console.log('[Claude] System message:', String(c.subtype ?? '(no subtype)'));
+          }
         }
 
         // Capture session ID and system:init data - matches server.js logic
@@ -2618,9 +2694,33 @@ export class ClaudeProvider extends BaseProvider {
 
           const message = c.message as Record<string, unknown>;
           const content = message.content;
+
+          /*
+           * The CLI reporting a failure in the shape of an assistant message.
+           * Its text is the error ("Not logged in · Please run /login"), not
+           * something the model said, so it becomes the error chunk and none of
+           * it is streamed as content — otherwise it lands in the transcript
+           * and goes back to the model next turn as its own words.
+           */
+          const messageText = Array.isArray(content)
+            ? (content as Array<Record<string, unknown>>)
+                .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+                .map((b) => b.text as string)
+                .join('\n')
+            : '';
+          const sdkErrorKind = sdkErrorKindOf(c as { error?: unknown; message?: { model?: unknown } }, messageText);
+          if (sdkErrorKind) {
+            const chunk = failTurn(
+              codeForSdkError(sdkErrorKind, messageText),
+              cleanSdkErrorText(messageText) || sdkErrorKind,
+            );
+            if (chunk) yield chunk;
+          }
+
           if (Array.isArray(content)) {
             for (const [blockIndex, block] of content.entries()) {
               if (block.type === 'text' && block.text) {
+                if (sdkErrorKind) continue;
                 // Whatever the deltas did not already carry — usually nothing
                 // when streaming is on, and the whole block when it is off.
                 const already = streamedBlocks.get(blockIndex) ?? '';
@@ -2803,15 +2903,28 @@ export class ClaudeProvider extends BaseProvider {
 
       yield* drainPending();
 
-      // Signal completion
+      // Signal completion. A failed turn still ends with `done` — it is what
+      // clears the client's streaming state — flagged so nothing downstream
+      // treats it as a finished answer.
       yield {
         type: 'done',
         provider: this.name,
+        ...(turnError ? { error: true } : {}),
       };
 
       console.log('[Claude] Stream completed');
     } catch (error: unknown) {
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (turnError && !(error instanceof Error && error.name === 'AbortError')) {
+        /*
+         * The SDK throws "Claude Code returned an error result: …" after an
+         * `is_error` result. That failure has already been reported as a typed
+         * error chunk; relaying the throw as well is how the user got the same
+         * failure twice, once as `**Error:** …` prose.
+         */
+        console.warn('[Claude] SDK threw after the turn had already failed:', error instanceof Error ? error.message : error);
+        yield* drainPending();
+        yield { type: 'done', provider: this.name, error: true };
+      } else if (error instanceof Error && error.name === 'AbortError') {
         console.log('[Claude] Query aborted for chatId:', chatId);
         // Before reporting the abort: whatever was already created is still
         // created, and the model has already told the user so. See drainPending.
@@ -2829,6 +2942,7 @@ export class ClaudeProvider extends BaseProvider {
           yield {
             type: 'error',
             message: `Tool "${trip.name}" was stopped after ${(trip.elapsedMs / 1000).toFixed(0)}s without returning. ${advice} Work already produced above is kept.`,
+            code: 'timeout' satisfies TurnErrorCode,
             provider: this.name,
           };
         }
@@ -2837,6 +2951,17 @@ export class ClaudeProvider extends BaseProvider {
           provider: this.name,
         };
       } else {
+        /*
+         * Rethrown, not turned into a chunk: several callers only collect text
+         * and would report an empty success. The classification rides along on
+         * the error so the chat route does not have to re-derive it from the
+         * message alone.
+         */
+        if (error && typeof error === 'object') {
+          try {
+            (error as { turnErrorCode?: TurnErrorCode }).turnErrorCode = classifyThrownTurnError(error).code;
+          } catch { /* a frozen error still propagates; the route classifies it */ }
+        }
         throw error;
       }
     } finally {

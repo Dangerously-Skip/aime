@@ -150,7 +150,35 @@ describe('streaming', () => {
 
     const error = events.find((e) => e.type === 'error');
     expect(error?.message).toContain('SDK fell over');
+    expect(error?.code).toBe('unknown');
     expect(events.at(-1)?.type).toBe('done'); // stream still terminates cleanly
+    expect(events.at(-1)?.error).toBe(true);
+  });
+
+  it('classifies a thrown 429 so the client can offer a retry', async () => {
+    mocks.queryMock.mockImplementation(async function* () {
+      throw Object.assign(new Error('Too Many Requests'), { status: 429 });
+    });
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'rate_limit' });
+    expect(events.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('marks the final done as failed when the provider reported an error', async () => {
+    scriptProvider([
+      { type: 'error', message: 'Not logged in', code: 'auth', provider: 'claude' },
+      { type: 'done', error: true, provider: 'claude' },
+    ]);
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'auth' });
+    expect(events.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('leaves the error flag off a turn that succeeded', async () => {
+    scriptProvider([{ type: 'text', content: 'fine', provider: 'claude' }]);
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+    expect(events.at(-1)?.type).toBe('done');
+    expect(events.at(-1)?.error).toBeUndefined();
   });
 });
 

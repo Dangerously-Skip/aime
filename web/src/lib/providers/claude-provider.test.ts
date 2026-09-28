@@ -734,6 +734,134 @@ describe('stream translation', () => {
 });
 
 /**
+ * A failed turn is a typed `error` chunk (lib/sse/turn-error.ts), never
+ * assistant prose, and the stream still ends in `done` — flagged `error: true`.
+ *
+ * Driven with the message shapes the SDK actually sends for a revoked key: a
+ * synthetic assistant message carrying `error: 'authentication_failed'` whose
+ * text is the CLI's login advice, then an `is_error` result, then a throw.
+ */
+describe('typed turn errors', () => {
+  const authMessage = {
+    type: 'assistant',
+    error: 'authentication_failed',
+    message: { model: '<synthetic>', content: [{ type: 'text', text: 'Not logged in · Please run /login' }] },
+  };
+  const authResult = {
+    type: 'result',
+    subtype: 'success',
+    is_error: true,
+    result: 'Not logged in · Please run /login',
+    usage: {},
+  };
+
+  it('turns an assistant-message auth error into an error chunk, not text', async () => {
+    scriptChunks([authMessage, authResult]);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    const errors = chunks.filter((c) => c.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ code: 'auth', message: 'Not logged in' });
+    // The CLI's advice never reaches the transcript.
+    expect(chunks.filter((c) => c.type === 'text')).toEqual([]);
+    expect(JSON.stringify(chunks)).not.toContain('/login');
+    expect(chunks.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('reports once when the SDK also throws after the error result', async () => {
+    queryMock.mockImplementation(async function* () {
+      yield authMessage;
+      yield authResult;
+      throw new Error('Claude Code returned an error result: Not logged in · Please run /login');
+    });
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.filter((c) => c.type === 'error')).toHaveLength(1);
+    expect(chunks.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('classifies an is_error result that arrives without an assistant error', async () => {
+    scriptChunks([
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        api_error_status: 402,
+        result: 'Your credit balance is too low to access the Anthropic API.',
+        usage: {},
+      },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.find((c) => c.type === 'error')).toMatchObject({ code: 'billing' });
+    expect(chunks.filter((c) => c.type === 'text')).toEqual([]);
+    expect(chunks.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('uses error_during_execution’s `errors` when there is no result text', async () => {
+    scriptChunks([
+      { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['prompt is too long'], usage: {} },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.find((c) => c.type === 'error')).toMatchObject({ code: 'context_length' });
+  });
+
+  it('does not treat a turn or budget ceiling as a failure', async () => {
+    scriptChunks([{ type: 'result', subtype: 'error_max_turns', is_error: true, usage: {} }]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.some((c) => c.type === 'error')).toBe(false);
+    expect(chunks.at(-1)).toEqual({ type: 'done', provider: 'claude' });
+  });
+
+  it('catches the login advice on a synthetic message even without the typed field', async () => {
+    scriptChunks([
+      {
+        type: 'assistant',
+        message: { model: '<synthetic>', content: [{ type: 'text', text: 'Invalid API key · Please run /login' }] },
+      },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.find((c) => c.type === 'error')).toMatchObject({ code: 'auth' });
+    expect(chunks.filter((c) => c.type === 'text')).toEqual([]);
+  });
+
+  it('leaves an ordinary reply that mentions /login alone', async () => {
+    scriptChunks([
+      { type: 'assistant', message: { model: 'claude-sonnet-5', content: [{ type: 'text', text: 'Please run /login in your CLI.' }] } },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.some((c) => c.type === 'error')).toBe(false);
+    expect(chunks.find((c) => c.type === 'text')).toMatchObject({ content: 'Please run /login in your CLI.' });
+  });
+
+  it('forwards api_retry as a retry chunk', async () => {
+    scriptChunks([
+      { type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 8000, error_status: 429, error: 'rate_limit' },
+      { type: 'system', subtype: 'api_retry', attempt: 3, max_retries: 10, retry_delay_ms: 16000, error_status: 529, error: 'unknown' },
+      { type: 'system', subtype: 'api_retry', attempt: 4, max_retries: 10, retry_delay_ms: 1000, error_status: null, error: 'unknown' },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.filter((c) => c.type === 'retry')).toEqual([
+      { type: 'retry', attempt: 2, delayMs: 8000, code: 'rate_limit', provider: 'claude' },
+      { type: 'retry', attempt: 3, delayMs: 16000, code: 'overloaded', provider: 'claude' },
+      { type: 'retry', attempt: 4, delayMs: 1000, code: 'network', provider: 'claude' },
+    ]);
+    // A retry is not a failure.
+    expect(chunks.at(-1)).toEqual({ type: 'done', provider: 'claude' });
+  });
+
+  it('tags a thrown 429 with its code and still rethrows it', async () => {
+    const err = Object.assign(new Error('Too Many Requests'), { status: 429 });
+    queryMock.mockImplementation(async function* () {
+      throw err;
+    });
+    await expect(run(new ClaudeProvider(), {})).rejects.toBe(err);
+    expect((err as { turnErrorCode?: string }).turnErrorCode).toBe('rate_limit');
+  });
+});
+
+/**
  * `deniedTools` — the difference between a control that looks enforced and one
  * that is.
  *

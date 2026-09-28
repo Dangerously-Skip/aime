@@ -11,7 +11,10 @@ export type ChunkType =
   | 'system_init'
   | 'done'
   | 'aborted'
+  /** A failed turn: `{ message, code: TurnErrorCode }` — see lib/sse/turn-error.ts. */
   | 'error'
+  /** The provider is retrying an API call: `{ attempt, delayMs, code }`. */
+  | 'retry'
   | 'connected'
   | 'status'
   | 'assistant'

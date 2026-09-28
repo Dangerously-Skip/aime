@@ -7,6 +7,7 @@ import { type SessionControls } from '@/lib/slash-commands';
 import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
 import { baseToolName, toolMatches } from '@/lib/security/tool-names';
+import { classifyThrownTurnError } from '@/lib/providers/turn-errors';
 
 /** Tool profile → allowed tool sets (intersected with surface defaults) */
 const TOOL_PROFILES: Record<string, string[]> = {
@@ -1013,6 +1014,12 @@ export async function POST(
       let toolCallCount = 0;
       const streamStartMs = Date.now();
       let queryTimedOut = false;
+      /**
+       * Did the turn fail? Set from the provider's typed `error` chunk, the
+       * silence timeout, or a throw — and carried onto the final `done` so the
+       * client can tell a failed turn from a finished one.
+       */
+      let turnFailed = false;
 
       /*
        * THE TIMEOUT MEASURES SILENCE, NOT DURATION.
@@ -1061,8 +1068,10 @@ export async function POST(
          * a run that had been working the whole time, and the advice that
          * followed sent the user off to simplify a request that was fine.
          */
+        turnFailed = true;
         await sse.writeEvent({
           type: 'error',
+          code: 'timeout',
           message:
             `The run stopped producing output for ${timeoutSecs} seconds and was cancelled. ` +
             `Anything already produced above is kept.`,
@@ -1292,6 +1301,7 @@ export async function POST(
           if (queryTimedOut) continue;
           // A chunk is a sign of life — see `noteActivity`.
           noteActivity();
+          if (chunk.type === 'error') turnFailed = true;
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);
             toolCallCount++;
@@ -1368,7 +1378,9 @@ export async function POST(
             if (errObj.cause) console.error('[CHAT] cause:', errObj.cause);
             if (errObj.stack) console.error('[CHAT] stack:', errObj.stack);
           }
-          await sse.writeEvent({ type: 'error', message: errMsg });
+          turnFailed = true;
+          const { code, message: shown } = classifyThrownTurnError(streamError);
+          await sse.writeEvent({ type: 'error', message: shown, code });
         }
       } finally {
         if (queryTimer) clearTimeout(queryTimer);
@@ -1427,6 +1439,7 @@ export async function POST(
 
       await sse.writeEvent({
         type: 'done',
+        ...(turnFailed ? { error: true } : {}),
         usage: {
           inputTokens,
           outputTokens,
@@ -1446,7 +1459,10 @@ export async function POST(
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error('[CHAT] Error:', errMsg);
-      await sse.writeEvent({ type: 'error', message: errMsg });
+      const { code, message: shown } = classifyThrownTurnError(error);
+      await sse.writeEvent({ type: 'error', message: shown, code });
+      // Still a `done`: it is what clears the client's streaming state.
+      await sse.writeEvent({ type: 'done', error: true });
     } finally {
       clearInterval(heartbeatInterval);
       await sse.close();
