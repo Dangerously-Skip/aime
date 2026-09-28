@@ -871,7 +871,6 @@ export async function POST(
         const { extractDocument } = await import('@/lib/extractors');
         const { getScratchDir, getScratchRoot, isSafeChatId } = await import('@/lib/app-paths');
         const { join: ej, dirname: eDirname } = await import('path');
-        const { mkdirSync: eMkdir, writeFileSync: eWrite } = await import('fs');
         const { writeUniqueFile, copyIntoUnique, isRealPathWithin } = await import('@/lib/uploads/store');
         const isToolSurface = surfaceId === 'cowork' || surfaceId === 'code';
         // Stored names are unique per conversation (`a.png`, `a-2.png`) so two
@@ -957,12 +956,13 @@ export async function POST(
               att.extractedPath = att.filePath;
               console.log('[EXTRACT] Empty result; falling back to Read tool path for', att.name);
             } else if (isToolSurface && result.text.length > 0) {
-              // Save to scratch dir for agent to Read/Grep
+              // Save to scratch dir for agent to Read/Grep — under a UNIQUE name,
+              // like the uploads beside it: two `report.pdf` attachments in one
+              // conversation both became documents/report.md, and the second
+              // overwrote the first while the model still held both paths.
               const scratchDir = ej(getScratchDir(chatId as string), 'documents');
-              eMkdir(scratchDir, { recursive: true });
-              const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.[^.]+$/, '.md');
-              const extractedPath = ej(scratchDir, safeName);
-              eWrite(extractedPath, result.text, 'utf-8');
+              const mdName = `${att.name.replace(/\.[^.]+$/, '')}.md`;
+              const extractedPath = await writeUniqueFile(scratchDir, mdName, Buffer.from(result.text, 'utf-8'));
               att.extractedPath = extractedPath;
               att.content = ''; // Free memory — agent will use Read tool
               console.log('[EXTRACT] Saved to scratch:', extractedPath, '(' + result.text.length + ' chars)');

@@ -753,6 +753,38 @@ describe('document extraction', () => {
   });
 });
 
+describe('extracted documents get unique names', () => {
+  it('two same-named attachments no longer overwrite each other', async () => {
+    const { mkdtemp, rm, readFile } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    const home = await mkdtemp(path.join(os.tmpdir(), 'aime-route-docs-'));
+    mocks.homeRef.value = home;
+    try {
+      const { events } = await post('cowork', {
+        message: 'compare these',
+        chatId: 'docs-1',
+        attachments: [
+          { name: 'notes.md', content: Buffer.from('# first draft').toString('base64'), type: 'text/markdown', category: 'document' },
+          { name: 'notes.md', content: Buffer.from('# second draft').toString('base64'), type: 'text/markdown', category: 'document' },
+        ],
+      });
+      const paths = events
+        .filter((e) => e.type === 'document_extracted')
+        .map((e) => e.extractedPath as string);
+      expect(paths).toHaveLength(2);
+      expect(new Set(paths).size).toBe(2);
+      expect(paths.every((p) => p.includes(`${path.sep}documents${path.sep}`))).toBe(true);
+      const bodies = await Promise.all(paths.map((p) => readFile(p, 'utf-8')));
+      expect(bodies.join('\n')).toContain('first draft');
+      expect(bodies.join('\n')).toContain('second draft');
+    } finally {
+      mocks.homeRef.value = null;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('writing voice injection (P4)', () => {
   /**
    * The claim is that VOICE.md reaches the model. Asserting on the system prompt
