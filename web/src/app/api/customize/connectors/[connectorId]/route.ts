@@ -1,10 +1,12 @@
 import { NextRequest } from 'next/server';
-import fs from 'fs';
-import { getMcpConfigPath } from '@/lib/app-paths';
+import {
+  readMcpConfig,
+  updateMcpConfig,
+  SKIP_WRITE,
+  McpConfigCorruptError,
+} from '@/lib/mcp/config-store';
 
 export const runtime = 'nodejs';
-
-const MCP_JSON_PATH = getMcpConfigPath();
 
 interface McpServerConfig {
   type: 'stdio' | 'http' | 'sse';
@@ -20,18 +22,16 @@ interface McpJson {
   mcpServers?: Record<string, McpServerConfig>;
 }
 
-function readMcpJson(): McpJson {
-  try {
-    if (fs.existsSync(MCP_JSON_PATH)) {
-      return JSON.parse(fs.readFileSync(MCP_JSON_PATH, 'utf-8'));
-    }
-  } catch {}
-  return { mcpServers: {} };
+function writeErrorResponse(err: unknown): Response {
+  if (err instanceof McpConfigCorruptError) {
+    return Response.json({ error: err.message }, { status: 409 });
+  }
+  console.error('[Connectors] Error writing MCP config:', err);
+  return Response.json({ error: 'Failed to save connector' }, { status: 500 });
 }
 
-function writeMcpJson(data: McpJson) {
-  fs.writeFileSync(MCP_JSON_PATH, JSON.stringify(data, null, 2), 'utf-8');
-}
+const hasServer = (data: McpJson, id: string): boolean =>
+  !!data.mcpServers && Object.hasOwn(data.mcpServers, id);
 
 /**
  * GET /api/customize/connectors/:connectorId — Read a single connector
@@ -41,8 +41,8 @@ export async function GET(
   { params }: { params: Promise<{ connectorId: string }> },
 ) {
   const { connectorId } = await params;
-  const mcpData = readMcpJson();
-  const config = mcpData.mcpServers?.[connectorId];
+  const mcpData = (await readMcpConfig()) as McpJson;
+  const config = hasServer(mcpData, connectorId) ? mcpData.mcpServers![connectorId] : undefined;
 
   if (!config) {
     return Response.json({ error: 'Connector not found' }, { status: 404 });
@@ -77,20 +77,25 @@ export async function PUT(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const mcpData = readMcpJson();
-  if (!mcpData.mcpServers?.[connectorId]) {
+  let updated: McpServerConfig | undefined;
+  try {
+    updated = await updateMcpConfig((raw) => {
+      const mcpData = raw as McpJson;
+      if (!hasServer(mcpData, connectorId)) return SKIP_WRITE;
+      const next: McpServerConfig = {
+        ...mcpData.mcpServers![connectorId],
+        ...(body.config || {}),
+        ...(body.disabled !== undefined ? { disabled: body.disabled } : {}),
+      };
+      mcpData.mcpServers![connectorId] = next;
+      return next;
+    });
+  } catch (err) {
+    return writeErrorResponse(err);
+  }
+  if (!updated) {
     return Response.json({ error: 'Connector not found' }, { status: 404 });
   }
-
-  const existing = mcpData.mcpServers[connectorId];
-  const updated: McpServerConfig = {
-    ...existing,
-    ...(body.config || {}),
-    ...(body.disabled !== undefined ? { disabled: body.disabled } : {}),
-  };
-
-  mcpData.mcpServers[connectorId] = updated;
-  writeMcpJson(mcpData);
 
   return Response.json({
     connector: {
@@ -112,14 +117,21 @@ export async function DELETE(
   { params }: { params: Promise<{ connectorId: string }> },
 ) {
   const { connectorId } = await params;
-  const mcpData = readMcpJson();
 
-  if (!mcpData.mcpServers?.[connectorId]) {
+  let deleted: boolean | undefined;
+  try {
+    deleted = await updateMcpConfig((raw) => {
+      const mcpData = raw as McpJson;
+      if (!hasServer(mcpData, connectorId)) return SKIP_WRITE;
+      delete mcpData.mcpServers![connectorId];
+      return true;
+    });
+  } catch (err) {
+    return writeErrorResponse(err);
+  }
+  if (!deleted) {
     return Response.json({ error: 'Connector not found' }, { status: 404 });
   }
-
-  delete mcpData.mcpServers[connectorId];
-  writeMcpJson(mcpData);
 
   return Response.json({ deleted: true });
 }

@@ -205,6 +205,46 @@ describe('token refresh — when it runs at all', () => {
     });
   });
 
+  // REGRESSION: two chats starting together each saw the token as expiring and
+  // each POSTed the refresh token. A provider that rotates refresh tokens honours
+  // the first and rejects (or revokes the grant on) the second.
+  it('concurrent refreshes of one server share ONE token request (single-flight)', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    fetchMock.mockImplementation(async () => {
+      await gate;
+      return new Response(JSON.stringify({ access_token: 'NEW_TOKEN', expires_in: 3600 }), { status: 200 });
+    });
+    await write({
+      'aime-connector-google-personal': expired({ env: { GOOGLE_ACCESS_TOKEN: 'old' }, _meta: {} }),
+    });
+    const meta = (await readBack())['aime-connector-google-personal']._meta as Record<string, unknown>;
+
+    // Driven directly rather than through three concurrent loadProvisionedMcpServers
+    // calls: concurrent dynamic imports of the vi.mock'd app-paths intermittently
+    // resolve to the REAL module here, so two of three loads read ~/.claude and
+    // never reached the refresh — the test passed with single-flight removed.
+    const { refreshTokenIfNeeded, loadProvisionedMcpServers } = await import('./provisioned');
+    const refreshes = Promise.all([
+      refreshTokenIfNeeded('aime-connector-google-personal', meta, configPath),
+      refreshTokenIfNeeded('aime-connector-google-personal', meta, configPath),
+      refreshTokenIfNeeded('aime-connector-google-personal', meta, configPath),
+    ]);
+    // Let every caller reach the token endpoint before it answers.
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    expect(await refreshes).toEqual(['NEW_TOKEN', 'NEW_TOKEN', 'NEW_TOKEN']);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((await readBack())['aime-connector-google-personal'].env).toEqual({
+      GOOGLE_ACCESS_TOKEN: 'NEW_TOKEN',
+    });
+
+    // And a load arriving after it finished sees a fresh token: no second call.
+    await loadProvisionedMcpServers();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('translates streamable-http to the SDK http type', async () => {
     await write({
       'aime-connector-github': {

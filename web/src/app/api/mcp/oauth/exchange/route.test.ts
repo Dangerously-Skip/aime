@@ -103,6 +103,29 @@ describe('POST /api/mcp/oauth/exchange — token endpoint trust', () => {
     expect(meta.tokenEndpoint).toBe('https://auth.acme.com/token');
   });
 
+  it('marks the entry with the AIME managedBy value, not the pre-rename one', async () => {
+    await registerClient();
+    await post(validBody());
+    const meta = JSON.parse(await readFile(configPath, 'utf-8')).mcpServers['aime-mcp-acme']._meta;
+    expect(meta.managedBy).toBe('aime-mcp-oauth');
+  });
+
+  it('keeps the other servers in the config', async () => {
+    await writeFile(configPath, JSON.stringify({ mcpServers: { other: { url: 'https://o' } } }));
+    await registerClient();
+    await post(validBody());
+    const servers = JSON.parse(await readFile(configPath, 'utf-8')).mcpServers;
+    expect(Object.keys(servers).sort()).toEqual(['aime-mcp-acme', 'other']);
+  });
+
+  it('refuses to write over an unparseable config', async () => {
+    await writeFile(configPath, '{"mcpServers": {"other"');
+    await registerClient();
+    const res = await post(validBody());
+    expect(res.status).toBe(409);
+    await expect(readFile(configPath, 'utf-8')).rejects.toThrow();
+  });
+
   it('falls back to the request when nothing was stored, but still demands https', async () => {
     // A pre-existing registration written before tokenEndpoint was persisted.
     await registerClient({ tokenEndpoint: undefined });
