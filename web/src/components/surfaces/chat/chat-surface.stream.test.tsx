@@ -22,6 +22,26 @@ import { streamRegistry } from '@/lib/stream-registry';
  *   an aborted fetch reaches neither, so Stop left the Run 'running' for ever.
  */
 
+/**
+ * A body the test writes into: `push` an SSE event, `end` the stream. Lets a
+ * test switch conversation between two chunks of the same reply.
+ */
+function controllableFetch() {
+  let ctrl!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({ start(c) { ctrl = c; } });
+  const enc = new TextEncoder();
+  return {
+    fetch: () => Promise.resolve(new Response(body, { status: 200 })),
+    push: (event: Record<string, unknown>) => ctrl.enqueue(enc.encode(`data: ${JSON.stringify(event)}\n\n`)),
+    end: () => ctrl.close(),
+  };
+}
+
+/** Let the reader loop drain what has been pushed. */
+async function flush() {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
 /** Headers arrive, then the body goes silent — what an inactivity timeout detects. */
 function stalledBodyFetch(_url: string, init: RequestInit): Promise<Response> {
   const signal = init.signal as AbortSignal;
@@ -143,6 +163,32 @@ describe('ChatSurface — a failing stream reports to the conversation it belong
     const last = (useChatStore.getState().messages[CHAT] ?? []).at(-1);
     expect(last?.isStreaming).toBeFalsy();
     expect(last?.isLoading).toBeFalsy();
+  });
+});
+
+describe('ChatSurface — a reply stays in the conversation it was asked in', () => {
+  it('text arriving after a mid-stream conversation switch lands in the original chat', async () => {
+    const stream = controllableFetch();
+    fetchMock.mockImplementation((url: string) =>
+      String(url).includes('/api/chat/') ? stream.fetch() : Promise.resolve(new Response('{}')),
+    );
+    useChatStore.getState().addMessage(OTHER, {
+      id: 'other-1', role: 'assistant', content: 'unrelated work', timestamp: Date.now(),
+    });
+    render(<ChatSurface />);
+    await send('write a poem');
+
+    await act(async () => { stream.push({ type: 'text', content: 'Roses ' }); await flush(); });
+    // The user opens another conversation while the reply is still arriving.
+    await act(async () => { useChatStore.getState().setCurrentChat(OTHER); });
+    await act(async () => {
+      stream.push({ type: 'text', content: 'are red' });
+      stream.end();
+      await flush();
+    });
+
+    expect(lastContent(CHAT)).toBe('Roses are red');
+    expect(lastContent(OTHER)).toBe('unrelated work');
   });
 });
 

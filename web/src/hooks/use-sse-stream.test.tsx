@@ -148,6 +148,40 @@ describe('useSSEStream.sendMessage', () => {
     expect(chunkTypes).not.toContain('done');
   });
 
+  it('hands every callback the chat the stream was started for, not the one on screen', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'data: {"type":"text","content":"a"}\n\n',
+        'data: {"type":"done","usage":{"inputTokens":1,"outputTokens":1,"cost":0,"model":"m","durationMs":1,"toolCallCount":0}}\n\n',
+      ]),
+    );
+    const onChunk = vi.fn();
+    const onDone = vi.fn();
+    const onUsage = vi.fn();
+    // The hook is showing 'on-screen'; the turn belongs to 'started-for'.
+    const { result } = renderHook(() =>
+      useSSEStream({ onChunk, onDone, onUsage, onError: vi.fn(), setIsStreaming: vi.fn(), chatId: 'on-screen' }),
+    );
+
+    await result.current.sendMessage('hi', 'started-for', 'chat', null);
+
+    expect(onChunk).toHaveBeenCalledWith(expect.objectContaining({ type: 'text' }), 'started-for');
+    expect(onUsage).toHaveBeenCalledWith(expect.anything(), 'started-for');
+    expect(onDone).toHaveBeenCalledWith('started-for');
+  });
+
+  it('hands onError the chat the failed stream was started for', async () => {
+    fetchMock.mockRejectedValue(new Error('connection refused'));
+    const onError = vi.fn();
+    const { result } = renderHook(() =>
+      useSSEStream({ onChunk: vi.fn(), onDone: vi.fn(), onError, setIsStreaming: vi.fn(), chatId: 'on-screen' }),
+    );
+
+    await result.current.sendMessage('hi', 'started-for', 'chat', null);
+
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), 'started-for');
+  });
+
   it('sends the payload to the surface endpoint, omitting empty extras', async () => {
     fetchMock.mockResolvedValue(sseResponse([]));
     const { stream } = setup();

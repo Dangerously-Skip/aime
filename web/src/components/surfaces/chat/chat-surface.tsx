@@ -244,22 +244,6 @@ export function ChatSurface() {
     }
   }, [chatId]);
 
-  // Read the CURRENT chatId from the store at call time, not from the
-  // closure. On the first message in a new chat, the closure chatId is ""
-  // because setCurrentChat(newId) hasn't triggered a re-render yet.
-  // This causes chunks to be written to chatId "" instead of the new ID.
-  const getChatId = () => useChatStore.getState().currentChatId ?? "";
-
-  /**
-   * The chat the in-flight stream was started for.
-   *
-   * `getChatId()` answers "which conversation is on screen NOW", which is the
-   * right question while chunks are arriving and the wrong one when a turn ends:
-   * a timeout firing after a cross-surface switch appended its error text to
-   * whatever the user was reading instead of the conversation that failed.
-   */
-  const streamChatIdRef = useRef("");
-
   const ownsChat = useCallback(
     (id: string) => !!useChatStore.getState().messages[id]?.length,
     [],
@@ -277,14 +261,14 @@ export function ChatSurface() {
     chatId,
     setIsStreaming,
     onUsage: runRecorder.onUsage,
-    onChunk(event) {
+    // `cid` is the chat this stream was started for — never the one on screen
+    // now. See useSSEStream for why every callback is handed it.
+    onChunk(event, cid) {
       // Chunks whose handling is the same on every surface — cron jobs,
       // standing orders, widgets, memory. Handled in ONE place
       // (lib/sse/agnostic-chunks) because each surface having its own case
       // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Chat' })) return;
-
-      const cid = getChatId();
+      if (handleAgnosticChunk(event, { chatId: cid, surface: 'Chat' })) return;
 
       // The six chunks whose handling is identical on chat, cowork and code —
       // recorded once in lib/sse/core-chunks against the nine-action store
@@ -327,14 +311,14 @@ export function ChatSurface() {
         case "prompt_suggestion": {
           const suggestion = event.suggestion as string;
           if (suggestion) {
-            addSuggestion(getChatId(), suggestion);
+            addSuggestion(cid, suggestion);
           }
           break;
         }
         case "document_extracted": {
           const extractedText = event.extractedText as string | undefined;
           const docName = event.name as string;
-          const did = getChatId();
+          const did = cid;
           if (extractedText && did) {
             const msgs = useChatStore.getState().messages[did] || [];
             for (let i = msgs.length - 1; i >= 0; i--) {
@@ -349,19 +333,16 @@ export function ChatSurface() {
         }
       }
     },
-    onDone() {
+    onDone(doneId) {
       runRecorder.succeed();
-      const doneId = streamChatIdRef.current || getChatId();
       completeRunningTools(doneId);
       stopStreaming(doneId);
       if (!document.hasFocus()) {
         showNotification("Task complete", "Claude has finished working on your request.");
       }
     },
-    onError(error) {
+    onError(error, errorId) {
       runRecorder.fail(error.message);
-      // The conversation that failed, not whichever one is on screen by now.
-      const errorId = streamChatIdRef.current || getChatId();
       stopStreaming(errorId);
       appendToLastAssistant(errorId, `\n\n**Error:** ${error.message}`);
     },
@@ -488,9 +469,6 @@ export function ChatSurface() {
       // Open the run record before the turn starts so an immediate failure is
       // still attributed rather than lost.
       runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
-      // Pin the target before the stream starts: everything that finalises the
-      // turn must land here even if the user has moved on by then.
-      streamChatIdRef.current = id;
       await sendMessage(trimmed, id, "chat", route?.model ?? null, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,

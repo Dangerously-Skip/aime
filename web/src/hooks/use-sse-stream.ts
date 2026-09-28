@@ -76,18 +76,28 @@ export interface StreamUsage {
   clarificationCount?: number;
 }
 
+/*
+ * Every callback receives the chatId THE STREAM WAS STARTED FOR.
+ *
+ * The callbacks are pinned at send time, but a pinned closure still answers
+ * "which chat is on screen" if that is what it reads — and the surfaces did:
+ * Chat routed every chunk through `useChatStore.getState().currentChatId`, so
+ * switching conversation mid-reply moved the rest of the reply into the chat
+ * you had just opened. Cowork's first turn only worked because an incidental
+ * `await import()` let React re-render before the stream started. Handing the
+ * stream's own id to every callback makes the right answer the easy one.
+ */
 interface UseSSEStreamOptions {
-  onChunk: (event: SSEEvent) => void;
+  onChunk: (event: SSEEvent, chatId: string) => void;
   /**
    * A stream failed, including an inactivity timeout. NOT called for a
-   * deliberate stop — the surfaces append this to the transcript as
-   * `**Error:** …`, and a user who pressed Stop must not be shown an error.
+   * deliberate stop — a user who pressed Stop must not be shown an error.
    */
-  onError: (error: Error) => void;
+  onError: (error: Error, chatId: string) => void;
   /** The stream finished on its own. Aborted streams never reach this. */
-  onDone: () => void;
-  onUsage?: (usage: StreamUsage) => void;
-  chatId: string;                            // needed for registry key
+  onDone: (chatId: string) => void;
+  onUsage?: (usage: StreamUsage, chatId: string) => void;
+  chatId: string;                            // the chat on screen — what Stop aborts
   /** Store-level flag: gates the composer, NOT the per-message spinner. */
   setIsStreaming: (v: boolean) => void;
 }
@@ -269,10 +279,13 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
       // Snapshot the callbacks at send time so a conversation switch
       // mid-stream doesn't redirect chunks to the wrong chatId.
-      const pinnedOnChunk = optionsRef.current.onChunk;
-      const pinnedOnDone = optionsRef.current.onDone;
-      const pinnedOnError = optionsRef.current.onError;
-      const pinnedOnUsage = optionsRef.current.onUsage;
+      const pinned = optionsRef.current;
+      const pinnedOnChunk = (event: SSEEvent) => pinned.onChunk(event, chatId);
+      const pinnedOnDone = () => pinned.onDone(chatId);
+      const pinnedOnError = (err: Error) => pinned.onError(err, chatId);
+      const pinnedOnUsage = pinned.onUsage
+        ? (usage: StreamUsage) => pinned.onUsage!(usage, chatId)
+        : undefined;
       const pinnedSetIsStreaming = optionsRef.current.setIsStreaming;
 
       pinnedSetIsStreaming(true);

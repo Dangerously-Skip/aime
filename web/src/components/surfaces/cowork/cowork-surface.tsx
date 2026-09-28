@@ -952,12 +952,15 @@ export function CoworkSurface() {
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
-    onUsage(usage) {
+    // Every callback is handed the chat its stream was started for. Usage used
+    // to be filed against `currentChatId` — whatever was on screen when the
+    // turn ENDED — so a long run finished while you read another conversation
+    // billed that one.
+    onUsage(usage, id) {
       // Composed: the run recorder captures cost first (it must not be skipped
       // by the no-active-conversation early return below), then the existing
       // ROI/telemetry pipeline runs unchanged.
       runRecorder.onUsage(usage);
-      const id = useCoworkStore.getState().currentChatId;
       if (!id) return;
       // Store token usage
       updateConversationMetrics(id, {
@@ -1045,19 +1048,19 @@ export function CoworkSurface() {
         });
       }).catch(() => {});
     },
-    onChunk(event) {
+    onChunk(event, cid) {
       // Chunks whose handling is the same on every surface — cron jobs,
       // standing orders, widgets, memory. Handled in ONE place
       // (lib/sse/agnostic-chunks) because each surface having its own case
       // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Cowork' })) return;
+      if (handleAgnosticChunk(event, { chatId: cid, surface: 'Cowork' })) return;
 
       // The chunks whose handling is identical across surfaces, recorded once in
       // lib/sse/core-chunks. `skip` names what this surface still owns — see the
       // note there; it is a visible migration step, not a permanent carve-out.
       if (
         handleCoreChunk(event, {
-          chatId: chatId,
+          chatId: cid,
           store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
           printDocument,
           onCanvas: onCanvasEvent,
@@ -1073,7 +1076,7 @@ export function CoworkSurface() {
       switch (event.type) {
         case "tool_use": {
           // Complete any previously running tools before starting a new one
-          completeRunningTools(chatId);
+          completeRunningTools(cid);
           const toolId = (event.id as string) || `tool_${Date.now()}`;
           const toolName = (event.name as string) || "Unknown";
           const toolInput = (event.input as Record<string, unknown>) || {};
@@ -1082,7 +1085,7 @@ export function CoworkSurface() {
           if (cwd && typeof toolInput.file_path === 'string' && !toolInput.file_path.startsWith('/')) {
             toolInput.file_path = `${cwd.replace(/\/$/, '')}/${toolInput.file_path}`;
           }
-          addToolCall(chatId, {
+          addToolCall(cid, {
             id: toolId,
             name: toolName,
             input: toolInput,
@@ -1138,25 +1141,25 @@ export function CoworkSurface() {
               .then((r) => r.json())
               .then(({ results }) => {
                 if (results && results.length > 0) {
-                  if (chatId) addSearchGroup(chatId, { query: searchQuery, results });
+                  if (cid) addSearchGroup(cid, { query: searchQuery, results });
                 }
               })
               .catch(() => {});
           }
           // Categorize into sidebar panels
           const categorized = categorizeToolCall(toolName, toolInput, { richContext: true });
-          if (categorized && chatId && isValidSidebarEntry(categorized.path)) {
+          if (categorized && cid && isValidSidebarEntry(categorized.path)) {
             // Skip search query entries — redundant with SearchResultsCard
             if (isSearchEntry(categorized.path)) {
               // Don't add search queries to either panel
             } else if (categorized.category === "context") {
               // Don't add to Context if this path is already in Artifacts
-              const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+              const currentArtifacts = useCoworkStore.getState().artifactFiles[cid] ?? [];
               if (!currentArtifacts.includes(categorized.path)) {
-                addContextFile(chatId, categorized.path);
+                addContextFile(cid, categorized.path);
               }
             } else {
-              addArtifactFile(chatId, categorized.path);
+              addArtifactFile(cid, categorized.path);
               // Also register as project artifact
               if (currentProjectId) {
                 const fileName = categorized.path.split("/").pop() || categorized.path;
@@ -1166,7 +1169,7 @@ export function CoworkSurface() {
                   path: categorized.path,
                   type: "file",
                   surface: "cowork",
-                  conversationId: chatId,
+                  conversationId: cid,
                   createdAt: Date.now(),
                   updatedAt: Date.now(),
                 });
@@ -1174,11 +1177,11 @@ export function CoworkSurface() {
             }
           }
           // Detect plan file writes
-          if (toolName === "Write" && chatId) {
+          if (toolName === "Write" && cid) {
             const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
             if (filePath.includes(".claude/plans/")) {
               const content = typeof toolInput.content === "string" ? toolInput.content : "";
-              if (content) setPlanContent(chatId, content);
+              if (content) setPlanContent(cid, content);
             }
           }
           break;
@@ -1189,7 +1192,7 @@ export function CoworkSurface() {
             typeof event.result === "string"
               ? event.result
               : JSON.stringify(event.result);
-          updateToolResult(chatId, id, result, event.is_error as boolean | undefined);
+          updateToolResult(cid, id, result, event.is_error as boolean | undefined);
           // Detect dev server URLs in Bash output
           if (result && !event.is_error) {
             const detected = detectServerUrl(result);
@@ -1209,19 +1212,19 @@ export function CoworkSurface() {
            * `c.type === 'tool_result'`, a message type the SDK has never sent.
            * They arrive inside `user` messages and now reach the client.
            */
-          if (result && !event.is_error && chatId) {
+          if (result && !event.is_error && cid) {
             const startedAs = toolNamesById.current.get(id);
             if (isParsableSearchTool(startedAs)) {
               const parsed = parseSearchWebResults(result);
               const query = searchQueriesById.current.get(id);
               if (parsed.length > 0 && query) {
-                addSearchGroup(chatId, { query, results: parsed });
+                addSearchGroup(cid, { query, results: parsed });
               }
             }
           }
           // Detect binary files mentioned in Bash output (e.g. python-pptx writing a .pptx)
-          if (result && !event.is_error && chatId) {
-            const allMsgs = useCoworkStore.getState().messages[chatId];
+          if (result && !event.is_error && cid) {
+            const allMsgs = useCoworkStore.getState().messages[cid];
             const lastMsg = allMsgs?.at(-1);
             const matchingTc = lastMsg?.toolCalls?.find((tc) => tc.id === id);
             // Same marker, the other arrival path — see the note at the command site.
@@ -1233,7 +1236,7 @@ export function CoworkSurface() {
               const bashCmd = typeof matchingTc.input?.command === "string" ? matchingTc.input.command : "";
               const isCurlWget = /\bcurl\b|\bwget\b/.test(bashCmd);
               const coworkState = useCoworkStore.getState();
-              const coworkFolder = chatId ? coworkState.folderByChat[chatId] ?? null : null;
+              const coworkFolder = cid ? coworkState.folderByChat[cid] ?? null : null;
               const cwd = coworkFolder || folder || projectFolder || scratchDir;
               const addBashArtifact = (raw: string) => {
                 let filePath = raw;
@@ -1247,7 +1250,7 @@ export function CoworkSurface() {
                   }
                   filePath = `${cwd}/${filePath}`;
                 }
-                addArtifactFile(chatId, filePath);
+                addArtifactFile(cid, filePath);
               };
               if (!isCurlWget) {
                 BASH_ARTIFACT_EXT.lastIndex = 0;
@@ -1272,38 +1275,38 @@ export function CoworkSurface() {
           // Add extracted document to context sidebar, removing the original attachment entry to avoid duplicates
           const extractedPath = event.extractedPath as string | undefined;
           const originalName = event.name as string | undefined;
-          if (extractedPath && chatId) {
+          if (extractedPath && cid) {
             if (originalName) {
-              const existing = useCoworkStore.getState().contextFiles[chatId] ?? [];
+              const existing = useCoworkStore.getState().contextFiles[cid] ?? [];
               const duplicate = existing.find((p) => p === originalName || p.endsWith(`/${originalName}`));
-              if (duplicate) removeContextFile(chatId, duplicate);
+              if (duplicate) removeContextFile(cid, duplicate);
             }
-            addContextFile(chatId, extractedPath);
+            addContextFile(cid, extractedPath);
           }
           console.log('[Cowork] Document extracted:', event.name, 'path:', extractedPath, 'length:', event.textLength);
           break;
         }
       }
     },
-    onDone: () => {
+    onDone: (cid) => {
       runRecorder.succeed();
-      completeRunningTools(chatId);
-      stopStreaming(chatId);
-      const allMsgs = useCoworkStore.getState().messages[chatId];
+      completeRunningTools(cid);
+      stopStreaming(cid);
+      const allMsgs = useCoworkStore.getState().messages[cid];
       const lastMsg = allMsgs?.at(-1);
       // (Search results are fetched in parallel via /api/search-proxy when
       // web_search tool_use events arrive in the stream.)
       // Inline plan detection: check last assistant message for plan heading
       if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
-        setPlanContent(chatId, lastMsg.content);
+        setPlanContent(cid, lastMsg.content);
       }
       // Detect binary artifacts from Bash tool calls (e.g. python-pptx, generate_presentation.sh).
       // The SDK doesn't emit tool_result events, so we scan Bash command inputs for output file paths.
-      if (chatId) {
+      if (cid) {
         const coworkState = useCoworkStore.getState();
-        const coworkFolder = chatId ? coworkState.folderByChat[chatId] ?? null : null;
+        const coworkFolder = cid ? coworkState.folderByChat[cid] ?? null : null;
         const cwdFallback = coworkFolder || folder || projectFolder || scratchDir;
-        const msgs = useCoworkStore.getState().messages[chatId] ?? [];
+        const msgs = useCoworkStore.getState().messages[cid] ?? [];
         for (const msg of msgs) {
           for (const tc of msg.toolCalls ?? []) {
             if (tc.name === "Bash" && tc.input?.command) {
@@ -1317,9 +1320,9 @@ export function CoworkSurface() {
                 if (!filePath.startsWith("/") && cwdFallback) {
                   filePath = `${cwdFallback}/${filePath}`;
                 }
-                const existing = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+                const existing = useCoworkStore.getState().artifactFiles[cid] ?? [];
                 if (!existing.includes(filePath)) {
-                  addArtifactFile(chatId, filePath);
+                  addArtifactFile(cid, filePath);
                 }
               }
             }
@@ -1327,8 +1330,8 @@ export function CoworkSurface() {
         }
       }
       // Verify artifacts still exist on disk and remove phantoms.
-      if (chatId) {
-        const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+      if (cid) {
+        const currentArtifacts = useCoworkStore.getState().artifactFiles[cid] ?? [];
         if (currentArtifacts.length > 0 && window.electronAPI?.fileExists) {
           for (const artifactPath of currentArtifacts) {
             // Skip non-absolute paths and bash: labels
@@ -1336,7 +1339,7 @@ export function CoworkSurface() {
             window.electronAPI.fileExists(artifactPath).then((exists: boolean) => {
               if (!exists) {
                 console.log("[Cowork] Removing phantom artifact (file not found):", artifactPath);
-                removeArtifactFile(chatId, artifactPath);
+                removeArtifactFile(cid, artifactPath);
               }
             }).catch(() => {});
           }
@@ -1344,7 +1347,7 @@ export function CoworkSurface() {
       }
       // Auto-continuation: if the agent ended mid-task (many tool calls + last message
       // suggests more work to do), automatically send a "continue" prompt
-      if (chatId && allMsgs && allMsgs.length > 2) {
+      if (cid && allMsgs && allMsgs.length > 2) {
         const totalToolCalls = allMsgs.reduce(
           (sum, m) => sum + (m.toolCalls?.length ?? 0), 0
         );
@@ -1355,17 +1358,17 @@ export function CoworkSurface() {
           // Small delay so the UI shows the partial response before we continue
           setTimeout(() => {
             const continuePrompt = "Continue — complete the file generation. Do not re-explain what you've done. Execute the remaining tool calls to produce the deliverable.";
-            addMessage(chatId, { id: crypto.randomUUID(), role: "user", content: continuePrompt, timestamp: Date.now(), isAutoContinue: true } as Message);
-            addMessage(chatId, { id: crypto.randomUUID(), role: "assistant", content: "", timestamp: Date.now(), isLoading: true, isStreaming: true });
-            startStreaming(chatId);
-            const currentControls = useCoworkStore.getState().sessionControls[chatId] ?? DEFAULT_SESSION_CONTROLS;
-            const priorMsgs = useCoworkStore.getState().messages[chatId] || [];
+            addMessage(cid, { id: crypto.randomUUID(), role: "user", content: continuePrompt, timestamp: Date.now(), isAutoContinue: true } as Message);
+            addMessage(cid, { id: crypto.randomUUID(), role: "assistant", content: "", timestamp: Date.now(), isLoading: true, isStreaming: true });
+            startStreaming(cid);
+            const currentControls = useCoworkStore.getState().sessionControls[cid] ?? DEFAULT_SESSION_CONTROLS;
+            const priorMsgs = useCoworkStore.getState().messages[cid] || [];
             const hist = stripMessagesForHistory(priorMsgs.slice(0, -2));
             const route = resolveRoute();
             // A fresh run: the auto-continue is a hook-driven turn of its own,
             // and the turn that triggered it was already closed by succeed().
             runRecorder.begin({ trigger: "hook", model: route?.model ?? undefined });
-            void sendMessage(continuePrompt, chatId, "cowork", route?.model ?? null, {
+            void sendMessage(continuePrompt, cid, "cowork", route?.model ?? null, {
               // Spread the shared context rather than re-listing it. The
               // hand-written version of this object omitted deckTheme,
               // searchSettings, memories, projectInstructions,
@@ -1385,10 +1388,10 @@ export function CoworkSurface() {
         showNotification("Task complete", "Claude has finished working on your request.");
       }
     },
-    onError: (error) => {
+    onError: (error, cid) => {
       runRecorder.fail(error.message);
-      stopStreaming(chatId);
-      appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
+      stopStreaming(cid);
+      appendToLastAssistant(cid, `\n\n**Error:** ${error.message}`);
     },
   });
 
