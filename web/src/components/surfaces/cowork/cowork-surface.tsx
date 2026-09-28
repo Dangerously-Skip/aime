@@ -1519,8 +1519,9 @@ export function CoworkSurface() {
             setCurrentChat(id);
           }
           setSessionControls(id, result.controls);
-          addMessage(id, { id: crypto.randomUUID(), role: 'user', content: trimmed, timestamp: Date.now() });
-          addMessage(id, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now() });
+          // Shown, never sent to the model: see stripMessagesForHistory.
+          addMessage(id, { id: crypto.randomUUID(), role: 'user', content: trimmed, timestamp: Date.now(), isCommandEcho: true });
+          addMessage(id, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now(), isCommandEcho: true });
           return;
         }
       }
@@ -1861,7 +1862,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={handleMessageArtifactClick} onPreviewUrl={handleMessagePreviewUrl} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
+            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={handleMessageArtifactClick} onPreviewUrl={handleMessagePreviewUrl} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} showReasoning={sessionControls.reasoningVisible} expandToolCalls={sessionControls.verboseMode} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">

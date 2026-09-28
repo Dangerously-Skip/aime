@@ -255,6 +255,21 @@ describe('ChatSurface — Try again regenerates', () => {
   });
 });
 
+describe('ChatSurface — slash commands are not conversation', () => {
+  it('a command and its confirmation are shown but never sent to the model as history', async () => {
+    render(<ChatSurface />);
+    await send('/reasoning off');
+    expect(useChatStore.getState().messages[CHAT].map((m) => m.isCommandEcho)).toEqual([true, true]);
+    expect(useChatStore.getState().sessionControls[CHAT]?.reasoningVisible).toBe(false);
+
+    await send('real question');
+    const [body] = chatBodies();
+    expect(body.message).toBe('real question');
+    expect(body.history).toBeUndefined();
+    streamRegistry.abort(CHAT);
+  });
+});
+
 describe('ChatSurface — the title is set once', () => {
   it('titles an untitled chat from the first message and keeps it after that', async () => {
     useConversationStore.getState().updateConversation(CHAT, { title: 'New Chat' });

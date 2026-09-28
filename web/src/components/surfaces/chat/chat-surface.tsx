@@ -512,8 +512,9 @@ export function ChatSurface() {
             setActiveConversation(id);
             setCurrentChat(id);
           }
-          addMessage(id, { id: crypto.randomUUID(), role: "user", content: trimmed, timestamp: Date.now() });
-          addMessage(id, { id: crypto.randomUUID(), role: "assistant", content: result.message, timestamp: Date.now() });
+          // Shown, never sent to the model: see stripMessagesForHistory.
+          addMessage(id, { id: crypto.randomUUID(), role: "user", content: trimmed, timestamp: Date.now(), isCommandEcho: true });
+          addMessage(id, { id: crypto.randomUUID(), role: "assistant", content: result.message, timestamp: Date.now(), isCommandEcho: true });
           return;
         }
       }
@@ -784,7 +785,7 @@ export function ChatSurface() {
             {/* Messages column */}
             <div className="flex flex-1 flex-col min-w-0">
               {/* Messages */}
-              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
+              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} showReasoning={sessionControls.reasoningVisible} expandToolCalls={sessionControls.verboseMode} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
 
               {/* Prompt suggestions */}
               {suggestions.length > 0 && !isStreaming && (

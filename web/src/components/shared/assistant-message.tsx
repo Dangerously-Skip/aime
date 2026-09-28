@@ -114,6 +114,10 @@ interface AssistantMessageProps {
   error?: { code: TurnErrorCode; message: string };
   /** The provider is backing off; the turn is waiting, not stuck. */
   retrying?: { attempt: number; delayMs: number };
+  /** `/reasoning off` hides the thinking block. */
+  showThinking?: boolean;
+  /** `/verbose on` opens the tool-call details. */
+  expandToolCalls?: boolean;
 }
 
 function CanvasChip({ title, onOpen }: { title: string; onOpen: () => void }) {
@@ -154,6 +158,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   surfaceId,
   error,
   retrying,
+  showThinking = true,
+  expandToolCalls = false,
 }: AssistantMessageProps) {
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const setOpen = useCanvasStore((s) => s.setOpen);
@@ -263,13 +269,17 @@ export const AssistantMessage = memo(function AssistantMessage({
         )}
 
         {/* Thinking */}
-        {thinking && (
+        {thinking && showThinking && (
           <ThinkingSection content={thinking} isComplete={!isStreaming} />
         )}
 
         {/* Tool calls summary bar */}
         {toolCalls.length > 0 && (
           <ToolCallsSummaryBar
+            // Remounted when /verbose flips, so the new default applies to
+            // replies already on screen, not only the next one.
+            key={expandToolCalls ? "expanded" : "collapsed"}
+            defaultOpen={expandToolCalls}
             toolCalls={toolCalls}
             onArtifactClick={onArtifactClick}
             onPreviewUrl={onPreviewUrl}

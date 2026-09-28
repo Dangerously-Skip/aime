@@ -69,9 +69,12 @@ interface MessageListProps {
   conversationId?: string;
   /** Surface this list is rendered in — passed to inline canvas chips. */
   surfaceId?: 'chat' | 'cowork';
+  /** Session display controls: `/reasoning` and `/verbose`. */
+  showReasoning?: boolean;
+  expandToolCalls?: boolean;
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onConnectorSettled, onArtifactClick, onPreviewUrl, onRetry, onEditMessage, onCancel, conversationId, surfaceId }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onConnectorSettled, onArtifactClick, onPreviewUrl, onRetry, onEditMessage, onCancel, conversationId, surfaceId, showReasoning = true, expandToolCalls = false }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -207,6 +210,8 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
             surfaceId={surfaceId}
             error={msg.error}
             retrying={msg.retrying}
+            showThinking={showReasoning}
+            expandToolCalls={expandToolCalls}
           />
         ) : null;
       })}

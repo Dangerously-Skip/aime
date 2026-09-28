@@ -401,6 +401,21 @@ export const useCoworkStore = create<CoworkStore>()(
         searchGroups: state.searchGroups,
       }),
       skipHydration: true,
+      /*
+       * v1: `verboseMode` now expands tool calls. Every persisted `true` is the
+       * old default, which meant nothing — carrying it over would open every
+       * tool card in those conversations. See DEFAULT_SESSION_CONTROLS.
+       */
+      version: 1,
+      migrate: (persisted, version) => {
+        const state = persisted as { sessionControls?: Record<string, SessionControls> };
+        if (version < 1 && state?.sessionControls) {
+          for (const ctrl of Object.values(state.sessionControls)) {
+            if (ctrl) ctrl.verboseMode = false;
+          }
+        }
+        return state as never;
+      },
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));
