@@ -29,6 +29,7 @@ import { SURFACE_ROUTES, getSurfaceRoute } from '@/lib/models/surface-routes'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Layers, Search, X } from 'lucide-react'
+import { APP_NAME } from '@/config/branding'
 
 /** Never render more than this many candidates at once (catalogs hit ~345). */
 const MAX_VISIBLE = 30
@@ -154,7 +155,7 @@ export function TierGrid() {
     <div className="border rounded-lg p-6 bg-card space-y-4">
       <div className="flex items-center gap-2">
         <Layers className="h-4 w-4 text-muted-foreground" />
-        <h4 className="text-sm font-medium">How AIME picks models</h4>
+        <h4 className="text-sm font-medium">How {APP_NAME} picks models</h4>
       </div>
       <p className="text-sm text-muted-foreground">
         A tier is a promise about cost and capability. Pick which model fills each — or leave it

@@ -1,14 +1,73 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { ThumbsUp } from 'lucide-react'
 import { useSettingsStore } from "@/stores/settings-store";
 import { Input } from "@/components/ui/input";
 
+/**
+ * One way to write money in this section. It used to be three: `$0.0123`
+ * (four places) in the cost table, `$12.34` for spend and `$12` for savings.
+ * Sub-cent amounts keep enough precision to be non-zero.
+ */
+export function formatUsd(value: number): string {
+  const v = Number.isFinite(value) ? value : 0;
+  const abs = Math.abs(v);
+  const digits = abs > 0 && abs < 0.01 ? 4 : 2;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(v);
+}
+
+/**
+ * The typed hourly rate, or null when it is not a usable number.
+ *
+ * `Number(value) || 150` snapped the field back to 150 the moment it was
+ * cleared, so a rate could not be retyped from scratch. The draft is now kept
+ * as typed and only a valid number is committed.
+ */
+export function parseHourlyRate(raw: string): number | null {
+  if (!raw.trim()) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1 || n > 10000) return null;
+  return n;
+}
+
+interface CostBreakdown {
+  input: number
+  output: number
+  total: number
+  calls: number
+}
+
+interface CostData {
+  surfaces: Record<string, CostBreakdown>
+  total: CostBreakdown
+}
+
 export function RoiSection() {
   const conversations = useConversationStore((s) => s.conversations);
   const devHourlyRate = useSettingsStore((s) => s.devHourlyRate);
   const setDevHourlyRate = useSettingsStore((s) => s.setDevHourlyRate);
+  const [rateDraft, setRateDraft] = useState<string | null>(null);
+
+  // The per-surface API cost table, moved here from Data & privacy so spend is
+  // reported in one place.
+  const [costData, setCostData] = useState<CostData | null>(null);
+  const [costError, setCostError] = useState<string | null>(null);
+  useEffect(() => {
+    fetch('/api/settings/costs')
+      .then((res) => {
+        if (!res.ok) throw new Error('Could not load API costs')
+        return res.json()
+      })
+      .then((data) => setCostData(data))
+      .catch((err) => setCostError(err instanceof Error ? err.message : 'Could not load API costs'))
+  }, []);
 
   // Compute lifetime stats from all conversations
   const withMetrics = conversations.filter((c) => c.tokenUsage);
@@ -39,6 +98,8 @@ export function RoiSection() {
     ? Math.round((ratedConvs.filter((c) => c.userRating === 1).length / ratedConvs.length) * 100)
     : null;
 
+  const rateInvalid = rateDraft !== null && parseHourlyRate(rateDraft) === null;
+
   return (
     <div className="space-y-6">
       <div>
@@ -47,24 +108,38 @@ export function RoiSection() {
       </div>
 
       {/* Dev hourly rate config */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium">Developer hourly rate (USD)</label>
+      <div className="space-y-2">
+        <label htmlFor="roi-hourly-rate" className="block text-xs font-medium">
+          Developer hourly rate (USD)
+        </label>
         <Input
+          id="roi-hourly-rate"
           type="number"
+          inputMode="decimal"
           min={1}
           max={10000}
-          value={devHourlyRate}
-          onChange={(e) => setDevHourlyRate(Number(e.target.value) || 150)}
+          value={rateDraft ?? String(devHourlyRate)}
+          aria-invalid={rateInvalid || undefined}
+          onChange={(e) => {
+            setRateDraft(e.target.value);
+            const n = parseHourlyRate(e.target.value);
+            if (n !== null) setDevHourlyRate(n);
+          }}
+          // Leaving the field with nothing valid in it restores the saved rate
+          // rather than inventing one.
+          onBlur={() => setRateDraft(null)}
           className="h-8 w-32 text-xs"
         />
-        <p className="text-xs text-muted-foreground">Used to calculate $ saved per session.</p>
+        <p className={`text-xs ${rateInvalid ? "text-destructive" : "text-muted-foreground"}`}>
+          {rateInvalid ? "Enter a rate between 1 and 10,000." : "Used to calculate $ saved per session."}
+        </p>
       </div>
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3">
-        <StatCard label="Total agent spend" value={`$${totalCost.toFixed(2)}`} />
+        <StatCard label="Total agent spend" value={formatUsd(totalCost)} />
         <StatCard label="Human hours saved" value={`~${totalHoursSaved.toFixed(0)}h`} />
-        <StatCard label="Total $ saved" value={`$${Math.max(0, totalDollarsSaved).toFixed(0)}`} />
+        <StatCard label="Total saved" value={formatUsd(Math.max(0, totalDollarsSaved))} />
         <StatCard label="Avg ROI" value={avgMultiplier > 0 ? `${avgMultiplier.toFixed(1)}×` : "—"} />
       </div>
 
@@ -86,6 +161,44 @@ export function RoiSection() {
           }
           sub={ratedConvs.length > 0 ? `${ratedConvs.length} rated` : "No ratings yet"}
         />
+      </div>
+
+      {/* API spend by surface */}
+      <div className="space-y-2">
+        <h4 className="text-xs font-medium">API spend by surface</h4>
+        {costError && <p className="text-xs text-destructive">{costError}</p>}
+        {!costData && !costError && <p className="text-xs text-muted-foreground">Loading…</p>}
+        {costData && (
+          <table className="w-full rounded-md border text-xs">
+            <thead className="text-muted-foreground">
+              <tr className="border-b">
+                <th scope="col" className="p-2 text-left font-medium">Surface</th>
+                <th scope="col" className="p-2 text-right font-medium">Input</th>
+                <th scope="col" className="p-2 text-right font-medium">Output</th>
+                <th scope="col" className="p-2 text-right font-medium">Total</th>
+                <th scope="col" className="p-2 text-right font-medium">Calls</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(costData.surfaces).map(([name, cost]) => (
+                <tr key={name} className="border-b last:border-b-0">
+                  <th scope="row" className="p-2 text-left font-normal capitalize">{name}</th>
+                  <td className="p-2 text-right font-mono">{formatUsd(cost.input)}</td>
+                  <td className="p-2 text-right font-mono">{formatUsd(cost.output)}</td>
+                  <td className="p-2 text-right font-mono">{formatUsd(cost.total)}</td>
+                  <td className="p-2 text-right font-mono">{cost.calls}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t bg-muted/50 font-medium">
+                <th scope="row" colSpan={3} className="p-2 text-left">Total</th>
+                <td className="p-2 text-right font-mono">{formatUsd(costData.total.total)}</td>
+                <td className="p-2 text-right font-mono">{costData.total.calls}</td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
       </div>
 
       {/* Task type breakdown */}

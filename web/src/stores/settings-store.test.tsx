@@ -181,6 +181,39 @@ describe('v11 — the teamId key is dropped', () => {
   });
 });
 
+/**
+ * v13: three controls that changed nothing were removed from Settings — tool
+ * access mode, and Code's worktree location and branch prefix. Same rule as
+ * v11: DROP the keys, or the default merge splices them back into live state.
+ */
+describe('v13 — dead-control keys are dropped', () => {
+  const DEAD = ['toolAccessMode', 'codeWorktreeLocation', 'codeBranchPrefix'];
+
+  it('drops them from a v12 payload and keeps the rest', async () => {
+    await rehydrateWith(12, {
+      fullName: 'Ada',
+      toolAccessMode: 'alwaysLoaded',
+      codeWorktreeLocation: '/tmp/wt',
+      codeBranchPrefix: 'ada/',
+      toolProfile: 'coding',
+    });
+    const s = useSettingsStore.getState() as unknown as Record<string, unknown>;
+    for (const k of DEAD) expect(s[k]).toBeUndefined();
+    expect(s.fullName).toBe('Ada');
+    expect(s.toolProfile).toBe('coding');
+  });
+
+  it('drops them from the oldest payloads too', async () => {
+    for (const version of [1, 3, 5, 9]) {
+      localStorage.clear();
+      useSettingsStore.getState().resetAll();
+      await rehydrateWith(version, { toolAccessMode: 'onDemand', codeBranchPrefix: 'x/' });
+      const s = useSettingsStore.getState() as unknown as Record<string, unknown>;
+      for (const k of DEAD) expect(s[k]).toBeUndefined();
+    }
+  });
+});
+
 describe('settings actions', () => {
   it('addRecentFolder deduplicates, prepends, and caps at 10', () => {
     const s = () => useSettingsStore.getState();
@@ -203,15 +236,6 @@ describe('settings actions', () => {
     expect(s().trustedFolders).toHaveLength(100);
     expect(s().trustedFolders).not.toContain('/keep'); // oldest dropped
     expect(s().trustedFolders.at(-1)).toBe('/t/99');
-  });
-
-  it('clearGithubAuth wipes token and user together', () => {
-    const s = () => useSettingsStore.getState();
-    s().setGithubToken('gh-token');
-    s().setGithubUser('adam');
-    s().clearGithubAuth();
-    expect(s().githubToken).toBeNull();
-    expect(s().githubUser).toBeNull();
   });
 
   it('resetAll restores initial state', () => {

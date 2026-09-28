@@ -5,12 +5,16 @@ import { useSettingsStore, type ChatFont } from '@/stores/settings-store'
 import { Sun, Moon, Monitor, Sparkles, Terminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const themeOptions: { value: Theme; label: string; icon: React.ReactNode }[] = [
+/**
+ * `description` is for the two named themes: "Light" and "Dark" explain
+ * themselves, "Zara" and "Max" do not.
+ */
+const themeOptions: { value: Theme; label: string; icon: React.ReactNode; description?: string }[] = [
   { value: 'light', label: 'Light', icon: <Sun className="h-4 w-4" /> },
-  { value: 'system', label: 'Auto', icon: <Monitor className="h-4 w-4" /> },
+  { value: 'system', label: 'Auto', icon: <Monitor className="h-4 w-4" />, description: 'Follows your system' },
   { value: 'dark', label: 'Dark', icon: <Moon className="h-4 w-4" /> },
-  { value: 'zara', label: 'Zara', icon: <Sparkles className="h-4 w-4" /> },
-  { value: 'max', label: 'Max', icon: <Terminal className="h-4 w-4" /> },
+  { value: 'zara', label: 'Zara', icon: <Sparkles className="h-4 w-4" />, description: 'Soft pink, light' },
+  { value: 'max', label: 'Max', icon: <Terminal className="h-4 w-4" />, description: 'Deep navy with a warm accent' },
 ]
 
 const fontOptions: {
@@ -118,6 +122,7 @@ export function AppearanceSection() {
             <button
               key={opt.value}
               type="button"
+              aria-pressed={theme === opt.value}
               onClick={() => setTheme(opt.value)}
               className={cn(
                 'rounded-lg border-2 p-2 text-left transition-all hover:border-muted-foreground/30',
@@ -131,6 +136,9 @@ export function AppearanceSection() {
                 {opt.icon}
                 <span className="text-xs font-medium">{opt.label}</span>
               </div>
+              {opt.description && (
+                <p className="mt-0.5 px-0.5 text-[10px] leading-tight text-muted-foreground">{opt.description}</p>
+              )}
             </button>
           ))}
         </div>
@@ -144,6 +152,7 @@ export function AppearanceSection() {
             <button
               key={opt.value}
               type="button"
+              aria-pressed={chatFont === opt.value}
               onClick={() => setChatFont(opt.value)}
               className={cn(
                 'rounded-lg border-2 p-3 text-left transition-all hover:border-muted-foreground/30',
@@ -155,7 +164,9 @@ export function AppearanceSection() {
               <span className="text-xs font-medium text-muted-foreground">
                 {opt.label}
               </span>
-              <p className="mt-1.5 text-sm truncate" style={opt.style}>
+              {/* Wraps rather than truncating: a preview cut off at "the quick
+                  brown…" shows less of the face than it exists to show. */}
+              <p className="mt-1.5 text-sm leading-snug" style={opt.style}>
                 The quick brown fox jumps over the lazy dog
               </p>
             </button>

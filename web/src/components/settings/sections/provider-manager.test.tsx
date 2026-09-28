@@ -39,7 +39,7 @@ function jsonOk(body: unknown) {
 describe('ProviderManager', () => {
   it('shows an empty state until a provider is added', () => {
     render(<ProviderManager />);
-    expect(screen.getByText(/No custom providers yet/i)).toBeTruthy();
+    expect(screen.getByText(/No model providers yet/i)).toBeTruthy();
   });
 
   it('adds a provider: scans models, stores the key, and lists it', async () => {
@@ -50,10 +50,13 @@ describe('ProviderManager', () => {
       return jsonOk({});
     });
 
+    // With Anthropic already configured the form opens on OpenRouter.
+    const anthropicRow = { id: 'anthropic', presetId: 'anthropic', label: 'Anthropic', enabled: true, createdAt: 0, models: [] };
+    useProviderStore.setState({ providers: [anthropicRow] });
+
     render(<ProviderManager />);
     fireEvent.click(screen.getByText(/Add provider/i));
 
-    // openrouter (default) needs a key → enter it to enable the button
     const keyInput = screen.getByPlaceholderText('sk-…');
     fireEvent.change(keyInput, { target: { value: 'sk-or-test' } });
     fireEvent.click(screen.getByText(/Add & scan/i));
@@ -62,10 +65,10 @@ describe('ProviderManager', () => {
     // both the row label and the preset tag, so it is not a safe anchor).
     await waitFor(() => expect(screen.getByText('Kimi K2')).toBeTruthy());
     expect(screen.getAllByText('OpenRouter').length).toBeGreaterThan(0);
-    expect(screen.getByText(/1 model/)).toBeTruthy();
+    expect(screen.getByText(/· 1 model/)).toBeTruthy();
 
     // store reflects the new provider with its scanned model + credential flag
-    const providers = useProviderStore.getState().providers;
+    const providers = useProviderStore.getState().providers.filter((p) => p.id !== 'anthropic');
     expect(providers).toHaveLength(1);
     expect(providers[0].presetId).toBe('openrouter');
     expect(providers[0].models).toEqual([{ id: 'moonshotai/kimi-k2', label: 'Kimi K2' }]);

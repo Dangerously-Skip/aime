@@ -6,166 +6,53 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
 import { ConnectorsSection } from './connectors-section';
+import { legacyAnthropicRow, savedMessage } from './provider-manager';
 import { useSettingsStore } from '@/stores/settings-store';
 import { useProviderStore } from '@/stores/provider-store';
-import {
-  createCredentialStore,
-  type CredentialStore,
-} from '@/lib/models/credentials';
+import { createCredentialStore, type CredentialStore } from '@/lib/models/credentials';
 
 /**
- * Settings → API Access. This section used to lead with an org team picker that
- * mapped a team name to a bundled API key; the org concept moved to a separate
- * product, so the Anthropic key entry is the front door now.
+ * Settings → Models & API keys. The Anthropic key has ONE home now — the
+ * provider list — instead of a card of its own beside an Anthropic preset.
  *
- * The second block routes the component's fetch through the REAL route handler
- * and a REAL (encrypted, on-disk) credential store: "the key is saved" is the
- * claim, and a mocked store would have agreed with a section that POSTs nothing.
+ * Credential writes go through the REAL route handler into a REAL encrypted
+ * store: "the key is saved" and "the key is gone" are the claims, and a mocked
+ * store would agree with a section that POSTs nothing. Only the scan (a call to
+ * api.anthropic.com) is stubbed.
  */
 
-// A real store over a temp file, swapped in per test.
 let realStore: CredentialStore | null = null;
 vi.mock('@/lib/models/credentials', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/models/credentials')>();
-  return { ...actual, getCredentialStore: () => realStore! };
+  return {
+    ...actual,
+    // No store ⇒ what the real one does without AIME_CRED_KEY.
+    getCredentialStore: () => {
+      if (!realStore) throw new actual.CredentialStoreUnavailable('AIME_CRED_KEY is not set');
+      return realStore;
+    },
+  };
 });
 
+let dir: string;
+let scanStatus = 200;
 const fetchMock = vi.fn();
-const callsTo = (fragment: string, method?: string) =>
-  fetchMock.mock.calls.filter(
-    (c) =>
-      String(c[0]).includes(fragment) &&
-      (!method || (c[1] as RequestInit | undefined)?.method === method),
-  );
 
-beforeEach(() => {
+beforeEach(async () => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aime-apiaccess-test-'));
+  realStore = createCredentialStore(randomBytes(32), path.join(dir, 'credentials.enc'));
+  scanStatus = 200;
+  const route = await import('@/app/api/models/providers/credentials/route');
   fetchMock.mockReset();
-  fetchMock.mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
-  vi.stubGlobal('fetch', fetchMock);
-  useSettingsStore.setState({ anthropicApiKey: null });
-  useProviderStore.setState({ providers: [] });
-});
-
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
-
-const statusConfigured = () =>
-  screen.getByTestId('anthropic-key-status').getAttribute('data-configured');
-
-describe('ConnectorsSection — the team picker is gone', () => {
-  it('leads with the Anthropic API key entry, not a team list', () => {
-    render(<ConnectorsSection />);
-    expect(screen.getByText('Anthropic API Key')).toBeTruthy();
-    expect(screen.getByLabelText('Anthropic API key')).toBeTruthy();
-    expect(screen.getByPlaceholderText('sk-ant-...')).toBeTruthy();
-  });
-
-  it('renders no team selector and no team copy', () => {
-    render(<ConnectorsSection />);
-    expect(screen.queryByText(/Select your team/i)).toBeNull();
-    expect(screen.queryByText(/configure AI access automatically/i)).toBeNull();
-    expect(screen.queryByText(/team admin/i)).toBeNull();
-  });
-
-  it('still offers ProviderManager for the other inference providers', () => {
-    render(<ConnectorsSection />);
-    expect(screen.getByText(/No custom providers yet/i)).toBeTruthy();
-  });
-});
-
-describe('ConnectorsSection — the configured indicator follows the key', () => {
-  it('is unconfigured with no key', () => {
-    render(<ConnectorsSection />);
-    expect(statusConfigured()).toBe('false');
-    expect(screen.queryByText('Configured')).toBeNull();
-  });
-
-  it('flips to configured once a key is saved', () => {
-    render(<ConnectorsSection />);
-    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
-      target: { value: 'sk-ant-abc' },
-    });
-    fireEvent.click(screen.getByText('Save'));
-
-    expect(statusConfigured()).toBe('true');
-    expect(screen.getByText('Configured')).toBeTruthy();
-    // the saved key is shown (masked) rather than an empty entry field
-    expect((screen.getByLabelText('Anthropic API key') as HTMLInputElement).value).toBe('sk-ant-abc');
-  });
-
-  it('reflects a key that was already in settings', () => {
-    useSettingsStore.setState({ anthropicApiKey: 'sk-ant-existing' });
-    render(<ConnectorsSection />);
-    expect(statusConfigured()).toBe('true');
-  });
-
-  it('drops back to unconfigured when the key is removed', () => {
-    useSettingsStore.setState({ anthropicApiKey: 'sk-ant-existing' });
-    render(<ConnectorsSection />);
-    fireEvent.click(screen.getByTitle('Remove key'));
-
-    expect(statusConfigured()).toBe('false');
-    expect(useSettingsStore.getState().anthropicApiKey).toBeNull();
-  });
-
-  it('ignores a blank key', () => {
-    render(<ConnectorsSection />);
-    fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: '   ' } });
-    expect((screen.getByText('Save').closest('button') as HTMLButtonElement).disabled).toBe(true);
-  });
-});
-
-describe('ConnectorsSection — the key reaches the credentials endpoint', () => {
-  it('POSTs the key under providerId "anthropic"', async () => {
-    render(<ConnectorsSection />);
-    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
-      target: { value: '  sk-ant-trimmed  ' },
-    });
-    fireEvent.click(screen.getByText('Save'));
-
-    await waitFor(() => expect(callsTo('/credentials', 'POST')).toHaveLength(1));
-    const body = JSON.parse((callsTo('/credentials', 'POST')[0][1] as RequestInit).body as string);
-    expect(body).toEqual({ providerId: 'anthropic', values: { apiKey: 'sk-ant-trimmed' } });
-  });
-
-  it('DELETEs the mirrored credential when the key is cleared', async () => {
-    useSettingsStore.setState({ anthropicApiKey: 'sk-ant-existing' });
-    render(<ConnectorsSection />);
-    fireEvent.click(screen.getByTitle('Remove key'));
-
-    await waitFor(() => expect(callsTo('/credentials', 'DELETE')).toHaveLength(1));
-    const body = JSON.parse((callsTo('/credentials', 'DELETE')[0][1] as RequestInit).body as string);
-    expect(body).toEqual({ providerId: 'anthropic' });
-  });
-
-  it('a failing mirror never loses the key locally', async () => {
-    fetchMock.mockRejectedValue(new Error('offline'));
-    render(<ConnectorsSection />);
-    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
-      target: { value: 'sk-ant-offline' },
-    });
-    fireEvent.click(screen.getByText('Save'));
-
-    expect(useSettingsStore.getState().anthropicApiKey).toBe('sk-ant-offline');
-  });
-});
-
-/**
- * The round-trip, against the real route handler + real encrypted store. Proves
- * the save actually persists rather than merely calling fetch.
- */
-describe('ConnectorsSection — round-trips to the real credential store', () => {
-  let dir: string;
-
-  beforeEach(async () => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aime-apiaccess-test-'));
-    realStore = createCredentialStore(randomBytes(32), path.join(dir, 'credentials.enc'));
-
-    const route = await import('@/app/api/models/providers/credentials/route');
-    fetchMock.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
-      const req = new Request(String(url).startsWith('http') ? String(url) : `http://localhost${url}`, {
+  fetchMock.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes('/api/models/scan')) {
+      return scanStatus === 200
+        ? new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' }] }), { status: 200 })
+        : new Response(JSON.stringify({ error: 'invalid x-api-key' }), { status: scanStatus });
+    }
+    if (u.includes('/credentials')) {
+      const req = new Request(`http://localhost${u}`, {
         method: init?.method ?? 'GET',
         headers: { 'Content-Type': 'application/json' },
         body: init?.body as string | undefined,
@@ -174,33 +61,99 @@ describe('ConnectorsSection — round-trips to the real credential store', () =>
       if (method === 'POST') return route.POST(req as Parameters<typeof route.POST>[0]);
       if (method === 'DELETE') return route.DELETE(req as Parameters<typeof route.DELETE>[0]);
       return route.GET();
-    });
+    }
+    return new Response('{}', { status: 200 });
   });
+  vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  useSettingsStore.setState({ anthropicApiKey: null });
+  useProviderStore.setState({ providers: [] });
+});
 
-  afterEach(() => {
-    realStore = null;
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  realStore = null;
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
-  it('a saved key is readable back out of the encrypted store', async () => {
+async function addAnthropic(key: string) {
+  render(<ConnectorsSection />);
+  // With no Anthropic row yet, the form opens on Anthropic (the old card's job).
+  fireEvent.click(screen.getByText(/Add provider/i));
+  fireEvent.change(screen.getByLabelText('API key'), { target: { value: key } });
+  fireEvent.click(screen.getByText(/Add & scan/i));
+}
+
+describe('one place for the Anthropic key', () => {
+  it('has no separate Anthropic key card', () => {
     render(<ConnectorsSection />);
-    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
-      target: { value: 'sk-ant-roundtrip' },
-    });
-    fireEvent.click(screen.getByText('Save'));
-
-    await waitFor(async () =>
-      expect(await realStore!.getField('anthropic', 'apiKey')).toBe('sk-ant-roundtrip'),
-    );
+    expect(screen.queryByText('Anthropic API Key')).toBeNull();
+    expect(screen.queryByTestId('anthropic-key-status')).toBeNull();
+    expect(screen.getByText(/Model providers/)).toBeTruthy();
   });
 
-  it('clearing the key removes it from the store', async () => {
+  it('adding Anthropic checks the key, stores it under `anthropic`, and mirrors it for requests', async () => {
+    await addAnthropic('sk-ant-good');
+    await waitFor(() => expect(useProviderStore.getState().providers.map((p) => p.presetId)).toEqual(['anthropic']));
+    expect(useSettingsStore.getState().anthropicApiKey).toBe('sk-ant-good');
+    expect(await realStore!.getField('anthropic', 'apiKey')).toBe('sk-ant-good');
+    expect(useProviderStore.getState().providers.map((p) => p.id)).toEqual(['anthropic']);
+    expect(await screen.findByText(/Verified — 1 model found/)).toBeTruthy();
+  });
+
+  it('a key the provider rejects is reported and stored nowhere', async () => {
+    scanStatus = 401;
+    await addAnthropic('sk-ant-typo');
+    expect(await screen.findByText('invalid x-api-key')).toBeTruthy();
+    expect(await realStore!.get('anthropic')).toBeUndefined();
+    expect(useSettingsStore.getState().anthropicApiKey).toBeNull();
+    expect(useProviderStore.getState().providers).toHaveLength(0);
+  });
+
+  it('removing the Anthropic row removes the key from the store AND the settings mirror', async () => {
     await realStore!.set('anthropic', { apiKey: 'sk-ant-old' });
     useSettingsStore.setState({ anthropicApiKey: 'sk-ant-old' });
-
+    useProviderStore.setState({
+      providers: [{ id: 'anthropic', presetId: 'anthropic', label: 'Anthropic', enabled: true, createdAt: 0, models: [] }],
+    });
     render(<ConnectorsSection />);
-    fireEvent.click(screen.getByTitle('Remove key'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Anthropic' }));
+    await waitFor(() => expect(useSettingsStore.getState().anthropicApiKey).toBeNull());
+    expect(await realStore!.get('anthropic')).toBeUndefined();
+    expect(useProviderStore.getState().providers).toHaveLength(0);
+  });
 
-    await waitFor(async () => expect(await realStore!.get('anthropic')).toBeUndefined());
+  it('a key set through the old card gets a row, so it can be seen and removed', async () => {
+    useSettingsStore.setState({ anthropicApiKey: 'sk-ant-legacy' });
+    render(<ConnectorsSection />);
+    await waitFor(() =>
+      expect(useProviderStore.getState().providers.map((p) => p.presetId)).toEqual(['anthropic']),
+    );
+    expect(screen.getByRole('button', { name: 'Remove Anthropic' })).toBeTruthy();
+  });
+});
+
+describe('when the credential store has no master key (503)', () => {
+  it('says so up front instead of failing silently', async () => {
+    realStore = null; // getCredentialStore now throws → the real route answers 503
+    render(<ConnectorsSection />);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Restart the app/);
+  });
+});
+
+describe('legacyAnthropicRow', () => {
+  it('only when there is a key and no Anthropic row', () => {
+    expect(legacyAnthropicRow(null, [])).toBeNull();
+    expect(legacyAnthropicRow('k', [{ presetId: 'anthropic' }])).toBeNull();
+    expect(legacyAnthropicRow('k', [{ presetId: 'openrouter' }])?.id).toBe('anthropic');
+  });
+});
+
+describe('savedMessage', () => {
+  it('says "Verified" only when something was checked', () => {
+    expect(savedMessage(true, 3)).toMatch(/^Verified — 3 models/);
+    expect(savedMessage(false, 0)).toMatch(/^Saved \(not checked\)/);
+    expect(savedMessage(false, 0)).not.toMatch(/verified/i);
   });
 });

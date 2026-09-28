@@ -256,7 +256,7 @@ export const CREDENTIAL_FIELD_SPECS: Record<CredentialField, CredentialFieldSpec
   apiKey: {
     label: 'API key',
     placeholder: 'sk-…',
-    help: 'Stored in your OS keychain, never in the browser.',
+    help: 'Encrypted on this machine with a key held in your OS keychain.',
     secret: true,
   },
   baseUrl: {

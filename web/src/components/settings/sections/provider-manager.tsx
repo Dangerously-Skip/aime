@@ -8,6 +8,8 @@ import { ProviderFields, providerHint } from '@/components/shared/provider-field
 // From credential-ids, NOT credentials: this is a client component and that
 // module imports `fs`, which cannot be bundled for the browser.
 import { isProviderCredentialId } from '@/lib/models/credential-ids'
+import { deleteCredentials, listCredentialIds, saveCredentials } from '@/lib/models/credentials-client'
+import { useSettingsStore } from '@/stores/settings-store'
 import type { ScannedModel } from '@/lib/models/providers'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -40,33 +42,50 @@ async function scanModels(
   return (data.models ?? []) as ScannedModel[]
 }
 
-/** Persist a provider's secret to the server-side keychain (never localStorage). */
-async function saveCredentials(providerId: string, values: Record<string, string>): Promise<void> {
-  const res = await fetch('/api/models/providers/credentials', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerId, values }),
-  })
-  if (!res.ok) {
-    const d = await res.json().catch(() => ({}))
-    throw new Error(d.error || `Could not store key (${res.status})`)
+/**
+ * The Anthropic row an install should have but may not.
+ *
+ * Settings used to carry a separate "Anthropic API Key" card beside this list,
+ * AND an Anthropic preset in it, and onboarding wrote both — two places for one
+ * key, disagreeing about whether it was set. The list is now the only place. A
+ * profile that set its key through the old card has the key and no row, so the
+ * row is recreated here (id `anthropic`, the id the key is already stored
+ * under) rather than leaving a working key the user cannot see or remove.
+ */
+export function legacyAnthropicRow(
+  anthropicApiKey: string | null,
+  providers: ReadonlyArray<{ presetId: string }>,
+): { id: string; presetId: string; label: string; enabled: true; models: []; hasCredentials: true } | null {
+  if (!anthropicApiKey) return null
+  if (providers.some((p) => p.presetId === 'anthropic')) return null
+  return {
+    id: 'anthropic',
+    presetId: 'anthropic',
+    label: getPreset('anthropic')?.label ?? 'Anthropic',
+    enabled: true,
+    models: [],
+    hasCredentials: true,
   }
 }
 
-async function deleteCredentials(providerId: string): Promise<void> {
-  await fetch('/api/models/providers/credentials', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerId }),
-  }).catch(() => {})
+/**
+ * Which preset "Add provider" opens on. Anthropic until it is configured: it
+ * used to have a card of its own at the top of this page as the shortest path
+ * to a working install, and with the card gone the form is that front door.
+ */
+export function defaultPresetFor(providers: ReadonlyArray<{ presetId: string }>): string {
+  return providers.some((p) => p.presetId === 'anthropic') ? 'openrouter' : 'anthropic'
 }
 
-/** Which stored credential ids no provider claims. Ids only — never values. */
-async function listCredentialIds(): Promise<string[]> {
-  const res = await fetch('/api/models/providers/credentials')
-  if (!res.ok) return []
-  const data = (await res.json().catch(() => ({}))) as { providerIds?: string[] }
-  return Array.isArray(data.providerIds) ? data.providerIds : []
+/**
+ * What to say once a provider is saved. "Verified" is a claim that a request
+ * reached the provider and it answered — true only when a scan ran. Bedrock,
+ * Vertex and Azure cannot be scanned, and their setup used to say "verified"
+ * all the same.
+ */
+export function savedMessage(canScan: boolean, modelCount: number): string {
+  if (!canScan) return 'Saved (not checked) — this provider cannot be tested until you use it.'
+  return `Verified — ${modelCount} model${modelCount === 1 ? '' : 's'} found.`
 }
 
 /**
@@ -112,8 +131,12 @@ export function ProviderManager() {
   const setEnabled = useProviderStore((s) => s.setEnabled)
   const setModels = useProviderStore((s) => s.setModels)
   const setHasCredentials = useProviderStore((s) => s.setHasCredentials)
+  const setAnthropicApiKey = useSettingsStore((s) => s.setAnthropicApiKey)
 
   const [orphans, setOrphans] = useState<string[]>([])
+  /** Credential storage answered 503 — nothing can be saved until a restart. */
+  const [storeError, setStoreError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
 
   // provider-store hydrates lazily (skipHydration). The orphan scan is chained
   // off that promise, never run beside it: comparing stored keys against an
@@ -122,11 +145,24 @@ export function ProviderManager() {
     let cancelled = false
     void useProviderStore.persist
       .rehydrate()
-      ?.then(listCredentialIds)
+      ?.then(() => {
+        const legacy = legacyAnthropicRow(
+          useSettingsStore.getState().anthropicApiKey,
+          useProviderStore.getState().providers,
+        )
+        if (legacy && !cancelled) useProviderStore.getState().addProvider(legacy)
+      })
+      .then(() => listCredentialIds())
       .then((ids) => {
         if (!cancelled) setOrphans(orphanCredentialIds(ids, useProviderStore.getState().providers))
       })
-      .catch(() => {})
+      .catch((err: unknown) => {
+        // The one failure worth saying out loud: without a master key every
+        // save below would fail too, so say so before the user types a key.
+        if (!cancelled && err instanceof Error && err.name === 'CredentialStoreUnavailableError') {
+          setStoreError(err.message)
+        }
+      })
     return () => {
       cancelled = true
     }
@@ -153,8 +189,9 @@ export function ProviderManager() {
   const preset = useMemo(() => getPreset(presetId), [presetId])
 
   function beginAdd() {
-    const p = getPreset('openrouter')
-    setPresetId('openrouter')
+    const id = defaultPresetFor(providers)
+    const p = getPreset(id)
+    setPresetId(id)
     setLabel(p?.label ?? '')
     setBaseUrl(p?.defaultBaseUrl ?? '')
     setFields({})
@@ -191,7 +228,14 @@ export function ProviderManager() {
         return
       }
       const { plan } = planned
-      const models = await executeProviderSetup(plan, { scan: scanModels, saveCredentials })
+      const models = await executeProviderSetup(plan, {
+        scan: scanModels,
+        saveCredentials: (id, values) => saveCredentials(id, values),
+      })
+      // Anthropic doubles as the built-in path, which every surface reaches by
+      // sending the key with the request — so it is mirrored to settings too.
+      if (plan.mirrorToSettings && plan.values.apiKey) setAnthropicApiKey(plan.values.apiKey)
+      setNotice(`${plan.label}: ${savedMessage(plan.canScan, models.length)}`)
 
       addProvider({
         id: plan.id,
@@ -230,8 +274,23 @@ export function ProviderManager() {
   }
 
   async function handleRemove(providerId: string) {
-    await deleteCredentials(providerId)
-    removeProvider(providerId)
+    const p = providers.find((x) => x.id === providerId)
+    setError(null)
+    setNotice(null)
+    try {
+      await deleteCredentials(providerId)
+      if (p?.presetId === 'anthropic') {
+        // The key's other two homes: the fixed `anthropic` record (when this
+        // row predates the singleton id) and the settings mirror.
+        if (providerId !== 'anthropic') await deleteCredentials('anthropic')
+        setAnthropicApiKey(null)
+      }
+      removeProvider(providerId)
+    } catch (err) {
+      // Keep the row: removing it while its key stays stored is how orphans
+      // were made in the first place.
+      setError(err instanceof Error ? err.message : 'Could not remove the provider')
+    }
   }
 
   async function handlePurgeOrphans() {
@@ -246,8 +305,10 @@ export function ProviderManager() {
     if (!ok) return
     setBusy('orphans')
     try {
-      await Promise.all(orphans.map(deleteCredentials))
+      await Promise.all(orphans.map((id) => deleteCredentials(id)))
       setOrphans([])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete the stored keys')
     } finally {
       setBusy(null)
     }
@@ -263,19 +324,31 @@ export function ProviderManager() {
     <div className="border rounded-lg p-6 bg-card space-y-4">
       <div className="flex items-center gap-2">
         <Boxes className="h-4 w-4 text-muted-foreground" />
-        <h4 className="text-sm font-medium">Model Providers</h4>
+        <h4 className="text-sm font-medium">Model providers</h4>
         {!adding && (
           <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs" onClick={beginAdd}>
             <Plus className="h-3.5 w-3.5 mr-1" /> Add provider
           </Button>
         )}
       </div>
+      {/* Worded to be true of every row. The Anthropic key is the exception to
+          "encrypted only": each request still carries it, so a copy lives in
+          app storage too — see `anthropicApiKey` in settings-store. */}
       <p className="text-sm text-muted-foreground">
-        Bring your own models — OpenRouter, OpenAI, Groq, a local Ollama/LM Studio endpoint, and more.
-        Keys are stored in your OS keychain, never in the browser.
+        Anthropic, OpenRouter, OpenAI, Groq, a local Ollama/LM Studio endpoint, and more. Keys are
+        encrypted on this machine with a key held in your OS keychain; the Anthropic key is also kept
+        in app storage, because each request carries it.
       </p>
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {storeError && (
+        <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {storeError}
+        </p>
+      )}
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      {notice && !error && (
+        <p role="status" className="text-xs text-emerald-600 dark:text-emerald-400">{notice}</p>
+      )}
 
       {adding && (
         <div className="rounded-lg border border-border/70 p-4 space-y-3 bg-background/40">
@@ -334,7 +407,7 @@ export function ProviderManager() {
       )}
 
       {providers.length === 0 && !adding && (
-        <p className="text-xs text-muted-foreground/70 italic">No custom providers yet.</p>
+        <p className="text-xs text-muted-foreground/70 italic">No model providers yet — add one to start using a model.</p>
       )}
 
       <div className="space-y-3">
@@ -342,6 +415,10 @@ export function ProviderManager() {
           <div key={p.id} className="rounded-lg border border-border/70 p-3.5 space-y-2">
             <div className="flex items-center gap-2">
               <button
+                type="button"
+                role="switch"
+                aria-checked={p.enabled}
+                aria-label={`Use ${p.label}`}
                 onClick={() => setEnabled(p.id, !p.enabled)}
                 title={p.enabled ? 'Disable' : 'Enable'}
                 className={`inline-block w-2 h-2 rounded-full shrink-0 ${p.enabled ? 'bg-green-500' : 'bg-muted-foreground/40'}`}
@@ -351,11 +428,11 @@ export function ProviderManager() {
               <span className="text-xs text-muted-foreground">· {p.models.length} model{p.models.length === 1 ? '' : 's'}</span>
               <div className="ml-auto flex items-center gap-1">
                 {getPreset(p.presetId)?.scan && (
-                  <Button size="icon" variant="ghost" className="h-6 w-6" title="Rescan models" onClick={() => handleRescan(p.id)} disabled={busy === p.id}>
+                  <Button size="icon" variant="ghost" className="h-6 w-6" title="Rescan models" aria-label={`Rescan ${p.label} models`} onClick={() => handleRescan(p.id)} disabled={busy === p.id}>
                     {busy === p.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                   </Button>
                 )}
-                <Button size="icon" variant="ghost" className="h-6 w-6 hover:text-destructive" title="Remove provider" onClick={() => handleRemove(p.id)}>
+                <Button size="icon" variant="ghost" className="h-6 w-6 hover:text-destructive" title="Remove provider" aria-label={`Remove ${p.label}`} onClick={() => handleRemove(p.id)}>
                   <X className="h-3.5 w-3.5" />
                 </Button>
               </div>
@@ -365,7 +442,7 @@ export function ProviderManager() {
                 {p.models.map((m) => (
                   <span key={m.id} className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-2 py-0.5 text-[11px]">
                     {m.label || m.id}
-                    <button onClick={() => removeModel(p.id, m.id)} className="text-muted-foreground hover:text-destructive" title="Remove model">
+                    <button onClick={() => removeModel(p.id, m.id)} className="text-muted-foreground hover:text-destructive" title="Remove model" aria-label={`Remove ${m.label || m.id}`}>
                       <X className="h-3 w-3" />
                     </button>
                   </span>

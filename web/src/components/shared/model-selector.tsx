@@ -12,7 +12,10 @@ import {
 } from "@/components/ui/select";
 import { useProviderStore } from "@/stores/provider-store";
 import { useSettingsStore } from "@/stores/settings-store";
+import { useAppStore } from "@/stores/app-store";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { filledTiers } from "@/lib/models/tier-availability";
+import { Check } from "lucide-react";
 import {
   buildModelOptions,
   defaultRoute,
@@ -25,7 +28,42 @@ import {
   type ModelOption,
 } from "@/lib/models/client-options";
 import type { ProviderWithModels, TierAssignments } from "@/lib/models/effective-registry";
-import type { Capability } from "@/lib/models/types";
+import type { Capability, Tier } from "@/lib/models/types";
+
+/** Trigger text when nothing is pinned and nothing needs substituting. */
+export const AUTO_LABEL = "Auto";
+
+/**
+ * Tier options with no model of their own, for this capability. Picking one
+ * would silently tumble to a cheaper tier, so it is shown disabled instead.
+ *
+ * While built-in reachability is still unknown the built-ins count as
+ * reachable — the same optimism as `hasBuiltins` — so nothing flickers
+ * disabled during the /api/models round trip.
+ */
+export function emptyTierIds(
+  options: ModelOption[],
+  providers: ProviderWithModels[],
+  opts: {
+    capability: Capability;
+    tierModels?: TierAssignments;
+    hasAnthropicKey?: boolean;
+    hasBedrock?: boolean;
+    known?: boolean;
+  },
+): Set<string> {
+  const unknown = opts.known === false;
+  const filled = filledTiers(opts.capability, providers, {
+    tierModels: opts.tierModels,
+    hasAnthropicKey: unknown || opts.hasAnthropicKey,
+    hasBedrock: opts.hasBedrock,
+  });
+  return new Set(
+    options
+      .filter((o) => o.kind === "tier" && o.tier && !filled.has(o.tier as Tier))
+      .map((o) => o.id),
+  );
+}
 
 const BUILTINS: BuiltinModel[] = [
   { id: "opus", label: "Opus 4.7" },
@@ -154,7 +192,8 @@ export function ModelSelector({
 }: ModelSelectorProps) {
   const providers = useProviderStore((s) => s.providers);
   const tierModels = useSettingsStore((s) => s.tierModels);
-  const { hasAnthropicKey, hasBedrock, hasBuiltins } = useBuiltinAccess();
+  const { hasAnthropicKey, hasBedrock, hasBuiltins, known } = useBuiltinAccess();
+  const openSettings = useAppStore((s) => s.openSettings);
 
   // provider-store is rehydrated centrally by StoreHydration, alongside every
   // other persisted store. It used to be pulled in from right here:
@@ -201,7 +240,38 @@ export function ModelSelector({
    * and the trigger renders the honest label itself.
    */
   const selected = options.some((o) => o.id === value) ? value : '';
-  const shownLabel = findOption(options, shown)?.label ?? '';
+  /**
+   * The trigger always names something. An unpinned surface with a reachable
+   * built-in used to render an empty button — the surface's own default runs,
+   * which is "Auto": whatever the tier grid in Settings says.
+   */
+  const shownLabel = findOption(options, shown)?.label ?? (value ? '' : AUTO_LABEL);
+  const empty = useMemo(
+    () =>
+      onSelectModel
+        ? emptyTierIds(options, providers, { capability, tierModels, hasAnthropicKey, hasBedrock, known })
+        : new Set<string>(),
+    [onSelectModel, options, providers, capability, tierModels, hasAnthropicKey, hasBedrock, known],
+  );
+
+  const renderItem = (o: ModelOption) => {
+    const disabled = empty.has(o.id);
+    // `shown` can differ from the Select's value (see above), and then the
+    // built-in check mark would mark nothing. Mark what is actually in use.
+    const current = o.id === shown && selected !== o.id;
+    return (
+      <SelectItem key={o.id} value={o.id} disabled={disabled} className="text-xs">
+        <span className="min-w-0 truncate">{o.label}</span>
+        {disabled && <span className="shrink-0 text-[10px] text-muted-foreground">no model yet</span>}
+        {current && (
+          <>
+            <Check className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="sr-only">(in use)</span>
+          </>
+        )}
+      </SelectItem>
+    );
+  };
 
   const handleChange = (v: string | null) => {
     if (!v) return;
@@ -210,28 +280,41 @@ export function ModelSelector({
 
   return (
     <Select value={selected} onValueChange={handleChange}>
-      <SelectTrigger className={`h-7 w-[130px] text-xs bg-card ${className}`}>
+      <SelectTrigger
+        aria-label={shownLabel ? `Model: ${shownLabel}` : "Model"}
+        className={`h-7 w-[130px] max-w-[12rem] text-xs bg-card ${className}`}
+      >
         {shownLabel ? <span className="truncate">{shownLabel}</span> : <SelectValue />}
       </SelectTrigger>
-      <SelectContent>
+      {/* End-aligned and capped to the viewport: centred on a trigger at the
+          composer's right edge, a menu of long model names ran off-screen. */}
+      <SelectContent
+        align="end"
+        alignItemWithTrigger={false}
+        className="w-auto min-w-48 max-w-[min(22rem,calc(100vw-1rem))]"
+      >
         {groups.length <= 1
-          ? options.map((o) => (
-              <SelectItem key={o.id} value={o.id} className="text-xs">
-                {o.label}
-              </SelectItem>
-            ))
+          ? options.map(renderItem)
           : groups.map((g) => (
               <SelectGroup key={g.group}>
                 <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   {g.group}
                 </SelectLabel>
-                {g.items.map((o) => (
-                  <SelectItem key={o.id} value={o.id} className="text-xs">
-                    {o.label}
-                  </SelectItem>
-                ))}
+                {g.items.map(renderItem)}
               </SelectGroup>
             ))}
+        {empty.size > 0 && (
+          <div className="border-t border-border px-2 py-1.5 text-[11px] text-muted-foreground">
+            Tiers marked “no model yet” have nothing assigned.{" "}
+            <button
+              type="button"
+              className="underline hover:text-foreground"
+              onClick={() => openSettings("connectors")}
+            >
+              Assign models in Settings
+            </button>
+          </div>
+        )}
       </SelectContent>
     </Select>
   );

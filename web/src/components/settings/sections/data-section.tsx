@@ -1,46 +1,30 @@
 'use client'
 
-import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/stores/chat-store'
 import { useCoworkStore } from '@/stores/cowork-store'
 import { useCodeStore } from '@/stores/code-store'
 import { useBrowserStore } from '@/stores/browser-store'
 import { useConversationStore } from '@/stores/conversation-store'
-import { useSettingsStore } from '@/stores/settings-store'
-import { Download, Trash2, AlertTriangle, RotateCcw } from 'lucide-react'
+import { useSettingsStore, exportableSettings } from '@/stores/settings-store'
+import { APP_NAME } from '@/config/branding'
+import { Download, Trash2, AlertTriangle } from 'lucide-react'
 
-interface CostBreakdown {
-  input: number
-  output: number
-  total: number
-  calls: number
-  inputTokens: number
-  outputTokens: number
-  model: string
+/** `aime-settings-2026-09-29.json` — named for the product and the day. */
+export function exportFileName(now: Date = new Date()): string {
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${APP_NAME.toLowerCase()}-settings-${y}-${m}-${d}.json`
 }
 
-interface CostData {
-  surfaces: Record<string, CostBreakdown>
-  total: CostBreakdown
-}
-
+/**
+ * Data & privacy: export and deletion. Two things that used to be here live
+ * elsewhere now — the per-surface cost table is in Usage & ROI (it was in
+ * both), and "Restart setup wizard" duplicated Profile → "Run setup again"
+ * while still offering to "change your team", a feature that is gone.
+ */
 export function DataSection() {
-  const [costData, setCostData] = useState<CostData | null>(null)
-  const [costError, setCostError] = useState<string | null>(null)
-
-  useEffect(() => {
-    fetch('/api/settings/costs')
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch costs')
-        return res.json()
-      })
-      .then((data) => setCostData(data))
-      .catch((err) => setCostError(err.message))
-  }, [])
-
-  const formatUSD = (value: number) => `$${value.toFixed(4)}`
-
   const handleClearHistory = () => {
     const confirmed = window.confirm(
       'Are you sure you want to clear all conversation history? This action cannot be undone.'
@@ -86,7 +70,8 @@ export function DataSection() {
   const handleExport = () => {
     const exportData = {
       exportedAt: new Date().toISOString(),
-      settings: useSettingsStore.getState(),
+      // Never the raw store: it held API keys, and this file lands in Downloads.
+      settings: exportableSettings(useSettingsStore.getState()),
       chat: useChatStore.getState(),
       cowork: useCoworkStore.getState(),
       code: useCodeStore.getState(),
@@ -100,7 +85,7 @@ export function DataSection() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'open-claude-cowork-export.json'
+    a.download = exportFileName()
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -109,57 +94,6 @@ export function DataSection() {
 
   return (
     <div className="space-y-6">
-      {/* Cost Tracking Summary */}
-      <div>
-        <label className="text-sm font-medium">Cost tracking</label>
-        {costError && (
-          <p className="text-xs text-destructive mt-1">{costError}</p>
-        )}
-        {costData && (
-          <div className="mt-1.5 rounded-md border">
-            <div className="grid grid-cols-5 gap-2 p-3 text-xs font-medium text-muted-foreground border-b">
-              <div>Surface</div>
-              <div className="text-right">Input</div>
-              <div className="text-right">Output</div>
-              <div className="text-right">Total</div>
-              <div className="text-right">Calls</div>
-            </div>
-            {Object.entries(costData.surfaces).map(([name, cost]) => (
-              <div
-                key={name}
-                className="grid grid-cols-5 gap-2 p-3 text-sm border-b last:border-b-0"
-              >
-                <div className="capitalize">{name}</div>
-                <div className="text-right font-mono text-xs">
-                  {formatUSD(cost.input)}
-                </div>
-                <div className="text-right font-mono text-xs">
-                  {formatUSD(cost.output)}
-                </div>
-                <div className="text-right font-mono text-xs">
-                  {formatUSD(cost.total)}
-                </div>
-                <div className="text-right font-mono text-xs">
-                  {cost.calls}
-                </div>
-              </div>
-            ))}
-            <div className="grid grid-cols-5 gap-2 p-3 text-sm font-medium border-t bg-muted/50">
-              <div className="col-span-3">Grand Total</div>
-              <div className="text-right font-mono text-xs">
-                {formatUSD(costData.total.total)}
-              </div>
-              <div />
-            </div>
-          </div>
-        )}
-        {!costData && !costError && (
-          <p className="text-xs text-muted-foreground mt-1">
-            Loading cost data...
-          </p>
-        )}
-      </div>
-
       {/* Export */}
       <div>
         <Button variant="outline" onClick={handleExport}>
@@ -167,25 +101,7 @@ export function DataSection() {
           Export conversations
         </Button>
         <p className="text-xs text-muted-foreground mt-1">
-          Download all conversations and settings as JSON
-        </p>
-      </div>
-
-      {/* Restart wizard */}
-      <div>
-        <Button
-          variant="outline"
-          onClick={() => {
-            useSettingsStore.getState().setOnboardingComplete(false)
-            useSettingsStore.getState().setOnboardingSkippedAt(null)
-            window.location.reload()
-          }}
-        >
-          <RotateCcw className="h-4 w-4 mr-2" />
-          Restart setup wizard
-        </Button>
-        <p className="text-xs text-muted-foreground mt-1">
-          Re-run the first-time setup to change your team or connect apps
+          Download your conversations and settings as JSON. API keys are never included.
         </p>
       </div>
 
@@ -213,7 +129,9 @@ export function DataSection() {
           <div>
             <div className="text-sm font-medium">Clear all data</div>
             <p className="text-xs text-muted-foreground">
-              Permanently delete all settings, conversations, and preferences
+              Permanently delete all settings, conversations, and preferences. Saved API
+              keys live in the encrypted store and are not touched — remove providers
+              in Models &amp; API keys first to delete those.
             </p>
           </div>
           <Button variant="destructive" size="sm" onClick={handleClearAllData}>

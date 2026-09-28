@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useConnectorStore } from "@/stores/connector-store";
 import { startOAuthFlow } from "@/lib/connectors/oauth";
 import { provisionConnector } from "@/lib/connectors/provisioner";
@@ -17,8 +17,24 @@ import {
 } from "@/components/customize/connector-logos";
 import { ArrowLeft, Check, Loader2, Power } from "lucide-react";
 
-// Featured connectors for onboarding — the five that actually work end-to-end.
-const FEATURED_CONNECTORS = [
+interface FeaturedConnector {
+  id: string;
+  name: string;
+  description: string;
+  Logo: (props: { className?: string }) => React.ReactElement;
+  /** A caveat worth knowing BEFORE clicking Connect. */
+  note?: string;
+}
+
+/**
+ * Featured connectors for onboarding — the five that work end-to-end.
+ *
+ * Microsoft 365 connects through Microsoft's own public "Graph PowerShell"
+ * client, which only accepts work or school accounts and which some tenants
+ * block until an admin approves it. It stays featured (nothing to configure for
+ * those who can use it), but says so up front instead of failing after sign-in.
+ */
+export const FEATURED_CONNECTORS: FeaturedConnector[] = [
   {
     id: "github",
     name: "GitHub",
@@ -36,6 +52,7 @@ const FEATURED_CONNECTORS = [
     name: "Microsoft 365 (Mail + Calendar)",
     description: "Read/send email and manage calendar via Graph",
     Logo: M365GraphLogo,
+    note: "Work or school accounts only; some organisations require admin approval.",
   },
   {
     id: "miro",
@@ -50,6 +67,44 @@ const FEATURED_CONNECTORS = [
     Logo: BuildkiteLogo,
   },
 ];
+
+/** "m365-graph" → "Microsoft 365 (Mail + Calendar)"; unknown ids are title-cased. */
+export function connectorDisplayName(id: string): string {
+  const featured = FEATURED_CONNECTORS.find((c) => c.id === id);
+  if (featured) return featured.name;
+  return id
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/**
+ * Can this server actually run the OAuth flow for a connector?
+ *
+ * An oauth2 connector needs a client id the server holds (env, or a built-in
+ * public client). Without one the flow fails only after the user has clicked
+ * Connect — so ask first, and show "needs an app registration" instead of a
+ * button that cannot work. Other auth types (API key, MCP OAuth) need nothing
+ * from the server and are always offered.
+ */
+export async function serverCanOffer(
+  connectorId: string,
+  auth: { type: string; byoCredentials?: unknown },
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  if (auth.type !== "oauth2") return true;
+  // The user brings the OAuth app; the flow asks for it.
+  if (auth.byoCredentials) return true;
+  try {
+    const res = await fetchImpl(
+      `/api/connectors/oauth/config?connectorId=${encodeURIComponent(connectorId)}`,
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 interface StepConnectorsProps {
   onConnectorConnected: (connectorId: string) => void;
@@ -66,6 +121,26 @@ export function StepConnectors({
   const setToken = useConnectorStore((s) => s.setToken);
   const setEnabled = useConnectorStore((s) => s.setEnabled);
   const clearToken = useConnectorStore((s) => s.clearToken);
+
+  /** Connectors this server cannot run a sign-in for (see `serverCanOffer`). */
+  const [unavailable, setUnavailable] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { CONNECTOR_MAP } = await import("@/lib/connectors/registry");
+      const results = await Promise.all(
+        FEATURED_CONNECTORS.map(async (c) => {
+          const def = CONNECTOR_MAP[c.id];
+          return [c.id, def ? await serverCanOffer(c.id, def.auth) : false] as const;
+        }),
+      );
+      if (!cancelled) setUnavailable(new Set(results.filter(([, ok]) => !ok).map(([id]) => id)));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -173,6 +248,7 @@ export function StepConnectors({
     <div className="flex flex-col">
       {/* Back button */}
       <button
+        type="button"
         onClick={onBack}
         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mb-4 self-start"
       >
@@ -181,14 +257,16 @@ export function StepConnectors({
       </button>
 
       <div className="text-center mb-6">
-        <h2 className="text-xl font-semibold tracking-tight">Connect your apps</h2>
+        <h2 id="onboarding-step-title" tabIndex={-1} className="text-xl font-semibold tracking-tight outline-none">
+          Connect your apps
+        </h2>
         <p className="text-sm text-muted-foreground mt-2">
           Optional &mdash; you can always add more later
         </p>
       </div>
 
       <div className="space-y-2 mb-6">
-        {FEATURED_CONNECTORS.map(({ id, name, description, Logo }) => {
+        {FEATURED_CONNECTORS.map(({ id, name, description, Logo, note }) => {
           const isConnecting = connectingId === id;
           const isAuthenticated = connectorStates[id]?.authenticated ?? false;
           const error = errors[id];
@@ -202,6 +280,12 @@ export function StepConnectors({
               <div className="flex-1 min-w-0">
                 <h3 className="text-sm font-semibold leading-tight">{name}</h3>
                 <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+                {note && <p className="text-[11px] text-muted-foreground/80 mt-0.5">{note}</p>}
+                {unavailable.has(id) && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
+                    Requires an app registration on this install — set it up later in Customize → Connectors.
+                  </p>
+                )}
                 {error && (
                   <p className="text-xs text-destructive mt-1">{error}</p>
                 )}
@@ -263,8 +347,10 @@ export function StepConnectors({
                     <Check className="h-3 w-3" />
                     Connected
                   </span>
-                ) : (
+                ) : unavailable.has(id) ? null : (
                   <button
+                    type="button"
+                    aria-label={`Connect ${name}`}
                     onClick={() => handleConnect(id)}
                     disabled={!!connectingId}
                     className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
@@ -280,6 +366,7 @@ export function StepConnectors({
       </div>
 
       <button
+        type="button"
         onClick={onContinue}
         className="mx-auto inline-flex items-center justify-center rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
       >

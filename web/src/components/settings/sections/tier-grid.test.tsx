@@ -5,6 +5,7 @@ import { TierGrid } from './tier-grid';
 import { useProviderStore } from '@/stores/provider-store';
 import { useSettingsStore } from '@/stores/settings-store';
 import type { ScannedModel } from '@/lib/models/providers';
+import { APP_NAME } from '@/config/branding';
 
 /**
  * A realistic OpenRouter scan: ~345 models across a 20,000x price range. This is
@@ -52,7 +53,7 @@ afterEach(() => {
 describe('TierGrid', () => {
   it('renders a row for all four tiers, premium-first', () => {
     render(<TierGrid />);
-    expect(screen.getByText('How AIME picks models')).toBeTruthy();
+    expect(screen.getByText(`How ${APP_NAME} picks models`)).toBeTruthy();
 
     const rows = screen.getAllByTestId('tier-row');
     expect(rows).toHaveLength(4);

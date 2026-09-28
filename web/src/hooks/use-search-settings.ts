@@ -16,7 +16,6 @@ import { useProviderStore } from '@/stores/provider-store';
  */
 export interface SearchSettingsPayload {
   searchProvider: string | null;
-  searchApiKey: string | null;
   searchInstanceUrl: string | null;
   searchCredentialProviderId: string | null;
   /**
@@ -38,7 +37,6 @@ export interface SearchSettingsPayload {
 
 export function useSearchSettings(): SearchSettingsPayload {
   const searchProvider = useSettingsStore((s) => s.searchProvider);
-  const searchApiKey = useSettingsStore((s) => s.searchApiKey);
   const searchInstanceUrl = useSettingsStore((s) => s.searchInstanceUrl);
   const searchCredentialProviderId = useSettingsStore((s) => s.searchCredentialProviderId);
 
@@ -52,7 +50,6 @@ export function useSearchSettings(): SearchSettingsPayload {
 
   return {
     searchProvider,
-    searchApiKey,
     searchInstanceUrl,
     searchCredentialProviderId,
     openrouterProviderId,

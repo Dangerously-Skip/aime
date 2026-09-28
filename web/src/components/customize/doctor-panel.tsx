@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { useProviderStore } from '@/stores/provider-store';
 import { CheckCircle, XCircle, AlertCircle, RefreshCw, Stethoscope } from 'lucide-react';
 import { shortenHomePaths } from './shorten-home-paths';
 
@@ -55,7 +56,17 @@ export function DoctorPanel() {
   const run = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/doctor');
+      // POST the provider list (ids/labels only) so client-only providers such
+      // as a local Ollama count as model access.
+      const providers = useProviderStore.getState().providers.map((p) => ({
+        id: p.id, presetId: p.presetId, label: p.label, enabled: p.enabled,
+        modelCount: p.models.length, hasCredentials: !!p.hasCredentials,
+      }));
+      const res = await fetch('/api/doctor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providers }),
+      });
       const data = await res.json() as DoctorResult;
       setResult(data);
     } catch (err) {
