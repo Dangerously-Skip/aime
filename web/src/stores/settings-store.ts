@@ -36,7 +36,6 @@ interface SettingsState {
   // Profile
   fullName: string;
   displayName: string;
-  workFunction: string;
   personalPreferences: string;
 
   // Appearance
@@ -58,8 +57,6 @@ interface SettingsState {
   sessionResetTime: string;
   sessionIdleMinutes: number;
 
-  // Cowork
-  coworkInstructions: string;
 
   // Security
   blockDangerousCommands: boolean;
@@ -170,7 +167,6 @@ interface SettingsActions {
   setTierModel: (tier: Tier, modelId: string | null) => void;
   setFullName: (name: string) => void;
   setDisplayName: (name: string) => void;
-  setWorkFunction: (fn: string) => void;
   setPersonalPreferences: (prefs: string) => void;
   setChatFont: (font: ChatFont) => void;
   setToolProfile: (profile: ToolProfile) => void;
@@ -183,7 +179,6 @@ interface SettingsActions {
   setSessionResetMode: (mode: SessionResetMode) => void;
   setSessionResetTime: (time: string) => void;
   setSessionIdleMinutes: (minutes: number) => void;
-  setCoworkInstructions: (instructions: string) => void;
   addRecentFolder: (path: string) => void;
   addTrustedFolder: (path: string) => void;
   setAnthropicApiKey: (key: string | null) => void;
@@ -209,7 +204,6 @@ export type SettingsStore = SettingsState & SettingsActions;
 export const INITIAL_SETTINGS: SettingsState = {
   fullName: '',
   displayName: '',
-  workFunction: '',
   personalPreferences: '',
   chatFont: 'default',
   toolProfile: 'full',
@@ -222,7 +216,6 @@ export const INITIAL_SETTINGS: SettingsState = {
   sessionResetMode: 'manual',
   sessionResetTime: '04:00',
   sessionIdleMinutes: 60,
-  coworkInstructions: '',
   recentFolders: [],
   trustedFolders: [],
   anthropicApiKey: null,
@@ -262,7 +255,6 @@ export const INITIAL_SETTINGS: SettingsState = {
 export const PERSISTED_SETTINGS_KEYS = [
   'fullName',
   'displayName',
-  'workFunction',
   'personalPreferences',
   'chatFont',
   'toolProfile',
@@ -275,7 +267,6 @@ export const PERSISTED_SETTINGS_KEYS = [
   'sessionResetMode',
   'sessionResetTime',
   'sessionIdleMinutes',
-  'coworkInstructions',
   'recentFolders',
   'trustedFolders',
   'anthropicApiKey',
@@ -340,7 +331,6 @@ export const useSettingsStore = create<SettingsStore>()(
 
       setFullName: (fullName) => set({ fullName }),
       setDisplayName: (displayName) => set({ displayName }),
-      setWorkFunction: (workFunction) => set({ workFunction }),
       setPersonalPreferences: (personalPreferences) => set({ personalPreferences }),
       setChatFont: (chatFont) => set({ chatFont }),
       setToolProfile: (toolProfile) => set({ toolProfile }),
@@ -364,7 +354,6 @@ export const useSettingsStore = create<SettingsStore>()(
       setSessionResetMode: (sessionResetMode) => set({ sessionResetMode }),
       setSessionResetTime: (sessionResetTime) => set({ sessionResetTime }),
       setSessionIdleMinutes: (sessionIdleMinutes) => set({ sessionIdleMinutes }),
-      setCoworkInstructions: (coworkInstructions) => set({ coworkInstructions }),
 
       addRecentFolder: (path) =>
         set((state) => {
@@ -432,14 +421,17 @@ export const useSettingsStore = create<SettingsStore>()(
         if (version < 14) {
           stashSecretsForKeychain(state);
         }
-        // v13: three Settings controls that nothing read were removed — the
-        // tool-access mode, and Code's worktree location and branch prefix.
+        // v13: Settings controls that nothing read were removed — the
+        // tool-access mode, Code's worktree location and branch prefix,
+        // Profile's work function, and the Cowork "global instructions".
         // Dropped rather than left, for the same reason as `teamId` below:
         // the default merge would splice the orphans back into live state.
         if (version < 13) {
           delete state.toolAccessMode;
           delete state.codeWorktreeLocation;
           delete state.codeBranchPrefix;
+          delete state.workFunction;
+          delete state.coworkInstructions;
         }
         // v12: search became a configurable provider instead of one env var.
         // Backfilled up front, not in a per-version branch, because the

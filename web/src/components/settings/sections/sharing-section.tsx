@@ -4,6 +4,10 @@ import { useState } from 'react'
 import { useSettingsStore } from '@/stores/settings-store'
 import { S3_PRESETS } from '@/lib/publish/s3-storage'
 import { DECK_STORAGE_CREDENTIAL_ID } from '@/lib/models/credential-ids'
+import { saveCredentials } from '@/lib/models/credentials-client'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 
 /**
  * Where "Share" publishes a deck.
@@ -43,15 +47,8 @@ export function SharingSection() {
     setStatus(null)
     try {
       if (secret.trim()) {
-        const res = await fetch('/api/models/providers/credentials', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            providerId: DECK_STORAGE_CREDENTIAL_ID,
-            values: { secretAccessKey: secret.trim() },
-          }),
-        })
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not store the key')
+        // Throws with a "restart the app" message on a 503 (no master key).
+        await saveCredentials(DECK_STORAGE_CREDENTIAL_ID, { secretAccessKey: secret.trim() })
       }
       setDeckStorage({ preset, endpoint: endpoint.trim(), bucket: bucket.trim(), region: region.trim(), accessKeyId: accessKeyId.trim(), publicBaseUrl: publicBaseUrl.trim() })
       // Cleared from component state the moment it is stored — there is no
@@ -65,7 +62,7 @@ export function SharingSection() {
     }
   }
 
-  const field = 'w-full rounded border border-border bg-background px-2 py-1.5 text-sm'
+  const field = 'h-8 text-sm'
 
   return (
     <div className="space-y-6">
@@ -97,48 +94,53 @@ export function SharingSection() {
           </p>
         </div>
 
-        <label className="block space-y-1">
-          <span className="text-xs text-muted-foreground">Provider</span>
-          <select
+        <div className="space-y-1">
+          <span id="sharing-provider-label" className="block text-xs text-muted-foreground">Provider</span>
+          <Select
             value={preset}
-            onChange={(e) => {
-              const next = S3_PRESETS.find((p) => p.id === e.target.value)
-              setPreset(e.target.value)
+            onValueChange={(v) => {
+              if (!v) return
+              const next = S3_PRESETS.find((p) => p.id === v)
+              setPreset(v)
               if (next?.region) setRegion(next.region)
             }}
-            className={field}
           >
-            {S3_PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>{p.label}</option>
-            ))}
-          </select>
+            <SelectTrigger aria-labelledby="sharing-provider-label" className="h-8 w-full text-sm">
+              <span className="truncate">{chosen.label}</span>
+            </SelectTrigger>
+            <SelectContent>
+              {S3_PRESETS.map((p) => (
+                <SelectItem key={p.id} value={p.id} className="text-sm">{p.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <span className="block text-xs text-muted-foreground">{chosen.note}</span>
-        </label>
+        </div>
 
         <label className="block space-y-1">
           <span className="text-xs text-muted-foreground">Endpoint</span>
-          <input className={field} value={endpoint} placeholder={chosen.endpointHint} onChange={(e) => setEndpoint(e.target.value)} />
+          <Input className={field} value={endpoint} placeholder={chosen.endpointHint} onChange={(e) => setEndpoint(e.target.value)} />
         </label>
 
         <div className="grid grid-cols-2 gap-2">
           <label className="block space-y-1">
             <span className="text-xs text-muted-foreground">Bucket</span>
-            <input className={field} value={bucket} onChange={(e) => setBucket(e.target.value)} />
+            <Input className={field} value={bucket} onChange={(e) => setBucket(e.target.value)} />
           </label>
           <label className="block space-y-1">
             <span className="text-xs text-muted-foreground">Region</span>
-            <input className={field} value={region} placeholder="auto" onChange={(e) => setRegion(e.target.value)} />
+            <Input className={field} value={region} placeholder="auto" onChange={(e) => setRegion(e.target.value)} />
           </label>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
           <label className="block space-y-1">
             <span className="text-xs text-muted-foreground">Access key ID</span>
-            <input className={field} value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} />
+            <Input className={field} value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} />
           </label>
           <label className="block space-y-1">
             <span className="text-xs text-muted-foreground">Secret access key</span>
-            <input
+            <Input
               className={field}
               type="password"
               value={secret}
@@ -150,21 +152,17 @@ export function SharingSection() {
 
         <label className="block space-y-1">
           <span className="text-xs text-muted-foreground">Public base URL</span>
-          <input className={field} value={publicBaseUrl} placeholder="https://decks.example.com" onChange={(e) => setPublicBaseUrl(e.target.value)} />
+          <Input className={field} value={publicBaseUrl} placeholder="https://decks.example.com" onChange={(e) => setPublicBaseUrl(e.target.value)} />
           <span className="block text-xs text-muted-foreground">
             Where the bucket is readable from. On R2 this is not the endpoint — without it the link
             works only for you.
           </span>
         </label>
 
-        <button
-          onClick={save}
-          disabled={busy}
-          className="rounded border border-border px-3 py-1.5 text-sm hover:bg-accent disabled:opacity-50"
-        >
+        <Button size="sm" variant="outline" onClick={save} disabled={busy}>
           {busy ? 'Saving…' : 'Save'}
-        </button>
-        {status && <p className="text-xs text-muted-foreground">{status}</p>}
+        </Button>
+        {status && <p role="status" className="text-xs text-muted-foreground">{status}</p>}
       </section>
     </div>
   )

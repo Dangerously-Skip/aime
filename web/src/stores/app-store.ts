@@ -18,7 +18,7 @@ export type SidebarMode = 'history' | 'projects' | 'customize';
  */
 export type SettingsSectionId =
   | 'profile' | 'appearance' | 'capabilities' | 'identity' | 'connectors'
-  | 'search' | 'sharing' | 'cowork' | 'security' | 'memory'
+  | 'search' | 'sharing' | 'security' | 'memory'
   | 'notifications' | 'roi' | 'data';
 
 export type CustomizeSection = 'landing' | 'skills' | 'connectors' | 'browse-connectors' | 'browse-marketplace' | 'automation' | 'agents' | 'design';

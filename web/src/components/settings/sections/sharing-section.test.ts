@@ -52,8 +52,10 @@ describe('it says what each tier can promise', () => {
  */
 describe('the secret key does not go into settings', () => {
   it('is POSTed to the credential store', () => {
-    expect(SECTION).toContain('/api/models/providers/credentials');
-    expect(SECTION).toContain('DECK_STORAGE_CREDENTIAL_ID');
+    // Through the shared credentials client (which POSTs to
+    // /api/models/providers/credentials and turns a 503 into a readable error).
+    expect(SECTION).toMatch(/saveCredentials\(DECK_STORAGE_CREDENTIAL_ID/);
+    expect(SECTION).toContain("from '@/lib/models/credentials-client'");
   });
 
   it('is not part of what setDeckStorage persists', () => {
