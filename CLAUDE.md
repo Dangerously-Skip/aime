@@ -216,7 +216,7 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 1. **Electron Main** (`web/main-web.js`) — Window lifecycle, IPC handlers, auto-updater, minute-tick heartbeat, GitHub OAuth
 2. **Electron Preload** (`web/preload-web.js`) — IPC bridge via `contextBridge` (file dialogs, auth windows, notifications, updates, `onMinuteTick`)
 3. **Next.js App** (`web/src/`) — React UI with shadcn/ui, Zustand stores
-4. **API Routes** (`web/src/app/api/`) — SSE streaming, connectors, telemetry, identity, memory, webhooks, cron, subagents
+4. **API Routes** (`web/src/app/api/`) — SSE streaming, connectors, telemetry, identity, cron, subagents
 
 ### Surfaces (`web/src/components/surfaces/`)
 
@@ -235,29 +235,32 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 - `browser-store.ts` — Browser DOM state, navigation, tool results
 - `assistant-store.ts` — Standing orders, automation templates
 - `conversation-store.ts` — Conversation list, metadata, tokenUsage, effortEstimate, ROI, ratings
-- `settings-store.ts` — User preferences (v6, persisted)
+- `settings-store.ts` — User preferences (v12, persisted)
 - `project-store.ts` — Projects, artifacts, per-project settings
 - `connector-store.ts` — Connected service status
+- `provider-store.ts` — BYOK providers and their scanned models
 - `canvas-store.ts` — A2UI canvas panel state
-- `cron-store.ts` — Cron jobs + `matchesCron()`
-- `heartbeat-store.ts` — Connection health
 - `memory-store.ts` — Memory extraction/retrieval
 - `context-bus-store.ts` — Inter-component event bus
 - `reminder-store.ts` — Task reminders
+- `run-store.ts` — Goals + an in-memory window of recent runs (durable log is `/api/runs`)
+- `widget-store.ts` — Cockpit widgets (stored recipe + last render)
+- `code-workspace-store.ts` — Per-workspace Code IDE layout (panels, sizes, open tabs)
+- `tool-budget-store.ts` — Last observed tool count from a live session (not persisted)
 
 ### API Routes (`web/src/app/api/`)
 
-**Core:** `POST /api/chat/[surfaceId]` (SSE streaming with agent routing), `POST /api/abort`, `GET /api/providers`, `GET /api/models`, `GET /api/health`, `GET /api/doctor`, `GET /api/surfaces`
+**Core:** `POST /api/chat/[surfaceId]` (SSE streaming with agent routing), `POST /api/abort`, `GET /api/models`, `GET /api/health`, `GET /api/doctor`, `GET /api/surfaces`
 
-**Identity & Memory:** `GET|POST /api/identity/user-md`, `GET|POST /api/identity/soul-md`, `POST /api/memory/daily`
+**Identity:** `GET|POST /api/identity/user-md`, `GET|POST /api/identity/soul-md`
 
 **Telemetry:** `POST /api/telemetry/events`, `POST /api/telemetry/estimate-effort`, `GET /api/settings/costs`
 
-**Connectors:** `/api/connectors/oauth/*`, `/api/connectors/provision`, `/api/connectors/status`, `/api/nango/*`
+**Connectors:** `/api/connectors/oauth/*`, `/api/connectors/provision`
 
 **Customization:** `/api/customize/connectors/*`, `/api/customize/plugins`, `/api/customize/skills/*`, `/api/marketplace`
 
-**Automation:** `GET|POST|DELETE /api/cron`, `GET|POST|DELETE /api/webhooks`, `POST /api/webhooks/[token]`, `POST /api/subagent`, `POST /api/subagent/batch`, `POST /api/session/reset`, `GET /api/agents`
+**Automation:** `GET|POST|DELETE /api/cron`, `POST /api/subagent`, `POST /api/subagent/batch`, `GET /api/agents`
 
 **Files:** `/api/files/read`, `/api/files/delete`, `/api/files/search`, `POST /api/upload`
 
@@ -269,7 +272,7 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 
 ### Providers (`web/src/lib/providers/`)
 
-- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` searxng + in-process `aime` server), handles tool interception (canvas, spawn_agent, loop detection), session controls.
+- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` searxng + in-process `aime` server), handles tool interception (canvas, loop detection), session controls.
 
 ### Models are configured in exactly one place, and two tests hold that line
 
@@ -317,21 +320,18 @@ config, hence the try/catch at the call site; that is not defensive habit.
 - `standing-order-engine.ts` / `standing-order-templates.ts` — Automation execution
 - `browser-tools.ts` — DOM interaction, element inspection, navigation
 - `artifacts/` — Parser, persistence, server-detector
-- `hooks/` — Server-side audit logger, cost tracker, file watcher, tool monitor
+- `hooks/` — Server-side cost tracker + tool monitor (nothing creates them today; `/api/settings/costs` reads an always-empty map)
 
 ### Hooks (`web/src/hooks/`)
 
 - `use-sse-stream.ts` — SSE streaming with TTFT tracking, `onUsage` callback
-- `use-heartbeat.ts` — Subscribes to `minute:tick` IPC
-- `use-cron.ts` — Cron evaluation on heartbeat
-- `use-session-reset.ts` — Idle/daily session reset
+- `use-cron.ts` — Cron evaluation on the minute tick
 - `use-electron.ts` — Electron IPC (file dialogs, auth)
 - `use-voice-input.ts` — Local Whisper speech-to-text
 - `use-at-suggestions.ts` — @-mention autocomplete
 - `use-browser-agent.ts` — Browser automation coordination
 - `use-file-drop.ts` — Drag-and-drop file handling
 - `use-standing-orders.ts` — Automation template execution
-- `use-auto-project.ts` — Auto-associate conversations with projects
 - `use-conversations.ts` — Conversation list management
 - `use-project-context.ts` — Project-scoped context injection
 - `use-scratch-dir.ts` — Scratch directory lifecycle management
@@ -342,28 +342,28 @@ config, hence the try/catch at the call site; that is not defensive habit.
 - **Web search** via the `web-search` MCP — opt-in, only mounted when `SEARXNG_INSTANCES` is set
 - **Telemetry** via SigV4-signed analytics API (`ANALYTICS_API_URL`)
 - **Auto-update** from generic provider URL in electron-builder config
-- **Nango** (optional) for 700+ OAuth connector hub
 
 ## Environment Variables
 
-Defined in `.env` (copy from `.env.example`):
+Defined in `web/.env` (copy from `web/.env.example`, which lists every variable
+the app reads — `env-example.test.ts` enforces that):
 
 - `ANTHROPIC_API_KEY` — Claude inference via the Anthropic API (BYOK; also settable per-user in Settings → API Access)
-- `CLAUDE_CODE_USE_BEDROCK=1` + AWS credentials — Alternative: Claude inference via Bedrock
-- `NIB_COWORK_DEFAULT_MODEL` — Default model (`sonnet`)
+- `AWS_REGION` + AWS credentials (profile, access keys, or `AWS_BEARER_TOKEN_BEDROCK`) — Alternative: Claude inference via Bedrock
+- `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` — Pin the model ids the SDK aliases resolve to on Bedrock. There is no default-model env var: the tier grid decides
+- `MEMORY_EXTRACTION_MODEL` — Memory-extraction model when the tier grid resolves none (unset = skip)
 - `ANALYTICS_API_URL` / `ANALYTICS_AWS_REGION` — ROI telemetry pipeline (opt-in; telemetry is off without it)
-- `SEARXNG_INSTANCES` — searxng URL for web search (no default; feature off without it)
-- OAuth credentials (GitHub, Slack, Atlassian, MS365, Google, Figma, Miro, Zoom) — see `.env.example`
-- `NANGO_*` — Optional Nango connector hub
+- `SEARXNG_INSTANCES` — legacy searxng URL for web search, used only when nothing is chosen in Settings → Web Search
+- OAuth credentials (GitHub, Slack, Atlassian, MS365, Google, Figma, Miro, Zoom) — see `web/.env.example`
 
 ## Key Patterns
 
 - **SSE streaming**: API routes yield chunks via `createSSEStream()`; client reads via `response.body.getReader()` in `use-sse-stream.ts`
 - **Session controls**: Slash commands parsed into `SessionControls` (thinkLevel, verboseMode, modelOverride, agentName) passed to provider
 - **Agent routing**: `route.ts` loads AGENTS.md, matches on triggers or `/agent` command, injects agent system prompt
-- **Tool interception**: `canvas` tool → SSE event → canvas-store; `spawn_agent` → HTTP to `/api/subagent`; loop detection via sliding window
+- **Tool interception**: `canvas` tool → SSE event → canvas-store; loop detection via sliding window
 - **Cowork sidebar**: Tool calls categorized into Context (Read/Glob/Grep/Bash) and Artifacts (Write/Edit/NotebookEdit) by `categorizeToolCall()`. Search results from MCP searxng aggregated into `SearchResultsCard`. WebFetch URLs from search follow-ups are suppressed from Context.
-- **Minute tick**: Electron main sends `minute:tick` IPC → preload exposes `onMinuteTick` → hooks subscribe for cron, heartbeat, session reset
+- **Minute tick**: Electron main sends `minute:tick` IPC → preload exposes `onMinuteTick` → hooks subscribe for cron and scheduled work (mounted in `components/layout/schedulers.tsx`)
 - **Identity files**: `SOUL.md` (personality) + `USER.md` (user context) injected into system prompt
 - **ROI tracking**: `done` SSE event with token/cost/duration → effort estimation via Haiku → conversation metrics
 
