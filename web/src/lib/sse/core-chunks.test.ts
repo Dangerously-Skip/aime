@@ -150,10 +150,41 @@ describe('handleCoreChunk', () => {
     expect(s.updateToolResult).toHaveBeenCalledWith('c1', 't2', 'out', true);
   });
 
-  it('appends an error into the transcript with a default message', () => {
+  it('a store without setTurnError keeps the old inline text rather than losing the error', () => {
     const s = fakeStore();
     handleCoreChunk({ type: 'error' }, ctx(s));
     expect(s.appendToLastAssistant).toHaveBeenCalledWith('c1', '\n\n**Error:** An error occurred');
+  });
+
+  it('records an error on the reply instead of writing it into the reply text', () => {
+    const s = { ...fakeStore(), setTurnError: vi.fn() };
+    handleCoreChunk({ type: 'error', message: 'Please run /login', code: 'auth' }, ctx(s));
+    expect(s.setTurnError).toHaveBeenCalledWith('c1', { code: 'auth', message: 'Please run /login' });
+    expect(s.appendToLastAssistant).not.toHaveBeenCalled();
+  });
+
+  it('classifies an error the server sent without a code', () => {
+    const s = { ...fakeStore(), setTurnError: vi.fn() };
+    handleCoreChunk({ type: 'error', message: '429 Too Many Requests' }, ctx(s));
+    expect(s.setTurnError).toHaveBeenCalledWith('c1', { code: 'rate_limit', message: '429 Too Many Requests' });
+  });
+
+  it('shows a provider retry on the streaming reply', () => {
+    const s = { ...fakeStore(), setRetryStatus: vi.fn() };
+    expect(handleCoreChunk({ type: 'retry', attempt: 2, delayMs: 4000, code: 'overloaded' }, ctx(s))).toBe(true);
+    expect(s.setRetryStatus).toHaveBeenCalledWith('c1', { attempt: 2, delayMs: 4000 });
+  });
+
+  it('against the real chat store: the error is on the message, and the content is untouched', () => {
+    useChatStore.setState({ messages: {} });
+    const st = useChatStore.getState();
+    st.addMessage('c1', { id: 'u', role: 'user', content: 'hi', timestamp: 1 });
+    st.addMessage('c1', { id: 'a', role: 'assistant', content: 'Partial answer', timestamp: 2, isStreaming: true });
+    handleCoreChunk({ type: 'error', message: 'overloaded_error', code: 'overloaded' }, ctx(useChatStore.getState() as never));
+    const last = useChatStore.getState().messages.c1.at(-1)!;
+    expect(last.content).toBe('Partial answer');
+    expect(last.error).toEqual({ code: 'overloaded', message: 'overloaded_error' });
+    expect(last.isStreaming).toBe(false);
   });
 
   it('declines a chunk the surface has opted out of', () => {

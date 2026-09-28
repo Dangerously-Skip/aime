@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { useSSEStream, stripMessagesForHistory, type SSEEvent, type StreamUsage } from './use-sse-stream';
+import { useSSEStream, stripMessagesForHistory, StreamTurnError, type SSEEvent, type StreamUsage } from './use-sse-stream';
 import { streamRegistry } from '@/lib/stream-registry';
 import { useChatStore, type Message } from '@/stores/chat-store';
 import { handleCoreChunk } from '@/lib/sse/core-chunks';
@@ -63,6 +63,31 @@ describe('stripMessagesForHistory', () => {
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'hello' },
     ]);
+  });
+
+  it('never sends error text back to the model, including legacy inline errors', () => {
+    expect(
+      stripMessagesForHistory([
+        { role: 'user', content: 'q1' },
+        { role: 'assistant', content: 'Partial answer\n\n**Error:** Please run /login' },
+        { role: 'user', content: 'q2' },
+        { role: 'assistant', content: '\n\n**Error:** HTTP 500: boom' },
+      ]),
+    ).toEqual([
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'Partial answer' },
+      { role: 'user', content: 'q2' },
+    ]);
+  });
+
+  it('leaves slash commands and their confirmations out', () => {
+    expect(
+      stripMessagesForHistory([
+        { role: 'user', content: '/verbose off', isCommandEcho: true },
+        { role: 'assistant', content: 'Verbose mode **off**', isCommandEcho: true },
+        { role: 'user', content: 'real question' },
+      ]),
+    ).toEqual([{ role: 'user', content: 'real question' }]);
   });
 });
 
@@ -220,8 +245,39 @@ describe('useSSEStream.sendMessage', () => {
 
     expect(handlers.onError).toHaveBeenCalledTimes(1);
     expect((handlers.onError.mock.calls[0][0] as Error).message).toContain('HTTP 500');
+    // The raw body can be a stack trace or an HTML page — never shown.
+    expect((handlers.onError.mock.calls[0][0] as Error).message).not.toContain('exploded');
     expect(handlers.onDone).not.toHaveBeenCalled();
     expect(handlers.setIsStreaming).toHaveBeenLastCalledWith(false);
+  });
+
+  it('classifies HTTP failures so the banner can say what to do', async () => {
+    const cases: Array<[number, string, string]> = [
+      [401, 'Unauthorized', 'auth'],
+      [429, 'slow down', 'rate_limit'],
+      [503, '<html>Service Unavailable</html>', 'overloaded'],
+      [500, JSON.stringify({ error: 'No model configured', code: 'no_model' }), 'no_model'],
+    ];
+    for (const [status, body, code] of cases) {
+      fetchMock.mockResolvedValueOnce({ ok: false, status, text: async () => body } as unknown as Response);
+      const { handlers, stream } = setup();
+      await stream.sendMessage('hi', 'chat1', 'chat', 'sonnet');
+      const err = handlers.onError.mock.calls[0][0] as StreamTurnError;
+      expect(err).toBeInstanceOf(StreamTurnError);
+      expect(err.code, `HTTP ${status}`).toBe(code);
+      expect(err.message).not.toContain('<html>');
+    }
+  });
+
+  it("shows our own route's curated 4xx message", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ error: 'Message exceeds max length (100000 chars)' }),
+    } as unknown as Response);
+    const { handlers, stream } = setup();
+    await stream.sendMessage('hi', 'chat1', 'chat', 'sonnet');
+    expect((handlers.onError.mock.calls[0][0] as Error).message).toBe('Message exceeds max length (100000 chars)');
   });
 
   it('reports network failures via onError', async () => {
@@ -471,6 +527,8 @@ describe('useSSEStream — aborted streams finalise message state', () => {
     expect(spies.onError.mock.calls[0][0].message).toMatch(TIMEOUT_TEXT);
     // The half of the message that stops a user redoing work already on disk.
     expect(spies.onError.mock.calls[0][0].message).toMatch(/Artifacts/);
+    // Classified, so the banner offers Try again rather than "Something went wrong".
+    expect(spies.onError.mock.calls[0][0]).toMatchObject({ code: 'timeout' });
     expect(spies.onDone).not.toHaveBeenCalled();
 
     const last = lastMessage('timeout-chat');

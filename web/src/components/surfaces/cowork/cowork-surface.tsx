@@ -10,7 +10,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { useSearchSettings } from '@/hooks/use-search-settings'
 import { useDeckTheme } from '@/hooks/use-deck-theme'
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { useSSEStream, stripMessagesForHistory, turnErrorOf } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { parseSearchWebResults, isParsableSearchTool } from "@/lib/search/parse-results";
@@ -758,6 +758,8 @@ export function CoworkSurface() {
   const addMessage = useCoworkStore((s) => s.addMessage);
   const appendToLastAssistant = useCoworkStore((s) => s.appendToLastAssistant);
   const addToolCall = useCoworkStore((s) => s.addToolCall);
+  const setTurnError = useCoworkStore((s) => s.setTurnError);
+  const setRetryStatus = useCoworkStore((s) => s.setRetryStatus);
   const updateToolResult = useCoworkStore((s) => s.updateToolResult);
   const completeRunningTools = useCoworkStore((s) => s.completeRunningTools);
   const updateMessage = useCoworkStore((s) => s.updateMessage);
@@ -1053,7 +1055,7 @@ export function CoworkSurface() {
       if (
         handleCoreChunk(event, {
           chatId: cid,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools, setTurnError, setRetryStatus },
           printDocument,
           onCanvas: onCanvasEvent,
           notify: (title, body) => {
@@ -1383,7 +1385,8 @@ export function CoworkSurface() {
     onError: (error, cid) => {
       runRecorder.fail(error.message);
       stopStreaming(cid);
-      appendToLastAssistant(cid, `\n\n**Error:** ${error.message}`);
+      // A banner on the reply, not text in it — see TurnErrorBanner.
+      setTurnError(cid, turnErrorOf(error));
     },
   });
 

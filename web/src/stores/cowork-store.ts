@@ -9,8 +9,14 @@ import {
   markTurnStart,
   turnStartedAt,
 } from '@/lib/artifact-reconcile';
-import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
-import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
+import type { Message, ToolCall, TurnError } from '@/stores/chat-store';
+import {
+  cleanStaleStreamingFlags,
+  dedupeMessageIds,
+  dedupeLegacyTranscriptRows,
+  withTurnError,
+  withRetryStatus,
+} from '@/stores/chat-store';
 import { type SessionControls } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
@@ -24,7 +30,6 @@ export interface CanvasArtifact {
   createdAt: number;
 }
 
-const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
 interface CoworkState {
   messages: Record<string, Message[]>;
@@ -60,6 +65,8 @@ interface CoworkActions {
   addMessage: (chatId: string, message: Message) => void;
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
+  setTurnError: (chatId: string, error: TurnError) => void;
+  setRetryStatus: (chatId: string, retrying: Message['retrying'] | null) => void;
   attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: A2UIDocument }) => void;
   setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
@@ -143,9 +150,22 @@ export const useCoworkStore = create<CoworkStore>()(
             ...last,
             content: last.content + content,
             isLoading: false,
+            ...(last.retrying ? { retrying: undefined } : {}),
             ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
           };
           return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
+      setTurnError: (chatId, error) =>
+        set((state) => {
+          const updated = withTurnError(state.messages[chatId] ?? [], error);
+          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
+        }),
+
+      setRetryStatus: (chatId, retrying) =>
+        set((state) => {
+          const updated = withRetryStatus(state.messages[chatId] ?? [], retrying);
+          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
         }),
 
       attachCanvasToLastAssistant: (chatId, canvas) =>
@@ -190,7 +210,7 @@ export const useCoworkStore = create<CoworkStore>()(
           const lastIdx = msgs.length - 1;
           const last = msgs[lastIdx];
           const updated = [...msgs];
-          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false };
+          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false, retrying: undefined };
           return { isStreaming, streamingChats, messages: { ...state.messages, [chatId]: updated } };
         }),
 

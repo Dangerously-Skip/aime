@@ -148,10 +148,15 @@ describe('ChatSurface — a failing stream reports to the conversation it belong
       await vi.advanceTimersByTimeAsync(120_000);
     });
 
-    expect(lastContent(CHAT)).toContain('**Error:**');
-    expect(lastContent(CHAT)).toMatch(/the turn was stopped/i);
+    const failed = (useChatStore.getState().messages[CHAT] ?? []).at(-1);
+    expect(failed?.error?.code).toBe('timeout');
+    expect(failed?.error?.message).toMatch(/the turn was stopped/i);
+    // On the reply as a banner, not written into it (it would go back to the
+    // model as history).
+    expect(failed?.content).not.toContain('**Error:**');
     // The conversation the user is actually reading is untouched.
     expect(lastContent(OTHER)).toBe('unrelated work');
+    expect((useChatStore.getState().messages[OTHER] ?? []).at(-1)?.error).toBeUndefined();
   });
 
   it('clears the spinner on the conversation that failed', async () => {

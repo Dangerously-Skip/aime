@@ -7,7 +7,7 @@ import { ChatTitleBar } from "@/components/shared/chat-title-bar";
 import { useChatStore } from "@/stores/chat-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { useSSEStream, stripMessagesForHistory, turnErrorOf } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { streamRegistry } from "@/lib/stream-registry";
@@ -123,6 +123,8 @@ export function ChatSurface() {
     (s) => s.appendToLastAssistant
   );
   const addToolCall = useChatStore((s) => s.addToolCall);
+  const setTurnError = useChatStore((s) => s.setTurnError);
+  const setRetryStatus = useChatStore((s) => s.setRetryStatus);
   const completeRunningTools = useChatStore((s) => s.completeRunningTools);
   const updateMessage = useChatStore((s) => s.updateMessage);
   const updateToolResult = useChatStore((s) => s.updateToolResult);
@@ -267,7 +269,7 @@ export function ChatSurface() {
       if (
         handleCoreChunk(event, {
           chatId: cid,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools, setTurnError, setRetryStatus },
           printDocument,
           onCanvas: onCanvasEvent,
           notify: (title, body) => {
@@ -333,7 +335,8 @@ export function ChatSurface() {
     onError(error, errorId) {
       runRecorder.fail(error.message);
       stopStreaming(errorId);
-      appendToLastAssistant(errorId, `\n\n**Error:** ${error.message}`);
+      // A banner on the reply, not text in it — see TurnErrorBanner.
+      setTurnError(errorId, turnErrorOf(error));
     },
   });
 

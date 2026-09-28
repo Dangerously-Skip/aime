@@ -44,6 +44,9 @@ interface Message {
   isAutoContinue?: boolean;
   attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>;
   inlineCanvases?: Array<{ id: string; title: string; doc: import("@/lib/a2ui/types").A2UIDocument }>;
+  error?: { code: import("@/lib/sse/turn-error").TurnErrorCode; message: string };
+  retrying?: { attempt: number; delayMs: number };
+  isCommandEcho?: boolean;
 }
 
 interface MessageListProps {
@@ -171,6 +174,8 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
             conversationId={conversationId}
             inlineCanvases={msg.inlineCanvases}
             surfaceId={surfaceId}
+            error={msg.error}
+            retrying={msg.retrying}
           />
         ) : null;
       })}

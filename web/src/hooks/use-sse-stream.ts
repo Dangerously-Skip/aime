@@ -10,6 +10,7 @@ import {
 } from '@/lib/stream-registry';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
 import { resetTextBoundary } from '@/lib/sse/core-chunks';
+import { classifyTurnError, isTurnErrorCode, type TurnErrorCode } from '@/lib/sse/turn-error';
 
 /** Abort the stream if no data arrives for this long (the server heartbeats every 15s). */
 const INACTIVITY_TIMEOUT_MS = 120_000;
@@ -49,15 +50,69 @@ function isAbortError(error: unknown): boolean {
 }
 
 /**
+ * A failed turn, already classified. `message` is safe to show: an HTTP
+ * failure never carries the raw response body, which could be a stack trace
+ * or an HTML error page.
+ */
+export class StreamTurnError extends Error {
+  readonly code: TurnErrorCode;
+  constructor(code: TurnErrorCode, message: string) {
+    super(message);
+    this.name = 'StreamTurnError';
+    this.code = code;
+  }
+}
+
+/** Any error a stream can end with, as what the banner renders. */
+export function turnErrorOf(error: Error): { code: TurnErrorCode; message: string } {
+  if (error instanceof StreamTurnError) return { code: error.code, message: error.message };
+  return { code: classifyTurnError(error.message), message: error.message };
+}
+
+/**
+ * Turn a non-2xx response into a classified error without echoing the body.
+ *
+ * Our own route answers 4xx with `{ error }` — curated, user-facing text
+ * ("Message exceeds max length") — and may add a `code`. Anything else (a 500
+ * page, a proxy's HTML) is used only to classify, never displayed.
+ */
+export function httpTurnError(status: number, body: string): StreamTurnError {
+  let curated: string | undefined;
+  let code: TurnErrorCode | undefined;
+  try {
+    const json = JSON.parse(body) as { error?: unknown; code?: unknown };
+    if (isTurnErrorCode(json.code)) code = json.code;
+    if (typeof json.error === 'string' && status < 500 && json.error.length <= 200) curated = json.error;
+  } catch {
+    // Not JSON — classify the text, show none of it.
+  }
+  return new StreamTurnError(
+    code ?? classifyTurnError(body, status),
+    curated ?? `The request failed (HTTP ${status}).`,
+  );
+}
+
+/** A reply that ended in the old inline error text, before errors became banners. */
+const LEGACY_INLINE_ERROR = /\n*\*\*Error:\*\* [\s\S]*$/;
+
+/**
  * Strip store messages to a lightweight {role, content} array suitable for the history param.
- * Filters to user/assistant with non-empty content.
+ *
+ * What the MODEL said, and what the user asked — nothing else. Out: empty
+ * placeholders, slash commands and their confirmations, and error text
+ * (legacy transcripts carry it inline; re-sending it taught the model that it
+ * had said "**Error:** Please run /login").
  */
 export function stripMessagesForHistory(
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string; isCommandEcho?: boolean }>
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
   return messages
-    .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
-    .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isCommandEcho)
+    .map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.role === 'assistant' ? (m.content ?? '').replace(LEGACY_INLINE_ERROR, '') : m.content,
+    }))
+    .filter((m) => m.content);
 }
 
 export interface SSEEvent {
@@ -344,8 +399,8 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         });
 
         if (!response.ok) {
-          const errorText = await response.text().catch(() => 'Unknown error');
-          throw new Error(`HTTP ${response.status}: ${errorText}`);
+          const errorText = await response.text().catch(() => '');
+          throw httpTurnError(response.status, errorText);
         }
 
         if (!response.body) {
@@ -437,12 +492,12 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
         if (abortReason === 'timeout') {
           // A timeout is a failure the user has to see, so it goes down the
-          // same path as any other stream error: `onError`, which every surface
-          // appends to the transcript as `**Error:** …`. notifyStreamAborted
+          // same path as any other stream error: `onError`, which the surfaces
+          // render as the turn's error banner. notifyStreamAborted
           // first so message state is finalised even if a surface's onError
           // resolves a different chatId than the one this stream was started for.
           notifyStreamAborted({ chatId, reason: 'timeout' });
-          pinnedOnError(new Error(timeoutMessage(abortDetailOf(controller.signal))));
+          pinnedOnError(new StreamTurnError('timeout', timeoutMessage(abortDetailOf(controller.signal))));
           return;
         }
 

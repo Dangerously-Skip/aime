@@ -7,6 +7,7 @@ import { onStreamAborted } from '@/lib/stream-registry';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
+import type { TurnErrorCode } from '@/lib/sse/turn-error';
 
 export type ModelId = 'sonnet' | 'opus' | 'haiku';
 export type { SessionControls };
@@ -18,7 +19,6 @@ export interface CanvasArtifact {
   createdAt: number;
 }
 
-const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
 export interface ToolCall {
   id: string;
@@ -54,6 +54,54 @@ export interface Message {
   isAutoContinue?: boolean;
   /** Inline canvas chips — A2UI docs the agent rendered during this turn */
   inlineCanvases?: Array<{ id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }>;
+  /**
+   * The turn failed. Rendered as a banner beside the reply, never appended to
+   * `content` — content goes back to the model as history, and "**Error:** …"
+   * then read as something the assistant had said.
+   */
+  error?: TurnError;
+  /** The provider is retrying; shown as a quiet status while the turn waits. */
+  retrying?: { attempt: number; delayMs: number };
+  /**
+   * A slash command and its confirmation. Shown in the transcript, never sent
+   * to the model: "/verbose" and "Verbose mode on" are not conversation.
+   */
+  isCommandEcho?: boolean;
+}
+
+export interface TurnError {
+  code: TurnErrorCode;
+  message: string;
+}
+
+/**
+ * Where a turn's error / retry status lands: the last assistant message, which
+ * is the reply the turn was writing. A question or connect card can sit after
+ * it, which is why this is not simply "the last message".
+ */
+function lastAssistantIndex(msgs: Message[]): number {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'assistant' && !msgs[i].questionData && !msgs[i].connectorRequest) return i;
+    if (msgs[i].role === 'user') return -1;
+  }
+  return -1;
+}
+
+/** Record a failed turn on its reply. Shared by every store with this Message shape. */
+export function withTurnError(msgs: Message[], error: TurnError): Message[] | null {
+  const idx = lastAssistantIndex(msgs);
+  if (idx < 0) return null;
+  const updated = [...msgs];
+  updated[idx] = { ...updated[idx], error, retrying: undefined, isLoading: false, isStreaming: false };
+  return updated;
+}
+
+export function withRetryStatus(msgs: Message[], retrying: Message['retrying'] | null): Message[] | null {
+  const idx = lastAssistantIndex(msgs);
+  if (idx < 0) return null;
+  const updated = [...msgs];
+  updated[idx] = { ...updated[idx], retrying: retrying ?? undefined };
+  return updated;
 }
 
 /** Clean stale streaming/loading flags from persisted messages (no active stream on rehydration). */
@@ -193,6 +241,8 @@ interface ChatActions {
   addMessage: (chatId: string, message: Message) => void;
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
+  setTurnError: (chatId: string, error: TurnError) => void;
+  setRetryStatus: (chatId: string, retrying: Message['retrying'] | null) => void;
   attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }) => void;
   setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
@@ -278,9 +328,23 @@ export const useChatStore = create<ChatStore>()(
             ...last,
             content: last.content + content,
             isLoading: false,
+            // Output arriving means the retry it was waiting on succeeded.
+            ...(last.retrying ? { retrying: undefined } : {}),
             ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
           };
           return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
+      setTurnError: (chatId, error) =>
+        set((state) => {
+          const updated = withTurnError(state.messages[chatId] ?? [], error);
+          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
+        }),
+
+      setRetryStatus: (chatId, retrying) =>
+        set((state) => {
+          const updated = withRetryStatus(state.messages[chatId] ?? [], retrying);
+          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
         }),
 
       attachCanvasToLastAssistant: (chatId, canvas) =>
@@ -319,7 +383,7 @@ export const useChatStore = create<ChatStore>()(
           const lastIdx = msgs.length - 1;
           const last = msgs[lastIdx];
           const updated = [...msgs];
-          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false };
+          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false, retrying: undefined };
           return { isStreaming, streamingChats, messages: { ...state.messages, [chatId]: updated } };
         }),
 

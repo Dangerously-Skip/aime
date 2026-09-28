@@ -16,6 +16,8 @@ import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
 import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { BASH_ARTIFACT_EXT, isValidSidebarEntry } from "@/lib/artifact-tracker";
+import { TurnErrorBanner } from "./turn-error-banner";
+import type { TurnErrorCode } from "@/lib/sse/turn-error";
 
 const WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "ExcelWrite", "ExcelEdit"]);
 
@@ -108,6 +110,10 @@ interface AssistantMessageProps {
   inlineCanvases?: Array<{ id: string; title: string; doc: A2UIDocument }>;
   /** Surface this message is rendered in — drives where canvas chips reopen. */
   surfaceId?: 'chat' | 'cowork';
+  /** The turn failed — rendered as a banner, never as reply text. */
+  error?: { code: TurnErrorCode; message: string };
+  /** The provider is backing off; the turn is waiting, not stuck. */
+  retrying?: { attempt: number; delayMs: number };
 }
 
 function CanvasChip({ title, onOpen }: { title: string; onOpen: () => void }) {
@@ -141,6 +147,8 @@ export function AssistantMessage({
   conversationId,
   inlineCanvases,
   surfaceId,
+  error,
+  retrying,
 }: AssistantMessageProps) {
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const setOpen = useCanvasStore((s) => s.setOpen);
@@ -331,6 +339,21 @@ export function AssistantMessage({
           </div>
         )}
 
+        {retrying && isStreaming && (
+          <div className="flex items-center gap-1.5 py-1 text-xs text-muted-foreground" role="status">
+            <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
+            Retrying (attempt {retrying.attempt})…
+          </div>
+        )}
+
+        {error && (
+          <TurnErrorBanner
+            code={error.code}
+            message={error.message}
+            onRetry={isLastAssistantMessage ? onRetry : undefined}
+          />
+        )}
+
         {/* Between-turn loading — shows starburst when streaming but no tools running and cursor idle */}
         {isStreaming && !isLoading && content && toolCalls.length > 0 && toolCalls.every((tc) => tc.status !== "running") && !content.endsWith("▊") && (
           <div className="flex items-center gap-2 py-2">
@@ -362,7 +385,8 @@ export function AssistantMessage({
                 <Copy className="h-3.5 w-3.5" />
               )}
             </Button>
-            {isLastAssistantMessage && onRetry && (
+            {/* The error banner carries its own Try again. */}
+            {isLastAssistantMessage && onRetry && !error && (
               <Button
                 variant="ghost"
                 size="icon"
