@@ -9,7 +9,6 @@ import type { Tier } from '@/lib/models/types';
 import type { SearchProviderId } from '@/lib/search/providers';
 
 export type ChatFont = 'default' | 'sans' | 'mono' | 'system' | 'dyslexic';
-export type ToolAccessMode = 'onDemand' | 'alwaysLoaded';
 export type ToolProfile = 'minimal' | 'coding' | 'full';
 export type SessionResetMode = 'manual' | 'daily' | 'idle';
 
@@ -43,7 +42,6 @@ interface SettingsState {
   chatFont: ChatFont;
 
   // Capabilities
-  toolAccessMode: ToolAccessMode;
   toolProfile: ToolProfile;
   /** Push-to-talk global hotkey (P4.1). Off by default — never claim a system-wide key uninvited. */
   pushToTalkEnabled: boolean;
@@ -61,10 +59,6 @@ interface SettingsState {
 
   // Cowork
   coworkInstructions: string;
-
-  // Code
-  codeWorktreeLocation: string;
-  codeBranchPrefix: string;
 
   // Security
   blockDangerousCommands: boolean;
@@ -172,7 +166,6 @@ interface SettingsActions {
   setWorkFunction: (fn: string) => void;
   setPersonalPreferences: (prefs: string) => void;
   setChatFont: (font: ChatFont) => void;
-  setToolAccessMode: (mode: ToolAccessMode) => void;
   setToolProfile: (profile: ToolProfile) => void;
   setPushToTalkEnabled: (enabled: boolean) => void;
   setPushToTalkAccelerator: (raw: string) => import('@/lib/voice/accelerator').AcceleratorVerdict;
@@ -184,8 +177,6 @@ interface SettingsActions {
   setSessionResetTime: (time: string) => void;
   setSessionIdleMinutes: (minutes: number) => void;
   setCoworkInstructions: (instructions: string) => void;
-  setCodeWorktreeLocation: (location: string) => void;
-  setCodeBranchPrefix: (prefix: string) => void;
   addRecentFolder: (path: string) => void;
   addTrustedFolder: (path: string) => void;
   setGithubToken: (token: string | null) => void;
@@ -218,7 +209,6 @@ export const INITIAL_SETTINGS: SettingsState = {
   workFunction: '',
   personalPreferences: '',
   chatFont: 'default',
-  toolAccessMode: 'onDemand',
   toolProfile: 'full',
   pushToTalkEnabled: false,
   pushToTalkAccelerator: DEFAULT_PUSH_TO_TALK,
@@ -230,8 +220,6 @@ export const INITIAL_SETTINGS: SettingsState = {
   sessionResetTime: '04:00',
   sessionIdleMinutes: 60,
   coworkInstructions: '',
-  codeWorktreeLocation: '',
-  codeBranchPrefix: '',
   recentFolders: [],
   trustedFolders: [],
   githubToken: null,
@@ -277,7 +265,6 @@ export const PERSISTED_SETTINGS_KEYS = [
   'workFunction',
   'personalPreferences',
   'chatFont',
-  'toolAccessMode',
   'toolProfile',
   'pushToTalkEnabled',
   'pushToTalkAccelerator',
@@ -289,8 +276,6 @@ export const PERSISTED_SETTINGS_KEYS = [
   'sessionResetTime',
   'sessionIdleMinutes',
   'coworkInstructions',
-  'codeWorktreeLocation',
-  'codeBranchPrefix',
   'recentFolders',
   'trustedFolders',
   'githubToken',
@@ -341,7 +326,6 @@ export const useSettingsStore = create<SettingsStore>()(
       setWorkFunction: (workFunction) => set({ workFunction }),
       setPersonalPreferences: (personalPreferences) => set({ personalPreferences }),
       setChatFont: (chatFont) => set({ chatFont }),
-      setToolAccessMode: (toolAccessMode) => set({ toolAccessMode }),
       setToolProfile: (toolProfile) => set({ toolProfile }),
       setPushToTalkEnabled: (pushToTalkEnabled) => set({ pushToTalkEnabled }),
       /** Stores the CANONICAL form, so the same combination never persists two ways. */
@@ -364,8 +348,6 @@ export const useSettingsStore = create<SettingsStore>()(
       setSessionResetTime: (sessionResetTime) => set({ sessionResetTime }),
       setSessionIdleMinutes: (sessionIdleMinutes) => set({ sessionIdleMinutes }),
       setCoworkInstructions: (coworkInstructions) => set({ coworkInstructions }),
-      setCodeWorktreeLocation: (codeWorktreeLocation) => set({ codeWorktreeLocation }),
-      setCodeBranchPrefix: (codeBranchPrefix) => set({ codeBranchPrefix }),
 
       addRecentFolder: (path) =>
         set((state) => {
@@ -428,9 +410,18 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 12,
+      version: 13,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
+        // v13: three Settings controls that nothing read were removed — the
+        // tool-access mode, and Code's worktree location and branch prefix.
+        // Dropped rather than left, for the same reason as `teamId` below:
+        // the default merge would splice the orphans back into live state.
+        if (version < 13) {
+          delete state.toolAccessMode;
+          delete state.codeWorktreeLocation;
+          delete state.codeBranchPrefix;
+        }
         // v12: search became a configurable provider instead of one env var.
         // Backfilled up front, not in a per-version branch, because the
         // branches below return early — same rationale as v8/v9. null is the

@@ -10,7 +10,6 @@ import { AppearanceSection } from "./sections/appearance-section"
 import { CapabilitiesSection } from "./sections/capabilities-section"
 import { ConnectorsSection } from "./sections/connectors-section"
 import { CoworkSection } from "./sections/cowork-section"
-import { CodeSection } from "./sections/code-section"
 import { DataSection } from "./sections/data-section"
 import { MemorySection } from "./sections/memory-section"
 import { QuietHoursSection } from "./sections/quiet-hours-section"
@@ -27,7 +26,6 @@ const sectionComponents: Record<string, React.ComponentType> = {
   identity: IdentitySection,
   connectors: ConnectorsSection,
   cowork: CoworkSection,
-  code: CodeSection,
   security: SecuritySection,
   search: SearchSection,
   sharing: SharingSection,
