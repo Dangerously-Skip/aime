@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X } from "lucide-react";
+import { useSurfaceKeydown } from "@/hooks/use-surface-active";
 
 /**
  * Keybind cheat-sheet. Press `?` anywhere in the IDE workspace to open a
@@ -15,6 +16,8 @@ const KEYBINDS: Array<{ keys: string; description: string }> = [
   { keys: "⌘B", description: "Toggle file tree" },
   { keys: "⌘J", description: "Toggle terminal" },
   { keys: "⌘\\", description: "Toggle chat" },
+  { keys: "⌘E", description: "Toggle editor" },
+  { keys: "⌘S / ⌘F", description: "Save / find in the focused editor tab" },
   { keys: "?", description: "Show this help" },
   { keys: "Click file", description: "Open in a new editor tab (dedupes)" },
   { keys: "⌘-click file", description: "Open in an additional tab" },
@@ -28,26 +31,24 @@ const KEYBINDS: Array<{ keys: string; description: string }> = [
 export function KeybindHelp() {
   const [open, setOpen] = useState(false);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && open) {
-        e.preventDefault();
-        setOpen(false);
-        return;
-      }
-      if (e.key !== "?") return;
-      // Ignore when the user is typing in a field
-      const target = e.target as HTMLElement | null;
-      if (target) {
-        const tag = target.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
-      }
+  // Only while Code is on screen: `?` on the Browser surface is not a request
+  // for Code's cheat sheet.
+  useSurfaceKeydown((e) => {
+    if (e.key === "Escape" && open) {
       e.preventDefault();
-      setOpen((v) => !v);
+      setOpen(false);
+      return;
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+    if (e.key !== "?") return;
+    // Ignore when the user is typing in a field
+    const target = e.target as HTMLElement | null;
+    if (target && target.tagName) {
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+    }
+    e.preventDefault();
+    setOpen((v) => !v);
+  });
 
   if (!open) return null;
 

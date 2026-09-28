@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   PanelsTopLeft,
   Eye,
@@ -16,11 +16,20 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
+import { useSurfaceKeydown } from "@/hooks/use-surface-active";
 import {
   Popover,
   PopoverTrigger,
   PopoverContent,
 } from "@/components/ui/popover";
+
+/** ⌘-key → the panel it toggles. */
+const PANEL_KEYS: Record<string, "chat" | "tree" | "viewer" | "terminal"> = {
+  b: "tree",
+  j: "terminal",
+  "\\": "chat",
+  e: "viewer",
+};
 
 interface PanelToolbarProps {
   workspace: string | null;
@@ -36,39 +45,16 @@ export function PanelToolbar({ workspace }: PanelToolbarProps) {
   const { layout, togglePanel, resetLayout } = useCodeWorkspace(workspace);
   const [open, setOpen] = useState(false);
 
-  // Keybinds: Cmd+B (tree), Cmd+J (terminal), Cmd+\ (chat),
-  // Cmd+Shift+D (diff — opens the active file's diff if any),
-  // Cmd+Shift+F (focus tree filter), ? (help).
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const cmd = e.metaKey || e.ctrlKey;
-      if (!cmd) return;
-      const key = e.key.toLowerCase();
-      if (e.shiftKey && key === "d") {
-        e.preventDefault();
-        // Best-effort: ask the global diff opener for the active file
-        // (file tree owns that; for now we just nudge the user).
-        return;
-      }
-      if (!e.shiftKey && !e.altKey) {
-        if (key === "b") {
-          e.preventDefault();
-          togglePanel("tree");
-        } else if (key === "j") {
-          e.preventDefault();
-          togglePanel("terminal");
-        } else if (key === "\\") {
-          e.preventDefault();
-          togglePanel("chat");
-        } else if (key === "e") {
-          e.preventDefault();
-          togglePanel("viewer");
-        }
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [togglePanel]);
+  // Keybinds: Cmd+B (tree), Cmd+J (terminal), Cmd+\ (chat), Cmd+E (editor).
+  // Only while Code is on screen — every surface stays mounted, and these used
+  // to toggle Code's panels from under whatever you were typing in Chat.
+  useSurfaceKeydown((e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    const slot = PANEL_KEYS[e.key.toLowerCase()];
+    if (!slot) return;
+    e.preventDefault();
+    togglePanel(slot);
+  });
 
   const items: Array<{
     key: "chat" | "tree" | "viewer" | "terminal";

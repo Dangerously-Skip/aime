@@ -359,24 +359,35 @@ function FileEditor({
   }, [findOpen]);
 
   // Cmd/Ctrl+S — save. Cmd/Ctrl+F — find. Esc — close find.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && editing) {
-        e.preventDefault();
-        onSave();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        setFindOpen(true);
-      } else if (e.key === "Escape" && findOpen) {
-        setFindOpen(false);
-      }
+  //
+  // On this pane's own element, not `window`: every open file tab mounts one
+  // of these, and a window listener meant ⌘S saved EVERY tab in edit mode and
+  // ⌘F opened a find bar in all of them — from any surface. Keys now reach
+  // only the tab that has focus. `tabIndex={-1}` makes a click anywhere in the
+  // body focus the pane, so a read-only view still gets ⌘F.
+  function onKeyDown(e: React.KeyboardEvent) {
+    const cmd = e.metaKey || e.ctrlKey;
+    const key = e.key.toLowerCase();
+    if (cmd && key === "s") {
+      // Swallowed even when not editing: the browser's "Save page" is never
+      // what ⌘S in an editor means.
+      e.preventDefault();
+      if (editing) onSave();
+    } else if (cmd && key === "f") {
+      e.preventDefault();
+      setFindOpen(true);
+    } else if (e.key === "Escape" && findOpen) {
+      setFindOpen(false);
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [editing, findOpen, onSave]);
+  }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div
+      className="flex flex-col h-full min-h-0 outline-none"
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      data-testid="file-editor"
+    >
       <div className="flex items-center gap-1 px-2 h-8 shrink-0 min-w-0">
         <span className="flex-1 min-w-0 truncate font-mono text-[11px] text-muted-foreground">
           {path ?? name}

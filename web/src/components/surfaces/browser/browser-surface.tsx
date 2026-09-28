@@ -32,6 +32,7 @@ import { handleBrowserToolChunk } from "@/lib/sse/browser-tool-chunk";
 import { classifyBrowserRequest } from "@/lib/browser/request-shape";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useElectron } from "@/hooks/use-electron";
+import { useSurfaceKeydown } from "@/hooks/use-surface-active";
 
 /** Same source of truth the other surfaces use for their capability. */
 const CAPABILITY = getSurfaceRoute("browser").capability;
@@ -312,17 +313,15 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
   }, [inspectorMode, addPendingContext, setInspectorMode]);
 
   // ── Keyboard shortcut: Cmd+Shift+S for screenshot ─────────────────────
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "S") {
-        e.preventDefault();
-        handleScreenshot();
-      }
+  // Only while Browser is on screen: every surface stays mounted, and this
+  // used to capture the page from Code or Chat. Lower-cased because macOS
+  // reports `s` rather than `S` for ⌘⇧S.
+  useSurfaceKeydown((e) => {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      void handleScreenshot();
     }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
 
   // Retrieve relevant memories for browser agent
   const memories = useMemoryStore((s) => s.memories);
