@@ -2,7 +2,14 @@
 
 import { useEffect, useRef } from 'react';
 import { useContextBusStore } from '@/stores/context-bus-store';
-import { currentChatOf, hasJobConversations, openJobConversation } from '@/lib/schedule/job-conversation';
+import {
+  currentChatOf,
+  handBackView,
+  hasJobConversations,
+  openJobConversation,
+  snapshotView,
+  type ViewSnapshot,
+} from '@/lib/schedule/job-conversation';
 
 /** How often a busy surface re-checks for room to run its due job. */
 const BUSY_RETRY_MS = 5_000;
@@ -85,7 +92,14 @@ export function useScheduledPrompt(
    * thing the fresh conversation exists to avoid. So the job waits until the
    * surface reports the new conversation as current (normally the next commit).
    */
-  const pendingRef = useRef<{ prompt: string; conversationId: string; deadline: number; commit: number } | null>(null);
+  const pendingRef = useRef<{
+    prompt: string;
+    conversationId: string;
+    deadline: number;
+    commit: number;
+    /** What the user had open, handed back once the job's turn is in flight. */
+    restore: ViewSnapshot;
+  } | null>(null);
 
   useEffect(() => {
     if (!surfaceId) return;
@@ -105,9 +119,17 @@ export function useScheduledPrompt(
       }
       // Switched — or it never will; running it where it can beats dropping it.
       pendingRef.current = null;
-      void Promise.resolve(submitRef.current(pending.prompt)).catch((err) => {
-        console.error(`[cron] ${surfaceId} failed to run a scheduled prompt:`, err);
-      });
+      let settled = false;
+      void Promise.resolve(submitRef.current(pending.prompt))
+        .catch((err) => {
+          console.error(`[cron] ${surfaceId} failed to run a scheduled prompt:`, err);
+        })
+        .finally(() => {
+          settled = true;
+        });
+      // The job runs in the background: give the user their conversation back
+      // as soon as the turn is bound to the job's (see job-conversation).
+      handBackView(surfaceId, pending.conversationId, pending.restore, () => settled);
       return true;
     };
 
@@ -139,6 +161,7 @@ export function useScheduledPrompt(
        * The submit waits for the surface to switch to it (runPending above).
        */
       if (hasJobConversations(surfaceId)) {
+        const restore = snapshotView(surfaceId);
         const conversationId = openJobConversation(surfaceId, { prompt, projectId });
         if (conversationId) {
           pendingRef.current = {
@@ -146,6 +169,7 @@ export function useScheduledPrompt(
             conversationId,
             deadline: Date.now() + SWITCH_DEADLINE_MS,
             commit: commitsRef.current,
+            restore,
           };
           retryTimer = setTimeout(tryRun, 0);
           return;
