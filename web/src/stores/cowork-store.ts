@@ -1,16 +1,23 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
+import { createThrottledJSONStorage } from '@/lib/throttled-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import {
   findUnregisteredArtifacts,
   markTurnStart,
   turnStartedAt,
 } from '@/lib/artifact-reconcile';
-import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
-import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
+import type { Message, ToolCall, TurnError } from '@/stores/chat-store';
+import {
+  cleanStaleStreamingFlags,
+  dedupeMessageIds,
+  dedupeLegacyTranscriptRows,
+  withTurnError,
+  withRetryStatus,
+} from '@/stores/chat-store';
 import { type SessionControls } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
@@ -24,7 +31,6 @@ export interface CanvasArtifact {
   createdAt: number;
 }
 
-const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
 interface CoworkState {
   messages: Record<string, Message[]>;
@@ -34,7 +40,17 @@ interface CoworkState {
    * built-in `model` enum.
    */
   modelRoute: ModelOption | null;
+  /**
+   * Any of this store's conversations mid-turn. Kept for callers that ask the
+   * surface-wide question; the composer asks `streamingChats` instead.
+   */
   isStreaming: boolean;
+  /**
+   * Which conversations have a turn in flight. Per chat, because one surface
+   * boolean meant chat B showed a Stop that aborted nothing while A streamed,
+   * and B could not send at all. Not persisted — no stream survives a reload.
+   */
+  streamingChats: Record<string, true>;
   folderByChat: Record<string, string | null>;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
@@ -50,12 +66,20 @@ interface CoworkActions {
   addMessage: (chatId: string, message: Message) => void;
   updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
   appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
+  setTurnError: (chatId: string, error: TurnError) => void;
+  setRetryStatus: (chatId: string, retrying: Message['retrying'] | null) => void;
   attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: A2UIDocument }) => void;
   setModelRoute: (opt: ModelOption | null) => void;
   startStreaming: (chatId: string) => void;
   stopStreaming: (chatId: string) => void;
   setCurrentChat: (chatId: string | null) => void;
   clearMessages: (chatId: string) => void;
+  /**
+   * Drop everything after `messageId` — or from it, with `inclusive`. How Retry
+   * replaces a failed reply and Edit replaces a question, instead of stacking a
+   * duplicate question and a second answer under the first.
+   */
+  truncateMessages: (chatId: string, messageId: string, opts?: { inclusive?: boolean }) => void;
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   completeRunningTools: (chatId: string) => void;
@@ -72,6 +96,7 @@ interface CoworkActions {
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   touchActivity: (chatId: string) => void;
   setIsStreaming: (v: boolean) => void;
+  setChatStreaming: (chatId: string, streaming: boolean) => void;
   addSearchGroup: (chatId: string, group: { query: string; results: { title: string; url: string; snippet: string }[] }) => void;
   clearSearchGroups: (chatId: string) => void;
 }
@@ -85,6 +110,7 @@ export const useCoworkStore = create<CoworkStore>()(
       currentChatId: null,
       modelRoute: null,
       isStreaming: false,
+      streamingChats: {},
       folderByChat: {},
       contextFiles: {},
       artifactFiles: {},
@@ -131,9 +157,22 @@ export const useCoworkStore = create<CoworkStore>()(
             ...last,
             content: last.content + content,
             isLoading: false,
+            ...(last.retrying ? { retrying: undefined } : {}),
             ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
           };
           return { messages: { ...state.messages, [chatId]: updated } };
+        }),
+
+      setTurnError: (chatId, error) =>
+        set((state) => {
+          const updated = withTurnError(state.messages[chatId] ?? [], error);
+          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
+        }),
+
+      setRetryStatus: (chatId, retrying) =>
+        set((state) => {
+          const updated = withRetryStatus(state.messages[chatId] ?? [], retrying);
+          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
         }),
 
       attachCanvasToLastAssistant: (chatId, canvas) =>
@@ -157,21 +196,29 @@ export const useCoworkStore = create<CoworkStore>()(
         // Stamped here so an aborted turn can tell its own files from every
         // previous turn's when it reconciles the scratch directory.
         if (chatId) markTurnStart(chatId);
+        /*
+         * No `currentChatId` here. It used to switch the screen to whichever
+         * chat started a turn — so an auto-continue firing in chat A yanked a
+         * user who had moved on to B back to A. The composer selects a new
+         * conversation itself before it sends.
+         */
         set((state) => ({
           isStreaming: true,
-          currentChatId: chatId || state.currentChatId,
+          streamingChats: chatId ? { ...state.streamingChats, [chatId]: true } : state.streamingChats,
         }));
       },
 
       stopStreaming: (chatId) =>
         set((state) => {
+          const { [chatId]: _done, ...streamingChats } = state.streamingChats;
+          const isStreaming = Object.keys(streamingChats).length > 0;
           const msgs = state.messages[chatId];
-          if (!msgs?.length) return { isStreaming: false };
+          if (!msgs?.length) return { isStreaming, streamingChats };
           const lastIdx = msgs.length - 1;
           const last = msgs[lastIdx];
           const updated = [...msgs];
-          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false };
-          return { isStreaming: false, messages: { ...state.messages, [chatId]: updated } };
+          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false, retrying: undefined };
+          return { isStreaming, streamingChats, messages: { ...state.messages, [chatId]: updated } };
         }),
 
       setCurrentChat: (chatId) => set({ currentChatId: chatId }),
@@ -180,6 +227,16 @@ export const useCoworkStore = create<CoworkStore>()(
         set((state) => {
           const { [chatId]: _, ...rest } = state.messages;
           return { messages: rest };
+        }),
+
+      truncateMessages: (chatId, messageId, opts) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          const idx = msgs?.findIndex((m) => m.id === messageId) ?? -1;
+          if (!msgs || idx < 0) return state;
+          return {
+            messages: { ...state.messages, [chatId]: msgs.slice(0, opts?.inclusive ? idx : idx + 1) },
+          };
         }),
 
       addToolCall: (chatId, toolCall) =>
@@ -305,6 +362,15 @@ export const useCoworkStore = create<CoworkStore>()(
         })),
 
       setIsStreaming: (v) => set({ isStreaming: v }),
+
+      setChatStreaming: (chatId, streaming) =>
+        set((state) => {
+          if (!chatId || !!state.streamingChats[chatId] === streaming) return state;
+          const next = { ...state.streamingChats };
+          if (streaming) next[chatId] = true;
+          else delete next[chatId];
+          return { streamingChats: next };
+        }),
       addSearchGroup: (chatId, group) =>
         set((state) => ({
           searchGroups: {
@@ -319,7 +385,10 @@ export const useCoworkStore = create<CoworkStore>()(
     }),
     {
       name: 'aime:cowork',
-      storage: createJSONStorage(() => getGatedStorage()),
+      // Not per token: see lib/throttled-storage. Busy = any chat mid-turn.
+      storage: createThrottledJSONStorage(() => getGatedStorage(), {
+        isBusy: (): boolean => Object.keys(useCoworkStore.getState().streamingChats).length > 0,
+      }),
       partialize: (state) => ({
         messages: state.messages,
         currentChatId: state.currentChatId,
@@ -332,6 +401,21 @@ export const useCoworkStore = create<CoworkStore>()(
         searchGroups: state.searchGroups,
       }),
       skipHydration: true,
+      /*
+       * v1: `verboseMode` now expands tool calls. Every persisted `true` is the
+       * old default, which meant nothing — carrying it over would open every
+       * tool card in those conversations. See DEFAULT_SESSION_CONTROLS.
+       */
+      version: 1,
+      migrate: (persisted, version) => {
+        const state = persisted as { sessionControls?: Record<string, SessionControls> };
+        if (version < 1 && state?.sessionControls) {
+          for (const ctrl of Object.values(state.sessionControls)) {
+            if (ctrl) ctrl.verboseMode = false;
+          }
+        }
+        return state as never;
+      },
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));

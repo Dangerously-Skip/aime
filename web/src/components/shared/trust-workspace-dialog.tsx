@@ -41,7 +41,7 @@ export function TrustWorkspaceDialog({
 
         <div className="text-sm text-muted-foreground space-y-2">
           <p>
-            Trusting a workspace allows Claude to read, write, and execute
+            Trusting a workspace allows the assistant to read, write, and execute
             commands within this directory. Only trust workspaces from sources
             you trust.
           </p>

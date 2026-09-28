@@ -1,6 +1,7 @@
 'use client';
 
 import type { ChunkType } from '@/lib/providers/base-provider';
+import { classifyTurnError, isTurnErrorCode, type TurnErrorCode } from '@/lib/sse/turn-error';
 
 /**
  * The conversation-stream contract every surface store already satisfied.
@@ -19,6 +20,14 @@ export interface ConversationStreamStore {
   addToolCall: (chatId: string, toolCall: ToolCallInit) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   completeRunningTools: (chatId: string) => void;
+  /**
+   * Record a failed turn on its reply, to be shown as a banner. Optional so a
+   * store that has not adopted it yet keeps the old inline text rather than
+   * losing the error altogether.
+   */
+  setTurnError?: (chatId: string, error: { code: TurnErrorCode; message: string }) => void;
+  /** Show / clear "Retrying (attempt n)…" on the reply. */
+  setRetryStatus?: (chatId: string, retrying: { attempt: number; delayMs: number } | null) => void;
 }
 
 /** The message shape all three stores accept, narrowed to what the stream sets. */
@@ -65,9 +74,12 @@ export type CoreChunkType =
   | 'input_request'
   | 'connector_request'
   | 'document_print'
-  | 'canvas';
+  | 'canvas'
+  // The provider is backing off and will try again. Emitted by the chat route
+  // rather than a provider, hence not in ChunkType.
+  | 'retry';
 
-const CORE: readonly ChunkType[] = [
+const CORE: readonly (ChunkType | 'retry')[] = [
   'turn_start',
   'text',
   'thinking',
@@ -78,6 +90,7 @@ const CORE: readonly ChunkType[] = [
   'connector_request',
   'document_print',
   'canvas',
+  'retry',
 ] satisfies readonly CoreChunkType[];
 
 export interface CoreChunkContext {
@@ -238,12 +251,25 @@ export function handleCoreChunk(
       return true;
     }
 
-    case 'error':
-      store.appendToLastAssistant(
-        chatId,
-        `\n\n**Error:** ${(event.message as string) || 'An error occurred'}`,
-      );
+    case 'error': {
+      const message = (event.message as string) || 'An error occurred';
+      if (!store.setTurnError) {
+        store.appendToLastAssistant(chatId, `\n\n**Error:** ${message}`);
+        return true;
+      }
+      // The server classifies; an older server (or a relayed error) may not,
+      // so classify the text rather than render every failure as "unknown".
+      const code = isTurnErrorCode(event.code) ? event.code : classifyTurnError(message);
+      store.setTurnError(chatId, { code, message });
       return true;
+    }
+
+    case 'retry': {
+      const attempt = typeof event.attempt === 'number' ? event.attempt : 1;
+      const delayMs = typeof event.delayMs === 'number' ? event.delayMs : 0;
+      store.setRetryStatus?.(chatId, { attempt, delayMs });
+      return true;
+    }
 
     case 'input_request':
       store.addMessage(chatId, {
@@ -254,7 +280,7 @@ export function handleCoreChunk(
         questionData: event.questions,
         questionToolUseId: event.toolUseId as string,
       });
-      ctx.notify?.('Claude needs your input', 'A question or permission prompt is waiting for you.');
+      ctx.notify?.('The assistant needs your input', 'A question or permission prompt is waiting for you.');
       return true;
 
     case 'connector_request':

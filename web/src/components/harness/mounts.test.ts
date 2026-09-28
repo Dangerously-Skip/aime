@@ -17,6 +17,25 @@ const codeSurface = read('components', 'surfaces', 'code', 'code-surface.tsx');
 // Code's composer body lives in its own module; the surface builds its props.
 const codeInput = read('components', 'surfaces', 'code', 'code-input.tsx');
 const layout = read('components', 'surfaces', 'code', 'workspace', 'workspace-layout.tsx');
+const composer = read('components', 'shared', 'composer', 'composer.tsx');
+
+/**
+ * Cowork's two composer states are one `<Composer {...composerProps}>`, so a
+ * control reaches both by being in those props once — and the shared Composer
+ * must actually RENDER the slot it is handed.
+ */
+function coworkComposerCarries(tag: string, slot: 'header' | 'belowInput' | 'toolbarStart') {
+  const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
+  const active = cowork.slice(cowork.indexOf('/* ── Active state'));
+  expect(empty).toContain('<Composer {...composerProps}');
+  expect(active).toContain('<Composer {...composerProps}');
+  const props = /const composerProps = \{[\s\S]*?\n {2}\};/.exec(cowork)?.[0] ?? '';
+  expect(props, `composerProps does not pass ${slot}`).toMatch(new RegExp(`\\b${slot}:`));
+  // The slot's content is built in this file, up to and including the props.
+  const built = cowork.slice(0, cowork.indexOf('const composerProps = {') + props.length);
+  expect(built).toContain(tag);
+  expect(composer, `Composer never renders {${slot}}`).toContain(`{${slot}}`);
+}
 const slotTypes = read('lib', 'code-workspace', 'types.ts');
 
 describe('the goal panel is mounted on both surfaces', () => {
@@ -133,11 +152,7 @@ describe('the entry point is where the user actually is', () => {
      * anything mounted only there is invisible at the one moment it is wanted:
      * folder chosen, nothing typed.
      */
-    const emptyBranch = cowork.slice(
-      cowork.indexOf('{!hasMessages ? ('),
-      cowork.indexOf('/* ── Active state'),
-    );
-    expect(emptyBranch).toContain('<GoalModeToggle');
+    coworkComposerCarries('<GoalModeToggle', 'toolbarStart');
   });
 
   it('shows a run’s status without asking to start another', () => {
@@ -223,11 +238,8 @@ describe('goal mode reaches every composer', () => {
      * It was only in the empty state, so a conversation that had already said
      * something — exactly where a follow-up goal starts — could not begin one.
      */
-    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
-    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
-    expect(empty).toContain('<GoalModeToggle');
-    expect(active).toContain('<GoalModeToggle');
-    expect(active).toContain('<GoalModeBar');
+    coworkComposerCarries('<GoalModeToggle', 'toolbarStart');
+    coworkComposerCarries('<GoalModeBar', 'belowInput');
   });
 
   it('Code offers it too — it was left out of the first pass entirely', () => {
@@ -391,10 +403,7 @@ describe('the question is answerable from the conversation', () => {
   });
 
   it('Cowork has it in BOTH composer states', () => {
-    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
-    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
-    expect(empty).toContain('<GoalQuestion');
-    expect(active).toContain('<GoalQuestion');
+    coworkComposerCarries('<GoalQuestion', 'header');
   });
 
   it('Code renders the slot, not merely receives it', () => {

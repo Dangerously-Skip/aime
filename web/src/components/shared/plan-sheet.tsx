@@ -41,7 +41,7 @@ export function PlanSheet({ content, open, onClose }: PlanSheetProps) {
             </Button>
           </div>
           <SheetDescription className="sr-only">
-            Current plan created by Claude
+            Current plan created by the assistant
           </SheetDescription>
         </SheetHeader>
 

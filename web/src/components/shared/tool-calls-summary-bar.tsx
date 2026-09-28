@@ -27,6 +27,8 @@ interface ToolCallsSummaryBarProps {
   onPreviewUrl?: (url: string) => void;
   /** Forwarded to ToolCallCard so a stuck tool can offer Cancel inline. */
   onCancel?: () => void;
+  /** Start expanded — `/verbose on`. */
+  defaultOpen?: boolean;
 }
 
 function ElapsedTimer({ startTime }: { startTime: number }) {
@@ -47,6 +49,7 @@ export function ToolCallsSummaryBar({
   onArtifactClick,
   onPreviewUrl,
   onCancel,
+  defaultOpen = false,
 }: ToolCallsSummaryBarProps) {
   const { running, label, icon, runningStartTime } = useMemo(() => {
     const running = toolCalls.filter((t) => t.status === "running");
@@ -80,7 +83,7 @@ export function ToolCallsSummaryBar({
     );
 
   return (
-    <Collapsible className="mb-2">
+    <Collapsible className="mb-2" defaultOpen={defaultOpen}>
       <CollapsibleTrigger
         className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors group ${
           isRunning ? "animate-pulse" : ""

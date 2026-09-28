@@ -15,7 +15,9 @@ export interface SlashCommand {
 export interface SessionControls {
   thinkLevel: ThinkLevel;
   effortLevel: EffortLevel | null;
+  /** `/verbose`: tool-call details open by default instead of collapsed. Display only. */
   verboseMode: boolean;
+  /** `/reasoning`: show the model's thinking block. Display only. */
   reasoningVisible: boolean;
   modelOverride: string | null;
   agentName: string | null;
@@ -24,7 +26,10 @@ export interface SessionControls {
 export const DEFAULT_SESSION_CONTROLS: SessionControls = {
   thinkLevel: 'off',
   effortLevel: null,
-  verboseMode: true,
+  // Off: tool calls stay the collapsed one-line summary they have always been.
+  // It used to default to true while meaning nothing; now that it does
+  // something, true would have expanded every tool card for every user.
+  verboseMode: false,
   reasoningVisible: true,
   modelOverride: null,
   agentName: null,
@@ -42,8 +47,8 @@ export const THINK_LEVEL_TOKENS: Record<ThinkLevel, number> = {
 /** All recognized slash commands. */
 export const SLASH_COMMANDS = [
   { name: '/think', description: 'Set thinking depth: off, low, medium, high, adaptive', args: '<level>' },
-  { name: '/verbose', description: 'Toggle verbose tool output on/off', args: '[on|off]' },
-  { name: '/reasoning', description: 'Toggle reasoning/thinking block visibility', args: '[on|off]' },
+  { name: '/verbose', description: 'Show tool-call details expanded (on) or collapsed (off)', args: '[on|off]' },
+  { name: '/reasoning', description: "Show or hide the model's thinking", args: '[on|off]' },
   { name: '/model', description: 'Override model for this session', args: '<name>' },
   { name: '/effort', description: 'Set reasoning effort: low, medium, high, max', args: '<level>' },
   { name: '/agent', description: 'Bind session to a named agent from AGENTS.md', args: '<name>' },
@@ -165,6 +170,15 @@ export function applySlashCommand(
     default:
       return null;
   }
+}
+
+/**
+ * Is this input one of the session-control commands above? Those are handled
+ * entirely in the client, so they work with no model configured at all.
+ */
+export function isSessionCommand(input: string): boolean {
+  const parsed = parseSlashCommand(input);
+  return !!parsed && SLASH_COMMANDS.some((c) => c.name === parsed.command);
 }
 
 /**

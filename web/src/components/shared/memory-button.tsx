@@ -82,6 +82,7 @@ export function MemoryButton({ content, conversationId }: MemoryButtonProps) {
         size="icon"
         className="h-7 w-7 text-green-500"
         disabled
+        aria-label="Saved to memory"
       >
         <Check className="h-3.5 w-3.5" />
       </Button>
@@ -94,6 +95,7 @@ export function MemoryButton({ content, conversationId }: MemoryButtonProps) {
         className="inline-flex items-center justify-center h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         onClick={handleOpen}
         title="Save to memory"
+        aria-label="Save to memory"
       >
         <Brain className="h-3.5 w-3.5" />
       </PopoverTrigger>

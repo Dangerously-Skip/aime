@@ -26,6 +26,7 @@ beforeEach(() => {
     messages: {},
     currentChatId: null,
     isStreaming: false,
+    streamingChats: {},
     folderByChat: {},
     contextFiles: {},
     artifactFiles: {},
@@ -114,13 +115,30 @@ describe('streaming lifecycle', () => {
     store().addMessage('c', message({ isStreaming: true, isLoading: true }));
     store().startStreaming('c');
     expect(store().isStreaming).toBe(true);
-    expect(store().currentChatId).toBe('c');
+    expect(store().streamingChats['c']).toBe(true);
 
     store().stopStreaming('c');
     expect(store().isStreaming).toBe(false);
+    expect(store().streamingChats['c']).toBeUndefined();
     const [msg] = store().messages['c'];
     expect(msg.isStreaming).toBe(false);
     expect(msg.isLoading).toBe(false);
+  });
+
+  // An auto-continue starts a turn in chat A while the user reads B; starting
+  // it used to set currentChatId and yank them back to A.
+  it('starting a turn does not change which conversation is on screen', () => {
+    store().setCurrentChat('b');
+    store().startStreaming('a');
+    expect(store().currentChatId).toBe('b');
+  });
+
+  it('one conversation finishing leaves another marked as streaming', () => {
+    store().startStreaming('a');
+    store().startStreaming('b');
+    store().stopStreaming('a');
+    expect(store().streamingChats).toEqual({ b: true });
+    expect(store().isStreaming).toBe(true);
   });
 
   // Stop, conversation switch and the 120s stuck-tool cancel all abort the

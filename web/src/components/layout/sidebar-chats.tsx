@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
-import { useChatStore } from "@/stores/chat-store";
-import { useCoworkStore } from "@/stores/cowork-store";
-import { useCodeStore } from "@/stores/code-store";
 import { useAppStore } from "@/stores/app-store";
+import {
+  conversationMatches,
+  deleteConversation,
+  restoreConversation,
+  type DeletedConversation,
+} from "./sidebar-chats-actions";
 import { useConversations } from "@/hooks/use-conversations";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
@@ -25,13 +28,58 @@ interface SidebarChatsProps {
   projectId?: string | null;
 }
 
-/** Clear the current chat ID from the surface-specific store when deleting an active conversation */
-function clearSurfaceChat(convId: string) {
-  const conv = useConversationStore.getState().conversations.find(c => c.id === convId);
-  const surface = conv?.surface;
-  if (surface === 'chat') useChatStore.getState().setCurrentChat('');
-  else if (surface === 'cowork') useCoworkStore.getState().setCurrentChat('');
-  else if (surface === 'code') useCodeStore.getState().setCurrentChat('');
+/** How long a deleted conversation can be brought back. */
+const UNDO_MS = 8000;
+
+/**
+ * One conversation in the list. The delete control is a real button beside
+ * the row, not a span inside it — a button nested in a button is invalid, and
+ * `hidden group-hover:block` made it unreachable by keyboard.
+ */
+function ConversationRow({
+  conv,
+  active,
+  icon: Icon,
+  onOpen,
+  onDelete,
+  children,
+}: {
+  conv: Conversation;
+  active: boolean;
+  icon: typeof MessageCircle;
+  onOpen: () => void;
+  onDelete: () => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      className={`group flex w-full items-center rounded-md text-xs transition-colors ${
+        active
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-current={active ? "page" : undefined}
+        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
+      >
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="truncate flex-1">{conv.title}</span>
+        {children}
+      </button>
+      <button
+        type="button"
+        onClick={onDelete}
+        aria-label={`Delete ${conv.title}`}
+        title="Delete"
+        className="mr-1 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
+      >
+        <Trash2 className="h-3 w-3" aria-hidden="true" />
+      </button>
+    </div>
+  );
 }
 
 export function SidebarChats({ projectId }: SidebarChatsProps) {
@@ -39,7 +87,6 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
   const [bgExpanded, setBgExpanded] = useState(false);
   const activeSurface = useAppStore((s) => s.activeSurface);
   const addConversation = useConversationStore((s) => s.addConversation);
-  const removeConversation = useConversationStore((s) => s.removeConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
   const navigateTo = useConversationStore((s) => s.navigateTo);
   const activeId = useConversationStore((s) => s.activeId);
@@ -59,12 +106,36 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
     setActiveConversation(conv.id);
   }
 
+  /*
+   * Delete at once, offer Undo for a few seconds. A confirm dialog on every
+   * delete is friction for the common case; no way back is worse for the rare
+   * mistake.
+   */
+  const [deleted, setDeleted] = useState<DeletedConversation | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+  }, []);
+
+  function handleDelete(id: string) {
+    const snapshot = deleteConversation(id);
+    if (!snapshot) return;
+    setDeleted(snapshot);
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    undoTimer.current = setTimeout(() => setDeleted(null), UNDO_MS);
+  }
+
+  function handleUndo() {
+    if (!deleted) return;
+    restoreConversation(deleted);
+    setDeleted(null);
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+  }
+
   const filteredGroups = groups
     .map((group) => ({
       ...group,
-      conversations: group.conversations.filter((c) =>
-        c.title.toLowerCase().includes(searchQuery.toLowerCase())
-      ),
+      conversations: group.conversations.filter((c) => conversationMatches(c, searchQuery)),
     }))
     .filter((group) => group.conversations.length > 0);
 
@@ -80,6 +151,8 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
           size="icon"
           className="h-6 w-6 text-sidebar-foreground hover:text-foreground"
           onClick={handleNewChat}
+          aria-label="New chat"
+          title="New chat"
         >
           <Plus className="h-3.5 w-3.5" />
         </Button>
@@ -91,6 +164,7 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search..."
+            aria-label="Search conversations"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="h-8 pl-8 text-xs bg-sidebar-accent/50 border-sidebar-border"
@@ -116,17 +190,14 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
               </div>
               <div className="space-y-0.5">
                 {group.conversations.map((conv) => (
-                  <button
+                  <ConversationRow
                     key={conv.id}
-                    onClick={() => navigateTo(conv.id)}
-                    className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
-                      activeId === conv.id
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                    }`}
+                    conv={conv}
+                    active={activeId === conv.id}
+                    icon={MessageCircle}
+                    onOpen={() => navigateTo(conv.id)}
+                    onDelete={() => handleDelete(conv.id)}
                   >
-                    <MessageCircle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate flex-1">{conv.title}</span>
                     {conv.roi && (
                       <RoiBadge
                         roi={conv.roi}
@@ -135,31 +206,7 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
                         size="xs"
                       />
                     )}
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (useConversationStore.getState().activeId === conv.id) {
-                          clearSurfaceChat(conv.id);
-                        }
-                        removeConversation(conv.id);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.stopPropagation();
-                          const wasActive = useConversationStore.getState().activeId === conv.id;
-                          removeConversation(conv.id);
-                          if (wasActive) {
-                            useChatStore.getState().setCurrentChat('');
-                          }
-                        }
-                      }}
-                      className="hidden group-hover:block shrink-0"
-                    >
-                      <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                    </span>
-                  </button>
+                  </ConversationRow>
                 ))}
               </div>
             </div>
@@ -183,43 +230,14 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
               {bgExpanded && (
                 <div className="space-y-0.5 mt-0.5">
                   {backgroundConversations.map((conv) => (
-                    <button
+                    <ConversationRow
                       key={conv.id}
-                      onClick={() => navigateTo(conv.id)}
-                      className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
-                        activeId === conv.id
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
-                      }`}
-                    >
-                      <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="truncate flex-1">{conv.title}</span>
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const wasActive = useConversationStore.getState().activeId === conv.id;
-                          removeConversation(conv.id);
-                          if (wasActive) {
-                            useChatStore.getState().setCurrentChat('');
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.stopPropagation();
-                            const wasActive = useConversationStore.getState().activeId === conv.id;
-                            removeConversation(conv.id);
-                            if (wasActive) {
-                              useChatStore.getState().setCurrentChat('');
-                            }
-                          }
-                        }}
-                        className="hidden group-hover:block shrink-0"
-                      >
-                        <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-                      </span>
-                    </button>
+                      conv={conv}
+                      active={activeId === conv.id}
+                      icon={Bot}
+                      onOpen={() => navigateTo(conv.id)}
+                      onDelete={() => handleDelete(conv.id)}
+                    />
                   ))}
                 </div>
               )}
@@ -227,6 +245,18 @@ export function SidebarChats({ projectId }: SidebarChatsProps) {
           )}
         </div>
       </ScrollArea>
+
+      {deleted && (
+        <div
+          role="status"
+          className="mx-2 mb-2 flex items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-accent/60 px-2.5 py-1.5 text-xs"
+        >
+          <span className="min-w-0 flex-1 truncate">Deleted “{deleted.conversation.title}”</span>
+          <button type="button" onClick={handleUndo} className="shrink-0 font-medium text-primary hover:underline">
+            Undo
+          </button>
+        </div>
+      )}
     </div>
   );
 }

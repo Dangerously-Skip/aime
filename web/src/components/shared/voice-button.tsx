@@ -35,6 +35,7 @@ export function VoiceButton({ onTranscript }: VoiceButtonProps) {
         className="h-7 w-7 shrink-0 text-primary"
         disabled
         title="Transcribing..."
+        aria-label="Transcribing"
       >
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
       </Button>
@@ -52,6 +53,8 @@ export function VoiceButton({ onTranscript }: VoiceButtonProps) {
       }`}
       onClick={isListening ? stopListening : startListening}
       title={isListening ? "Stop recording" : "Voice input"}
+      aria-label={isListening ? "Stop recording" : "Voice input"}
+      aria-pressed={isListening}
     >
       {isListening ? (
         <MicOff className="h-3.5 w-3.5" />

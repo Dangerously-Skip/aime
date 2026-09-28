@@ -5,17 +5,18 @@ import { MessageList } from "@/components/shared/message-list";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { ChatTitleBar } from "@/components/shared/chat-title-bar";
 import { useChatStore } from "@/stores/chat-store";
-import { useConversationStore } from "@/stores/conversation-store";
+import { useConversationStore, isUntitled } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { useSSEStream, stripMessagesForHistory, turnErrorOf } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { streamRegistry } from "@/lib/stream-registry";
-import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, X, ImageIcon, FileText, File, FilePen, PanelRight, PanelRightClose, LayoutDashboard, Pencil, Sparkles, Code2, Lightbulb } from "lucide-react";
-import { AttachmentMenu } from "@/components/shared/attachment-menu";
+import { FileText, FilePen, PanelRight, PanelRightClose, LayoutDashboard, Pencil, Sparkles, Code2, Lightbulb } from "lucide-react";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
+import { Composer, type ComposerHandle } from "@/components/shared/composer/composer";
+import { addComposerAttachment, setComposerText } from "@/components/shared/composer/draft-store";
+import { lastUserPrompt } from "@/components/shared/composer/recall";
+import { rememberTurnAttachments, resendPayload } from "@/components/shared/composer/turn-attachments";
 import type { Message } from "@/stores/chat-store";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useFileDrop } from "@/hooks/use-file-drop";
@@ -24,32 +25,28 @@ import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
-import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { summarizeConversation } from "@/lib/memory/summarizer";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { ArtifactPanel } from "@/components/shared/artifact-panel";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { useElectron } from "@/hooks/use-electron";
-import { VoiceButton } from "@/components/shared/voice-button";
-import { parseSlashCommand, applySlashCommand, getSlashSuggestions, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
+import { parseSlashCommand, applySlashCommand, isSessionCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
+import { useModelReady } from "@/hooks/use-model-ready";
+import { NoModelCard } from "@/components/shared/no-model-card";
 import type { SessionControls } from "@/lib/slash-commands";
-import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
-import { useAtSuggestions, removeAtQuery } from "@/hooks/use-at-suggestions";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasOverlay } from "@/components/shared/canvas-overlay";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import type { CanvasArtifact } from "@/stores/chat-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
-import { categorizeToolCall, isValidSidebarEntry, artifactsFromMessages } from "@/lib/artifact-tracker";
+import { categorizeToolCall, isValidSidebarEntry } from "@/lib/artifact-tracker";
+import { artifactsOf } from "./artifacts-of";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { useToolBudgetStore } from "@/stores/tool-budget-store";
-import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useDeckTheme } from "@/hooks/use-deck-theme";
 import { useSearchSettings } from "@/hooks/use-search-settings";
@@ -59,14 +56,6 @@ import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 const CAPABILITY = getSurfaceRoute("chat").capability;
 
 const EMPTY_SUGGESTIONS: string[] = [];
-
-function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
-  switch (category) {
-    case 'image': return <ImageIcon className="h-3 w-3" />
-    case 'document': return <File className="h-3 w-3" />
-    default: return <FileText className="h-3 w-3" />
-  }
-}
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_CANVAS_ARTIFACTS: CanvasArtifact[] = [];
@@ -87,19 +76,19 @@ function getGreeting(): string {
 }
 
 export function ChatSurface() {
-  const [inputValue, setInputValue] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
-  const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
-  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
-  const { fileSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
-    useAtSuggestions();
+  const composerRef = useRef<ComposerHandle>(null);
   // Cron jobs now route to standing orders via useAssistantStore (see cron_create handler)
   // Artifact tracking — files created by Write/Edit/Bash tool calls
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  // Dropped files join the draft of the conversation on screen — the same
+  // place the composer's own attach button and paste put them.
   const { isDragging, dropZoneProps } = useFileDrop(
-    useCallback((file: AttachmentFile) => setAttachments((prev) => [...prev, file]), [])
+    useCallback(
+      (file: AttachmentFile) => addComposerAttachment("chat", useChatStore.getState().currentChatId ?? "", file),
+      [],
+    )
   );
   const currentChatId = useChatStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
@@ -126,15 +115,20 @@ export function ChatSurface() {
    * messages carry the tool calls and are persisted, so there was never anything
    * to accumulate.
    */
-  const artifactFiles = useMemo(() => artifactsFromMessages(messages), [messages]);
+  const artifactFiles = useMemo(() => artifactsOf(messages), [messages]);
   const modelRoute = useChatStore((s) => s.modelRoute);
-  const isStreaming = useChatStore((s) => s.isStreaming);
+  // THIS conversation's turn, not the surface's: another chat streaming must
+  // neither lock this composer nor give it a Stop button that aborts nothing.
+  const isStreaming = useChatStore((s) => !!chatId && !!s.streamingChats[chatId]);
+  const setChatStreaming = useChatStore((s) => s.setChatStreaming);
   const setModelRoute = useChatStore((s) => s.setModelRoute);
   const addMessage = useChatStore((s) => s.addMessage);
   const appendToLastAssistant = useChatStore(
     (s) => s.appendToLastAssistant
   );
   const addToolCall = useChatStore((s) => s.addToolCall);
+  const setTurnError = useChatStore((s) => s.setTurnError);
+  const setRetryStatus = useChatStore((s) => s.setRetryStatus);
   const completeRunningTools = useChatStore((s) => s.completeRunningTools);
   const updateMessage = useChatStore((s) => s.updateMessage);
   const updateToolResult = useChatStore((s) => s.updateToolResult);
@@ -143,6 +137,7 @@ export function ChatSurface() {
   const setCurrentChat = useChatStore((s) => s.setCurrentChat);
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
   const clearMessages = useChatStore((s) => s.clearMessages);
+  const truncateMessages = useChatStore((s) => s.truncateMessages);
   const updateConversation = useConversationStore(
     (s) => s.updateConversation
   );
@@ -244,22 +239,6 @@ export function ChatSurface() {
     }
   }, [chatId]);
 
-  // Read the CURRENT chatId from the store at call time, not from the
-  // closure. On the first message in a new chat, the closure chatId is ""
-  // because setCurrentChat(newId) hasn't triggered a re-render yet.
-  // This causes chunks to be written to chatId "" instead of the new ID.
-  const getChatId = () => useChatStore.getState().currentChatId ?? "";
-
-  /**
-   * The chat the in-flight stream was started for.
-   *
-   * `getChatId()` answers "which conversation is on screen NOW", which is the
-   * right question while chunks are arriving and the wrong one when a turn ends:
-   * a timeout firing after a cross-surface switch appended its error text to
-   * whatever the user was reading instead of the conversation that failed.
-   */
-  const streamChatIdRef = useRef("");
-
   const ownsChat = useCallback(
     (id: string) => !!useChatStore.getState().messages[id]?.length,
     [],
@@ -276,15 +255,17 @@ export function ChatSurface() {
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
+    setChatStreaming,
+    coalesceText: true,
     onUsage: runRecorder.onUsage,
-    onChunk(event) {
+    // `cid` is the chat this stream was started for — never the one on screen
+    // now. See useSSEStream for why every callback is handed it.
+    onChunk(event, cid) {
       // Chunks whose handling is the same on every surface — cron jobs,
       // standing orders, widgets, memory. Handled in ONE place
       // (lib/sse/agnostic-chunks) because each surface having its own case
       // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Chat' })) return;
-
-      const cid = getChatId();
+      if (handleAgnosticChunk(event, { chatId: cid, surface: 'Chat' })) return;
 
       // The six chunks whose handling is identical on chat, cowork and code —
       // recorded once in lib/sse/core-chunks against the nine-action store
@@ -294,7 +275,7 @@ export function ChatSurface() {
       if (
         handleCoreChunk(event, {
           chatId: cid,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools, setTurnError, setRetryStatus },
           printDocument,
           onCanvas: onCanvasEvent,
           notify: (title, body) => {
@@ -327,14 +308,14 @@ export function ChatSurface() {
         case "prompt_suggestion": {
           const suggestion = event.suggestion as string;
           if (suggestion) {
-            addSuggestion(getChatId(), suggestion);
+            addSuggestion(cid, suggestion);
           }
           break;
         }
         case "document_extracted": {
           const extractedText = event.extractedText as string | undefined;
           const docName = event.name as string;
-          const did = getChatId();
+          const did = cid;
           if (extractedText && did) {
             const msgs = useChatStore.getState().messages[did] || [];
             for (let i = msgs.length - 1; i >= 0; i--) {
@@ -349,89 +330,32 @@ export function ChatSurface() {
         }
       }
     },
-    onDone() {
+    onDone(doneId) {
       runRecorder.succeed();
-      const doneId = streamChatIdRef.current || getChatId();
       completeRunningTools(doneId);
       stopStreaming(doneId);
       if (!document.hasFocus()) {
-        showNotification("Task complete", "Claude has finished working on your request.");
+        showNotification("Task complete", "The assistant has finished working on your request.");
       }
     },
-    onError(error) {
+    onError(error, errorId) {
       runRecorder.fail(error.message);
-      // The conversation that failed, not whichever one is on screen by now.
-      const errorId = streamChatIdRef.current || getChatId();
       stopStreaming(errorId);
-      appendToLastAssistant(errorId, `\n\n**Error:** ${error.message}`);
+      // A banner on the reply, not text in it — see TurnErrorBanner.
+      setTurnError(errorId, turnErrorOf(error));
     },
   });
 
-  const handleSubmit = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return;
-      const trimmed = text.trim();
-
-      // ── Slash command interception ─────────────────────────────────────
-      const parsed = parseSlashCommand(trimmed);
-      if (parsed) {
-        const result = applySlashCommand(parsed, sessionControls);
-        if (result) {
-          // Apply the new controls
-          const currentId = chatId || crypto.randomUUID();
-          setSessionControlsInStore(currentId, result.controls);
-          // Add a system-like assistant message showing the result
-          let id = chatId;
-          if (!id) {
-            id = currentId;
-            addConversation({
-              id,
-              title: trimmed.substring(0, 50),
-              surface: "chat",
-              lastMessage: trimmed,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            });
-            setActiveConversation(id);
-            setCurrentChat(id);
-          }
-          addMessage(id, { id: crypto.randomUUID(), role: "user", content: trimmed, timestamp: Date.now() });
-          addMessage(id, { id: crypto.randomUUID(), role: "assistant", content: result.message, timestamp: Date.now() });
-          setInputValue("");
-          return;
-        }
-      }
-
-      // Auto-create conversation if none active
-      let id = chatId;
-      if (!id) {
-        id = crypto.randomUUID();
-        addConversation({
-          id,
-          title: truncateAtWordBoundary(trimmed, 50),
-          surface: "chat",
-          lastMessage: trimmed,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-        setActiveConversation(id);
-        setCurrentChat(id);
-      }
-
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        timestamp: Date.now(),
-        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
-      });
-
-      updateConversation(id, {
-        title: trimmed.substring(0, 50),
-        lastMessage: trimmed,
-        updatedAt: Date.now(),
-      });
-
+  /**
+   * Run a turn for the user message that is ALREADY last in the transcript:
+   * the reply placeholder, the request, the run record.
+   *
+   * Split from `handleSubmit` so Retry and Edit can use it. Both used to call
+   * `handleSubmit` with the old text, which added the question a second time,
+   * left the failed reply in place above it, and renamed the chat.
+   */
+  const startTurn = useCallback(
+    async (id: string, trimmed: string, attachments: AttachmentFile[], webSearch = false) => {
       addMessage(id, {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -442,18 +366,15 @@ export function ChatSurface() {
       });
 
       startStreaming(id);
-      setInputValue("");
 
       const currentAttachments = [...attachments];
-      const currentWebSearch = webSearchEnabled;
-      setAttachments([]);
-      setWebSearchEnabled(false);
+      const currentWebSearch = webSearch;
 
       if (currentWebSearch) sendFeatureAdoptionEvent({ feature: 'web_search', surface: 'chat' });
       if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'chat' });
       if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'chat' });
 
-      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
+      // Grab prior messages for history fallback (exclude the user message + assistant placeholder)
       const priorMessages = useChatStore.getState().messages[id] || [];
       const history = stripMessagesForHistory(priorMessages.slice(0, -2));
 
@@ -471,8 +392,8 @@ export function ChatSurface() {
       // Touch accessed memories
       relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
 
-      // Clear prompt suggestions when user sends a new message
-      if (chatId) clearSuggestions(chatId);
+      // Clear prompt suggestions when a new turn starts
+      clearSuggestions(id);
 
       // A tier route resolves here (it can land on a user provider's model); a
       // pinned model passes through. Null ⇒ nothing resolved, so fall back to
@@ -488,9 +409,6 @@ export function ChatSurface() {
       // Open the run record before the turn starts so an immediate failure is
       // still attributed rather than lost.
       runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
-      // Pin the target before the stream starts: everything that finalises the
-      // turn must land here even if the user has moved on by then.
-      streamChatIdRef.current = id;
       await sendMessage(trimmed, id, "chat", route?.model ?? null, {
         personalPreferences: personalPreferences || undefined,
         displayName: displayName || undefined,
@@ -516,7 +434,6 @@ export function ChatSurface() {
       });
     },
     [
-      chatId,
       runRecorder,
       modelRoute,
       providers,
@@ -528,22 +445,15 @@ export function ChatSurface() {
       addMessage,
       startStreaming,
       sendMessage,
-      updateConversation,
-      addConversation,
-      setActiveConversation,
-      setCurrentChat,
       personalPreferences,
       displayName,
-      attachments,
-      webSearchEnabled,
       projectInstructions,
       projectKnowledge,
       // Read inside the callback and previously missing, so a slash command or a
       // project change did not take effect until some other dep changed. All
-      // six are primitives or stable store references, so adding them only
-      // affects this callback's identity — it is never used in an effect.
+      // are primitives or stable store references, so adding them only affects
+      // this callback's identity — it is never used in an effect.
       sessionControls,
-      setSessionControlsInStore,
       clearSuggestions,
       currentProjectId,
       crossSurfaceContext,
@@ -561,120 +471,195 @@ export function ChatSurface() {
     ]
   );
 
+  /** Record a new question: its preview in the sidebar, and a title if the chat has none yet. */
+  const touchConversation = useCallback(
+    (id: string, text: string) => {
+      const conv = useConversationStore.getState().conversations.find((c) => c.id === id);
+      updateConversation(id, {
+        ...(isUntitled(conv?.title) ? { title: truncateAtWordBoundary(text, 50) } : {}),
+        lastMessage: text,
+      });
+    },
+    [updateConversation],
+  );
+
+  const handleSubmit = useCallback(
+    async (text: string, opts?: { attachments?: AttachmentFile[] }) => {
+      if (!text.trim()) return;
+      const trimmed = text.trim();
+      const attachments = opts?.attachments ?? [];
+
+      // ── Slash command interception ─────────────────────────────────────
+      const parsed = parseSlashCommand(trimmed);
+      if (parsed) {
+        const result = applySlashCommand(parsed, sessionControls);
+        if (result) {
+          // Apply the new controls
+          const currentId = chatId || crypto.randomUUID();
+          setSessionControlsInStore(currentId, result.controls);
+          // Add a system-like assistant message showing the result
+          let id = chatId;
+          if (!id) {
+            id = currentId;
+            addConversation({
+              id,
+              title: trimmed.substring(0, 50),
+              surface: "chat",
+              lastMessage: trimmed,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            });
+            setActiveConversation(id);
+            setCurrentChat(id);
+          }
+          // Shown, never sent to the model: see stripMessagesForHistory.
+          addMessage(id, { id: crypto.randomUUID(), role: "user", content: trimmed, timestamp: Date.now(), isCommandEcho: true });
+          addMessage(id, { id: crypto.randomUUID(), role: "assistant", content: result.message, timestamp: Date.now(), isCommandEcho: true });
+          return;
+        }
+      }
+
+      // Auto-create conversation if none active
+      let id = chatId;
+      if (!id) {
+        id = crypto.randomUUID();
+        addConversation({
+          id,
+          title: truncateAtWordBoundary(trimmed, 50),
+          surface: "chat",
+          lastMessage: trimmed,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        setActiveConversation(id);
+        setCurrentChat(id);
+      }
+
+      const userMessageId = crypto.randomUUID();
+      rememberTurnAttachments(userMessageId, attachments);
+      addMessage(id, {
+        id: userMessageId,
+        role: "user",
+        content: trimmed,
+        timestamp: Date.now(),
+        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
+      });
+      touchConversation(id, trimmed);
+
+      // Web search is a per-message switch: it applies to this send only.
+      const webSearch = webSearchEnabled;
+      setWebSearchEnabled(false);
+      await startTurn(id, trimmed, attachments, webSearch);
+    },
+    [
+      chatId,
+      addMessage,
+      addConversation,
+      setActiveConversation,
+      setCurrentChat,
+      webSearchEnabled,
+      sessionControls,
+      setSessionControlsInStore,
+      touchConversation,
+      startTurn,
+    ]
+  );
+
   /*
    * A due cron job runs HERE, through this surface's own submit — not through a
    * scheduler with a send path of its own, which would be a fourth place that
    * starts a turn. Before this, a job published to the bus, switched surface,
    * and nothing ran it.
    */
-  useScheduledPrompt('chat', handleSubmit, () => useChatStore.getState().isStreaming);
+  useScheduledPrompt('chat', handleSubmit, () => {
+    // Busy means the conversation the job would run in is mid-turn — a turn
+    // elsewhere does not block it, since conversations run concurrently.
+    const st = useChatStore.getState();
+    return !!st.currentChatId && !!st.streamingChats[st.currentChatId];
+  });
 
+  /**
+   * Regenerate the last reply: drop it (and anything after it) and run the
+   * same question again, with its attachments — without adding the question a
+   * second time or renaming the chat.
+   */
   const handleRetry = useCallback(() => {
     if (!chatId || isStreaming) return;
-    const msgs = useChatStore.getState().messages[chatId];
-    if (!msgs || msgs.length < 2) return;
-    // Find last user message
-    const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
-    if (!lastUserMsg) return;
-    handleSubmit(lastUserMsg.content);
-  }, [chatId, isStreaming, handleSubmit]);
+    const msgs = useChatStore.getState().messages[chatId] ?? [];
+    const lastUser = msgs.findLast((m) => m.role === "user" && !m.isAutoContinue);
+    if (!lastUser) return;
+    const { text, attachments } = resendPayload(lastUser);
+    truncateMessages(chatId, lastUser.id);
+    void startTurn(chatId, text, attachments);
+  }, [chatId, isStreaming, truncateMessages, startTurn]);
 
-  // Both the mic button and the global dictation hotkey land here. The hotkey is
-  // owned once by the app shell (see app-shell / use-push-to-talk) and delivers
-  // to whichever surface is on screen, so this surface does not gate on being
-  // active — the comparison that used to live here is the router's job now.
-  const handleVoiceTranscript = useCallback(
-    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
-    []
+  /**
+   * Edit a question and ask it again: everything from that question on is
+   * replaced by the edited question and a fresh reply.
+   */
+  const handleEditMessage = useCallback(
+    (messageId: string, newText: string) => {
+      const trimmed = newText.trim();
+      if (!chatId || isStreaming || !trimmed) return;
+      const msgs = useChatStore.getState().messages[chatId] ?? [];
+      const original = msgs.find((m) => m.id === messageId && m.role === "user");
+      if (!original) return;
+      const { text, attachments } = resendPayload(original, trimmed);
+      truncateMessages(chatId, messageId, { inclusive: true });
+      const userMessageId = crypto.randomUUID();
+      rememberTurnAttachments(userMessageId, attachments);
+      addMessage(chatId, {
+        id: userMessageId,
+        role: "user",
+        content: text,
+        timestamp: Date.now(),
+        attachments: original.attachments,
+      });
+      touchConversation(chatId, trimmed);
+      void startTurn(chatId, text, attachments);
+    },
+    [chatId, isStreaming, truncateMessages, addMessage, touchConversation, startTurn],
   );
 
-  // Merged suggestions: slash takes priority
-  const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
-    ? cmdSuggestions
-    : fileSuggestions.map((f) => ({
-        type: 'at' as const,
-        value: f.path,
-        label: '@' + f.name,
-        description: undefined,
-        meta: f.relative,
-      }));
+  /*
+   * Nothing configured could answer, so say that instead of sending a turn that
+   * can only come back as an authentication error. Session commands are
+   * client-side and still work.
+   */
+  const modelReady = useModelReady(modelRoute, CAPABILITY);
+  const [noModelAttempted, setNoModelAttempted] = useState(false);
+  const submitFromComposer = useCallback(
+    (text: string, attachments: AttachmentFile[]) => {
+      if (!modelReady && !isSessionCommand(text)) {
+        setNoModelAttempted(true);
+        return false;
+      }
+      void handleSubmit(text, { attachments });
+    },
+    [handleSubmit, modelReady],
+  );
+  const noModelCard = modelReady ? undefined : <NoModelCard attempted={noModelAttempted} />;
 
-  function handleSelectSuggestion(s: CommandSuggestion) {
-    if (s.type === 'slash') {
-      setInputValue(s.value + ' ');
-      setCmdSuggestions([]);
-    } else {
-      const newVal = removeAtQuery(inputValue);
-      setInputValue(newVal);
-      clearAtSuggestions();
-      resolveFileAsAttachment(s.value).then((att) => {
-        if (att) setAttachments((prev) => [...prev, att]);
-      });
-    }
-    setSelectedSuggestionIdx(0);
-  }
+  /** Up-arrow brings back the last thing you asked in THIS conversation. */
+  const recallText = useMemo(() => lastUserPrompt(messages), [messages]);
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (activeSuggestions.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.min(i + 1, activeSuggestions.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === 'Tab' || (e.key === 'Enter' && activeSuggestions.length > 0)) {
-        e.preventDefault();
-        handleSelectSuggestion(activeSuggestions[selectedSuggestionIdx]);
-        return;
-      }
-      if (e.key === 'Escape') {
-        setCmdSuggestions([]);
-        clearAtSuggestions();
-        return;
-      }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (isStreaming) {
-        abort();
-      } else {
-        handleSubmit(inputValue);
-      }
-    }
-  }
+  const attachmentMenu = {
+    onWebSearchToggle: () => setWebSearchEnabled((prev) => !prev),
+    webSearchEnabled,
+    currentProjectId,
+    onAddToProject: (pid: string) => assignToProject(chatId, pid),
+    onNewProject: () => setSidebarMode("projects"),
+    projects: allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon })),
+  };
 
-  function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const val = e.target.value;
-    setInputValue(val);
-    const textarea = e.target;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-    // Slash suggestions
-    setCmdSuggestions(
-      getSlashSuggestions(val).map((cmd) => ({
-        type: 'slash' as const,
-        value: cmd.name,
-        label: cmd.name,
-        description: cmd.args,
-        meta: cmd.description,
-      }))
-    );
-    // @ file suggestions: chat has no CWD so just clear them
-    clearAtSuggestions();
-    setSelectedSuggestionIdx(0);
-  }
-
-  function handleButtonClick() {
-    if (isStreaming) {
-      abort();
-    } else {
-      handleSubmit(inputValue);
-    }
-  }
+  const modelSelector = (
+    <ModelSelector
+      value={modelRoute?.id ?? ''}
+      onSelectModel={setModelRoute}
+      capability={CAPABILITY}
+      className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
+    />
+  );
 
   const handleArtifactSaved = useCallback(
     (artifactId: string, filePath: string) => {
@@ -736,73 +721,20 @@ export function ChatSurface() {
 
           {/* Centered input card */}
           <div className="w-full max-w-2xl">
-            <CommandPicker
-              suggestions={activeSuggestions}
-              selectedIndex={selectedSuggestionIdx}
-              onSelect={handleSelectSuggestion}
-              onSelectedIndexChange={setSelectedSuggestionIdx}
+            <Composer
+              ref={composerRef}
+              surface="chat"
+              conversationId={chatId}
+              variant="hero"
+              placeholder="How can I help you today?"
+              onSubmit={submitFromComposer}
+              isStreaming={isStreaming}
+              onStop={abort}
+              recallText={recallText}
+              attachmentMenu={attachmentMenu}
+              toolbarEnd={modelSelector}
+              header={noModelCard}
             />
-            <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-              <Textarea
-                value={inputValue}
-                onChange={handleTextareaChange}
-                onKeyDown={handleKeyDown}
-                placeholder="How can I help you today?"
-                rows={3}
-                className="min-h-[120px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-              />
-              {/* Attachment chips */}
-              {attachments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-                  {attachments.map((att, i) => (
-                    <span
-                      key={i}
-                      className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                    >
-                      <AttachmentIcon category={att.category} />
-                      {att.name}
-                      <button
-                        type="button"
-                        onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                        className="hover:text-foreground"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center justify-between px-4 py-2.5">
-                <div className="flex items-center gap-1">
-                  <AttachmentMenu
-                    onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                    onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                    webSearchEnabled={webSearchEnabled}
-                    currentProjectId={currentProjectId}
-                    onAddToProject={(pid) => assignToProject(chatId, pid)}
-                    onNewProject={() => setSidebarMode("projects")}
-                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                  />
-                  <VoiceButton onTranscript={handleVoiceTranscript} />
-                </div>
-                <div className="flex items-center gap-2">
-                  <ModelSelector
-                    value={modelRoute?.id ?? ''}
-                    onSelectModel={setModelRoute}
-                    capability={CAPABILITY}
-                    className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                  />
-                  <Button
-                    size="icon"
-                    className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/80"
-                    onClick={handleButtonClick}
-                    disabled={!inputValue.trim()}
-                  >
-                    <ArrowUp className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
 
             {/* Quick-start suggestion pills */}
             <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
@@ -814,7 +746,7 @@ export function ChatSurface() {
               ].map((pill) => (
                 <button
                   key={pill.label}
-                  onClick={() => { setInputValue(pill.prompt); setTimeout(() => document.querySelector<HTMLTextAreaElement>('[placeholder="How can I help you today?"]')?.focus(), 50); }}
+                  onClick={() => { setComposerText("chat", chatId, pill.prompt); composerRef.current?.focus(); }}
                   className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-card hover:border-border transition-colors"
                 >
                   <pill.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -853,7 +785,7 @@ export function ChatSurface() {
             {/* Messages column */}
             <div className="flex flex-1 flex-col min-w-0">
               {/* Messages */}
-              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
+              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} showReasoning={sessionControls.reasoningVisible} expandToolCalls={sessionControls.verboseMode} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
 
               {/* Prompt suggestions */}
               {suggestions.length > 0 && !isStreaming && (
@@ -862,7 +794,7 @@ export function ChatSurface() {
                     {suggestions.map((s, i) => (
                       <button
                         key={i}
-                        onClick={() => setInputValue(s)}
+                        onClick={() => { setComposerText("chat", chatId, s); composerRef.current?.focus(); }}
                         className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                       >
                         {s}
@@ -875,81 +807,19 @@ export function ChatSurface() {
               {/* Bottom input card */}
               <div className="px-6 pb-4 pt-2">
                 <div className="max-w-3xl mx-auto">
-                  <CommandPicker
-                    suggestions={activeSuggestions}
-                    selectedIndex={selectedSuggestionIdx}
-                    onSelect={handleSelectSuggestion}
-                    onSelectedIndexChange={setSelectedSuggestionIdx}
+                  <Composer
+                    ref={composerRef}
+                    surface="chat"
+                    conversationId={chatId}
+                    placeholder="Reply..."
+                    onSubmit={submitFromComposer}
+                    isStreaming={isStreaming}
+                    onStop={abort}
+                    recallText={recallText}
+                    attachmentMenu={attachmentMenu}
+                    toolbarEnd={modelSelector}
+                    header={noModelCard}
                   />
-                  <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-                    <Textarea
-                      value={inputValue}
-                      onChange={handleTextareaChange}
-                      onKeyDown={handleKeyDown}
-                      placeholder="Reply..."
-                      rows={2}
-                      className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-                      style={{ opacity: isStreaming ? 0.6 : 1 }}
-                    />
-                    {/* Attachment chips */}
-                    {attachments.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-                        {attachments.map((att, i) => (
-                          <span
-                            key={i}
-                            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                          >
-                            {att.name}
-                            <button
-                              type="button"
-                              onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                              className="hover:text-foreground"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        <AttachmentMenu
-                          onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                          onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                          webSearchEnabled={webSearchEnabled}
-                          currentProjectId={currentProjectId}
-                          onAddToProject={(pid) => assignToProject(chatId, pid)}
-                          onNewProject={() => setSidebarMode("projects")}
-                          projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                        />
-                        <VoiceButton onTranscript={handleVoiceTranscript} />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <ModelSelector
-                          value={modelRoute?.id ?? ''}
-                                onSelectModel={setModelRoute}
-                          capability={CAPABILITY}
-                          className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                        />
-                        <Button
-                          size="icon"
-                          className={`h-8 w-8 rounded-lg ${
-                            isStreaming
-                              ? "bg-destructive hover:bg-destructive/80"
-                              : "bg-primary hover:bg-primary/80"
-                          }`}
-                          onClick={handleButtonClick}
-                          disabled={!isStreaming && !inputValue.trim()}
-                        >
-                          {isStreaming ? (
-                            <Square className="h-3.5 w-3.5" />
-                          ) : (
-                            <ArrowUp className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>

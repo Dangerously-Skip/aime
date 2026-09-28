@@ -1,18 +1,16 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { MessageList } from "@/components/shared/message-list";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { FolderPicker } from "@/components/shared/folder-picker";
-import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import { useCoworkStore } from "@/stores/cowork-store";
-import { useConversationStore } from "@/stores/conversation-store";
+import { useConversationStore, isUntitled } from "@/stores/conversation-store";
 import { useSearchSettings } from '@/hooks/use-search-settings'
 import { useDeckTheme } from '@/hooks/use-deck-theme'
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
+import { useSSEStream, stripMessagesForHistory, turnErrorOf } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { parseSearchWebResults, isParsableSearchTool } from "@/lib/search/parse-results";
@@ -21,7 +19,6 @@ import { streamRegistry } from "@/lib/stream-registry";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
-import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { summarizeConversation } from "@/lib/memory/summarizer";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
@@ -31,7 +28,6 @@ import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { DropOverlay } from "@/components/shared/drop-overlay";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import type { Message } from "@/stores/chat-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
@@ -42,8 +38,6 @@ import {
   ChevronRight,
   FileText,
   FilePen,
-  ArrowUp,
-  Square,
   X,
   PanelRightClose,
   PanelRight,
@@ -59,15 +53,13 @@ import {
 } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
 import {
-  AGENT_PREFIX,
-  SEARCH_PREFIX,
-  COMMAND_PREFIX,
   classifyContextEntry,
   contextEntryDisplayName,
   isOpenableEntry,
   isSearchEntry,
 } from "@/lib/cowork/context-entry";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
+import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { RailSlot } from "@/lib/panels/rail-slot";
 import { railPanels } from "@/lib/panels/registry";
 import {
@@ -79,34 +71,33 @@ import { useGoalTranscript } from "@/components/harness/use-goal-transcript";
 import { GoalRunStatus } from "@/components/harness/goal-run-status";
 import { GoalQuestion } from "@/components/harness/goal-question";
 import { useElectron } from "@/hooks/use-electron";
-import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasOverlay } from "@/components/shared/canvas-overlay";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import {
-  BASH_WRITE_PATTERNS,
-  BASH_NOISE,
   BASH_ARTIFACT_EXT,
   isValidSidebarEntry,
   categorizeToolCall,
 } from "@/lib/artifact-tracker";
-import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
+import { Composer, type ComposerHandle } from "@/components/shared/composer/composer";
+import { addComposerAttachment, draftKey, useComposerDrafts } from "@/components/shared/composer/draft-store";
+import { lastUserPrompt } from "@/components/shared/composer/recall";
+import { rememberTurnAttachments, resendPayload } from "@/components/shared/composer/turn-attachments";
 import {
   parseSlashCommand,
   applySlashCommand,
-  getSlashSuggestions,
+  isSessionCommand,
   DEFAULT_SESSION_CONTROLS,
 } from "@/lib/slash-commands";
-import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
+import { useModelReady } from "@/hooks/use-model-ready";
+import { NoModelCard } from "@/components/shared/no-model-card";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import type { Capability } from "@/lib/models/types";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { useToolBudgetStore } from "@/stores/tool-budget-store";
-import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 
@@ -722,14 +713,9 @@ export function CoworkSurface() {
   const toolNamesById = useRef<Map<string, string>>(new Map());
   const searchQueriesById = useRef<Map<string, string>>(new Map());
 
-  const [inputValue, setInputValue] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const composerRef = useRef<ComposerHandle>(null);
   const [pendingFolder, setPendingFolder] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
-  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
-  const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
-    useAtSuggestions();
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const searchGroups = useCoworkStore((s) => s.searchGroups[s.currentChatId ?? ""] ?? EMPTY_SEARCH_GROUPS);
@@ -738,15 +724,22 @@ export function CoworkSurface() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const setCanvasOpen = useCanvasStore((s) => s.setOpen);
-  const handleFileAttach = useCallback(
-    (file: AttachmentFile) => {
-      setAttachments((prev) => [...prev, file]);
-      const cid = useCoworkStore.getState().currentChatId;
-      if (cid) useCoworkStore.getState().addContextFile(cid, file.name);
-    },
-    []
+  /** An attachment is context the agent will read — list it in the rail. */
+  const noteAttachment = useCallback((file: AttachmentFile) => {
+    const cid = useCoworkStore.getState().currentChatId;
+    if (cid) useCoworkStore.getState().addContextFile(cid, file.name);
+  }, []);
+  // Dropped files join the draft of the conversation on screen, like the
+  // composer's own attach button and paste.
+  const { isDragging, dropZoneProps } = useFileDrop(
+    useCallback(
+      (file: AttachmentFile) => {
+        addComposerAttachment("cowork", useCoworkStore.getState().currentChatId ?? "", file);
+        noteAttachment(file);
+      },
+      [noteAttachment],
+    ),
   );
-  const { isDragging, dropZoneProps } = useFileDrop(handleFileAttach);
   const currentChatId = useCoworkStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
   // Canvas SSE handler — store mutations + telemetry centralised in the hook.
@@ -756,7 +749,10 @@ export function CoworkSurface() {
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
   const modelRoute = useCoworkStore((s) => s.modelRoute);
-  const isStreaming = useCoworkStore((s) => s.isStreaming);
+  // THIS conversation's turn, not the surface's: another chat streaming must
+  // neither lock this composer nor give it a Stop button that aborts nothing.
+  const isStreaming = useCoworkStore((s) => !!chatId && !!s.streamingChats[chatId]);
+  const setChatStreaming = useCoworkStore((s) => s.setChatStreaming);
   const storeFolder = useCoworkStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
   const folder = storeFolder || pendingFolder;
   const contextFiles = useCoworkStore((s) => (chatId ? s.contextFiles[chatId] : undefined) ?? EMPTY_FILES);
@@ -767,6 +763,8 @@ export function CoworkSurface() {
   const addMessage = useCoworkStore((s) => s.addMessage);
   const appendToLastAssistant = useCoworkStore((s) => s.appendToLastAssistant);
   const addToolCall = useCoworkStore((s) => s.addToolCall);
+  const setTurnError = useCoworkStore((s) => s.setTurnError);
+  const setRetryStatus = useCoworkStore((s) => s.setRetryStatus);
   const updateToolResult = useCoworkStore((s) => s.updateToolResult);
   const completeRunningTools = useCoworkStore((s) => s.completeRunningTools);
   const updateMessage = useCoworkStore((s) => s.updateMessage);
@@ -785,6 +783,7 @@ export function CoworkSurface() {
   const startStreaming = useCoworkStore((s) => s.startStreaming);
   const stopStreaming = useCoworkStore((s) => s.stopStreaming);
   const setCurrentChat = useCoworkStore((s) => s.setCurrentChat);
+  const truncateMessages = useCoworkStore((s) => s.truncateMessages);
   const setIsStreaming = useCoworkStore((s) => s.setIsStreaming);
   const updateConversation = useConversationStore((s) => s.updateConversation);
   const updateConversationMetrics = useConversationStore((s) => s.updateConversationMetrics);
@@ -952,12 +951,17 @@ export function CoworkSurface() {
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
-    onUsage(usage) {
+    setChatStreaming,
+    coalesceText: true,
+    // Every callback is handed the chat its stream was started for. Usage used
+    // to be filed against `currentChatId` — whatever was on screen when the
+    // turn ENDED — so a long run finished while you read another conversation
+    // billed that one.
+    onUsage(usage, id) {
       // Composed: the run recorder captures cost first (it must not be skipped
       // by the no-active-conversation early return below), then the existing
       // ROI/telemetry pipeline runs unchanged.
       runRecorder.onUsage(usage);
-      const id = useCoworkStore.getState().currentChatId;
       if (!id) return;
       // Store token usage
       updateConversationMetrics(id, {
@@ -1045,20 +1049,20 @@ export function CoworkSurface() {
         });
       }).catch(() => {});
     },
-    onChunk(event) {
+    onChunk(event, cid) {
       // Chunks whose handling is the same on every surface — cron jobs,
       // standing orders, widgets, memory. Handled in ONE place
       // (lib/sse/agnostic-chunks) because each surface having its own case
       // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Cowork' })) return;
+      if (handleAgnosticChunk(event, { chatId: cid, surface: 'Cowork' })) return;
 
       // The chunks whose handling is identical across surfaces, recorded once in
       // lib/sse/core-chunks. `skip` names what this surface still owns — see the
       // note there; it is a visible migration step, not a permanent carve-out.
       if (
         handleCoreChunk(event, {
-          chatId: chatId,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
+          chatId: cid,
+          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools, setTurnError, setRetryStatus },
           printDocument,
           onCanvas: onCanvasEvent,
           notify: (title, body) => {
@@ -1073,7 +1077,7 @@ export function CoworkSurface() {
       switch (event.type) {
         case "tool_use": {
           // Complete any previously running tools before starting a new one
-          completeRunningTools(chatId);
+          completeRunningTools(cid);
           const toolId = (event.id as string) || `tool_${Date.now()}`;
           const toolName = (event.name as string) || "Unknown";
           const toolInput = (event.input as Record<string, unknown>) || {};
@@ -1082,7 +1086,7 @@ export function CoworkSurface() {
           if (cwd && typeof toolInput.file_path === 'string' && !toolInput.file_path.startsWith('/')) {
             toolInput.file_path = `${cwd.replace(/\/$/, '')}/${toolInput.file_path}`;
           }
-          addToolCall(chatId, {
+          addToolCall(cid, {
             id: toolId,
             name: toolName,
             input: toolInput,
@@ -1138,25 +1142,25 @@ export function CoworkSurface() {
               .then((r) => r.json())
               .then(({ results }) => {
                 if (results && results.length > 0) {
-                  if (chatId) addSearchGroup(chatId, { query: searchQuery, results });
+                  if (cid) addSearchGroup(cid, { query: searchQuery, results });
                 }
               })
               .catch(() => {});
           }
           // Categorize into sidebar panels
           const categorized = categorizeToolCall(toolName, toolInput, { richContext: true });
-          if (categorized && chatId && isValidSidebarEntry(categorized.path)) {
+          if (categorized && cid && isValidSidebarEntry(categorized.path)) {
             // Skip search query entries — redundant with SearchResultsCard
             if (isSearchEntry(categorized.path)) {
               // Don't add search queries to either panel
             } else if (categorized.category === "context") {
               // Don't add to Context if this path is already in Artifacts
-              const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+              const currentArtifacts = useCoworkStore.getState().artifactFiles[cid] ?? [];
               if (!currentArtifacts.includes(categorized.path)) {
-                addContextFile(chatId, categorized.path);
+                addContextFile(cid, categorized.path);
               }
             } else {
-              addArtifactFile(chatId, categorized.path);
+              addArtifactFile(cid, categorized.path);
               // Also register as project artifact
               if (currentProjectId) {
                 const fileName = categorized.path.split("/").pop() || categorized.path;
@@ -1166,7 +1170,7 @@ export function CoworkSurface() {
                   path: categorized.path,
                   type: "file",
                   surface: "cowork",
-                  conversationId: chatId,
+                  conversationId: cid,
                   createdAt: Date.now(),
                   updatedAt: Date.now(),
                 });
@@ -1174,11 +1178,11 @@ export function CoworkSurface() {
             }
           }
           // Detect plan file writes
-          if (toolName === "Write" && chatId) {
+          if (toolName === "Write" && cid) {
             const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
             if (filePath.includes(".claude/plans/")) {
               const content = typeof toolInput.content === "string" ? toolInput.content : "";
-              if (content) setPlanContent(chatId, content);
+              if (content) setPlanContent(cid, content);
             }
           }
           break;
@@ -1189,7 +1193,7 @@ export function CoworkSurface() {
             typeof event.result === "string"
               ? event.result
               : JSON.stringify(event.result);
-          updateToolResult(chatId, id, result, event.is_error as boolean | undefined);
+          updateToolResult(cid, id, result, event.is_error as boolean | undefined);
           // Detect dev server URLs in Bash output
           if (result && !event.is_error) {
             const detected = detectServerUrl(result);
@@ -1209,19 +1213,19 @@ export function CoworkSurface() {
            * `c.type === 'tool_result'`, a message type the SDK has never sent.
            * They arrive inside `user` messages and now reach the client.
            */
-          if (result && !event.is_error && chatId) {
+          if (result && !event.is_error && cid) {
             const startedAs = toolNamesById.current.get(id);
             if (isParsableSearchTool(startedAs)) {
               const parsed = parseSearchWebResults(result);
               const query = searchQueriesById.current.get(id);
               if (parsed.length > 0 && query) {
-                addSearchGroup(chatId, { query, results: parsed });
+                addSearchGroup(cid, { query, results: parsed });
               }
             }
           }
           // Detect binary files mentioned in Bash output (e.g. python-pptx writing a .pptx)
-          if (result && !event.is_error && chatId) {
-            const allMsgs = useCoworkStore.getState().messages[chatId];
+          if (result && !event.is_error && cid) {
+            const allMsgs = useCoworkStore.getState().messages[cid];
             const lastMsg = allMsgs?.at(-1);
             const matchingTc = lastMsg?.toolCalls?.find((tc) => tc.id === id);
             // Same marker, the other arrival path — see the note at the command site.
@@ -1233,7 +1237,7 @@ export function CoworkSurface() {
               const bashCmd = typeof matchingTc.input?.command === "string" ? matchingTc.input.command : "";
               const isCurlWget = /\bcurl\b|\bwget\b/.test(bashCmd);
               const coworkState = useCoworkStore.getState();
-              const coworkFolder = chatId ? coworkState.folderByChat[chatId] ?? null : null;
+              const coworkFolder = cid ? coworkState.folderByChat[cid] ?? null : null;
               const cwd = coworkFolder || folder || projectFolder || scratchDir;
               const addBashArtifact = (raw: string) => {
                 let filePath = raw;
@@ -1247,7 +1251,7 @@ export function CoworkSurface() {
                   }
                   filePath = `${cwd}/${filePath}`;
                 }
-                addArtifactFile(chatId, filePath);
+                addArtifactFile(cid, filePath);
               };
               if (!isCurlWget) {
                 BASH_ARTIFACT_EXT.lastIndex = 0;
@@ -1272,38 +1276,38 @@ export function CoworkSurface() {
           // Add extracted document to context sidebar, removing the original attachment entry to avoid duplicates
           const extractedPath = event.extractedPath as string | undefined;
           const originalName = event.name as string | undefined;
-          if (extractedPath && chatId) {
+          if (extractedPath && cid) {
             if (originalName) {
-              const existing = useCoworkStore.getState().contextFiles[chatId] ?? [];
+              const existing = useCoworkStore.getState().contextFiles[cid] ?? [];
               const duplicate = existing.find((p) => p === originalName || p.endsWith(`/${originalName}`));
-              if (duplicate) removeContextFile(chatId, duplicate);
+              if (duplicate) removeContextFile(cid, duplicate);
             }
-            addContextFile(chatId, extractedPath);
+            addContextFile(cid, extractedPath);
           }
           console.log('[Cowork] Document extracted:', event.name, 'path:', extractedPath, 'length:', event.textLength);
           break;
         }
       }
     },
-    onDone: () => {
+    onDone: (cid) => {
       runRecorder.succeed();
-      completeRunningTools(chatId);
-      stopStreaming(chatId);
-      const allMsgs = useCoworkStore.getState().messages[chatId];
+      completeRunningTools(cid);
+      stopStreaming(cid);
+      const allMsgs = useCoworkStore.getState().messages[cid];
       const lastMsg = allMsgs?.at(-1);
       // (Search results are fetched in parallel via /api/search-proxy when
       // web_search tool_use events arrive in the stream.)
       // Inline plan detection: check last assistant message for plan heading
       if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
-        setPlanContent(chatId, lastMsg.content);
+        setPlanContent(cid, lastMsg.content);
       }
       // Detect binary artifacts from Bash tool calls (e.g. python-pptx, generate_presentation.sh).
       // The SDK doesn't emit tool_result events, so we scan Bash command inputs for output file paths.
-      if (chatId) {
+      if (cid) {
         const coworkState = useCoworkStore.getState();
-        const coworkFolder = chatId ? coworkState.folderByChat[chatId] ?? null : null;
+        const coworkFolder = cid ? coworkState.folderByChat[cid] ?? null : null;
         const cwdFallback = coworkFolder || folder || projectFolder || scratchDir;
-        const msgs = useCoworkStore.getState().messages[chatId] ?? [];
+        const msgs = useCoworkStore.getState().messages[cid] ?? [];
         for (const msg of msgs) {
           for (const tc of msg.toolCalls ?? []) {
             if (tc.name === "Bash" && tc.input?.command) {
@@ -1317,9 +1321,9 @@ export function CoworkSurface() {
                 if (!filePath.startsWith("/") && cwdFallback) {
                   filePath = `${cwdFallback}/${filePath}`;
                 }
-                const existing = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+                const existing = useCoworkStore.getState().artifactFiles[cid] ?? [];
                 if (!existing.includes(filePath)) {
-                  addArtifactFile(chatId, filePath);
+                  addArtifactFile(cid, filePath);
                 }
               }
             }
@@ -1327,8 +1331,8 @@ export function CoworkSurface() {
         }
       }
       // Verify artifacts still exist on disk and remove phantoms.
-      if (chatId) {
-        const currentArtifacts = useCoworkStore.getState().artifactFiles[chatId] ?? [];
+      if (cid) {
+        const currentArtifacts = useCoworkStore.getState().artifactFiles[cid] ?? [];
         if (currentArtifacts.length > 0 && window.electronAPI?.fileExists) {
           for (const artifactPath of currentArtifacts) {
             // Skip non-absolute paths and bash: labels
@@ -1336,7 +1340,7 @@ export function CoworkSurface() {
             window.electronAPI.fileExists(artifactPath).then((exists: boolean) => {
               if (!exists) {
                 console.log("[Cowork] Removing phantom artifact (file not found):", artifactPath);
-                removeArtifactFile(chatId, artifactPath);
+                removeArtifactFile(cid, artifactPath);
               }
             }).catch(() => {});
           }
@@ -1344,7 +1348,7 @@ export function CoworkSurface() {
       }
       // Auto-continuation: if the agent ended mid-task (many tool calls + last message
       // suggests more work to do), automatically send a "continue" prompt
-      if (chatId && allMsgs && allMsgs.length > 2) {
+      if (cid && allMsgs && allMsgs.length > 2) {
         const totalToolCalls = allMsgs.reduce(
           (sum, m) => sum + (m.toolCalls?.length ?? 0), 0
         );
@@ -1355,17 +1359,17 @@ export function CoworkSurface() {
           // Small delay so the UI shows the partial response before we continue
           setTimeout(() => {
             const continuePrompt = "Continue — complete the file generation. Do not re-explain what you've done. Execute the remaining tool calls to produce the deliverable.";
-            addMessage(chatId, { id: crypto.randomUUID(), role: "user", content: continuePrompt, timestamp: Date.now(), isAutoContinue: true } as Message);
-            addMessage(chatId, { id: crypto.randomUUID(), role: "assistant", content: "", timestamp: Date.now(), isLoading: true, isStreaming: true });
-            startStreaming(chatId);
-            const currentControls = useCoworkStore.getState().sessionControls[chatId] ?? DEFAULT_SESSION_CONTROLS;
-            const priorMsgs = useCoworkStore.getState().messages[chatId] || [];
+            addMessage(cid, { id: crypto.randomUUID(), role: "user", content: continuePrompt, timestamp: Date.now(), isAutoContinue: true } as Message);
+            addMessage(cid, { id: crypto.randomUUID(), role: "assistant", content: "", timestamp: Date.now(), isLoading: true, isStreaming: true });
+            startStreaming(cid);
+            const currentControls = useCoworkStore.getState().sessionControls[cid] ?? DEFAULT_SESSION_CONTROLS;
+            const priorMsgs = useCoworkStore.getState().messages[cid] || [];
             const hist = stripMessagesForHistory(priorMsgs.slice(0, -2));
             const route = resolveRoute();
             // A fresh run: the auto-continue is a hook-driven turn of its own,
             // and the turn that triggered it was already closed by succeed().
             runRecorder.begin({ trigger: "hook", model: route?.model ?? undefined });
-            void sendMessage(continuePrompt, chatId, "cowork", route?.model ?? null, {
+            void sendMessage(continuePrompt, cid, "cowork", route?.model ?? null, {
               // Spread the shared context rather than re-listing it. The
               // hand-written version of this object omitted deckTheme,
               // searchSettings, memories, projectInstructions,
@@ -1382,90 +1386,29 @@ export function CoworkSurface() {
         }
       }
       if (!document.hasFocus()) {
-        showNotification("Task complete", "Claude has finished working on your request.");
+        showNotification("Task complete", "The assistant has finished working on your request.");
       }
     },
-    onError: (error) => {
+    onError: (error, cid) => {
       runRecorder.fail(error.message);
-      stopStreaming(chatId);
-      appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
+      stopStreaming(cid);
+      // A banner on the reply, not text in it — see TurnErrorBanner.
+      setTurnError(cid, turnErrorOf(error));
     },
   });
-
-  // Retry: ref holds handleSubmit so the retry callback can call it without circular deps
-  const handleSubmitRef = useRef<((text: string) => void) | null>(null);
-  const handleRetry = useCallback(() => {
-    if (!chatId || isStreaming) return;
-    const msgs = useCoworkStore.getState().messages[chatId];
-    if (!msgs || msgs.length < 2) return;
-    const lastUserMsg = [...msgs].reverse().find((m: { role: string }) => m.role === 'user');
-    if (!lastUserMsg) return;
-    handleSubmitRef.current?.(lastUserMsg.content);
-  }, [chatId, isStreaming]);
 
   // Ref to break circular dependency: handleSubmit uses resetIdleTimer, but
   // useHeartbeat (which provides resetIdleTimer) is called after handleSubmit.
   const resetIdleTimerRef = useRef<(() => void) | null>(null);
 
-  const handleSubmit = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return;
-      resetIdleTimerRef.current?.();
-      const trimmed = text.trim();
-
-      // ── Slash command interception ───────────────────────────────────────
-      const parsed = parseSlashCommand(trimmed);
-      if (parsed) {
-        const result = applySlashCommand(parsed, sessionControls);
-        if (result) {
-          let id = chatId;
-          if (!id) {
-            id = crypto.randomUUID();
-            addConversation({ id, title: trimmed.substring(0, 50), surface: 'cowork', lastMessage: trimmed, createdAt: Date.now(), updatedAt: Date.now() });
-            setActiveConversation(id);
-            setCurrentChat(id);
-          }
-          setSessionControls(id, result.controls);
-          addMessage(id, { id: crypto.randomUUID(), role: 'user', content: trimmed, timestamp: Date.now() });
-          addMessage(id, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now() });
-          setInputValue('');
-          return;
-        }
-      }
-
-      // Auto-create conversation if none active
-      let id = chatId;
-      if (!id) {
-        id = crypto.randomUUID();
-        addConversation({
-          id,
-          title: truncateAtWordBoundary(trimmed, 50),
-          surface: "cowork",
-          lastMessage: trimmed,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-        setActiveConversation(id);
-        setCurrentChat(id);
-        // Apply pending folder selection from before conversation was created
-        if (pendingFolder) {
-          setFolder(id, pendingFolder);
-          setPendingFolder(null);
-        }
-      }
-
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        timestamp: Date.now(),
-        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
-      });
-      updateConversation(id, {
-        title: trimmed.substring(0, 50),
-        lastMessage: trimmed,
-        updatedAt: Date.now(),
-      });
+  /**
+   * Run a turn for the user message that is ALREADY last in the transcript.
+   * Split out so Retry and Edit reuse it rather than calling `handleSubmit`
+   * with the old text — which added the question again, kept the failed reply
+   * above it, and renamed the chat.
+   */
+  const startTurn = useCallback(
+    async (id: string, trimmed: string, attachments: AttachmentFile[]) => {
       addMessage(id, {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -1475,13 +1418,11 @@ export function CoworkSurface() {
         isStreaming: true,
       });
       startStreaming(id);
-      setInputValue("");
       const currentAttachments = [...attachments];
-      setAttachments([]);
       if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'cowork' });
       if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'cowork' });
       if (sessionControls.agentName) sendFeatureAdoptionEvent({ feature: 'agent_routing', surface: 'cowork' });
-      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
+      // Grab prior messages for history fallback (exclude the user message + assistant placeholder)
       const priorMessages = useCoworkStore.getState().messages[id] || [];
       const history = stripMessagesForHistory(priorMessages.slice(0, -2));
 
@@ -1529,7 +1470,6 @@ export function CoworkSurface() {
       });
     },
     [
-      chatId,
       runRecorder,
       resolveRoute,
       // Carries the settings half of the turn; omitting it is how a theme or
@@ -1539,20 +1479,138 @@ export function CoworkSurface() {
       addMessage,
       startStreaming,
       sendMessage,
-      updateConversation,
-      addConversation,
-      setActiveConversation,
-      setCurrentChat,
-      attachments,
       // Read inside the callback and previously missing, so a slash command, a
       // project switch or a security-setting change did not take effect until
       // another dep changed. All are primitives or stable store references.
       sessionControls,
+      currentProjectId,
+    ]
+  );
+
+  /** Record a new question: its sidebar preview, and a title if the chat has none yet. */
+  const touchConversation = useCallback(
+    (id: string, text: string) => {
+      const conv = useConversationStore.getState().conversations.find((c) => c.id === id);
+      updateConversation(id, {
+        ...(isUntitled(conv?.title) ? { title: truncateAtWordBoundary(text, 50) } : {}),
+        lastMessage: text,
+      });
+    },
+    [updateConversation],
+  );
+
+  const handleSubmit = useCallback(
+    async (text: string, opts?: { attachments?: AttachmentFile[] }) => {
+      if (!text.trim()) return;
+      resetIdleTimerRef.current?.();
+      const trimmed = text.trim();
+      const attachments = opts?.attachments ?? [];
+
+      // ── Slash command interception ───────────────────────────────────────
+      const parsed = parseSlashCommand(trimmed);
+      if (parsed) {
+        const result = applySlashCommand(parsed, sessionControls);
+        if (result) {
+          let id = chatId;
+          if (!id) {
+            id = crypto.randomUUID();
+            addConversation({ id, title: trimmed.substring(0, 50), surface: 'cowork', lastMessage: trimmed, createdAt: Date.now(), updatedAt: Date.now() });
+            setActiveConversation(id);
+            setCurrentChat(id);
+          }
+          setSessionControls(id, result.controls);
+          // Shown, never sent to the model: see stripMessagesForHistory.
+          addMessage(id, { id: crypto.randomUUID(), role: 'user', content: trimmed, timestamp: Date.now(), isCommandEcho: true });
+          addMessage(id, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now(), isCommandEcho: true });
+          return;
+        }
+      }
+
+      // Auto-create conversation if none active
+      let id = chatId;
+      if (!id) {
+        id = crypto.randomUUID();
+        addConversation({
+          id,
+          title: truncateAtWordBoundary(trimmed, 50),
+          surface: "cowork",
+          lastMessage: trimmed,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        setActiveConversation(id);
+        setCurrentChat(id);
+        // Apply pending folder selection from before conversation was created
+        if (pendingFolder) {
+          setFolder(id, pendingFolder);
+          setPendingFolder(null);
+        }
+      }
+
+      const userMessageId = crypto.randomUUID();
+      rememberTurnAttachments(userMessageId, attachments);
+      addMessage(id, {
+        id: userMessageId,
+        role: "user",
+        content: trimmed,
+        timestamp: Date.now(),
+        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
+      });
+      touchConversation(id, trimmed);
+      await startTurn(id, trimmed, attachments);
+    },
+    [
+      chatId,
+      addMessage,
+      addConversation,
+      setActiveConversation,
+      setCurrentChat,
+      sessionControls,
       setSessionControls,
       pendingFolder,
       setFolder,
-      currentProjectId,
+      touchConversation,
+      startTurn,
     ]
+  );
+
+  /**
+   * Regenerate the last reply: drop it and run the same question again, with
+   * its attachments — no duplicate question, no rename.
+   */
+  const handleRetry = useCallback(() => {
+    if (!chatId || isStreaming) return;
+    const msgs = useCoworkStore.getState().messages[chatId] ?? [];
+    const lastUser = msgs.findLast((m) => m.role === "user" && !m.isAutoContinue);
+    if (!lastUser) return;
+    const { text, attachments } = resendPayload(lastUser);
+    truncateMessages(chatId, lastUser.id);
+    void startTurn(chatId, text, attachments);
+  }, [chatId, isStreaming, truncateMessages, startTurn]);
+
+  /** Edit a question and ask again: it and everything after it are replaced. */
+  const handleEditMessage = useCallback(
+    (messageId: string, newText: string) => {
+      const trimmed = newText.trim();
+      if (!chatId || isStreaming || !trimmed) return;
+      const msgs = useCoworkStore.getState().messages[chatId] ?? [];
+      const original = msgs.find((m) => m.id === messageId && m.role === "user");
+      if (!original) return;
+      const { text, attachments } = resendPayload(original, trimmed);
+      truncateMessages(chatId, messageId, { inclusive: true });
+      const userMessageId = crypto.randomUUID();
+      rememberTurnAttachments(userMessageId, attachments);
+      addMessage(chatId, {
+        id: userMessageId,
+        role: "user",
+        content: text,
+        timestamp: Date.now(),
+        attachments: original.attachments,
+      });
+      touchConversation(chatId, trimmed);
+      void startTurn(chatId, text, attachments);
+    },
+    [chatId, isStreaming, truncateMessages, addMessage, touchConversation, startTurn],
   );
 
   /*
@@ -1561,121 +1619,24 @@ export function CoworkSurface() {
    * starts a turn. Before this, a job published to the bus, switched surface,
    * and nothing ran it.
    */
-  useScheduledPrompt('cowork', handleSubmit, () => useCoworkStore.getState().isStreaming);
+  useScheduledPrompt('cowork', handleSubmit, () => {
+    // Busy means the conversation the job would run in is mid-turn — a turn
+    // elsewhere does not block it, since conversations run concurrently.
+    const st = useCoworkStore.getState();
+    return !!st.currentChatId && !!st.streamingChats[st.currentChatId];
+  });
 
-  handleSubmitRef.current = handleSubmit;
 
-  // Both the mic button and the global dictation hotkey land here. The hotkey is
-  // owned once by the app shell (see app-shell / use-push-to-talk) and delivers
-  // to whichever surface is on screen, so this surface does not gate on being
-  // active — the comparison that used to live here is the router's job now.
-  const handleVoiceTranscript = useCallback(
-    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
-    []
-  );
-
-  // Fire a background agent run on the cowork surface (used by heartbeat + cron)
-
-  // Cron and heartbeat hooks removed — standing order engine in the Assistant
-  // surface now handles all scheduled/recurring tasks.
-  // fireBackgroundRun is kept for potential future use by the standing order engine.
-
-  // Compute merged suggestions: slash takes priority over @
-  const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
-    ? cmdSuggestions
-    : fileSuggestions.map((f) => ({
-        type: 'at' as const,
-        value: f.path,
-        label: '@' + f.name,
-        description: undefined,
-        meta: f.relative,
-      }));
-
-  function handleSelectSuggestion(s: CommandSuggestion) {
-    if (s.type === 'slash') {
-      setInputValue(s.value + ' ');
-      setCmdSuggestions([]);
-    } else {
-      // @ file: remove @partial from input, resolve file, add as attachment
-      const newVal = removeAtQuery(inputValue);
-      setInputValue(newVal);
-      clearAtSuggestions();
-      resolveFileAsAttachment(s.value).then((att) => {
-        if (att) setAttachments((prev) => [...prev, att]);
-      });
-    }
-    setSelectedSuggestionIdx(0);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (activeSuggestions.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.min(i + 1, activeSuggestions.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === 'Tab' || (e.key === 'Enter' && activeSuggestions.length > 0)) {
-        e.preventDefault();
-        handleSelectSuggestion(activeSuggestions[selectedSuggestionIdx]);
-        return;
-      }
-      if (e.key === 'Escape') {
-        setCmdSuggestions([]);
-        clearAtSuggestions();
-        return;
-      }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (isStreaming) {
-        abort();
-      } else {
-        handleSubmit(inputValue);
-      }
-    }
-  }
-
-  function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const val = e.target.value;
-    setInputValue(val);
-    const textarea = e.target;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-
-    // Slash suggestions (only when text starts with /)
-    const slashSuggs = getSlashSuggestions(val);
-    setCmdSuggestions(
-      slashSuggs.map((cmd) => ({
-        type: 'slash' as const,
-        value: cmd.name,
-        label: cmd.name,
-        description: cmd.args,
-        meta: cmd.description,
-      }))
-    );
-
-    // @ file suggestions
-    const atQ = getAtQuery(val);
-    if (atQ !== null) {
-      const cwd = folder || projectFolder || scratchDir || '';
-      if (cwd) fetchAtSuggestions(atQ, cwd);
-      else clearAtSuggestions();
-    } else {
-      clearAtSuggestions();
-    }
-
-    setSelectedSuggestionIdx(0);
-  }
-
-  function handleButtonClick() {
-    if (isStreaming) {
-      abort();
-      return;
+  /*
+   * The ONE submit — Enter and the button both land here, so goal mode cannot
+   * be honoured by one and ignored by the other (Enter used to send a plain
+   * chat message with the goal toggle on). Returns false to keep the draft.
+   */
+  function submitFromComposer(text: string, attachments: AttachmentFile[]): boolean {
+    // Nothing configured could answer — say so instead of sending a doomed turn.
+    if (!modelReady && !isSessionCommand(text)) {
+      setNoModelAttempted(true);
+      return false;
     }
     /*
      * Goal mode is a property of the SEND, not a second composer.
@@ -1687,10 +1648,15 @@ export function CoworkSurface() {
      */
     if (goalMode) {
       const settings = goalSettingsFrom(goalBudget, goalCap);
-      if (typeof settings === "string") return setGoalError(settings);
-      if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
-      const objective = inputValue.trim();
-      if (!objective) return;
+      if (typeof settings === "string") {
+        setGoalError(settings);
+        return false;
+      }
+      if (!folder) {
+        setGoalError("Pick a folder first — the plan and progress live there.");
+        return false;
+      }
+      const objective = text;
       /*
        * A conversation has to exist first.
        *
@@ -1700,7 +1666,7 @@ export function CoworkSurface() {
        */
       if (!chatId) {
         setGoalError("Send a message first, or pick an existing chat — a goal needs a conversation to live in.");
-        return;
+        return false;
       }
       /*
        * Name the chat.
@@ -1720,22 +1686,35 @@ export function CoworkSurface() {
         }
       }
       setGoalPending(objective);
+      const goalDraft = draftKey("cowork", chatId);
       void startGoal({ conversationId: chatId, workingDir: folder, objective, ...settings }).then(
         (ok) => {
           setGoalPending(null);
           if (ok) {
-            setInputValue("");
+            useComposerDrafts.getState().clearDraft(goalDraft);
             setGoalMode(false);
             setGoalNudge((n) => n + 1);
           }
         },
       );
-      return;
+      // Kept until the goal has actually started — planning can still fail.
+      return false;
     }
-    handleSubmit(inputValue);
+    void handleSubmit(text, { attachments });
+    return true;
   }
 
   const hasMessages = messages.length > 0;
+  // Stable, so the memoised message rows do not all re-render per token.
+  const handleMessageArtifactClick = useCallback((v: string | ParsedArtifact) => {
+    if (typeof v === "string") setPreviewPath(v);
+  }, []);
+  const handleMessagePreviewUrl = useCallback((url: string) => {
+    setPreviewUrl(url);
+    setPreviewOpen(true);
+  }, []);
+  const modelReady = useModelReady(modelRoute, CAPABILITY);
+  const [noModelAttempted, setNoModelAttempted] = useState(false);
 
   // Goal mode: a switch on the composer, not a separate surface.
   const [goalMode, setGoalMode] = useState(false);
@@ -1757,25 +1736,77 @@ export function CoworkSurface() {
   const [goalPending, setGoalPending] = useState<string | null>(null);
   const [goalNudge, setGoalNudge] = useState(0);
 
-  const attachmentChips = attachments.length > 0 && (
-    <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-      {attachments.map((att, i) => (
-        <span
-          key={i}
-          className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+  const recallText = lastUserPrompt(messages);
+  const attachmentMenu = {
+    currentProjectId,
+    onAddToProject: (pid: string) => assignToProject(chatId, pid),
+    onNewProject: () => setSidebarMode("projects"),
+    projects: allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon })),
+  };
+  const composerToolbar = (
+    <>
+      <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
+      <EditorPicker folder={folder} />
+      {/*
+        On both composers. A conversation that has already said something is
+        exactly where a follow-up goal starts, and it was once reachable only
+        before the first message.
+      */}
+      <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
+      {planContent && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => setPlanOpen(true)}
         >
-          {att.name}
-          <button
-            type="button"
-            onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-            className="hover:text-foreground"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </span>
-      ))}
-    </div>
+          <ListChecks className="h-3.5 w-3.5" />
+          Plan
+        </Button>
+      )}
+    </>
   );
+  const composerModel = (
+    <ModelSelector
+      value={modelRoute?.id ?? ''}
+      onSelectModel={setModelRoute}
+      capability={CAPABILITY}
+      className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
+    />
+  );
+  // Attached to the composer, not a box under a box — the numbers belong to
+  // the send button they change the meaning of.
+  const goalBar = goalMode ? (
+    <GoalModeBar
+      budget={goalBudget} cap={goalCap}
+      onBudget={setGoalBudget} onCap={setGoalCap}
+      disabled={goalBusy} error={startError}
+    />
+  ) : null;
+  const composerProps = {
+    ref: composerRef,
+    surface: "cowork",
+    conversationId: chatId,
+    onSubmit: submitFromComposer,
+    isStreaming,
+    onStop: abort,
+    submitDisabled: goalBusy,
+    submitLabel: goalMode ? "Plan and start the goal" : "Send message",
+    recallText,
+    mentionCwd: folder || projectFolder || scratchDir || null,
+    onAttachmentAdded: noteAttachment,
+    attachmentMenu,
+    // The run's question belongs where the conversation is, not in a rail.
+    header: (
+      <>
+        {!modelReady && <NoModelCard attempted={noModelAttempted} />}
+        <GoalQuestion chatId={chatId} folder={folder} surfaceId="cowork" />
+      </>
+    ),
+    belowInput: goalBar,
+    toolbarStart: composerToolbar,
+    toolbarEnd: composerModel,
+  };
 
   return (
     <div className="relative flex h-full flex-col bg-background" {...dropZoneProps}>
@@ -1791,87 +1822,12 @@ export function CoworkSurface() {
             </h1>
           </div>
           <p className="text-sm text-muted-foreground mb-8">
-            Select a folder and describe your task — Claude will read, write, and edit files alongside you.
+            Select a folder and describe your task — the assistant will read, write, and edit files alongside you.
           </p>
 
           {/* Centered input card */}
           <div className="w-full max-w-2xl">
-            <CommandPicker
-              suggestions={activeSuggestions}
-              selectedIndex={selectedSuggestionIdx}
-              onSelect={handleSelectSuggestion}
-              onSelectedIndexChange={setSelectedSuggestionIdx}
-            />
-            {/* The run's question belongs where the conversation is, not in a rail. */}
-            <GoalQuestion chatId={chatId} folder={folder} surfaceId="cowork" />
-            <div
-              className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden"
-            >
-              <Textarea
-                value={inputValue}
-                onChange={handleTextareaChange}
-                onKeyDown={handleKeyDown}
-                placeholder="What would you like to work on?"
-                rows={3}
-                className="min-h-[120px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-              />
-              {attachmentChips}
-              {/* Attached to the composer, not a box under a box — the numbers
-                  belong to the send button they change the meaning of. */}
-              {goalMode && (
-                <GoalModeBar
-                  budget={goalBudget} cap={goalCap}
-                  onBudget={setGoalBudget} onCap={setGoalCap}
-                  disabled={goalBusy} error={startError}
-                />
-              )}
-              <div className="flex items-center justify-between px-4 py-2.5">
-                <div className="flex items-center gap-1">
-                  <AttachmentMenu
-                    onFileSelect={handleFileAttach}
-                    onWebSearchToggle={undefined as never}
-                    webSearchEnabled={false}
-                    hideWebSearch
-                    currentProjectId={currentProjectId}
-                    onAddToProject={(pid) => assignToProject(chatId, pid)}
-                    onNewProject={() => setSidebarMode("projects")}
-                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                  />
-                  <VoiceButton onTranscript={handleVoiceTranscript} />
-                  <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
-                  <EditorPicker folder={folder} />
-                  <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
-                  {planContent && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
-                      onClick={() => setPlanOpen(true)}
-                    >
-                      <ListChecks className="h-3.5 w-3.5" />
-                      Plan
-                    </Button>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <ModelSelector
-                    value={modelRoute?.id ?? ''}
-                    onSelectModel={setModelRoute}
-                    capability={CAPABILITY}
-                    className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                  />
-                  <Button
-                    size="icon"
-                    className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/80"
-                    onClick={handleButtonClick}
-                    disabled={!inputValue.trim() || goalBusy}
-                    title={goalMode ? "Plan and start the goal" : "Send"}
-                  >
-                    <ArrowUp className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
+            <Composer {...composerProps} variant="hero" placeholder="What would you like to work on?" />
 
             {folder && (
               <div className="mx-auto mt-3 w-full max-w-[672px]">
@@ -1906,101 +1862,12 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
+            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={handleMessageArtifactClick} onPreviewUrl={handleMessagePreviewUrl} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} showReasoning={sessionControls.reasoningVisible} expandToolCalls={sessionControls.verboseMode} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">
               <div className="max-w-3xl mx-auto">
-                <CommandPicker
-                  suggestions={activeSuggestions}
-                  selectedIndex={selectedSuggestionIdx}
-                  onSelect={handleSelectSuggestion}
-                  onSelectedIndexChange={setSelectedSuggestionIdx}
-                />
-                {/* The run's question belongs where the conversation is, not in a rail. */}
-                <GoalQuestion chatId={chatId} folder={folder} surfaceId="cowork" />
-                <div
-                  className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden"
-                >
-                  <Textarea
-                    value={inputValue}
-                    onChange={handleTextareaChange}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Describe your task..."
-                    rows={2}
-                    className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-                    style={{ opacity: isStreaming ? 0.6 : 1 }}
-                  />
-                  {attachmentChips}
-                  {goalMode && (
-                    <GoalModeBar
-                      budget={goalBudget}
-                      cap={goalCap}
-                      onBudget={setGoalBudget}
-                      onCap={setGoalCap}
-                      disabled={goalBusy}
-                      error={startError}
-                    />
-                  )}
-                  <div className="flex items-center justify-between px-4 py-2.5">
-                    <div className="flex items-center gap-1">
-                      <AttachmentMenu
-                        onFileSelect={handleFileAttach}
-                        onWebSearchToggle={() => {}}
-                        webSearchEnabled={false}
-                        currentProjectId={currentProjectId}
-                        onAddToProject={(pid) => assignToProject(chatId, pid)}
-                        onNewProject={() => setSidebarMode("projects")}
-                        projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                      />
-                      <VoiceButton onTranscript={handleVoiceTranscript} />
-                      <FolderPicker folder={folder} onFolderChange={handleFolderChange} scratchActive={!folder && !!scratchDir} />
-                      <EditorPicker folder={folder} />
-                      {/*
-                        The same toggle as the empty state. A conversation that
-                        has already said something is exactly where a follow-up
-                        goal starts, and it was reachable only before the first
-                        message.
-                      */}
-                      <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
-                      {planContent && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
-                          onClick={() => setPlanOpen(true)}
-                        >
-                          <ListChecks className="h-3.5 w-3.5" />
-                          Plan
-                        </Button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <ModelSelector
-                        value={modelRoute?.id ?? ''}
-                            onSelectModel={setModelRoute}
-                        capability={CAPABILITY}
-                        className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                      />
-                      <Button
-                        size="icon"
-                        className={`h-8 w-8 rounded-lg ${
-                          isStreaming
-                            ? "bg-destructive hover:bg-destructive/80"
-                            : "bg-primary hover:bg-primary/80"
-                        }`}
-                        onClick={handleButtonClick}
-                        disabled={!isStreaming && !inputValue.trim()}
-                      >
-                        {isStreaming ? (
-                          <Square className="h-3.5 w-3.5" />
-                        ) : (
-                          <ArrowUp className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+                <Composer {...composerProps} placeholder="Describe your task..." />
               </div>
             </div>
           </div>
