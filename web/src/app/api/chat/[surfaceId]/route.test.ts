@@ -73,6 +73,13 @@ beforeEach(() => {
   mocks.readAgentPromptMock.mockReturnValue('');
   mocks.extractMemoriesMock.mockResolvedValue([]);
   mocks.loadProvisionedMock.mockResolvedValue({});
+  // The route refuses a turn with no model credentials before calling the
+  // provider; every test but the no-model ones has a key.
+  vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('request validation', () => {
@@ -179,6 +186,57 @@ describe('streaming', () => {
     const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
     expect(events.at(-1)?.type).toBe('done');
     expect(events.at(-1)?.error).toBeUndefined();
+  });
+});
+
+describe('no model configured', () => {
+  /** Nothing the SDK could authenticate with. */
+  const clearCredentials = () => {
+    for (const k of [
+      'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_VERTEX',
+      'AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_PROFILE', 'AWS_BEARER_TOKEN_BEDROCK',
+      // No credential store either (it is keyed from this).
+      'AIME_CRED_KEY',
+    ]) vi.stubEnv(k, '');
+  };
+
+  it('fails fast with no_model and never starts the SDK', async () => {
+    clearCredentials();
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+
+    expect(mocks.queryMock).not.toHaveBeenCalled();
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'no_model' });
+    expect(events.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('lets a request key through', async () => {
+    clearCredentials();
+    await post('chat', { message: 'hi', chatId: 'c1', apiKey: 'sk-ant-user' });
+    expect(providerParams().apiKey).toBe('sk-ant-user');
+  });
+
+  it('lets a user-added provider with a base URL through', async () => {
+    clearCredentials();
+    await post('chat', {
+      message: 'hi',
+      chatId: 'c1',
+      model: 'llama3',
+      providerConfig: { providerId: 'local', transport: 'anthropic-native', baseUrl: 'http://127.0.0.1:11434' },
+    });
+    expect(mocks.queryMock).toHaveBeenCalled();
+  });
+
+  it('refuses a capability-only provider, which cannot drive a turn', async () => {
+    clearCredentials();
+    const { events } = await post('chat', {
+      message: 'hi',
+      chatId: 'c1',
+      apiKey: 'fal-key',
+      model: 'flux',
+      providerConfig: { providerId: 'fal', transport: 'native-fal' },
+    });
+    expect(mocks.queryMock).not.toHaveBeenCalled();
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'no_model' });
   });
 });
 

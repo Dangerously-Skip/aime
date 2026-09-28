@@ -396,6 +396,66 @@ export async function POST(
         }
       });
 
+      // ── Execution resolution (user-added providers) ────────────────────
+      // For a model on a user-added provider, resolve the key (keychain by
+      // providerId, or the transient request key) and the Anthropic-compat
+      // base URL. No providerConfig ⇒ default BYOK/env/Bedrock path unchanged.
+      const { resolveExecution } = await import('@/lib/models/execution');
+      const exec = await resolveExecution({
+        providerConfig,
+        requestApiKey: apiKey,
+        // openai-compat providers route through the shim on this same server.
+        shimOrigin: new URL(req.url).origin,
+        // Every stored field, not just the key: Bedrock and Vertex are driven by
+        // environment built from region/project/credentials.
+        loadFields: async (id) => {
+          try {
+            const { getCredentialStore } = await import('@/lib/models/credentials');
+            return await getCredentialStore().get(id);
+          } catch {
+            return undefined;
+          }
+        },
+        loadKey: async (id) => {
+          try {
+            const { getCredentialStore } = await import('@/lib/models/credentials');
+            return await getCredentialStore().getField(id, 'apiKey');
+          } catch {
+            // CredentialStoreUnavailable (no AIME_CRED_KEY) or read error →
+            // fall back to whatever the request supplied.
+            return undefined;
+          }
+        },
+      });
+      if (providerConfig) {
+        console.log('[CHAT] Provider config:', providerConfig.providerId,
+          providerConfig.transport ?? 'anthropic-native',
+          exec.baseUrl ? '(custom base URL)' : '');
+      }
+
+      /*
+       * No model, no turn — decided before anything expensive happens.
+       *
+       * A user with nothing configured used to wait for the SDK subprocess to
+       * boot and then read "Not logged in · Please run /login" as the
+       * assistant's reply. See lib/models/credential-check.ts.
+       *
+       * The Settings key mirrored into the credential store counts, and is
+       * USED when the request carried none — the same fallback the browser
+       * turn and the schedulers already apply — so it cannot pass this check
+       * and then fail at the SDK.
+       */
+      const { getServerAnthropicKey } = await import('@/lib/models/credentials');
+      const storedAnthropicKey = providerConfig || exec.apiKey ? undefined : await getServerAnthropicKey();
+      if (storedAnthropicKey) exec.apiKey = storedAnthropicKey;
+      const { hasModelCredentials, NO_MODEL_MESSAGE } = await import('@/lib/models/credential-check');
+      if (!hasModelCredentials({ exec, providerConfig, storedAnthropicKey })) {
+        console.warn('[CHAT] No usable model credentials — refusing the turn before starting the SDK');
+        await sse.writeEvent({ type: 'error', message: NO_MODEL_MESSAGE, code: 'no_model' });
+        await sse.writeEvent({ type: 'done', error: true });
+        return;
+      }
+
       // ── Every independent read, started at once ────────────────────────
       // Nine serialized filesystem round-trips used to sit between the request
       // arriving and the query being assembled: connector health, then SOUL.md,
@@ -829,42 +889,6 @@ export async function POST(
         // else: keep surfaceConfig.model as the last-resort fallback.
       }
 
-      // ── Execution resolution (user-added providers) ────────────────────
-      // For a model on a user-added provider, resolve the key (keychain by
-      // providerId, or the transient request key) and the Anthropic-compat
-      // base URL. No providerConfig ⇒ default BYOK/env/Bedrock path unchanged.
-      const { resolveExecution } = await import('@/lib/models/execution');
-      const exec = await resolveExecution({
-        providerConfig,
-        requestApiKey: apiKey,
-        // openai-compat providers route through the shim on this same server.
-        shimOrigin: new URL(req.url).origin,
-        // Every stored field, not just the key: Bedrock and Vertex are driven by
-        // environment built from region/project/credentials.
-        loadFields: async (id) => {
-          try {
-            const { getCredentialStore } = await import('@/lib/models/credentials');
-            return await getCredentialStore().get(id);
-          } catch {
-            return undefined;
-          }
-        },
-        loadKey: async (id) => {
-          try {
-            const { getCredentialStore } = await import('@/lib/models/credentials');
-            return await getCredentialStore().getField(id, 'apiKey');
-          } catch {
-            // CredentialStoreUnavailable (no AIME_CRED_KEY) or read error →
-            // fall back to whatever the request supplied.
-            return undefined;
-          }
-        },
-      });
-      if (providerConfig) {
-        console.log('[CHAT] Provider config:', providerConfig.providerId,
-          providerConfig.transport ?? 'anthropic-native',
-          exec.baseUrl ? '(custom base URL)' : '');
-      }
 
       // Thinking and effort are now handled natively by the SDK via ClaudeProvider
       // (passed as queryOptions.thinking and queryOptions.effort)
