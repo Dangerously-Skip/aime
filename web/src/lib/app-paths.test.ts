@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { getDataDir, getScratchDir, getMcpConfigPath, getMcpClientsPath } from './app-paths';
+import {
+  getDataDir,
+  getScratchDir,
+  getScratchRoot,
+  getMcpConfigPath,
+  getMcpClientsPath,
+} from './app-paths';
 import {
   DATA_DIR_NAME,
   LEGACY_DATA_DIR_NAME,
@@ -53,6 +59,29 @@ describe('getScratchDir', () => {
     expect(getScratchDir('chat42', home)).toBe(
       path.join(home, DATA_DIR_NAME, 'scratch', 'chat42'),
     );
+  });
+
+  it.each([
+    '0b7c1f9e-3d2a-4c55-9f7e-8a1b2c3d4e5f',
+    'harness_init_abc',
+    'standing-order-o1-1790000000000',
+    'upload_1790000000000',
+    'eval-x.1',
+  ])('accepts the chat id shape %j', (id) => {
+    expect(getScratchDir(id, home)).toBe(path.join(getScratchRoot(home), id));
+  });
+
+  // REGRESSION: request input went straight into path.join — `../..` escaped
+  // the scratch root, '' meant the root itself, undefined threw a TypeError.
+  it.each(['../..', '..', '.', '', 'a/b', 'a\\b', '.hidden', 'x\u0000y', 'x'.repeat(201)])(
+    'refuses %j',
+    (id) => {
+      expect(() => getScratchDir(id, home)).toThrow(/Invalid chat id/);
+    },
+  );
+
+  it('refuses a non-string', () => {
+    expect(() => getScratchDir(undefined as unknown as string, home)).toThrow(/Invalid chat id/);
   });
 });
 

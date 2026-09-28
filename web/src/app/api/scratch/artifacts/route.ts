@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { getScratchDir } from '@/lib/app-paths';
+import { getScratchDir, getScratchRoot } from '@/lib/app-paths';
 
 /**
  * List the files a turn left in its scratch directory.
@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
   // Resolve-then-verify: `getScratchDir` is ours, but containment is asserted
   // rather than assumed, so a future change to it cannot silently widen this.
   const resolved = path.resolve(scratchDir);
-  const root = path.resolve(getScratchDir(''));
+  const root = path.resolve(getScratchRoot());
   if (!resolved.startsWith(root + path.sep)) {
     return NextResponse.json({ error: 'invalid chatId' }, { status: 400 });
   }
