@@ -18,13 +18,18 @@ import {
 import { useAppStore } from '@/stores/app-store';
 import { DoctorPanel } from './doctor-panel';
 import { useAttendedJobs } from '@/hooks/use-attended-jobs';
+import { SchedulePicker, type ScheduleChange } from '@/components/schedule/schedule-picker';
+import { describeTrigger, type Trigger } from '@/lib/schedule/schedule';
 
-// ── Cron panel ────────────────────────────────────────────────────────────────
+// ── Scheduled jobs ────────────────────────────────────────────────────────────
 
 interface CronDraft {
-  expression: string;
+  trigger: Trigger;
   prompt: string;
 }
+
+/** Monday 9am — the same starting point a project's schedule form offers. */
+const DEFAULT_JOB_TRIGGER: Trigger = { type: 'cron', expression: '0 9 * * 1' };
 
 function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
   /*
@@ -35,7 +40,14 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
    */
   const { jobs, create, setEnabled, remove } = useAttendedJobs();
 
-  const [expr, setExpr] = useState(initialDraft?.expression ?? '');
+  const startTrigger = initialDraft?.trigger ?? DEFAULT_JOB_TRIGGER;
+  /*
+   * THE shared SchedulePicker, not a raw 5-field box. The box accepted only
+   * cron (so "every 2 hours" was unreachable here while a project could say
+   * it), checked nothing but the field count, and showed no preview — the
+   * picker validates with the tickers' own parsers and says when it next runs.
+   */
+  const [schedule, setSchedule] = useState<ScheduleChange>({ trigger: startTrigger, error: null });
   const [prompt, setPrompt] = useState(initialDraft?.prompt ?? '');
   const [surfaceId, setSurfaceId] = useState('cowork');
   const [adding, setAdding] = useState(!!initialDraft);
@@ -43,25 +55,13 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
 
   const handleAdd = async () => {
     setError('');
-    const parts = expr.trim().split(/\s+/);
-    if (parts.length !== 5) {
-      setError('Expression must have 5 fields: min hour dom month dow');
-      return;
-    }
     if (!prompt.trim()) {
       setError('Prompt is required');
       return;
     }
-
-    // Server-side validation
-    const res = await fetch('/api/cron', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expression: expr.trim(), prompt: prompt.trim(), surfaceId }),
-    });
-    if (!res.ok) {
-      const d = await res.json() as { error?: string };
-      setError(d.error ?? 'Invalid');
+    const trigger = schedule.trigger;
+    if (!trigger) {
+      setError(schedule.error ?? 'Pick a schedule');
       return;
     }
 
@@ -70,12 +70,12 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
      * failure is the whole difference: silently losing the job the user just
      * described is the worst outcome available here.
      */
-    const id = await create({ expression: expr.trim(), prompt: prompt.trim(), surfaceId });
+    const id = await create({ trigger, prompt: prompt.trim(), surfaceId });
     if (!id) {
       setError('Could not save the job. Check that the app is running and try again.');
       return;
     }
-    setExpr('');
+    setSchedule({ trigger: DEFAULT_JOB_TRIGGER, error: null });
     setPrompt('');
     setAdding(false);
   };
@@ -85,7 +85,7 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold flex items-center gap-2">
           <Clock className="h-4 w-4" />
-          Cron Jobs
+          Scheduled jobs
         </h3>
         <Button size="sm" variant="outline" onClick={() => setAdding((v) => !v)}>
           <Plus className="h-3.5 w-3.5 mr-1" />
@@ -96,23 +96,17 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
       {adding && (
         <div className="border border-border rounded-lg p-4 space-y-3 bg-muted/30">
           <div className="space-y-1">
-            <label htmlFor="cron-expression" className="text-xs font-medium">Cron Expression</label>
-            <Input
-              id="cron-expression"
-              placeholder="0 9 * * 1"
-              value={expr}
-              onChange={(e) => setExpr(e.target.value)}
-              className="h-8 text-xs font-mono"
-            />
+            <span className="text-xs font-medium">When</span>
+            <SchedulePicker value={startTrigger} onChange={setSchedule} compact />
             <p className="text-[11px] text-muted-foreground">
-              min hour dom month dow — e.g. <code>0 9 * * 1</code> = every Monday at 9am
+              Runs in the surface you pick, in a conversation of its own — only while {APP_NAME} is open.
             </p>
           </div>
           <div className="space-y-1">
             <label htmlFor="cron-prompt" className="text-xs font-medium">Prompt</label>
             <Input
               id="cron-prompt"
-              placeholder="Summarize my GitHub notifications"
+              placeholder="Summarize my notifications"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               className="h-8 text-xs"
@@ -131,7 +125,7 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
               <option value="code">Code</option>
             </select>
           </div>
-          {error && <p className="text-xs text-destructive">{error}</p>}
+          {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
           <div className="flex gap-2">
             <Button size="sm" onClick={handleAdd}>Save</Button>
             <Button size="sm" variant="ghost" onClick={() => { setAdding(false); setError(''); }}>Cancel</Button>
@@ -140,7 +134,7 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
       )}
 
       {jobs.length === 0 && !adding && (
-        <p className="text-xs text-muted-foreground">No cron jobs yet. Add one to schedule recurring agent runs.</p>
+        <p className="text-xs text-muted-foreground">No scheduled jobs yet. Add one to run a prompt on a timetable.</p>
       )}
 
       <div className="space-y-2">
@@ -153,12 +147,15 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
               className="mt-0.5 shrink-0"
             />
             <div className="flex-1 min-w-0">
-              {/* `trigger.expression` — the unified shape carries interval and
-                  event triggers too, which a cron job never could. */}
-              <p className="text-xs font-mono text-muted-foreground">{job.trigger.expression}</p>
+              {/* In words, with the raw expression on hover — the unified
+                  trigger carries intervals too, which a cron job never could. */}
+              <p className="text-xs text-muted-foreground" title={job.trigger.expression}>
+                {describeTrigger(job.trigger)}
+              </p>
               <p className="text-xs mt-0.5 truncate">{job.prompt}</p>
-              <div className="flex gap-1.5 mt-1">
+              <div className="flex items-center gap-1.5 mt-1">
                 <Badge variant="secondary" className="text-[10px] h-4 px-1">{job.surfaceId}</Badge>
+                <span className="text-[10px] text-muted-foreground">Needs {APP_NAME} open</span>
                 {job.lastRun && (
                   <span className="text-[10px] text-muted-foreground">
                     last: {new Date(job.lastRun).toLocaleString()}
@@ -189,7 +186,7 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
  * What the morning check-in would have done, expressed as the thing that runs.
  */
 export const MORNING_BRIEFING_DRAFT: CronDraft = {
-  expression: '0 9 * * 1-5',
+  trigger: { type: 'cron', expression: '0 9 * * 1-5' },
   prompt:
     "Give me a morning briefing: what's on today, open items, and key updates from my connected apps.",
 };
@@ -237,7 +234,7 @@ function HeartbeatSettings({ onScheduleBriefing }: { onScheduleBriefing: () => v
         </h3>
         <p className="text-[11px] text-muted-foreground mt-1">
           Proactive check-ins aren&apos;t scheduled by this version of {APP_NAME}, so these stay off
-          until they do. To get a daily briefing now, schedule it as a cron job.
+          until they do. To get a daily briefing now, schedule it as a job.
         </p>
         <Button size="sm" variant="outline" className="mt-2" onClick={onScheduleBriefing}>
           <Sunrise className="h-3.5 w-3.5 mr-1.5" />
