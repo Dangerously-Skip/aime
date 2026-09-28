@@ -29,7 +29,9 @@ import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { ArtifactPanel } from "@/components/shared/artifact-panel";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { useElectron } from "@/hooks/use-electron";
-import { parseSlashCommand, applySlashCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
+import { parseSlashCommand, applySlashCommand, isSessionCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
+import { useModelReady } from "@/hooks/use-model-ready";
+import { NoModelCard } from "@/components/shared/no-model-card";
 import type { SessionControls } from "@/lib/slash-commands";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasOverlay } from "@/components/shared/canvas-overlay";
@@ -551,12 +553,24 @@ export function ChatSurface() {
     handleSubmit(lastUserMsg.content);
   }, [chatId, isStreaming, handleSubmit]);
 
+  /*
+   * Nothing configured could answer, so say that instead of sending a turn that
+   * can only come back as an authentication error. Session commands are
+   * client-side and still work.
+   */
+  const modelReady = useModelReady(modelRoute, CAPABILITY);
+  const [noModelAttempted, setNoModelAttempted] = useState(false);
   const submitFromComposer = useCallback(
     (text: string, attachments: AttachmentFile[]) => {
+      if (!modelReady && !isSessionCommand(text)) {
+        setNoModelAttempted(true);
+        return false;
+      }
       void handleSubmit(text, { attachments });
     },
-    [handleSubmit],
+    [handleSubmit, modelReady],
   );
+  const noModelCard = modelReady ? undefined : <NoModelCard attempted={noModelAttempted} />;
 
   /** Up-arrow brings back the last thing you asked in THIS conversation. */
   const recallText = useMemo(() => lastUserPrompt(messages), [messages]);
@@ -651,6 +665,7 @@ export function ChatSurface() {
               recallText={recallText}
               attachmentMenu={attachmentMenu}
               toolbarEnd={modelSelector}
+              header={noModelCard}
             />
 
             {/* Quick-start suggestion pills */}
@@ -735,6 +750,7 @@ export function ChatSurface() {
                     recallText={recallText}
                     attachmentMenu={attachmentMenu}
                     toolbarEnd={modelSelector}
+                    header={noModelCard}
                   />
                 </div>
               </div>

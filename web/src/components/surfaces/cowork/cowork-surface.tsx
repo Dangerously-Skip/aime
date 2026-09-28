@@ -85,8 +85,11 @@ import { lastUserPrompt } from "@/components/shared/composer/recall";
 import {
   parseSlashCommand,
   applySlashCommand,
+  isSessionCommand,
   DEFAULT_SESSION_CONTROLS,
 } from "@/lib/slash-commands";
+import { useModelReady } from "@/hooks/use-model-ready";
+import { NoModelCard } from "@/components/shared/no-model-card";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
@@ -1571,6 +1574,11 @@ export function CoworkSurface() {
    * chat message with the goal toggle on). Returns false to keep the draft.
    */
   function submitFromComposer(text: string, attachments: AttachmentFile[]): boolean {
+    // Nothing configured could answer — say so instead of sending a doomed turn.
+    if (!modelReady && !isSessionCommand(text)) {
+      setNoModelAttempted(true);
+      return false;
+    }
     /*
      * Goal mode is a property of the SEND, not a second composer.
      *
@@ -1638,6 +1646,8 @@ export function CoworkSurface() {
   }
 
   const hasMessages = messages.length > 0;
+  const modelReady = useModelReady(modelRoute, CAPABILITY);
+  const [noModelAttempted, setNoModelAttempted] = useState(false);
 
   // Goal mode: a switch on the composer, not a separate surface.
   const [goalMode, setGoalMode] = useState(false);
@@ -1720,7 +1730,12 @@ export function CoworkSurface() {
     onAttachmentAdded: noteAttachment,
     attachmentMenu,
     // The run's question belongs where the conversation is, not in a rail.
-    header: <GoalQuestion chatId={chatId} folder={folder} surfaceId="cowork" />,
+    header: (
+      <>
+        {!modelReady && <NoModelCard attempted={noModelAttempted} />}
+        <GoalQuestion chatId={chatId} folder={folder} surfaceId="cowork" />
+      </>
+    ),
     belowInput: goalBar,
     toolbarStart: composerToolbar,
     toolbarEnd: composerModel,

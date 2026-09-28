@@ -168,6 +168,15 @@ export function applySlashCommand(
 }
 
 /**
+ * Is this input one of the session-control commands above? Those are handled
+ * entirely in the client, so they work with no model configured at all.
+ */
+export function isSessionCommand(input: string): boolean {
+  const parsed = parseSlashCommand(input);
+  return !!parsed && SLASH_COMMANDS.some((c) => c.name === parsed.command);
+}
+
+/**
  * Check if input starts with '/' and return prefix matches for autocomplete.
  */
 export function getSlashSuggestions(input: string): typeof SLASH_COMMANDS {

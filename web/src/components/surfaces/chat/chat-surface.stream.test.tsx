@@ -9,6 +9,11 @@ import { useConversationStore } from '@/stores/conversation-store';
 import { useRunStore } from '@/stores/run-store';
 import { useComposerDrafts } from '@/components/shared/composer/draft-store';
 import { streamRegistry } from '@/lib/stream-registry';
+import { resetServerCredentials } from '@/hooks/use-builtin-access';
+import { useAppStore } from '@/stores/app-store';
+
+/** What /api/models reports about server-side credentials, per test. */
+let serverCreds = { anthropic: true, bedrock: false };
 
 /**
  * The real Chat surface, driven through its own composer, against the real chat
@@ -73,10 +78,15 @@ beforeEach(() => {
     disconnect() {}
   });
   Element.prototype.scrollIntoView = () => {};
+  serverCreds = { anthropic: true, bedrock: false };
+  resetServerCredentials();
+  fetchMock.mockClear();
   fetchMock.mockImplementation((url: string, init: RequestInit) =>
     String(url).includes('/api/chat/')
       ? stalledBodyFetch(url, init)
-      : Promise.resolve(new Response('{}', { status: 200 })),
+      : String(url).includes('/api/models')
+        ? Promise.resolve(new Response(JSON.stringify(serverCreds), { status: 200 }))
+        : Promise.resolve(new Response('{}', { status: 200 })),
   );
   vi.stubGlobal('fetch', fetchMock);
 
@@ -177,7 +187,9 @@ describe('ChatSurface — a reply stays in the conversation it was asked in', ()
   it('text arriving after a mid-stream conversation switch lands in the original chat', async () => {
     const stream = controllableFetch();
     fetchMock.mockImplementation((url: string) =>
-      String(url).includes('/api/chat/') ? stream.fetch() : Promise.resolve(new Response('{}')),
+      String(url).includes('/api/chat/')
+        ? stream.fetch()
+        : Promise.resolve(new Response(JSON.stringify(serverCreds))),
     );
     useChatStore.getState().addMessage(OTHER, {
       id: 'other-1', role: 'assistant', content: 'unrelated work', timestamp: Date.now(),
@@ -196,6 +208,36 @@ describe('ChatSurface — a reply stays in the conversation it was asked in', ()
 
     expect(lastContent(CHAT)).toBe('Roses are red');
     expect(lastContent(OTHER)).toBe('unrelated work');
+  });
+});
+
+describe('ChatSurface — nothing configured to answer', () => {
+  it('shows Connect a model instead of sending a turn that can only fail', async () => {
+    serverCreds = { anthropic: false, bedrock: false };
+    const openSettings = vi.fn();
+    useAppStore.setState({ openSettings } as never);
+    render(<ChatSurface />);
+    // The server's answer lands; with no key and no provider there is no model.
+    await act(async () => { await flush(); });
+    expect(screen.getByText('No model is set up yet')).toBeTruthy();
+
+    await send('hello?');
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/api/chat/'))).toBe(false);
+    expect(useChatStore.getState().messages[CHAT] ?? []).toHaveLength(0);
+    // The question is kept for when a model is connected.
+    expect((screen.getByPlaceholderText('How can I help you today?') as HTMLTextAreaElement).value).toBe('hello?');
+    expect(screen.getByRole('alert').textContent).toMatch(/No model is set up yet/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect a model' }));
+    expect(openSettings).toHaveBeenCalledWith('connectors');
+  });
+
+  it('still runs session commands, which need no model', async () => {
+    serverCreds = { anthropic: false, bedrock: false };
+    render(<ChatSurface />);
+    await act(async () => { await flush(); });
+    await send('/think high');
+    expect(useChatStore.getState().sessionControls[CHAT]?.thinkLevel).toBe('high');
   });
 });
 

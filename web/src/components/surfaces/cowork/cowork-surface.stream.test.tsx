@@ -6,6 +6,7 @@ import { useCoworkStore } from '@/stores/cowork-store';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useRunStore } from '@/stores/run-store';
 import { useComposerDrafts } from '@/components/shared/composer/draft-store';
+import { resetServerCredentials } from '@/hooks/use-builtin-access';
 
 /**
  * The real Cowork surface, driven through its composer, against the real stores
@@ -46,9 +47,13 @@ beforeEach(() => {
   // base-ui ScrollArea reads it on a timer; jsdom has no Web Animations.
   (Element.prototype as unknown as { getAnimations: () => unknown[] }).getAnimations = () => [];
   stream = controllableFetch();
+  resetServerCredentials();
+  fetchMock.mockClear();
   fetchMock.mockImplementation((url: string) =>
     String(url).includes('/api/chat/')
       ? stream.fetch()
+      : String(url).includes('/api/models')
+        ? Promise.resolve(new Response(JSON.stringify({ anthropic: true, bedrock: false })))
       // Everything else the surface asks for on mount (scratch dir, goal
       // status, model access) gets an empty answer.
       : Promise.resolve(new Response('{}', { status: 200 })),
