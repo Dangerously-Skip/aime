@@ -38,6 +38,13 @@ describe('loading', () => {
     expect(screen.getAllByRole('button', { name: 'Retry' }).length).toBeGreaterThan(0)
   })
 
+  it('shows the server’s reason when the file cannot be read', async () => {
+    handler = () => Response.json({ error: 'Could not read ~/.claude/SOUL.md (EACCES).' }, { status: 500 })
+    render(<IdentitySection />)
+    const alerts = await screen.findAllByRole('alert')
+    expect(alerts.map((a) => a.textContent)).toContain('Could not read ~/.claude/SOUL.md (EACCES).')
+  })
+
   it('never lets a failed load be saved over the real file', async () => {
     handler = (url, init) =>
       init?.method === 'POST' ? Response.json({ ok: true }) : new Response('boom', { status: 500 })
