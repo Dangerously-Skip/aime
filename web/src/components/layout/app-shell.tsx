@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Schedulers } from "./schedulers";
 import { Sidebar } from "./sidebar";
 import { Tabbar } from "./tabbar";
@@ -19,6 +19,7 @@ import { CustomizeView } from "@/components/customize/customize-view";
 import { UpdateBanner } from "@/components/shared/update-banner";
 import { ReminderModal } from "@/components/shared/reminder-modal";
 import { ActivityFeedPanel } from "./activity-feed-panel";
+import { SidebarFrame, useResponsiveSidebar } from "./responsive-sidebar";
 
 export function AppShell() {
   // Minute-tick schedulers, mounted once. See schedulers.tsx for why they live
@@ -40,6 +41,21 @@ export function AppShell() {
 
   const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
   const pushToTalkAccelerator = useSettingsStore((s) => s.pushToTalkAccelerator);
+
+  // Below 1100px the sidebar collapses and the toggle opens it as an overlay.
+  const narrowWindow = useResponsiveSidebar();
+  const closeSidebar = useCallback(() => setSidebarVisible(false), [setSidebarVisible]);
+  const activeConversationId = useConversationStore((s) => s.activeId);
+
+  // Picking a conversation from the overlay is done with it: close it so the
+  // conversation is what you see, rather than a sidebar over it.
+  // Only a NEW conversation closes it — not crossing the breakpoint itself.
+  const lastConversationId = useRef(activeConversationId);
+  useEffect(() => {
+    if (lastConversationId.current === activeConversationId) return;
+    lastConversationId.current = activeConversationId;
+    if (narrowWindow) setSidebarVisible(false);
+  }, [activeConversationId, narrowWindow, setSidebarVisible]);
 
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [creatingProject, setCreatingProject] = useState(false);
@@ -149,14 +165,10 @@ export function AppShell() {
       */}
       <Schedulers />
 
-      {/* Sidebar */}
-      <div
-        className={`h-full shrink-0 transition-all duration-200 ${
-          sidebarVisible ? "w-[250px]" : "w-0"
-        } overflow-hidden`}
-      >
+      {/* Sidebar — docked, or an overlay below the narrow-window breakpoint */}
+      <SidebarFrame narrow={narrowWindow} open={sidebarVisible} onClose={closeSidebar}>
         <Sidebar isElectron={isElectron} onNewProject={handleNewProject} />
-      </div>
+      </SidebarFrame>
 
       {/* Main content */}
       <div className="flex flex-1 flex-col min-w-0">
