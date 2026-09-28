@@ -26,7 +26,8 @@ import {
   RefreshCw,
   AlertCircle,
 } from "lucide-react";
-import { getGitDiff } from "@/lib/code-workspace/ipc";
+import { getGitBranches, getGitDiff, getGitStatus } from "@/lib/code-workspace/ipc";
+import { detectDefaultBranch } from "./default-branch";
 import { useAppStore } from "@/stores/app-store";
 import { PanelShell } from "./panel-shell";
 import { isDarkTheme } from "@/lib/themes/app-themes";
@@ -264,20 +265,49 @@ export function DiffViewer({
     hunkIndexRef.current = 0;
   }, [diffText]);
 
-  // ── Mode picker (placeholder dropdown) ──────────────────────────────────
-  // Working tree vs HEAD (default)
-  // HEAD vs base branch — TODO(Agent C): wire baseRef from layout/picker
-  // Two arbitrary branches — placeholder for future picker
-  // For now we hard-code "main" as the base branch.
-  // TODO(Agent C): replace literal "main" with the picker-resolved base.
-  const HARDCODED_BASE = "main";
+  // ── Base branch ─────────────────────────────────────────────────────────
+  // This was a literal "main", so on a master/develop repo "HEAD vs base
+  // branch" compared against a ref that does not exist. The default is now
+  // detected (origin/HEAD → main → master → develop) and the user can pick
+  // any branch.
+  const [branches, setBranches] = useState<string[]>([]);
+  const [detectedBase, setDetectedBase] = useState<string | null>(null);
+  useEffect(() => {
+    if (!workspace) return;
+    let cancelled = false;
+    void Promise.all([getGitBranches(workspace), getGitStatus(workspace)]).then(([list, status]) => {
+      if (cancelled) return;
+      setBranches(list);
+      setDetectedBase(
+        detectDefaultBranch({ baseBranch: status?.baseBranch, currentBranch: status?.branch, branches: list }),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace]);
+
+  const baseRef =
+    mode.kind === "head-vs-base" ? mode.baseRef : mode.kind === "branch-vs-branch" ? mode.fromRef : null;
 
   function setModeFromPicker(value: string) {
+    // With nothing detected, fall back to HEAD's parent so the mode still
+    // shows something — the branch picker is right there to correct it.
+    const base = detectedBase ?? baseRef ?? "HEAD~1";
     if (value === "working-vs-head") setMode({ kind: "working-vs-head" });
-    else if (value === "head-vs-base") setMode({ kind: "head-vs-base", baseRef: HARDCODED_BASE });
+    else if (value === "head-vs-base") setMode({ kind: "head-vs-base", baseRef: base });
     else if (value === "branch-vs-branch")
-      setMode({ kind: "branch-vs-branch", fromRef: HARDCODED_BASE, toRef: "HEAD" });
+      setMode({ kind: "branch-vs-branch", fromRef: base, toRef: "HEAD" });
   }
+
+  function setBase(ref: string) {
+    if (mode.kind === "head-vs-base") setMode({ kind: "head-vs-base", baseRef: ref });
+    else if (mode.kind === "branch-vs-branch") setMode({ ...mode, fromRef: ref });
+  }
+
+  // The picker lists every branch, plus the current base if it is not one
+  // (e.g. HEAD~1, or a ref passed in by the caller).
+  const baseOptions = baseRef && !branches.includes(baseRef) ? [baseRef, ...branches] : branches;
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -303,6 +333,22 @@ export function DiffViewer({
         <option value="head-vs-base">HEAD vs base branch</option>
         <option value="branch-vs-branch">Two branches…</option>
       </select>
+      {baseRef !== null && (
+        <select
+          aria-label="Base branch"
+          title="Base branch"
+          className="text-[11px] bg-transparent border border-border/40 rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 max-w-[10rem]"
+          value={baseRef}
+          onChange={(e) => setBase(e.target.value)}
+        >
+          {baseOptions.map((b) => (
+            <option key={b} value={b}>
+              {b}
+              {b === detectedBase ? " (default)" : ""}
+            </option>
+          ))}
+        </select>
+      )}
       <button
         type="button"
         onClick={() => setViewMode((m) => (m === "unified" ? "split" : "unified"))}
