@@ -335,7 +335,7 @@ export function ChatSurface() {
       completeRunningTools(doneId);
       stopStreaming(doneId);
       if (!document.hasFocus()) {
-        showNotification("Task complete", "Claude has finished working on your request.");
+        showNotification("Task complete", "The assistant has finished working on your request.");
       }
     },
     onError(error, errorId) {

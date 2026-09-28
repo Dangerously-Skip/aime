@@ -100,7 +100,7 @@ export function QuestionCard({
       <div className="flex items-center gap-2">
         <MessageCircleQuestion className="h-4 w-4 text-primary" />
         <span className="text-sm font-medium text-foreground">
-          Claude has a question
+          The assistant has a question
         </span>
       </div>
 
@@ -186,7 +186,7 @@ export function QuestionCard({
       {submitted && (
         <p className="text-xs text-muted-foreground flex items-center gap-1">
           <Check className="h-3 w-3 text-primary" />
-          Answered — Claude is continuing...
+          Answered — the assistant is continuing...
         </p>
       )}
     </div>

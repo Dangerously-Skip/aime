@@ -1386,7 +1386,7 @@ export function CoworkSurface() {
         }
       }
       if (!document.hasFocus()) {
-        showNotification("Task complete", "Claude has finished working on your request.");
+        showNotification("Task complete", "The assistant has finished working on your request.");
       }
     },
     onError: (error, cid) => {
@@ -1822,7 +1822,7 @@ export function CoworkSurface() {
             </h1>
           </div>
           <p className="text-sm text-muted-foreground mb-8">
-            Select a folder and describe your task — Claude will read, write, and edit files alongside you.
+            Select a folder and describe your task — the assistant will read, write, and edit files alongside you.
           </p>
 
           {/* Centered input card */}

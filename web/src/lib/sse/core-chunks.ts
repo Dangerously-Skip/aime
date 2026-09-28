@@ -280,7 +280,7 @@ export function handleCoreChunk(
         questionData: event.questions,
         questionToolUseId: event.toolUseId as string,
       });
-      ctx.notify?.('Claude needs your input', 'A question or permission prompt is waiting for you.');
+      ctx.notify?.('The assistant needs your input', 'A question or permission prompt is waiting for you.');
       return true;
 
     case 'connector_request':
