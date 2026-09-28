@@ -33,7 +33,7 @@ const LANDING_ROWS = [
   {
     icon: Timer,
     title: "Automation",
-    description: "Schedule cron jobs, configure webhooks, and set up heartbeat check-ins",
+    description: "Schedule recurring agent runs and check that everything is set up",
     section: "automation" as const,
   },
   {

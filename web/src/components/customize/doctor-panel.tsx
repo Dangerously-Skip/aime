@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { CheckCircle, XCircle, AlertCircle, RefreshCw, Stethoscope } from 'lucide-react';
+import { shortenHomePaths } from './shorten-home-paths';
 
 interface HealthCheck {
   id: string;
@@ -102,9 +103,13 @@ export function DoctorPanel() {
               <StatusIcon status={check.status} />
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-semibold">{check.label}</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">{check.message}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5 break-words">{shortenHomePaths(check.message)}</p>
                 {check.fix && (
-                  <p className="text-[11px] text-blue-500 mt-1">Fix: {check.fix}</p>
+                  // Was browser-default blue with the absolute path verbatim, which
+                  // read as a link and wrapped across three lines of a narrow card.
+                  <p className="text-[11px] text-foreground/80 mt-1 break-words" title={check.fix}>
+                    <span className="font-medium">Fix:</span> {shortenHomePaths(check.fix)}
+                  </p>
                 )}
               </div>
             </div>
