@@ -2476,12 +2476,53 @@ export class ClaudeProvider extends BaseProvider {
       return { type: 'error', message, code, provider: this.name };
     };
 
+    /*
+     * THE SDK TAKES ITS CONTROLLER IN `options`. This was passed as a top-level
+     * `abortSignal`, a parameter `query()` does not have, so aborting stopped
+     * our own waits and nothing else: Stop, a disconnected client and the tool
+     * watchdog all left the subprocess running to completion, spending tokens
+     * on a turn nobody was reading.
+     */
+    queryOptions.abortController = abortController;
+
+    /*
+     * How a stopped query ends — the user's Stop, a client that went away, or
+     * the tool watchdog. Shared by the throw and the clean-exit paths, because
+     * the SDK does either depending on where in its loop the abort lands.
+     */
+    function* abortedTail(): Generator<StreamChunk> {
+      console.log('[Claude] Query aborted for chatId:', chatId);
+      // Before reporting the abort: whatever was already created is still
+      // created, and the model has already told the user so. See drainPending.
+      yield* drainPending();
+      const trip = watchdogTrip[0];
+      if (trip) {
+        // Surface the watchdog reason so the user sees what hung
+        // instead of a generic "aborted" — the abort here was ours. The
+        // advice differs by class: a hung remote call is worth retrying, but
+        // "try again" for a build that had been succeeding for nine minutes
+        // is exactly wrong — that advice belongs to the network class alone.
+        const advice = trip.network
+          ? 'The remote call hung. Try again or rephrase.'
+          : 'The command outlived its budget and was stopped; split long builds or test runs into smaller steps.';
+        yield {
+          type: 'error',
+          message: `Tool "${trip.name}" was stopped after ${(trip.elapsedMs / 1000).toFixed(0)}s without returning. ${advice} Work already produced above is kept.`,
+          code: 'timeout' satisfies TurnErrorCode,
+          provider: providerName,
+        };
+      }
+      yield {
+        type: 'aborted',
+        provider: providerName,
+      };
+    }
+
     try {
       // Stream responses from Claude Agent SDK - matches server.js exactly
       for await (const chunk of query({
         prompt: queryPrompt,
         options: queryOptions,
-        abortSignal: abortController.signal,
       } as Parameters<typeof query>[0])) {
         const c = chunk as Record<string, unknown>;
 
@@ -2919,20 +2960,28 @@ export class ClaudeProvider extends BaseProvider {
         }
       }
 
-      yield* drainPending();
+      if (abortController.signal.aborted) {
+        yield* abortedTail();
+      } else {
+        yield* drainPending();
 
-      // Signal completion. A failed turn still ends with `done` — it is what
-      // clears the client's streaming state — flagged so nothing downstream
-      // treats it as a finished answer.
-      yield {
-        type: 'done',
-        provider: this.name,
-        ...(turnError ? { error: true } : {}),
-      };
+        // Signal completion. A failed turn still ends with `done` — it is what
+        // clears the client's streaming state — flagged so nothing downstream
+        // treats it as a finished answer.
+        yield {
+          type: 'done',
+          provider: this.name,
+          ...(turnError ? { error: true } : {}),
+        };
 
-      console.log('[Claude] Stream completed');
+        console.log('[Claude] Stream completed');
+      }
     } catch (error: unknown) {
-      if (turnError && !(error instanceof Error && error.name === 'AbortError')) {
+      // The SDK's own abort error is a plain `Error` subclass whose name is
+      // "Error", so the name alone does not identify one — the signal does.
+      if (abortController.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+        yield* abortedTail();
+      } else if (turnError) {
         /*
          * The SDK throws "Claude Code returned an error result: …" after an
          * `is_error` result. That failure has already been reported as a typed
@@ -2942,32 +2991,6 @@ export class ClaudeProvider extends BaseProvider {
         console.warn('[Claude] SDK threw after the turn had already failed:', error instanceof Error ? error.message : error);
         yield* drainPending();
         yield { type: 'done', provider: this.name, error: true };
-      } else if (error instanceof Error && error.name === 'AbortError') {
-        console.log('[Claude] Query aborted for chatId:', chatId);
-        // Before reporting the abort: whatever was already created is still
-        // created, and the model has already told the user so. See drainPending.
-        yield* drainPending();
-        const trip = watchdogTrip[0];
-        if (trip) {
-          // Surface the watchdog reason so the user sees what hung
-          // instead of a generic "aborted" — the abort here was ours. The
-          // advice differs by class: a hung remote call is worth retrying, but
-          // "try again" for a build that had been succeeding for nine minutes
-          // is exactly wrong — that advice belongs to the network class alone.
-          const advice = trip.network
-            ? 'The remote call hung. Try again or rephrase.'
-            : 'The command outlived its budget and was stopped; split long builds or test runs into smaller steps.';
-          yield {
-            type: 'error',
-            message: `Tool "${trip.name}" was stopped after ${(trip.elapsedMs / 1000).toFixed(0)}s without returning. ${advice} Work already produced above is kept.`,
-            code: 'timeout' satisfies TurnErrorCode,
-            provider: this.name,
-          };
-        }
-        yield {
-          type: 'aborted',
-          provider: this.name,
-        };
       } else {
         /*
          * Rethrown, not turned into a chunk: several callers only collect text
@@ -2984,8 +3007,15 @@ export class ClaudeProvider extends BaseProvider {
       }
     } finally {
       clearInterval(watchdog);
-      // Clean up abort controller using composite key
-      if (chatId) {
+      /*
+       * Unregister only if the slot is still OURS.
+       *
+       * Stop deletes this entry at once, and the SDK takes a moment to wind
+       * down — long enough for the user to send again, which registers the new
+       * run under the same key. Deleting unconditionally here then removed the
+       * NEW run's controller, and its Stop button did nothing.
+       */
+      if (chatId && this.abortControllers.get(abortKey) === abortController) {
         this.abortControllers.delete(abortKey);
       }
     }

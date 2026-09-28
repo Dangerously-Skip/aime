@@ -2504,8 +2504,7 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
       let aborted: boolean | undefined;
       const issued: string[] = [];
       queryMock.mockImplementation(async function* (args: {
-        options: { canUseTool: CanUseTool };
-        abortSignal: AbortSignal;
+        options: { canUseTool: CanUseTool; abortController: AbortController };
       }) {
         yield {
           type: 'assistant',
@@ -2521,7 +2520,7 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
           { toolUseID: 'w-1' },
         );
         await vi.advanceTimersByTimeAsync(150_000);
-        aborted = args.abortSignal.aborted;
+        aborted = args.options.abortController.signal.aborted;
         // No vi.waitFor here (fake timers, inside the SDK generator): the 150s
         // advance above has already flushed the relay and parked the wait, and
         // asserting the answer LANDED proves that rather than assuming it.
@@ -3039,6 +3038,68 @@ describe('DocumentCreate — a PDF is only reported if it exists (regression)', 
  * the only place that holds both the query's AbortSignal and the waits, so it has
  * to thread one into the other.
  */
+describe('abort reaches the SDK, and only the run it belongs to', () => {
+  it('hands the SDK the controller that abort() fires', async () => {
+    const provider = new ClaudeProvider();
+    let signal: AbortSignal | undefined;
+    queryMock.mockImplementation(async function* (args: { options: { abortController: AbortController } }) {
+      signal = args.options.abortController.signal;
+      expect(provider.abort('wired')).toBe(true);
+    });
+    const chunks = await run(provider, { chatId: 'wired' });
+
+    expect(signal?.aborted).toBe(true);
+    // A clean exit after an abort is still an abort, not a finished turn.
+    expect(chunks.at(-1)?.type).toBe('aborted');
+  });
+
+  it('treats the SDK’s own abort error (named "Error") as an abort', async () => {
+    const provider = new ClaudeProvider();
+    queryMock.mockImplementation(async function* () {
+      provider.abort('sdk-abort');
+      throw new Error('Claude Code process aborted by user');
+    });
+    const chunks = await run(provider, { chatId: 'sdk-abort' });
+    expect(chunks.map((c) => c.type)).toEqual(['aborted']);
+  });
+
+  it('a stopped run winding down does not unregister the run that replaced it', async () => {
+    // Regression: Stop → resend. The first run's `finally` deleted the map
+    // entry by key, which by then held the SECOND run's controller, so Stop on
+    // the new run found nothing to abort.
+    const provider = new ClaudeProvider();
+    let releaseA!: () => void;
+    const aGate = new Promise<void>((r) => { releaseA = r; });
+    let releaseB!: () => void;
+    const bGate = new Promise<void>((r) => { releaseB = r; });
+    let bSignal: AbortSignal | undefined;
+
+    queryMock
+      .mockImplementationOnce(async function* () {
+        await aGate;
+      })
+      .mockImplementationOnce(async function* (args: { options: { abortController: AbortController } }) {
+        bSignal = args.options.abortController.signal;
+        await bGate;
+      });
+
+    const a = run(provider, { chatId: 'race' });
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledTimes(1));
+    expect(provider.abort('race')).toBe(true); // Stop on the first run
+
+    const b = run(provider, { chatId: 'race' });
+    await vi.waitFor(() => expect(bSignal).toBeDefined());
+
+    releaseA();
+    await a; // the first run's cleanup happens now
+
+    expect(provider.abort('race'), 'Stop on the second run found no controller').toBe(true);
+    expect(bSignal!.aborted).toBe(true);
+    releaseB();
+    await b;
+  });
+});
+
 describe('aborting a query cancels its outstanding rendezvous', () => {
   it('frees a pending connector card the moment the user presses Stop', async () => {
     const { pendingConnectorCount } = await import('../pending-connectors');
@@ -3074,9 +3135,9 @@ describe('aborting a query cancels its outstanding rendezvous', () => {
     const provider = new ClaudeProvider();
     let result: { ok: boolean } | undefined;
 
-    queryMock.mockImplementation(async function* (args: { abortSignal: AbortSignal }) {
+    queryMock.mockImplementation(async function* (args: { options: { abortController: AbortController } }) {
       const baseline = pendingDocumentCount();
-      const pending = waitForDocumentPrint('stop-doc-1', { signal: args.abortSignal });
+      const pending = waitForDocumentPrint('stop-doc-1', { signal: args.options.abortController.signal });
       expect(pendingDocumentCount()).toBe(baseline + 1);
       provider.abort('stop-chat-2');
       result = await pending;
