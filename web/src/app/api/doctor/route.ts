@@ -4,35 +4,44 @@ import * as path from 'path';
 import * as os from 'os';
 import { getMcpConfigPath } from '@/lib/app-paths';
 import { MCP_CONFIG_FILENAME } from '@/config/branding';
+import {
+  agentSdkCheck,
+  identityFileCheck,
+  logFileCheck,
+  modelAccessCheck,
+  parseProviderSummaries,
+  type ClientProviderSummary,
+  type HealthCheck,
+} from './checks';
 
 export const runtime = 'nodejs';
 
-interface HealthCheck {
-  id: string;
-  label: string;
-  status: 'ok' | 'warn' | 'error';
-  message: string;
-  fix?: string;
-}
-
-async function checkModelAccess(): Promise<HealthCheck> {
-  const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
-  const hasBedrock = !!(process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION);
-  if (!hasApiKey && !hasBedrock) {
-    return {
-      id: 'model_access',
-      label: 'Model access',
-      status: 'warn',
-      message: 'No ANTHROPIC_API_KEY or Bedrock env detected — set a key in Settings or .env',
-      fix: 'Set ANTHROPIC_API_KEY (or CLAUDE_CODE_USE_BEDROCK=1 + AWS credentials)',
-    };
+/**
+ * Every place a model credential can live, not just the environment: the env
+ * key, the encrypted credential store (keys saved in Settings), Bedrock with
+ * BOTH a region and credentials, and the providers the client reports.
+ */
+async function checkModelAccess(providers: ClientProviderSummary[]): Promise<HealthCheck> {
+  const { isBedrockConfigured } = await import('@/lib/bedrock-env');
+  const { probeCredentialStore, getCredentialStore } = await import('@/lib/models/credentials');
+  const probe = probeCredentialStore();
+  let ids: string[] = [];
+  if (probe.status === 'ok') {
+    try {
+      ids = await getCredentialStore().list();
+    } catch {
+      ids = [];
+    }
   }
-  return {
-    id: 'model_access',
-    label: 'Model access',
-    status: 'ok',
-    message: hasApiKey ? 'Anthropic API key configured' : 'AWS Bedrock env detected',
-  };
+  return modelAccessCheck({
+    envAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+    bedrock: {
+      region: !!(process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION),
+      credentials: isBedrockConfigured(),
+    },
+    store: { status: probe.status, ids, detail: probe.detail },
+    providers,
+  });
 }
 
 async function checkClaudeDir(): Promise<HealthCheck> {
@@ -73,16 +82,7 @@ async function checkIdentityFiles(): Promise<HealthCheck[]> {
     { id: 'user_md', label: 'USER.md', file: path.join(os.homedir(), '.claude', 'USER.md') },
     { id: 'memory_md', label: 'MEMORY.md', file: path.join(os.homedir(), '.claude', 'MEMORY.md') },
   ];
-  return files.map(({ id, label, file }) => {
-    const exists = fs.existsSync(file);
-    return {
-      id,
-      label,
-      status: exists ? 'ok' : 'warn' as 'ok' | 'warn',
-      message: exists ? `${label} found at ${file}` : `${label} not found — identity injection disabled`,
-      fix: exists ? undefined : `Create ${file} to configure the assistant's identity`,
-    };
-  });
+  return files.map(({ id, label, file }) => identityFileCheck(id, label, file, fs.existsSync(file)));
 }
 
 async function checkProvisionedMcpServers(): Promise<HealthCheck> {
@@ -166,27 +166,35 @@ async function checkSkillFiles(): Promise<HealthCheck> {
   }
 }
 
-export async function GET(_req: NextRequest) {
-  const checks: HealthCheck[] = [];
-
+async function runChecks(providers: ClientProviderSummary[]): Promise<Response> {
   const [modelAccessCheck, claudeDirCheck, mcpCheck, secretStorageCheck, skillsCheck] =
     await Promise.all([
-      checkModelAccess(),
+      checkModelAccess(providers),
       checkClaudeDir(),
       checkProvisionedMcpServers(),
       checkSecretStorage(),
       checkSkillFiles(),
     ]);
   const identityChecks = await checkIdentityFiles();
+  const sdkCheck = agentSdkCheck({
+    envCliPath: process.env.AIME_SDK_CLI_PATH,
+    nodeModulesDir: path.join(process.cwd(), 'node_modules'),
+    platform: process.platform,
+    arch: process.arch,
+    exists: fs.existsSync,
+  });
+  const logCheck = logFileCheck(process.env.AIME_USER_DATA_DIR, fs.existsSync);
 
-  checks.push(
+  const checks: HealthCheck[] = [
     modelAccessCheck,
+    sdkCheck,
     claudeDirCheck,
     ...identityChecks,
     mcpCheck,
     secretStorageCheck,
     skillsCheck,
-  );
+    logCheck,
+  ];
 
   const hasError = checks.some((c) => c.status === 'error');
   const hasWarn = checks.some((c) => c.status === 'warn');
@@ -196,4 +204,19 @@ export async function GET(_req: NextRequest) {
     summary: hasError ? 'error' : hasWarn ? 'warn' : 'ok',
     checks,
   });
+}
+
+/** Server-side view only: cannot see keyless (local) providers the client configured. */
+export async function GET(_req: NextRequest) {
+  return runChecks([]);
+}
+
+/**
+ * POST { providers: [{ id, presetId, label, enabled, modelCount, hasCredentials }] }
+ * — the client's provider list (ids and labels, never a secret), so providers
+ * that live only in client state, like a local Ollama, count as model access.
+ */
+export async function POST(req: NextRequest) {
+  const body = (await req.json().catch(() => ({}))) as { providers?: unknown };
+  return runChecks(parseProviderSummaries(body?.providers));
 }
