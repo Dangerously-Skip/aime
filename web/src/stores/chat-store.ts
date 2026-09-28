@@ -172,7 +172,17 @@ interface ChatState {
    * (the provider list itself persists in provider-store).
    */
   modelRoute: ModelOption | null;
+  /**
+   * Any of this store's conversations mid-turn. Kept for callers that ask the
+   * surface-wide question; the composer asks `streamingChats` instead.
+   */
   isStreaming: boolean;
+  /**
+   * Which conversations have a turn in flight. Per chat, because one surface
+   * boolean meant chat B showed a Stop that aborted nothing while A streamed,
+   * and B could not send at all. Not persisted — no stream survives a reload.
+   */
+  streamingChats: Record<string, true>;
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
   suggestions: Record<string, string[]>;
@@ -197,6 +207,7 @@ interface ChatActions {
   getSessionControls: (chatId: string) => SessionControls;
   touchActivity: (chatId: string) => void;
   setIsStreaming: (v: boolean) => void;
+  setChatStreaming: (chatId: string, streaming: boolean) => void;
   addSuggestion: (chatId: string, suggestion: string) => void;
   clearSuggestions: (chatId: string) => void;
   addCanvasArtifact: (chatId: string, artifact: CanvasArtifact) => void;
@@ -212,6 +223,7 @@ export const useChatStore = create<ChatStore>()(
       currentChatId: null,
       modelRoute: null,
       isStreaming: false,
+      streamingChats: {},
       sessionControls: {},
       lastActivityAt: {},
       suggestions: {},
@@ -290,19 +302,25 @@ export const useChatStore = create<ChatStore>()(
 
       startStreaming: (chatId) => set((state) => ({
         isStreaming: true,
-        // Also mark by chatId so callers can check which chat is streaming
+        streamingChats: chatId ? { ...state.streamingChats, [chatId]: true } : state.streamingChats,
+        // Project detail starts a turn from outside the surface and relies on
+        // this to land the surface on it.
         currentChatId: chatId || state.currentChatId,
       })),
 
       stopStreaming: (chatId) =>
         set((state) => {
+          const { [chatId]: _done, ...streamingChats } = state.streamingChats;
+          // Only this chat's turn ended; another conversation may still be
+          // running, and the surface-wide flag must say so.
+          const isStreaming = Object.keys(streamingChats).length > 0;
           const msgs = state.messages[chatId];
-          if (!msgs?.length) return { isStreaming: false };
+          if (!msgs?.length) return { isStreaming, streamingChats };
           const lastIdx = msgs.length - 1;
           const last = msgs[lastIdx];
           const updated = [...msgs];
           updated[lastIdx] = { ...last, isStreaming: false, isLoading: false };
-          return { isStreaming: false, messages: { ...state.messages, [chatId]: updated } };
+          return { isStreaming, streamingChats, messages: { ...state.messages, [chatId]: updated } };
         }),
 
       setCurrentChat: (chatId) => set({ currentChatId: chatId }),
@@ -393,6 +411,15 @@ export const useChatStore = create<ChatStore>()(
         })),
 
       setIsStreaming: (v) => set({ isStreaming: v }),
+
+      setChatStreaming: (chatId, streaming) =>
+        set((state) => {
+          if (!chatId || !!state.streamingChats[chatId] === streaming) return state;
+          const next = { ...state.streamingChats };
+          if (streaming) next[chatId] = true;
+          else delete next[chatId];
+          return { streamingChats: next };
+        }),
 
       addSuggestion: (chatId, suggestion) =>
         set((state) => ({

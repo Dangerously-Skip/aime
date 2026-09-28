@@ -756,7 +756,10 @@ export function CoworkSurface() {
     (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
   );
   const modelRoute = useCoworkStore((s) => s.modelRoute);
-  const isStreaming = useCoworkStore((s) => s.isStreaming);
+  // THIS conversation's turn, not the surface's: another chat streaming must
+  // neither lock this composer nor give it a Stop button that aborts nothing.
+  const isStreaming = useCoworkStore((s) => !!chatId && !!s.streamingChats[chatId]);
+  const setChatStreaming = useCoworkStore((s) => s.setChatStreaming);
   const storeFolder = useCoworkStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
   const folder = storeFolder || pendingFolder;
   const contextFiles = useCoworkStore((s) => (chatId ? s.contextFiles[chatId] : undefined) ?? EMPTY_FILES);
@@ -952,6 +955,7 @@ export function CoworkSurface() {
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
+    setChatStreaming,
     // Every callback is handed the chat its stream was started for. Usage used
     // to be filed against `currentChatId` — whatever was on screen when the
     // turn ENDED — so a long run finished while you read another conversation
@@ -1564,7 +1568,12 @@ export function CoworkSurface() {
    * starts a turn. Before this, a job published to the bus, switched surface,
    * and nothing ran it.
    */
-  useScheduledPrompt('cowork', handleSubmit, () => useCoworkStore.getState().isStreaming);
+  useScheduledPrompt('cowork', handleSubmit, () => {
+    // Busy means the conversation the job would run in is mid-turn — a turn
+    // elsewhere does not block it, since conversations run concurrently.
+    const st = useCoworkStore.getState();
+    return !!st.currentChatId && !!st.streamingChats[st.currentChatId];
+  });
 
   handleSubmitRef.current = handleSubmit;
 

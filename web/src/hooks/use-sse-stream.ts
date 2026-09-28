@@ -98,8 +98,14 @@ interface UseSSEStreamOptions {
   onDone: (chatId: string) => void;
   onUsage?: (usage: StreamUsage, chatId: string) => void;
   chatId: string;                            // the chat on screen — what Stop aborts
-  /** Store-level flag: gates the composer, NOT the per-message spinner. */
+  /** Store-level flag: true while ANY of this hook's streams runs. */
   setIsStreaming: (v: boolean) => void;
+  /**
+   * Per-conversation flag — what the composer should read. Set when a chat's
+   * stream starts, cleared when the stream that still owns the chat ends or is
+   * stopped (a superseded stream settling late leaves it alone).
+   */
+  setChatStreaming?: (chatId: string, streaming: boolean) => void;
 }
 
 interface UseSSEStreamReturn {
@@ -207,6 +213,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
     // Deliberate: the user asked for this. The running stream reads the cause
     // off its signal and finalises the turn without reporting an error.
     streamRegistry.abort(id, 'user');
+    optionsRef.current.setChatStreaming?.(id, false);
     if (activeChatIdRef.current === id) activeChatIdRef.current = null;
     // Only when nothing else is running — another conversation's turn must not
     // have the composer unlocked out from under it.
@@ -287,8 +294,10 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         ? (usage: StreamUsage) => pinned.onUsage!(usage, chatId)
         : undefined;
       const pinnedSetIsStreaming = optionsRef.current.setIsStreaming;
+      const pinnedSetChatStreaming = optionsRef.current.setChatStreaming;
 
       pinnedSetIsStreaming(true);
+      pinnedSetChatStreaming?.(chatId, true);
 
       let firstTokenAt: number | null = null;
       let clarificationCount = 0;
@@ -471,6 +480,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
            */
           resetTextBoundary(chatId);
           clearInactivityTimer();
+          pinnedSetChatStreaming?.(chatId, false);
           // Only surrender the abort target if it is still pointing at us.
           if (activeChatIdRef.current === chatId) activeChatIdRef.current = null;
           // `isStreaming` is one boolean for the whole surface and it gates the

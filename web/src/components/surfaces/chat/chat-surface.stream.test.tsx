@@ -80,7 +80,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
 
   useRunStore.setState({ runs: [], goals: [] });
-  useChatStore.setState({ messages: {}, currentChatId: CHAT, isStreaming: false });
+  useChatStore.setState({ messages: {}, currentChatId: CHAT, isStreaming: false, streamingChats: {} });
   useConversationStore.setState({ conversations: [], activeId: null });
   for (const id of [CHAT, OTHER]) {
     useConversationStore.getState().addConversation({
@@ -189,6 +189,37 @@ describe('ChatSurface — a reply stays in the conversation it was asked in', ()
 
     expect(lastContent(CHAT)).toBe('Roses are red');
     expect(lastContent(OTHER)).toBe('unrelated work');
+  });
+});
+
+describe('ChatSurface — streaming is per conversation', () => {
+  it('a second conversation can send while the first is still streaming, and Stop only stops its own', async () => {
+    // Every chat request stalls, so both turns stay in flight.
+    render(<ChatSurface />);
+    useChatStore.getState().addMessage(OTHER, {
+      id: 'b0', role: 'assistant', content: 'earlier', timestamp: Date.now(),
+    });
+    await send('long research in A');
+    expect(streamRegistry.has(CHAT)).toBe(true);
+
+    await act(async () => { useChatStore.getState().setCurrentChat(OTHER); });
+    // B is idle: its button sends rather than offering a Stop for A's turn.
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+
+    await send('quick question in B');
+    expect(streamRegistry.has(OTHER), 'B could not send while A streamed').toBe(true);
+    expect(streamRegistry.has(CHAT), 'sending in B killed A').toBe(true);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await Promise.resolve();
+    });
+    expect(streamRegistry.has(OTHER)).toBe(false);
+    expect(streamRegistry.has(CHAT), 'Stop in B stopped A').toBe(true);
+    expect(useChatStore.getState().streamingChats[CHAT]).toBe(true);
+    expect(useChatStore.getState().streamingChats[OTHER]).toBeUndefined();
+
+    streamRegistry.abort(CHAT);
   });
 });
 

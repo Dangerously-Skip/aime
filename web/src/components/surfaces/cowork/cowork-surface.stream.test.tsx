@@ -55,7 +55,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
 
   useRunStore.setState({ runs: [], goals: [] });
-  useCoworkStore.setState({ messages: {}, currentChatId: CHAT, isStreaming: false });
+  useCoworkStore.setState({ messages: {}, currentChatId: CHAT, isStreaming: false, streamingChats: {} });
   useConversationStore.setState({ conversations: [], activeId: null });
   for (const id of [CHAT, OTHER]) {
     useConversationStore.getState().addConversation({

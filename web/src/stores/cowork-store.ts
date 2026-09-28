@@ -34,7 +34,17 @@ interface CoworkState {
    * built-in `model` enum.
    */
   modelRoute: ModelOption | null;
+  /**
+   * Any of this store's conversations mid-turn. Kept for callers that ask the
+   * surface-wide question; the composer asks `streamingChats` instead.
+   */
   isStreaming: boolean;
+  /**
+   * Which conversations have a turn in flight. Per chat, because one surface
+   * boolean meant chat B showed a Stop that aborted nothing while A streamed,
+   * and B could not send at all. Not persisted — no stream survives a reload.
+   */
+  streamingChats: Record<string, true>;
   folderByChat: Record<string, string | null>;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
@@ -72,6 +82,7 @@ interface CoworkActions {
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   touchActivity: (chatId: string) => void;
   setIsStreaming: (v: boolean) => void;
+  setChatStreaming: (chatId: string, streaming: boolean) => void;
   addSearchGroup: (chatId: string, group: { query: string; results: { title: string; url: string; snippet: string }[] }) => void;
   clearSearchGroups: (chatId: string) => void;
 }
@@ -85,6 +96,7 @@ export const useCoworkStore = create<CoworkStore>()(
       currentChatId: null,
       modelRoute: null,
       isStreaming: false,
+      streamingChats: {},
       folderByChat: {},
       contextFiles: {},
       artifactFiles: {},
@@ -157,21 +169,29 @@ export const useCoworkStore = create<CoworkStore>()(
         // Stamped here so an aborted turn can tell its own files from every
         // previous turn's when it reconciles the scratch directory.
         if (chatId) markTurnStart(chatId);
+        /*
+         * No `currentChatId` here. It used to switch the screen to whichever
+         * chat started a turn — so an auto-continue firing in chat A yanked a
+         * user who had moved on to B back to A. The composer selects a new
+         * conversation itself before it sends.
+         */
         set((state) => ({
           isStreaming: true,
-          currentChatId: chatId || state.currentChatId,
+          streamingChats: chatId ? { ...state.streamingChats, [chatId]: true } : state.streamingChats,
         }));
       },
 
       stopStreaming: (chatId) =>
         set((state) => {
+          const { [chatId]: _done, ...streamingChats } = state.streamingChats;
+          const isStreaming = Object.keys(streamingChats).length > 0;
           const msgs = state.messages[chatId];
-          if (!msgs?.length) return { isStreaming: false };
+          if (!msgs?.length) return { isStreaming, streamingChats };
           const lastIdx = msgs.length - 1;
           const last = msgs[lastIdx];
           const updated = [...msgs];
           updated[lastIdx] = { ...last, isStreaming: false, isLoading: false };
-          return { isStreaming: false, messages: { ...state.messages, [chatId]: updated } };
+          return { isStreaming, streamingChats, messages: { ...state.messages, [chatId]: updated } };
         }),
 
       setCurrentChat: (chatId) => set({ currentChatId: chatId }),
@@ -305,6 +325,15 @@ export const useCoworkStore = create<CoworkStore>()(
         })),
 
       setIsStreaming: (v) => set({ isStreaming: v }),
+
+      setChatStreaming: (chatId, streaming) =>
+        set((state) => {
+          if (!chatId || !!state.streamingChats[chatId] === streaming) return state;
+          const next = { ...state.streamingChats };
+          if (streaming) next[chatId] = true;
+          else delete next[chatId];
+          return { streamingChats: next };
+        }),
       addSearchGroup: (chatId, group) =>
         set((state) => ({
           searchGroups: {

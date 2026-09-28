@@ -128,7 +128,10 @@ export function ChatSurface() {
    */
   const artifactFiles = useMemo(() => artifactsFromMessages(messages), [messages]);
   const modelRoute = useChatStore((s) => s.modelRoute);
-  const isStreaming = useChatStore((s) => s.isStreaming);
+  // THIS conversation's turn, not the surface's: another chat streaming must
+  // neither lock this composer nor give it a Stop button that aborts nothing.
+  const isStreaming = useChatStore((s) => !!chatId && !!s.streamingChats[chatId]);
+  const setChatStreaming = useChatStore((s) => s.setChatStreaming);
   const setModelRoute = useChatStore((s) => s.setModelRoute);
   const addMessage = useChatStore((s) => s.addMessage);
   const appendToLastAssistant = useChatStore(
@@ -260,6 +263,7 @@ export function ChatSurface() {
   const { sendMessage, abort } = useSSEStream({
     chatId,
     setIsStreaming,
+    setChatStreaming,
     onUsage: runRecorder.onUsage,
     // `cid` is the chat this stream was started for — never the one on screen
     // now. See useSSEStream for why every callback is handed it.
@@ -545,7 +549,12 @@ export function ChatSurface() {
    * starts a turn. Before this, a job published to the bus, switched surface,
    * and nothing ran it.
    */
-  useScheduledPrompt('chat', handleSubmit, () => useChatStore.getState().isStreaming);
+  useScheduledPrompt('chat', handleSubmit, () => {
+    // Busy means the conversation the job would run in is mid-turn — a turn
+    // elsewhere does not block it, since conversations run concurrently.
+    const st = useChatStore.getState();
+    return !!st.currentChatId && !!st.streamingChats[st.currentChatId];
+  });
 
   const handleRetry = useCallback(() => {
     if (!chatId || isStreaming) return;
@@ -918,6 +927,7 @@ export function ChatSurface() {
                           }`}
                           onClick={handleButtonClick}
                           disabled={!isStreaming && !inputValue.trim()}
+                          aria-label={isStreaming ? "Stop" : "Send message"}
                         >
                           {isStreaming ? (
                             <Square className="h-3.5 w-3.5" />
