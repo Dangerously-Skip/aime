@@ -59,6 +59,7 @@ import {
   isSearchEntry,
 } from "@/lib/cowork/context-entry";
 import { detectServerUrl } from "@/lib/artifacts/server-detector";
+import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { RailSlot } from "@/lib/panels/rail-slot";
 import { railPanels } from "@/lib/panels/registry";
 import {
@@ -951,6 +952,7 @@ export function CoworkSurface() {
     chatId,
     setIsStreaming,
     setChatStreaming,
+    coalesceText: true,
     // Every callback is handed the chat its stream was started for. Usage used
     // to be filed against `currentChatId` — whatever was on screen when the
     // turn ENDED — so a long run finished while you read another conversation
@@ -1702,6 +1704,14 @@ export function CoworkSurface() {
   }
 
   const hasMessages = messages.length > 0;
+  // Stable, so the memoised message rows do not all re-render per token.
+  const handleMessageArtifactClick = useCallback((v: string | ParsedArtifact) => {
+    if (typeof v === "string") setPreviewPath(v);
+  }, []);
+  const handleMessagePreviewUrl = useCallback((url: string) => {
+    setPreviewUrl(url);
+    setPreviewOpen(true);
+  }, []);
   const modelReady = useModelReady(modelRoute, CAPABILITY);
   const [noModelAttempted, setNoModelAttempted] = useState(false);
 
@@ -1851,7 +1861,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
+            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={handleMessageArtifactClick} onPreviewUrl={handleMessagePreviewUrl} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">

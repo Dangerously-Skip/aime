@@ -161,7 +161,27 @@ interface UseSSEStreamOptions {
    * stopped (a superseded stream settling late leaves it alone).
    */
   setChatStreaming?: (chatId: string, streaming: boolean) => void;
+  /**
+   * Merge consecutive `text` (and `thinking`) chunks and deliver them at most
+   * once per animation frame. A token per chunk meant a store update, a render
+   * and a markdown re-parse per token; the eye cannot see faster than a frame.
+   * Any other event flushes what is pending first, so ordering is unchanged,
+   * and so do the end of the stream, an error and a Stop.
+   */
+  coalesceText?: boolean;
 }
+
+/** A chunk that is nothing but text, so merging two loses nothing. */
+function isMergeable(event: SSEEvent): boolean {
+  if ((event.type !== 'text' && event.type !== 'thinking') || typeof event.content !== 'string') return false;
+  for (const k in event) if (k !== 'type' && k !== 'content') return false;
+  return true;
+}
+
+const nextFrame: (cb: () => void) => unknown =
+  typeof requestAnimationFrame === 'function'
+    ? (cb) => requestAnimationFrame(cb)
+    : (cb) => setTimeout(cb, 16);
 
 interface UseSSEStreamReturn {
   sendMessage: (
@@ -342,7 +362,38 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       // Snapshot the callbacks at send time so a conversation switch
       // mid-stream doesn't redirect chunks to the wrong chatId.
       const pinned = optionsRef.current;
-      const pinnedOnChunk = (event: SSEEvent) => pinned.onChunk(event, chatId);
+      const deliverChunk = (event: SSEEvent) => pinned.onChunk(event, chatId);
+
+      // Text waiting for the next frame — see `coalesceText`.
+      let pendingText: SSEEvent | null = null;
+      let frameScheduled = false;
+      const flushText = () => {
+        const event = pendingText;
+        pendingText = null;
+        if (event) deliverChunk(event);
+      };
+      const pinnedOnChunk = (event: SSEEvent) => {
+        if (!pinned.coalesceText || !isMergeable(event)) {
+          flushText();
+          deliverChunk(event);
+          return;
+        }
+        if (pendingText && pendingText.type === event.type) {
+          pendingText = { ...pendingText, content: (pendingText.content as string) + (event.content as string) };
+        } else {
+          flushText();
+          pendingText = { ...event };
+        }
+        if (!frameScheduled) {
+          frameScheduled = true;
+          nextFrame(() => {
+            frameScheduled = false;
+            // A stream superseded or finished in the meantime has already
+            // flushed (or deliberately dropped) its text.
+            flushText();
+          });
+        }
+      };
       const pinnedOnDone = () => pinned.onDone(chatId);
       const pinnedOnError = (err: Error) => pinned.onError(err, chatId);
       const pinnedOnUsage = pinned.onUsage
@@ -457,6 +508,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
               }
               // Intercept done event to extract usage metrics
               if (event.type === 'done' && event.usage && pinnedOnUsage) {
+                flushText();
                 const ttftMs = firstTokenAt ? firstTokenAt - (Date.now() - (event.usage as Record<string,number>).durationMs) : undefined;
                 pinnedOnUsage({
                   ...(event.usage as StreamUsage),
@@ -476,6 +528,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           }
         }
 
+        flushText();
         pinnedOnDone();
       } catch (error: unknown) {
         // WHY the stream ended comes from the explicit cause on our own signal.
@@ -486,9 +539,14 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
         if (abortReason === 'superseded') {
           // The replacement stream owns this chat's messages now. Finalising
-          // here would clear the spinner off a turn that is still running.
+          // here would clear the spinner off a turn that is still running —
+          // and its unflushed text belongs to the old turn, so it is dropped.
+          pendingText = null;
           return;
         }
+
+        // Whatever arrived before the failure or the Stop is part of the reply.
+        flushText();
 
         if (abortReason === 'timeout') {
           // A timeout is a failure the user has to see, so it goes down the

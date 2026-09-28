@@ -39,7 +39,8 @@ import { CanvasOverlay } from "@/components/shared/canvas-overlay";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import type { CanvasArtifact } from "@/stores/chat-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
-import { categorizeToolCall, isValidSidebarEntry, artifactsFromMessages } from "@/lib/artifact-tracker";
+import { categorizeToolCall, isValidSidebarEntry } from "@/lib/artifact-tracker";
+import { artifactsOf } from "./artifacts-of";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
@@ -114,7 +115,7 @@ export function ChatSurface() {
    * messages carry the tool calls and are persisted, so there was never anything
    * to accumulate.
    */
-  const artifactFiles = useMemo(() => artifactsFromMessages(messages), [messages]);
+  const artifactFiles = useMemo(() => artifactsOf(messages), [messages]);
   const modelRoute = useChatStore((s) => s.modelRoute);
   // THIS conversation's turn, not the surface's: another chat streaming must
   // neither lock this composer nor give it a Stop button that aborts nothing.
@@ -255,6 +256,7 @@ export function ChatSurface() {
     chatId,
     setIsStreaming,
     setChatStreaming,
+    coalesceText: true,
     onUsage: runRecorder.onUsage,
     // `cid` is the chat this stream was started for — never the one on screen
     // now. See useSSEStream for why every callback is handed it.

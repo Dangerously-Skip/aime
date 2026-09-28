@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { memo, useState, useMemo, useEffect } from "react";
 import { MarkdownRenderer } from "./markdown-renderer";
 import { ThinkingSection } from "./thinking-section";
 import { ToolCallsSummaryBar } from "./tool-calls-summary-bar";
@@ -133,7 +133,12 @@ function CanvasChip({ title, onOpen }: { title: string; onOpen: () => void }) {
   );
 }
 
-export function AssistantMessage({
+/*
+ * Memoised: a streaming reply updates its own message object every frame, and
+ * every other row's props are unchanged — without this the whole transcript,
+ * markdown included, re-rendered per token.
+ */
+export const AssistantMessage = memo(function AssistantMessage({
   content,
   thinking,
   toolCalls = [],
@@ -426,4 +431,4 @@ export function AssistantMessage({
       </div>
     </div>
   );
-}
+});

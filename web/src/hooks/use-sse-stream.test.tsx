@@ -195,6 +195,62 @@ describe('useSSEStream.sendMessage', () => {
     expect(onDone).toHaveBeenCalledWith('started-for');
   });
 
+  it('coalesceText merges text into one update per frame without reordering around other events', async () => {
+    // Frames never fire during the read loop — the worst case for ordering.
+    vi.stubGlobal('requestAnimationFrame', () => 0);
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'data: {"type":"text","content":"Hel"}\n\n',
+        'data: {"type":"text","content":"lo"}\n\n',
+        'data: {"type":"tool_use","id":"t1","name":"Read","input":{}}\n\n',
+        'data: {"type":"thinking","content":"hm"}\n\n',
+        'data: {"type":"text","content":"wor"}\n\n',
+        'data: {"type":"text","content":"ld"}\n\n',
+      ]),
+    );
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useSSEStream({
+        onChunk: (e) => calls.push(`${e.type}:${e.content ?? e.id}`),
+        onDone: () => calls.push('done'),
+        onError: vi.fn(),
+        setIsStreaming: vi.fn(),
+        chatId: 'c',
+        coalesceText: true,
+      }),
+    );
+
+    await result.current.sendMessage('hi', 'c', 'chat', null);
+
+    expect(calls).toEqual(['text:Hello', 'tool_use:t1', 'thinking:hm', 'text:world', 'done']);
+  });
+
+  it('coalesceText keeps text that arrived before a Stop', async () => {
+    vi.stubGlobal('requestAnimationFrame', () => 0);
+    let push!: (s: string) => void;
+    // Like a real fetch, the body errors when the request is aborted.
+    fetchMock.mockImplementation((_u: string, init: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          push = (s) => c.enqueue(new TextEncoder().encode(s));
+          init.signal?.addEventListener('abort', () => c.error(init.signal!.reason));
+        },
+      });
+      return Promise.resolve(new Response(body));
+    });
+    const onChunk = vi.fn();
+    const { result } = renderHook(() =>
+      useSSEStream({ onChunk, onDone: vi.fn(), onError: vi.fn(), setIsStreaming: vi.fn(), chatId: 'stop-c', coalesceText: true }),
+    );
+    const run = result.current.sendMessage('hi', 'stop-c', 'chat', null);
+    await new Promise((r) => setTimeout(r, 0));
+    push('data: {"type":"text","content":"partial"}\n\n');
+    await new Promise((r) => setTimeout(r, 0));
+    result.current.abort();
+    await run;
+    expect(onChunk).toHaveBeenCalledWith(expect.objectContaining({ content: 'partial' }), 'stop-c');
+  });
+
   it('hands onError the chat the failed stream was started for', async () => {
     fetchMock.mockRejectedValue(new Error('connection refused'));
     const onError = vi.fn();

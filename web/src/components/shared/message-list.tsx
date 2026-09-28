@@ -122,6 +122,19 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
     });
   }, [conversationId, lastUserId, hasMessages]);
 
+  /*
+   * The reply that gets Retry and the rating buttons: the last assistant
+   * message that is not a question card. Found once — it was a
+   * `slice().every()` per row, O(n²) on every token of a long conversation.
+   */
+  let lastAssistantIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant" && !messages[i].questionData) {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+
   // Track user scroll position
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
@@ -147,8 +160,7 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
     >
       <div ref={contentRef} className="max-w-3xl mx-auto">
       {messages.map((msg, idx) => {
-        const isLastAssistant = msg.role === "assistant" && !msg.isStreaming && !msg.isLoading &&
-          messages.slice(idx + 1).every((m) => m.role !== "assistant" || !!m.questionData);
+        const isLastAssistant = idx === lastAssistantIdx && !msg.isStreaming && !msg.isLoading;
         return msg.connectorRequest ? (
           <div key={msg.id} className="mb-4 max-w-2xl">
             <ConnectorRequestCard
