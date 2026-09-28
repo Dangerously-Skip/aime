@@ -32,7 +32,6 @@ import {
   Hammer,
   BookOpen,
   GitPullRequest,
-  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 
@@ -43,7 +42,8 @@ const TEMPLATE_ICONS: Record<string, LucideIcon> = {
 
 import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/standing-order-templates";
 import { TemplateDialog } from "./template-dialog";
-import { OrderEditor } from "./order-editor";
+import { OrderEditor, confirmDeleteOrder } from "./order-editor";
+import { describeTrigger, validateTrigger } from "@/lib/schedule/schedule";
 import { exportOrdersToJson } from "@/lib/standing-order-yaml";
 import { Cockpit } from "./cockpit";
 import { RunLog } from "@/components/runs/run-log";
@@ -96,17 +96,13 @@ function OrdersSidebar({
     }
   };
 
-  const triggerLabel = (order: StandingOrder) => {
-    if (order.trigger.type === 'cron' && order.trigger.expression) return order.trigger.expression;
-    if (order.trigger.type === 'interval' && order.trigger.expression) return `every ${order.trigger.expression}`;
-    if (order.trigger.type === 'event' && order.trigger.event) return `on ${order.trigger.event}`;
-    return order.trigger.type;
-  };
+  // In words, from the same module the tickers use — never raw cron.
+  const triggerLabel = (order: StandingOrder) => describeTrigger(order.trigger);
 
   if (collapsed) {
     return (
       <div className="w-12 p-2 flex flex-col items-center">
-        <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Expand sidebar">
+        <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Expand sidebar" aria-label="Expand sidebar">
           <PanelLeft className="h-4 w-4" />
         </Button>
       </div>
@@ -151,13 +147,19 @@ function OrdersSidebar({
             {statusIcon(order.status)}
             <div className="flex-1 min-w-0">
               <div className="truncate text-xs" title={order.instruction}>{order.instruction}</div>
-              <div className="text-xs text-muted-foreground truncate">{triggerLabel(order)}</div>
+              <div
+                className={`text-xs truncate ${validateTrigger(order.trigger) ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}
+                title={order.trigger.expression ?? order.trigger.event}
+              >
+                {triggerLabel(order)}
+              </div>
             </div>
-            <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+            <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
               {order.status === 'active' && (
                 <button
                   onClick={(e) => { e.stopPropagation(); pauseOrder(order.id); }}
                   title="Pause"
+                  aria-label="Pause schedule"
                 >
                   <Pause className="h-3 w-3 text-muted-foreground hover:text-yellow-500" />
                 </button>
@@ -166,13 +168,18 @@ function OrdersSidebar({
                 <button
                   onClick={(e) => { e.stopPropagation(); resumeOrder(order.id); }}
                   title="Resume"
+                  aria-label="Resume schedule"
                 >
                   <Play className="h-3 w-3 text-muted-foreground hover:text-green-500" />
                 </button>
               )}
               <button
-                onClick={(e) => { e.stopPropagation(); removeOrder(order.id); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirmDeleteOrder(order)) removeOrder(order.id);
+                }}
                 title="Delete"
+                aria-label="Delete schedule"
               >
                 <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
               </button>
@@ -186,18 +193,19 @@ function OrdersSidebar({
   return (
     <div className="w-[220px] p-2 flex flex-col shrink-0">
       <div className="surface-well flex flex-1 min-h-0 flex-col">
-      <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Standing Orders</span>
+      <div className="flex items-center justify-between gap-1 px-3 py-2">
+        <span className="min-w-0 truncate whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground">Schedules</span>
         <div className="flex items-center gap-0.5">
           <Button
             variant="ghost" size="icon-sm"
             onClick={() => exportOrdersToJson(orders)}
-            title="Export orders"
+            title="Export schedules"
+            aria-label="Export schedules"
             disabled={orders.length === 0}
           >
             <Download className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Collapse sidebar">
+          <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Collapse sidebar" aria-label="Collapse sidebar">
             <PanelLeftClose className="h-4 w-4" />
           </Button>
         </div>
@@ -207,7 +215,7 @@ function OrdersSidebar({
           {orders.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">
               <Clock className="h-5 w-5 mx-auto mb-1.5 opacity-40" />
-              No standing orders yet
+              No schedules yet
             </div>
           ) : (
             <>
@@ -253,6 +261,49 @@ function OrdersSidebar({
 
 // ── Single Card Widget ───────────────────────────────────────────────────────
 
+/**
+ * Does this card end by asking the user something?
+ *
+ * Only a sentence that ENDS in "?" counts. The old test also matched
+ * `what|when|how|which` ANYWHERE, unbounded — so "somewhat", "however",
+ * "showing" and "whenever" all put a Reply button on the card, which was nearly
+ * every card. A question word alone is not a question either: "Here is how to
+ * fix it." asks nothing.
+ */
+export function cardAsksQuestion(summary?: string): boolean {
+  if (!summary) return false;
+  // The last sentence, ignoring trailing markdown emphasis and whitespace.
+  const text = summary.trim().replace(/[*_`\s]+$/, '');
+  if (!text.endsWith('?')) return false;
+  const last = text.split(/(?<=[.!?])\s+/).pop() ?? '';
+  return /\?$/.test(last);
+}
+
+/** A time for today's cards; a date too for anything older, so "09:12" is never ambiguous. */
+export function formatCardTime(ts: number, now: number = Date.now()): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date(now).toDateString()) return time;
+  const sameYear = d.getFullYear() === new Date(now).getFullYear();
+  const date = d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
+  return `${date}, ${time}`;
+}
+
+/**
+ * What a reply to a card sends: the card itself as context, then the reply.
+ *
+ * A reply starts a fresh turn, and it used to carry only the card's TITLE — so
+ * answering "Which of these three should I book?" sent the model the question's
+ * heading and none of the three options.
+ */
+export function buildCardReply(card: Pick<AssistantCard, 'title' | 'summary'> | undefined, text: string): string {
+  if (!card) return text;
+  const body = (card.summary ?? '').trim();
+  const excerpt = body.length > 2000 ? `${body.slice(0, 2000)}…` : body;
+  const quoted = excerpt ? `\n${excerpt.split('\n').map((l) => `> ${l}`).join('\n')}\n` : '';
+  return `Replying to your earlier message "${card.title}":${quoted}\n${text}`;
+}
+
 function CardWidget({
   card,
   onAction,
@@ -274,7 +325,7 @@ function CardWidget({
 
   const hasA2UIDoc = !!card.doc;
   const isLong = (card.summary?.length || 0) > 300;
-  const hasQuestion = card.summary && (/\?[\s]*$/.test(card.summary.trim()) || /would you|could you|do you|what|when|how|which/i.test(card.summary));
+  const hasQuestion = cardAsksQuestion(card.summary);
 
   return (
     <div className="rounded-xl border border-border/50 bg-card shadow-sm hover:shadow-md transition-all overflow-hidden">
@@ -283,12 +334,12 @@ function CardWidget({
         <div className="flex-1 min-w-0 pr-2">
           <p className="text-sm font-semibold text-foreground leading-snug">{card.title}</p>
           <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
-            {new Date(card.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {formatCardTime(card.timestamp)}
             {card.pinned && ' · Pinned'}
             {card.unread && <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary ml-1.5 align-middle" />}
           </p>
         </div>
-        <Button variant="ghost" size="icon-sm" onClick={() => dismissCard(card.id)} className="shrink-0 -mt-1 -mr-2 opacity-0 group-hover:opacity-100 hover:opacity-100" title="Dismiss">
+        <Button variant="ghost" size="icon-sm" onClick={() => dismissCard(card.id)} className="shrink-0 -mt-1 -mr-2 opacity-0 group-hover:opacity-100 hover:opacity-100 focus-visible:opacity-100" title="Dismiss" aria-label="Dismiss card">
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -361,6 +412,7 @@ function CardWidget({
                 }
               }}
               placeholder="Type a reply..."
+              aria-label="Reply"
               className="flex-1 text-sm rounded-lg border border-border bg-background px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
               autoFocus
             />
@@ -374,6 +426,7 @@ function CardWidget({
                 }
               }}
               disabled={!replyText.trim()}
+              aria-label="Send reply"
             >
               Send
             </Button>
@@ -505,7 +558,6 @@ export function AssistantSurface() {
   const updateCard = useAssistantStore((s) => s.updateCard);
 
 
-  const addOrder = useAssistantStore((s) => s.addOrder);
   const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   // The route comes from the SAME `resolveSendRoute` chokepoint every other
   // surface uses — see the comment at the fetch below.
@@ -612,6 +664,8 @@ export function AssistantSurface() {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    /** Hoisted so an abort can keep what already arrived. */
+    let fullText = '';
     runRecorder.begin({
       trigger: opts?.trigger ?? (scheduledPrompt !== undefined ? "cron" : "manual"),
       model: route?.model ?? undefined,
@@ -649,7 +703,6 @@ export function AssistantSurface() {
         return;
       }
 
-      let fullText = '';
       /** Set by an SSE `error` event; reported once the stream ends. */
       let streamError: string | null = null;
 
@@ -710,6 +763,11 @@ export function AssistantSurface() {
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
+        /*
+         * A Stop is not an error, but it IS an ending. Returning here left the
+         * card on "Thinking..." for ever, which reads as still running.
+         */
+        updateCard(cardId, { summary: fullText ? `${fullText}\n\n_Stopped._` : 'Stopped.', unread: false });
         runRecorder.cancel();
         return;
       }
@@ -729,13 +787,24 @@ export function AssistantSurface() {
     isStreamingRef.current = false;
   }, []);
 
+  /*
+   * Enter sends; it never stops. It used to abort a live turn — so pressing
+   * Enter on a follow-up you had started typing killed the answer you were
+   * waiting for. Esc stops, which is what every other surface does. And Enter
+   * that COMMITS an IME composition (Japanese, Chinese, Korean input) is the
+   * input method's, not ours: sending there sent half a word.
+   */
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Escape" && isStreaming) {
         e.preventDefault();
-        if (isStreaming) handleAbort();
-        else handleSubmit();
+        handleAbort();
+        return;
       }
+      if (e.key !== "Enter" || e.shiftKey) return;
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      if (!isStreaming) void handleSubmit();
     },
     [handleSubmit, handleAbort, isStreaming]
   );
@@ -758,7 +827,6 @@ export function AssistantSurface() {
   const handleCardReply = useCallback((cardId: string, text: string) => {
     // Find the card to get context
     const card = useAssistantStore.getState().cards.find((c) => c.id === cardId);
-    const context = card ? `Regarding "${card.title}": ` : '';
     /*
      * Submit directly with the prompt as the argument. This used to set the
      * composer and click `[data-assistant-submit]` after 50ms — which raced
@@ -766,25 +834,21 @@ export function AssistantSurface() {
      * turn had started in between, clicked what is then the STOP button,
      * aborting a live run.
      */
-    void handleSubmit(context + text, { trigger: "manual" });
+    void handleSubmit(buildCardReply(card, text), { trigger: "manual" });
   }, [handleSubmit]);
 
   return (
     <div className="flex h-full bg-background">
-      {/* Left sidebar — Standing Orders */}
+      {/* Left sidebar — schedules (standing orders) */}
       <OrdersSidebar
         orders={orders}
         onSelectOrder={setSelectedOrderId}
         selectedOrderId={selectedOrderId}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)}
-        onActivateTemplate={(tpl) => {
-          if (tpl.parameters && tpl.parameters.length > 0) {
-            setActiveTemplate(tpl);
-          } else {
-            addOrder(tpl.buildOrder());
-          }
-        }}
+        // Always through the dialog: every template now opens on its schedule,
+        // so the user sees (and can change) when it will run before it does.
+        onActivateTemplate={setActiveTemplate}
       />
 
       {/* Main area */}
@@ -817,7 +881,7 @@ export function AssistantSurface() {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder='Try: "Remind me every morning to check my emails" or "Watch my build and let me know if it fails"'
+                placeholder='Try: "Remind me every morning to check my emails" or "Watch my build and let me know if it fails" (Esc stops a reply)'
                 rows={2}
                 className="min-h-[56px] max-h-[120px] resize-none border-0 bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
               />
@@ -830,6 +894,8 @@ export function AssistantSurface() {
                   // event as `scheduledPrompt`.
                   onClick={isStreaming ? handleAbort : () => handleSubmit()}
                   disabled={!isStreaming && !inputValue.trim()}
+                  aria-label={isStreaming ? "Stop" : "Send"}
+                  title={isStreaming ? "Stop (Esc)" : "Send"}
                 >
                   {isStreaming ? <Square className="h-3.5 w-3.5" /> : <ArrowUp className="h-4 w-4" />}
                 </Button>
@@ -845,56 +911,14 @@ export function AssistantSurface() {
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Bot className="h-12 w-12 mb-4 opacity-30" />
                 <h2 className="text-lg font-semibold text-foreground mb-2">Personal Assistant</h2>
-                <p className="text-sm text-center max-w-md mb-6">
-                  Create standing orders to monitor, schedule, and automate tasks.
+                <p className="text-sm text-center max-w-md mb-3">
+                  Create schedules to monitor, remind, and automate tasks.
                   Results appear here as interactive cards.
                 </p>
-                <div className="grid grid-cols-2 gap-3 text-xs max-w-md">
-                  <button
-                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                    onClick={() => setInputValue("Give me a morning briefing every weekday at 9am")}
-                  >
-                    <Sun className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Morning briefing</span>
-                      <br />
-                      <span className="text-muted-foreground">Daily summary at 9am</span>
-                    </div>
-                  </button>
-                  <button
-                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                    onClick={() => setInputValue("Remind me to stretch every 2 hours")}
-                  >
-                    <Timer className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Stretch reminder</span>
-                      <br />
-                      <span className="text-muted-foreground">Every 2 hours</span>
-                    </div>
-                  </button>
-                  <button
-                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                    onClick={() => setInputValue("Watch my latest Buildkite build and alert me if it fails")}
-                  >
-                    <Hammer className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Build monitor</span>
-                      <br />
-                      <span className="text-muted-foreground">Alert on failure</span>
-                    </div>
-                  </button>
-                  <button
-                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                    onClick={() => setInputValue("Make me a to-do list for today")}
-                  >
-                    <ListChecks className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Daily to-do</span>
-                      <br />
-                      <span className="text-muted-foreground">Interactive checklist</span>
-                    </div>
-                  </button>
-                </div>
+                <p className="text-xs text-center max-w-md">
+                  Ask above in plain words — &ldquo;remind me to stretch every 2 hours&rdquo; — or
+                  pick a Quick Start template on the left.
+                </p>
               </div>
             ) : (
               <>

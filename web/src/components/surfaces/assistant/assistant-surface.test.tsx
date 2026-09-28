@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
-import { AssistantSurface, StatusBar } from './assistant-surface';
+import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { AssistantSurface, StatusBar, cardAsksQuestion, formatCardTime, buildCardReply } from './assistant-surface';
 import { useRunStore } from '@/stores/run-store';
 import type { Run } from '@/lib/runs/types';
 import { useAssistantStore } from '@/stores/assistant-store';
@@ -280,5 +280,147 @@ describe('StatusBar', () => {
     render(<StatusBar orders={[]} runs={[run('succeeded'), run('failed')]} />);
     expect(screen.getByText('2 runs recorded')).toBeTruthy();
     expect(screen.getByText('1 failed')).toBeTruthy();
+  });
+});
+
+/** A turn that streams one chunk and then stays open until aborted. */
+function stubHangingTurn() {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    let body: Record<string, unknown> = {};
+    try { body = JSON.parse(String(init?.body ?? '{}')); } catch { /* not JSON */ }
+    calls.push({ url, body });
+    if (url !== '/api/chat/assistant') return url.includes('/api/runs') ? json({ runs: [] }) : json({});
+    const signal = init?.signal;
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'text', content: 'partial' })}\n\n`));
+        signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')));
+      },
+    }), { status: 200 });
+  }));
+}
+
+const composer = (container: HTMLElement) => container.querySelector('textarea')!;
+
+describe('the composer: Enter sends, Esc stops, IME is left alone', () => {
+  it('Enter while a reply is streaming does NOT abort it', async () => {
+    stubHangingTurn();
+    const { container } = renderSurface();
+    fireEvent.change(composer(container), { target: { value: 'first' } });
+    fireEvent.keyDown(composer(container), { key: 'Enter' });
+    await waitFor(() => expect(useAssistantStore.getState().cards[0]?.summary).toBe('partial'));
+
+    fireEvent.change(composer(container), { target: { value: 'follow-up I am typing' } });
+    fireEvent.keyDown(composer(container), { key: 'Enter' });
+    // Still streaming: the Stop button is still there, and no second turn began.
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+    expect(calls.filter((c) => c.url === '/api/chat/assistant')).toHaveLength(1);
+  });
+
+  it('Esc stops, and the card says so instead of "Thinking..." for ever', async () => {
+    stubHangingTurn();
+    const { container } = renderSurface();
+    fireEvent.change(composer(container), { target: { value: 'long task' } });
+    fireEvent.keyDown(composer(container), { key: 'Enter' });
+    await waitFor(() => expect(useAssistantStore.getState().cards[0]?.summary).toBe('partial'));
+
+    fireEvent.keyDown(composer(container), { key: 'Escape' });
+    await waitFor(() => expect(useAssistantStore.getState().cards[0]?.summary).toBe('partial\n\n_Stopped._'));
+    await waitFor(() => expect(useRunStore.getState().runs[0]?.status).toBe('cancelled'));
+  });
+
+  it('a stop before any text leaves "Stopped.", not "Thinking..."', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== '/api/chat/assistant') return json({ runs: [] });
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      });
+    }));
+    const { container } = renderSurface();
+    fireEvent.change(composer(container), { target: { value: 'x' } });
+    fireEvent.keyDown(composer(container), { key: 'Enter' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() => expect(useAssistantStore.getState().cards[0]?.summary).toBe('Stopped.'));
+  });
+
+  it('Enter that commits an IME composition does not send', () => {
+    const { container } = renderSurface();
+    fireEvent.change(composer(container), { target: { value: 'にほん' } });
+    fireEvent.keyDown(composer(container), { key: 'Enter', isComposing: true, keyCode: 229 });
+    expect(chatPost()).toBeUndefined();
+    expect(composer(container).value).toBe('にほん');
+  });
+});
+
+describe('cards', () => {
+  it('only a card that ends in a question offers Reply', () => {
+    expect(cardAsksQuestion('Build is green, somewhat slower. However, showing no failures whenever it ran.')).toBe(false);
+    expect(cardAsksQuestion('Here is how to fix it.')).toBe(false);
+    expect(cardAsksQuestion('Three flights found. Which one should I book?')).toBe(true);
+    expect(cardAsksQuestion('Want me to file it? **')).toBe(true);
+    expect(cardAsksQuestion(undefined)).toBe(false);
+  });
+
+  it('shows a date on cards from before today', () => {
+    const now = new Date(2026, 6, 20, 12, 0).getTime();
+    const today = formatCardTime(new Date(2026, 6, 20, 9, 5).getTime(), now);
+    const older = formatCardTime(new Date(2026, 6, 18, 9, 5).getTime(), now);
+    expect(today).not.toMatch(/Jul/);
+    expect(older).toMatch(/Jul/);
+    expect(older).toMatch(/18/);
+  });
+
+  it('a reply carries the card it answers, not just its title', async () => {
+    const reply = buildCardReply({ title: 'Flights', summary: 'A: 9am\nB: 1pm\nWhich should I book?' }, 'B please');
+    expect(reply).toContain('> A: 9am');
+    expect(reply).toContain('> B: 1pm');
+    expect(reply.endsWith('B please')).toBe(true);
+
+    // …and through the surface.
+    vi.stubGlobal('fetch', stubFetch((url) => (url === '/api/chat/assistant' ? sseResponse([]) : undefined)));
+    useAssistantStore.setState({
+      cards: [{ id: 'c1', title: 'Flights', summary: 'A: 9am\nB: 1pm\nWhich should I book?', timestamp: Date.now(), unread: true, pinned: false }],
+    });
+    renderSurface();
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+    fireEvent.change(screen.getByPlaceholderText('Type a reply...'), { target: { value: 'B please' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send reply' }));
+    await waitFor(() => expect(chatPost()).toBeDefined());
+    expect(chatPost()!.body.message).toContain('> B: 1pm');
+  });
+});
+
+describe('the sidebar', () => {
+  const seedOrder = () =>
+    useAssistantStore.setState({
+      orders: [{
+        id: 'o1', instruction: 'Stretch', trigger: { type: 'cron', expression: '0 9 * * 1-5' }, state: {},
+        status: 'active', notifyVia: 'toast', runCount: 0, errorCount: 0, createdAt: 1, updatedAt: 1,
+      }],
+    });
+
+  it('shows schedules in words, not cron', () => {
+    seedOrder();
+    renderSurface();
+    expect(screen.getByText('Weekdays at 9:00 AM')).toBeTruthy();
+    expect(screen.queryByText('0 9 * * 1-5')).toBeNull();
+  });
+
+  it('asks before deleting', () => {
+    seedOrder();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderSurface();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete schedule' }));
+    expect(confirm).toHaveBeenCalled();
+    expect(useAssistantStore.getState().orders).toHaveLength(1);
+  });
+
+  it('has one Quick Start, not two', () => {
+    renderSurface();
+    expect(screen.getAllByText('Quick Start')).toHaveLength(1);
+    // The centre empty state no longer duplicates it with its own buttons.
+    expect(screen.queryByRole('button', { name: /Stretch reminder/ })).toBeNull();
   });
 });
