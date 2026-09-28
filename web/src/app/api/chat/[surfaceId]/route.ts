@@ -407,36 +407,16 @@ export async function POST(
         }
       });
 
-      // ── Execution resolution (user-added providers) ────────────────────
+      // ── Execution resolution ───────────────────────────────────────────
       // For a model on a user-added provider, resolve the key (keychain by
       // providerId, or the transient request key) and the Anthropic-compat
-      // base URL. No providerConfig ⇒ default BYOK/env/Bedrock path unchanged.
-      const { resolveExecution } = await import('@/lib/models/execution');
-      const exec = await resolveExecution({
+      // base URL. No providerConfig ⇒ the built-in BYOK/env/Bedrock path.
+      const { resolveTurnExecution } = await import('@/lib/models/server-turn');
+      const { exec, usable } = await resolveTurnExecution({
         providerConfig,
         requestApiKey: apiKey,
         // openai-compat providers route through the shim on this same server.
         shimOrigin: new URL(req.url).origin,
-        // Every stored field, not just the key: Bedrock and Vertex are driven by
-        // environment built from region/project/credentials.
-        loadFields: async (id) => {
-          try {
-            const { getCredentialStore } = await import('@/lib/models/credentials');
-            return await getCredentialStore().get(id);
-          } catch {
-            return undefined;
-          }
-        },
-        loadKey: async (id) => {
-          try {
-            const { getCredentialStore } = await import('@/lib/models/credentials');
-            return await getCredentialStore().getField(id, 'apiKey');
-          } catch {
-            // CredentialStoreUnavailable (no AIME_CRED_KEY) or read error →
-            // fall back to whatever the request supplied.
-            return undefined;
-          }
-        },
       });
       if (providerConfig) {
         console.log('[CHAT] Provider config:', providerConfig.providerId,
@@ -450,17 +430,9 @@ export async function POST(
        * A user with nothing configured used to wait for the SDK subprocess to
        * boot and then read "Not logged in · Please run /login" as the
        * assistant's reply. See lib/models/credential-check.ts.
-       *
-       * The Settings key mirrored into the credential store counts, and is
-       * USED when the request carried none — the same fallback the browser
-       * turn and the schedulers already apply — so it cannot pass this check
-       * and then fail at the SDK.
        */
-      const { getServerAnthropicKey } = await import('@/lib/models/credentials');
-      const storedAnthropicKey = providerConfig || exec.apiKey ? undefined : await getServerAnthropicKey();
-      if (storedAnthropicKey) exec.apiKey = storedAnthropicKey;
-      const { hasModelCredentials, NO_MODEL_MESSAGE } = await import('@/lib/models/credential-check');
-      if (!hasModelCredentials({ exec, providerConfig, storedAnthropicKey })) {
+      if (!usable) {
+        const { NO_MODEL_MESSAGE } = await import('@/lib/models/credential-check');
         console.warn('[CHAT] No usable model credentials — refusing the turn before starting the SDK');
         await sse.writeEvent({ type: 'error', message: NO_MODEL_MESSAGE, code: 'no_model' });
         await sse.writeEvent({ type: 'done', error: true });
@@ -873,28 +845,17 @@ export async function POST(
         // a hardcoded name. The surface supplies the (capability, tier) intent
         // (SURFACE_ROUTES); an explicit request capability/tier overrides it —
         // that's how a user's per-surface tier preference arrives.
-        const { resolveRoute, createDefaultRegistry } = await import('@/lib/models/registry');
-        const { getSurfaceRoute } = await import('@/lib/models/surface-routes');
-        const { isBedrockConfigured } = await import('@/lib/bedrock-env');
-        // Availability for the default (Claude) registry: an API key (BYOK/env)
-        // makes the anthropic provider usable; a region makes Bedrock usable.
-        const availableIds = new Set<string>();
-        if (apiKey || process.env.ANTHROPIC_API_KEY) availableIds.add('anthropic');
-        if (isBedrockConfigured()) availableIds.add('bedrock');
-
-        const route = getSurfaceRoute(surfaceId);
-        const wantCapability = capability ?? route.capability;
-        const wantTier = tier ?? route.tier;
-
-        const resolved = resolveRoute(
-          createDefaultRegistry(),
-          wantCapability,
-          wantTier,
-          (p) => availableIds.has(p.id),
-        );
+        const { resolveBuiltinSurfaceModel } = await import('@/lib/models/server-turn');
+        const resolved = resolveBuiltinSurfaceModel({
+          surfaceId,
+          capability,
+          tier,
+          // A user-added provider's key is not an Anthropic key.
+          hasAnthropicKey: !providerConfig && !!exec.apiKey,
+        });
         if (resolved) {
-          effectiveModel = resolved.model.driverModel;
-          console.log('[CHAT] Registry resolved', wantCapability, wantTier, '→', effectiveModel,
+          effectiveModel = resolved.model;
+          console.log('[CHAT] Registry resolved', resolved.capability, resolved.tier, '→', effectiveModel,
             resolved.degraded ? '(degraded)' : '');
         }
         // else: keep surfaceConfig.model as the last-resort fallback.

@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import path from 'node:path';
-import os from 'node:os';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
 import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';
 import { resolveHarnessExecution } from '@/lib/harness/execution';
@@ -102,6 +101,18 @@ export async function POST(request: NextRequest) {
     new URL(request.url).origin,
   );
 
+  /*
+   * Planning runs inside this request, so a caller that goes away stops it.
+   * (Starting the RUN is different on purpose — see ../route.ts: a goal run
+   * outlives the window that started it.)
+   */
+  const planChatId = `harness_init_${conversationId}`;
+  const stopPlanning = () => {
+    console.warn('[HARNESS] Planning request went away — aborting', planChatId);
+    provider.abort(planChatId, surfaceId);
+  };
+  request.signal.addEventListener('abort', stopPlanning, { once: true });
+
   const result = await initializeGoal({
     dir,
     objective,
@@ -112,7 +123,7 @@ export async function POST(request: NextRequest) {
       let text = '';
       for await (const chunk of provider.query({
         prompt,
-        chatId: `harness_init_${conversationId}`,
+        chatId: planChatId,
         userId: `harness_${conversationId}`,
         mcpServers: {},
         model: exec.model,
@@ -136,8 +147,9 @@ export async function POST(request: NextRequest) {
       }
       return text;
     },
-  });
+  }).finally(() => request.signal.removeEventListener('abort', stopPlanning));
 
+  if (request.signal.aborted) return Response.json({ error: 'cancelled' }, { status: 499 });
   if (!result.ok) return Response.json({ error: result.error }, { status: 422 });
   return Response.json({ ok: true, goal: result.goal, ledger: result.ledger, dir, runIndex });
 }

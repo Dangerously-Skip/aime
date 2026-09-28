@@ -4,6 +4,7 @@ import { createSSEStream } from '@/lib/sse';
 import type { ProviderExecConfig } from '@/lib/models/execution';
 import type { Capability, Tier } from '@/lib/models/types';
 import { toApiModelId } from '@/lib/models/api-model-id';
+import { classifyThrownTurnError } from '@/lib/providers/turn-errors';
 
 export const runtime = 'nodejs';
 
@@ -146,6 +147,7 @@ export async function POST(req: NextRequest) {
       {
         error:
           'No API key is configured. Add one in Settings → API Access, or set ANTHROPIC_API_KEY.',
+        code: 'no_model',
       },
       { status: 400 },
     );
@@ -195,7 +197,12 @@ export async function POST(req: NextRequest) {
         streamParams.tools = tools;
       }
 
-      const stream = client.messages.stream(streamParams);
+      /*
+       * Tied to the request: the webview agent's client aborts its fetch on
+       * Stop and when it gives up, and without the signal the model kept
+       * generating — and billing — a turn nobody would read.
+       */
+      const stream = client.messages.stream(streamParams, { signal: req.signal });
 
       let toolInputJson = '';
 
@@ -236,9 +243,13 @@ export async function POST(req: NextRequest) {
         usage: finalMessage.usage,
       });
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error('[BROWSER-TURN] Error:', msg);
-      await sse.writeEvent({ type: 'error', message: msg });
+      if (req.signal.aborted) {
+        console.log('[BROWSER-TURN] Client went away — stream cancelled');
+      } else {
+        const { code, message } = classifyThrownTurnError(error);
+        console.error('[BROWSER-TURN] Error:', code, message);
+        await sse.writeEvent({ type: 'error', message, code });
+      }
     } finally {
       clearInterval(heartbeat);
       await sse.close();
