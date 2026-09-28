@@ -52,7 +52,7 @@ describe('AssistantMessage — errors and retries', () => {
     expect(screen.getByText('Here is the start')).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toMatch(/Rate limited/);
     // One Try again, on the banner — not a second one in the hover actions.
-    expect(screen.getAllByRole('button', { name: /Try again|Retry/ })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /Try again|Regenerate/ })).toHaveLength(1);
   });
 
   it('shows a quiet retry status while the provider backs off', () => {

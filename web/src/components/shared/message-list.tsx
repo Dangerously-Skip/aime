@@ -155,10 +155,23 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
+  /*
+   * A live log, so a screen reader hears new messages without hunting for
+   * them — but busy while a reply streams, which tells assistive tech to hold
+   * the announcement until the reply is complete rather than read it out a
+   * token at a time.
+   */
+  const replyInProgress = messages.some((m) => m.isStreaming || m.isLoading);
+
   return (
     <div
       ref={scrollRef}
       onScroll={handleScroll}
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions"
+      aria-busy={replyInProgress}
+      aria-label="Conversation"
       className={`relative flex-1 overflow-y-auto px-6 py-6 ${fontClass} ${className}`}
     >
       <div ref={contentRef} className="max-w-3xl mx-auto">

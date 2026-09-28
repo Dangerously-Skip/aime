@@ -385,14 +385,16 @@ export const AssistantMessage = memo(function AssistantMessage({
           </div>
         )}
 
-        {/* Actions — visible on hover */}
+        {/* Actions — revealed on hover, and on keyboard focus (focus-within). */}
         {!isStreaming && !isLoading && content && (
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             <Button
               variant="ghost"
               size="icon"
               className="h-7 w-7 text-muted-foreground hover:text-foreground"
               onClick={handleCopy}
+              aria-label={copied ? "Copied" : "Copy reply"}
+              title="Copy"
             >
               {copied ? (
                 <Check className="h-3.5 w-3.5 text-success" />
@@ -408,6 +410,7 @@ export const AssistantMessage = memo(function AssistantMessage({
                 className="h-7 w-7 text-muted-foreground hover:text-foreground"
                 onClick={onRetry}
                 title="Retry"
+                aria-label="Regenerate reply"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
               </Button>
@@ -422,6 +425,8 @@ export const AssistantMessage = memo(function AssistantMessage({
                   className={`h-7 w-7 transition-colors ${currentRating === 1 ? "text-green-500" : "text-muted-foreground hover:text-green-500"}`}
                   onClick={() => handleRate(1)}
                   title="This was helpful"
+                  aria-label="This was helpful"
+                  aria-pressed={currentRating === 1}
                 >
                   <ThumbsUp className="h-3.5 w-3.5" />
                 </Button>
@@ -431,6 +436,8 @@ export const AssistantMessage = memo(function AssistantMessage({
                   className={`h-7 w-7 transition-colors ${currentRating === -1 ? "text-red-500" : "text-muted-foreground hover:text-red-500"}`}
                   onClick={() => handleRate(-1)}
                   title="This was not helpful"
+                  aria-label="This was not helpful"
+                  aria-pressed={currentRating === -1}
                 >
                   <ThumbsDown className="h-3.5 w-3.5" />
                 </Button>
