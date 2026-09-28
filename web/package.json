@@ -44,6 +44,8 @@
       "credential-key.js",
       "bundled-install.js",
       "preload-web.js",
+      "electron/**/*.js",
+      "!electron/**/*.test.*",
       "setup-window.html",
       "setup-handler.js",
       "src/lib/code-workspace/pty-manager.js",
