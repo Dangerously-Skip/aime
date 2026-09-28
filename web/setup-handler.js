@@ -1,6 +1,6 @@
 /**
  * First-launch setup: downloads a self-contained Python from
- * astral-sh/python-build-standalone into ~/.quarry/python/, then
+ * astral-sh/python-build-standalone into ~/.aime/python/, then
  * pip-installs the deps the bundled skills need (python-pptx, fpdf2,
  * Pillow, etc.) and runs `playwright install chromium` so the ppt plugin's
  * HTML-to-PNG slide rendering works without the user lifting a finger.
@@ -63,19 +63,119 @@ async function resolvePythonAssetUrl() {
   return { url: asset.browser_download_url, name: asset.name, tag: release.tag_name };
 }
 
-const QUARRY_DIR = path.join(os.homedir(), ".quarry");
-const PYTHON_DIR = path.join(QUARRY_DIR, "python");
-const PLAYWRIGHT_DIR = path.join(QUARRY_DIR, "playwright-browsers");
-const SENTINEL = path.join(QUARRY_DIR, ".setup-complete");
+// Per-user data directory. `.quarry` is the pre-rename name, still read — see
+// resolveSetupDir. Mirrors DATA_DIR_NAME / LEGACY_DATA_DIR_NAME in
+// src/config/branding.ts (this file is plain CJS in the main process and cannot
+// import TypeScript).
+const DATA_DIR_NAME = ".aime";
+const LEGACY_DATA_DIR_NAME = ".quarry";
+
+function pythonExeIn(pythonDir, platform = process.platform) {
+  return platform === "win32"
+    ? path.join(pythonDir, "python.exe")
+    : path.join(pythonDir, "bin", "python3");
+}
+
+function isCompleteAt(dir) {
+  return fs.existsSync(path.join(dir, ".setup-complete")) && fs.existsSync(pythonExeIn(path.join(dir, "python")));
+}
+
+/**
+ * pip writes each console script (`pip`, `pip3`, `playwright`, …) with the
+ * interpreter's ABSOLUTE path in its shebang. Moving the directory therefore
+ * leaves `python3` itself working and every script beside it failing with "bad
+ * interpreter" — and the server's own data-dir migration (lib/app-paths.ts) has
+ * been moving this directory since the rename. Rewrites the header of any script
+ * in `binDir` that still points at `fromDir`. Idempotent and cheap: it reads 512
+ * bytes of each file and rewrites only the ones that match. POSIX only — on
+ * Windows pip's launchers are .exe files with the path compiled in; `python -m
+ * pip` still works there.
+ */
+function repairMovedScripts(binDir, fromDir, toDir) {
+  let repaired = 0;
+  let entries;
+  try {
+    entries = fs.readdirSync(binDir, { withFileTypes: true });
+  } catch {
+    return repaired;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const file = path.join(binDir, entry.name);
+    try {
+      const fd = fs.openSync(file, "r");
+      const head = Buffer.alloc(512);
+      const n = fs.readSync(fd, head, 0, 512, 0);
+      fs.closeSync(fd);
+      const text = head.subarray(0, n).toString("latin1");
+      if (!text.startsWith("#!") || !text.includes(fromDir)) continue;
+      const content = fs.readFileSync(file, "utf-8");
+      // Only the header: the first three lines cover both pip script forms
+      // (`#!<python>` and the `#!/bin/sh` + `'''exec' "<python>"` trampoline).
+      const lines = content.split("\n");
+      for (let i = 0; i < Math.min(3, lines.length); i++) {
+        lines[i] = lines[i].split(fromDir).join(toDir);
+      }
+      fs.writeFileSync(file, lines.join("\n"));
+      repaired++;
+    } catch {
+      // Unreadable or read-only — leave it; the interpreter itself still works.
+    }
+  }
+  return repaired;
+}
+
+/**
+ * Where the managed Python lives: `~/.aime`, migrated from `~/.quarry`.
+ *
+ *   - only `~/.quarry` exists      → rename it to `~/.aime` (same volume, instant)
+ *   - setup complete only in the legacy dir (both dirs exist — the server made
+ *     `~/.aime` first, or the rename failed) → keep using `~/.quarry` rather than
+ *     download ~300 MB again
+ *   - otherwise                    → `~/.aime`
+ *
+ * Must run in the main process BEFORE the Next server starts: the server's own
+ * migration renames `~/.quarry` on first touch, and this module computed its
+ * paths at require time — so the Python path handed to the server pointed at a
+ * directory the server then moved away, and the next launch re-ran setup.
+ */
+function resolveSetupDir(home = os.homedir()) {
+  const current = path.join(home, DATA_DIR_NAME);
+  const legacy = path.join(home, LEGACY_DATA_DIR_NAME);
+  try {
+    if (!fs.existsSync(current) && fs.existsSync(legacy)) {
+      fs.renameSync(legacy, current);
+    }
+  } catch {
+    // best-effort; fall through to whichever directory has a working install
+  }
+  if (!isCompleteAt(current) && isCompleteAt(legacy)) return legacy;
+  if (process.platform !== "win32" && isCompleteAt(current)) {
+    repairMovedScripts(path.join(current, "python", "bin"), path.join(legacy, "python"), path.join(current, "python"));
+  }
+  return current;
+}
+
+const DATA_DIR = path.join(os.homedir(), DATA_DIR_NAME);
+
+// Resolved on first use, not at require time: resolving can rename a directory
+// in the user's home, which is not something `require` should do as a side
+// effect (a test importing this module would migrate the developer's own data).
+let setupDirCache = null;
+function setupDir() {
+  if (!setupDirCache) setupDirCache = resolveSetupDir();
+  return setupDirCache;
+}
+const pythonDir = () => path.join(setupDir(), "python");
+const playwrightDir = () => path.join(setupDir(), "playwright-browsers");
+const sentinel = () => path.join(setupDir(), ".setup-complete");
 
 function pythonExe() {
-  return process.platform === "win32"
-    ? path.join(PYTHON_DIR, "python.exe")
-    : path.join(PYTHON_DIR, "bin", "python3");
+  return pythonExeIn(pythonDir());
 }
 
 function isSetupComplete() {
-  return fs.existsSync(SENTINEL) && fs.existsSync(pythonExe());
+  return fs.existsSync(sentinel()) && fs.existsSync(pythonExe());
 }
 
 function downloadFile(url, dest, onProgress) {
@@ -134,13 +234,13 @@ function runCommand(cmd, args, opts = {}) {
  * retry, surface an error card, or proceed degraded).
  */
 async function runSetup(report) {
-  await fsp.mkdir(QUARRY_DIR, { recursive: true });
+  await fsp.mkdir(setupDir(), { recursive: true });
 
   // Phase 1: resolve + download Python tarball
   report({ phase: "download-python", detail: "Resolving Python release…" });
   const { url, name: assetName, tag } = await resolvePythonAssetUrl();
   report({ phase: "download-python", percent: 0, detail: "Downloading Python runtime…" });
-  const tarPath = path.join(QUARRY_DIR, assetName);
+  const tarPath = path.join(setupDir(), assetName);
   await downloadFile(url, tarPath, (p) =>
     report({ phase: "download-python", percent: p, detail: `Downloading Python… ${(p * 100).toFixed(0)}%` })
   );
@@ -149,10 +249,10 @@ async function runSetup(report) {
   // a `python/` root directory. tar(1) is on every platform we care about
   // (Windows 10+ ships bsdtar, macOS has it natively).
   report({ phase: "extract-python", detail: "Extracting Python runtime…" });
-  if (fs.existsSync(PYTHON_DIR)) {
-    await fsp.rm(PYTHON_DIR, { recursive: true, force: true });
+  if (fs.existsSync(pythonDir())) {
+    await fsp.rm(pythonDir(), { recursive: true, force: true });
   }
-  await runCommand("tar", ["-xzf", tarPath, "-C", QUARRY_DIR]);
+  await runCommand("tar", ["-xzf", tarPath, "-C", setupDir()]);
   await fsp.rm(tarPath, { force: true });
   if (!fs.existsSync(pythonExe())) {
     throw new Error(`Python not found at ${pythonExe()} after extract`);
@@ -186,11 +286,11 @@ async function runSetup(report) {
   // ~/Library/Caches/ms-playwright (avoids polluting their global cache).
   report({ phase: "install-chromium", detail: "Installing Chromium for slide rendering…" });
   await runCommand(pythonExe(), ["-m", "playwright", "install", "chromium"], {
-    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: PLAYWRIGHT_DIR },
+    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: playwrightDir() },
   });
 
   // Mark complete
-  await fsp.writeFile(SENTINEL, JSON.stringify({
+  await fsp.writeFile(sentinel(), JSON.stringify({
     completedAt: new Date().toISOString(),
     pythonRelease: tag,
     pythonAsset: assetName,
@@ -202,7 +302,11 @@ async function runSetup(report) {
 module.exports = {
   isSetupComplete,
   runSetup,
-  PYTHON_DIR,
-  PLAYWRIGHT_DIR,
+  DATA_DIR,
+  pythonDir,
+  playwrightDir,
   pythonExe,
+  // exported for tests
+  resolveSetupDir,
+  repairMovedScripts,
 };

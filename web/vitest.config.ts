@@ -29,7 +29,10 @@ export default defineConfig({
     // ORIGIN, and the origin is which localStorage profile the app sees. A bug
     // there presents as data loss. A test for it that silently never ran would
     // be worse than none.
-    include: ['src/**/*.test.{ts,tsx}', '*.test.{js,ts}', 'scripts/**/*.test.{js,ts}'],
+    //
+    // `electron/` holds main-web.js's security policy (navigation, IPC sender
+    // checks, permissions) as pure modules — the same argument, only more so.
+    include: ['src/**/*.test.{ts,tsx}', '*.test.{js,ts}', 'scripts/**/*.test.{js,ts}', 'electron/**/*.test.{js,ts}'],
     environment: 'node',
     /**
      * Vitest's 5s default is a fast-laptop assumption. The suite runs in ~14s

@@ -4,10 +4,26 @@
 import type { ExtractionResult } from './types';
 
 /**
+ * SheetJS, with file I/O wired up.
+ *
+ * The maintained build (0.20.x, from cdn.sheetjs.com — the npm registry copy
+ * stopped at 0.18.5 with an unfixed prototype-pollution and a ReDoS) resolves
+ * `import('xlsx')` to its ESM entry, which deliberately does not load `fs`.
+ * Without `set_fs`, every `writeFile` throws "cannot save file" — the ExcelWrite
+ * and ExcelEdit tools would both be dead while reads kept working.
+ */
+async function loadXlsx() {
+  const XLSX = await import('xlsx');
+  const fs = await import('fs');
+  XLSX.set_fs(fs);
+  return XLSX;
+}
+
+/**
  * Extract text from an Excel file as markdown tables per sheet.
  */
 export async function extractXlsx(buffer: Buffer): Promise<ExtractionResult> {
-  const XLSX = await import('xlsx');
+  const XLSX = await loadXlsx();
   const workbook = XLSX.read(buffer, { type: 'buffer' });
   const sheets: string[] = [];
 
@@ -54,7 +70,7 @@ export async function readExcel(
   sheetName?: string,
   range?: string,
 ): Promise<string> {
-  const XLSX = await import('xlsx');
+  const XLSX = await loadXlsx();
   const fs = await import('fs');
   const buffer = fs.readFileSync(filePath);
   const workbook = XLSX.read(buffer, { type: 'buffer' });
@@ -93,7 +109,7 @@ export async function writeExcel(
   filePath: string,
   sheets: Array<{ name: string; data: unknown[][] }>,
 ): Promise<string> {
-  const XLSX = await import('xlsx');
+  const XLSX = await loadXlsx();
   const fs = await import('fs');
   const path = await import('path');
 
@@ -117,7 +133,7 @@ export async function editExcel(
   sheetName: string,
   edits: Array<{ cell: string; value: string | number | boolean }>,
 ): Promise<string> {
-  const XLSX = await import('xlsx');
+  const XLSX = await loadXlsx();
   const fs = await import('fs');
 
   const buffer = fs.readFileSync(filePath);
