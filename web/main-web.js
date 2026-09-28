@@ -18,6 +18,7 @@ const { postInternal } = require("./electron/internal-api");
 const { createRotatingLog } = require("./electron/rotating-log");
 const { createServerSupervisor, loadingPageUrl } = require("./electron/server-supervisor");
 const { migrateMcpConfigFile } = require("./electron/mcp-config-migration");
+const { resolveOpenPath } = require("./electron/open-path-policy");
 
 // Product name, from package.json — this file is plain CJS and cannot import
 // src/config/branding.ts, and package.json is the other place it is defined.
@@ -1468,8 +1469,33 @@ ipc.on("get-analytics-config", (event) => {
   event.returnValue = readAnalyticsConf();
 });
 
+/**
+ * Open a local file or folder with its default app. Returns "" on success or
+ * the reason it did not (shell.openPath's own contract). Validated first —
+ * absolute, existing, not something the OS would run — see
+ * electron/open-path-policy.js. Accepts a file:// URL, which is how the
+ * preview panel holds a local page.
+ */
 ipc.handle("open-path", async (_event, filePath) => {
-  return shell.openPath(expandHome(filePath));
+  const target = resolveOpenPath(filePath, {
+    homedir: os.homedir(),
+    platform: process.platform,
+    exists: (p) => fs.existsSync(p),
+    isExecutableFile: (p) => {
+      if (process.platform === "win32") return false;
+      try {
+        const st = fs.statSync(p);
+        return st.isFile() && (st.mode & 0o111) !== 0;
+      } catch {
+        return false;
+      }
+    },
+  });
+  if (!target.ok) {
+    console.warn("[AIME] open-path refused:", target.reason, String(filePath).slice(0, 200));
+    return target.reason;
+  }
+  return shell.openPath(target.path);
 });
 
 ipc.handle("read-file", async (_event, filePath) => {

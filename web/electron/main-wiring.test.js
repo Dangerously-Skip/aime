@@ -44,6 +44,17 @@ describe('first-launch setup window', () => {
   });
 });
 
+describe('open-path', () => {
+  it('validates through the policy before shell.openPath', () => {
+    const start = code.indexOf('ipc.handle("open-path"');
+    expect(start).toBeGreaterThan(-1);
+    const handler = code.slice(start, code.indexOf('\n});', start));
+    expect(handler).toMatch(/resolveOpenPath\(/);
+    expect(handler).toMatch(/shell\.openPath\(target\.path\)/);
+    expect(handler).not.toMatch(/shell\.openPath\(expandHome/);
+  });
+});
+
 describe('MCP config repair at launch', () => {
   it('goes through the atomic migration module, not a truncating write', () => {
     expect(code).toMatch(/require\("\.\/electron\/mcp-config-migration"\)/);

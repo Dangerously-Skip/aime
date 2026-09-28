@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getUserName: () => ipcRenderer.invoke("get-user-name"),
   getApiToken: () => ipcRenderer.invoke("get-api-token"),
   getHomeDir: () => ipcRenderer.invoke("get-home-dir"),
+  /**
+   * Open an absolute local path — or a file:// URL — with its default app.
+   * Resolves to "" on success, else the reason (not found, not absolute, an
+   * executable). window.open cannot do this: it refuses non-http URLs.
+   */
   openPath: (path) => ipcRenderer.invoke("open-path", path),
   readFile: (path) => ipcRenderer.invoke("read-file", path),
   writeFile: (path, content) => ipcRenderer.invoke("write-file", path, content),
