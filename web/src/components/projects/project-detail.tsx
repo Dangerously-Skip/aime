@@ -36,7 +36,6 @@ import {
   Timer,
   ToggleLeft,
   ToggleRight,
-  Users,
   Bot,
 } from "lucide-react";
 import {
@@ -55,9 +54,15 @@ import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 import { useAttendedJobs } from '@/hooks/use-attended-jobs';
+import { SchedulePicker, type ScheduleChange } from "@/components/schedule/schedule-picker";
+import { describeTrigger, type Trigger } from "@/lib/schedule/schedule";
+import { APP_NAME } from "@/config/branding";
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
+
+/** What a new project automation opens on: Mondays at 9. */
+const DEFAULT_JOB_TRIGGER: Trigger = { type: "cron", expression: "0 9 * * 1" };
 
 const SURFACE_CONFIG: Record<
   Surface,
@@ -177,7 +182,7 @@ export function ProjectDetail({
   const [editingInstructions, setEditingInstructions] = useState(false);
   const [instructionsDraft, setInstructionsDraft] = useState("");
   const [addingCron, setAddingCron] = useState(false);
-  const [cronExpr, setCronExpr] = useState("");
+  const [cronSchedule, setCronSchedule] = useState<ScheduleChange>({ trigger: DEFAULT_JOB_TRIGGER, error: null });
   const [cronPrompt, setCronPrompt] = useState("");
   const [cronSurface, setCronSurface] = useState("cowork");
   const [cronError, setCronError] = useState("");
@@ -392,19 +397,16 @@ export function ProjectDetail({
 
   async function handleAddCron() {
     setCronError("");
-    const parts = cronExpr.trim().split(/\s+/);
-    if (parts.length !== 5) { setCronError("Must have 5 fields: min hour dom month dow"); return; }
     if (!cronPrompt.trim()) { setCronError("Prompt is required"); return; }
-    const res = await fetch("/api/cron", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface }),
-    });
-    if (!res.ok) { const d = await res.json() as { error?: string }; setCronError(d.error ?? "Invalid"); return; }
-    // A round trip now; a failure must be visible rather than silently losing
-    // the schedule the user just described.
-    void createAttended({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface, projectId });
-    setCronExpr(""); setCronPrompt(""); setAddingCron(false);
+    const trigger = cronSchedule.trigger;
+    if (!trigger) { setCronError(cronSchedule.error ?? "Pick a schedule"); return; }
+    // A round trip now, and a failure must be visible rather than silently
+    // losing the schedule the user just described — the result was ignored.
+    const id = await createAttended({ trigger, prompt: cronPrompt.trim(), surfaceId: cronSurface, projectId });
+    if (!id) { setCronError("Could not save the schedule. Try again."); return; }
+    setCronSchedule({ trigger: DEFAULT_JOB_TRIGGER, error: null });
+    setCronPrompt("");
+    setAddingCron(false);
   }
 
   function startEditInstructions() {
@@ -456,7 +458,7 @@ export function ProjectDetail({
         <div className="flex items-start justify-between mb-2">
           <div className="flex items-center gap-3">
             <ProjectIcon icon={project.icon} className="h-7 w-7 text-muted-foreground" />
-            <h1 className="text-3xl font-light text-foreground tracking-tight">
+            <h1 className="text-2xl font-semibold text-foreground tracking-tight">
               {project.name}
             </h1>
           </div>
@@ -655,6 +657,7 @@ export function ProjectDetail({
                 size="icon"
                 className="h-7 w-7 text-muted-foreground"
                 onClick={() => setAddingCron((v) => !v)}
+                aria-label="Add automation"
               >
                 <Plus className="h-4 w-4" />
               </Button>
@@ -663,18 +666,16 @@ export function ProjectDetail({
             {addingCron && (
               <div className="p-4 border-b border-border space-y-3 bg-muted/20">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Cron Expression</label>
-                  <input
-                    value={cronExpr}
-                    onChange={(e) => setCronExpr(e.target.value)}
-                    placeholder="0 9 * * 1"
-                    className="w-full h-8 rounded-md border border-input bg-background px-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  <p className="text-[11px] text-muted-foreground">min hour dom month dow — e.g. every Monday 9am</p>
+                  <span className="text-xs font-medium text-muted-foreground">When</span>
+                  <SchedulePicker value={DEFAULT_JOB_TRIGGER} onChange={setCronSchedule} compact />
+                  <p className="text-[11px] text-muted-foreground">
+                    Runs in the project, with its instructions — only while {APP_NAME} is open.
+                  </p>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Prompt</label>
+                  <label htmlFor="project-job-prompt" className="text-xs font-medium text-muted-foreground">Prompt</label>
                   <input
+                    id="project-job-prompt"
                     value={cronPrompt}
                     onChange={(e) => setCronPrompt(e.target.value)}
                     placeholder="Summarize this week's progress"
@@ -682,8 +683,9 @@ export function ProjectDetail({
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Surface</label>
+                  <label htmlFor="project-job-surface" className="text-xs font-medium text-muted-foreground">Surface</label>
                   <select
+                    id="project-job-surface"
                     value={cronSurface}
                     onChange={(e) => setCronSurface(e.target.value)}
                     className="w-full h-8 rounded-md border border-input bg-background px-3 text-xs focus:outline-none"
@@ -693,7 +695,7 @@ export function ProjectDetail({
                     <option value="code">Code</option>
                   </select>
                 </div>
-                {cronError && <p className="text-xs text-destructive">{cronError}</p>}
+                {cronError && <p role="alert" className="text-xs text-destructive">{cronError}</p>}
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleAddCron}>Save</Button>
                   <Button size="sm" variant="ghost" onClick={() => { setAddingCron(false); setCronError(""); }}>Cancel</Button>
@@ -703,7 +705,7 @@ export function ProjectDetail({
 
             {cronJobs.length === 0 && !addingCron ? (
               <div className="px-5 py-6 text-xs text-muted-foreground">
-                No automations yet. Add a cron job to schedule recurring agent runs for this project.
+                No automations yet. Add a schedule to run the agent in this project on a timetable.
               </div>
             ) : (
               <div className="divide-y divide-border">
@@ -713,6 +715,9 @@ export function ProjectDetail({
                       onClick={() => void setAttendedEnabled(job.id, job.status !== 'active')}
                       className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
                       title={(job.status === 'active') ? "Disable" : "Enable"}
+                      role="switch"
+                      aria-checked={job.status === 'active'}
+                      aria-label={`Automation: ${job.prompt}`}
                     >
                       {(job.status === 'active')
                         ? <ToggleRight className="h-4 w-4 text-primary" />
@@ -720,10 +725,13 @@ export function ProjectDetail({
                       }
                     </button>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-mono text-muted-foreground">{job.trigger.expression}</p>
+                      <p className="text-xs text-muted-foreground" title={job.trigger.expression}>
+                        {describeTrigger(job.trigger)}
+                      </p>
                       <p className="text-sm mt-0.5 truncate">{job.prompt}</p>
                       <div className="flex items-center gap-2 mt-1">
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{job.surfaceId}</span>
+                        <span className="text-[10px] text-muted-foreground">Needs {APP_NAME} open</span>
                         {job.lastRun && (
                           <span className="text-[10px] text-muted-foreground">
                             last run {formatTimeAgo(job.lastRun)}
@@ -735,8 +743,11 @@ export function ProjectDetail({
                       </div>
                     </div>
                     <button
-                      onClick={() => void removeAttended(job.id)}
+                      onClick={() => {
+                        if (window.confirm(`Delete the automation "${job.prompt.slice(0, 60)}"?`)) void removeAttended(job.id);
+                      }}
                       className="shrink-0 text-muted-foreground hover:text-destructive transition-colors mt-0.5"
+                      aria-label="Delete automation"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -859,37 +870,6 @@ export function ProjectDetail({
               </div>
             )}
           </div>
-        {/* Team / Multiplayer — Coming Soon */}
-        <div className="mt-4 rounded-xl border border-border/50 bg-card/50 overflow-hidden opacity-50 pointer-events-none select-none">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-border/50">
-            <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Team
-            </h3>
-            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50">
-              Multiplayer Mode Coming Soon
-            </span>
-          </div>
-          <div className="px-5 py-4 space-y-3">
-            {/* Fake member rows */}
-            {["Project Owner", "Collaborator", "Viewer"].map((role) => (
-              <div key={role} className="flex items-center gap-3">
-                <div className="h-7 w-7 rounded-full bg-muted border border-border/50 shrink-0" />
-                <div className="flex-1 space-y-1">
-                  <div className="h-2.5 w-24 rounded bg-muted" />
-                  <div className="h-2 w-16 rounded bg-muted/60" />
-                </div>
-                <div className="h-5 w-14 rounded-full bg-muted/60" />
-              </div>
-            ))}
-            <div className="pt-1">
-              <div className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground/60">
-                <Plus className="h-3.5 w-3.5" />
-                Invite teammate
-              </div>
-            </div>
-          </div>
-        </div>
         </div>
       </div>
 

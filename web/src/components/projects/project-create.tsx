@@ -31,7 +31,7 @@ export function ProjectCreate({ onCancel, onCreate }: ProjectCreateProps) {
   return (
     <div className="flex flex-1 flex-col overflow-auto">
       <div className="w-full max-w-xl mx-auto px-6 py-16">
-        <h1 className="text-3xl font-light text-foreground tracking-tight mb-8">
+        <h1 className="text-2xl font-semibold text-foreground tracking-tight mb-8">
           Create a personal project
         </h1>
 
