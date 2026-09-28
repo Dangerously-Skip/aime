@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback } from "react";
-import { useCron } from "@/hooks/use-cron";
+import { useCron, type FiredJob } from "@/hooks/use-cron";
 import { useExecutionManifest } from "@/hooks/use-execution-manifest";
 import { useAppStore } from "@/stores/app-store";
 import { useContextBusStore } from "@/stores/context-bus-store";
+import { useAssistantStore } from "@/stores/assistant-store";
+import { notifyDesktop } from "@/lib/schedule/notify";
 
 /**
  * The renderer-side schedulers, mounted once.
@@ -29,37 +31,56 @@ import { useContextBusStore } from "@/stores/context-bus-store";
  * reorganises the routing is a scheduler that will stop firing. This mounts in
  * the shell, where "always" is the point rather than a side effect.
  */
-export function Schedulers() {
-  const setActiveSurface = useAppStore((s) => s.setActiveSurface);
+const SURFACE_NAMES: Record<string, string> = {
+  chat: "Chat",
+  cowork: "Cowork",
+  code: "Code",
+  browser: "Browser",
+  assistant: "Assistant",
+};
 
-  /**
-   * A due cron job.
-   *
-   * PUBLISHED, not executed here. This component has no composer, no
-   * conversation and no send path, and giving it one would be a fourth place
-   * that starts a turn. The context bus is how the surfaces already hear about
-   * work that originates outside them; the surface named by the job owns
-   * actually running it.
-   *
-   * Switching to that surface is deliberate: a scheduled run that happens
-   * invisibly is indistinguishable from one that did not happen, which is the
-   * complaint the goal pulse was added to answer.
-   */
-  const onFire = useCallback(
-    (job: { id: string; prompt: string; surfaceId: string }) => {
-      useContextBusStore.getState().publish({
-        summary: job.prompt,
-        source: `cron:${job.id}`,
-        // p0: the user asked for this at a specific time, and a scheduled run
-        // that arrives quietly is one they will not know ran.
-        priority: "p0",
-        targetSurface: job.surfaceId || undefined,
-        payload: { prompt: job.prompt, cronJobId: job.id },
-      });
-      if (job.surfaceId) setActiveSurface(job.surfaceId as never);
-    },
-    [setActiveSurface],
-  );
+/**
+ * A due attended job, handed to its surface — WITHOUT taking over the screen.
+ *
+ * PUBLISHED, not executed here. This component has no composer, no
+ * conversation and no send path, and giving it one would be a fourth place that
+ * starts a turn. The context bus is how the surfaces already hear about work
+ * that originates outside them; the surface named by the job runs it, in a
+ * conversation of its own filed under the job's project (use-scheduled-prompt →
+ * job-conversation).
+ *
+ * IT USED TO SWITCH THE ACTIVE SURFACE, on the theory that a run nobody sees is
+ * indistinguishable from one that did not happen. True — but yanking the user
+ * out of whatever they were typing, at 9:00 sharp, is the wrong answer to it.
+ * Every surface is mounted all the time, so the job runs in the background, and
+ * visibility comes from a notification (quiet hours respected) plus a line in
+ * the Assistant's activity log, which its health panel reads.
+ */
+export function fireAttendedJob(job: FiredJob): void {
+  useContextBusStore.getState().publish({
+    summary: job.prompt,
+    source: `cron:${job.id}`,
+    // p0: the user asked for this at a specific time.
+    priority: "p0",
+    targetSurface: job.surfaceId || undefined,
+    payload: { prompt: job.prompt, cronJobId: job.id, ...(job.projectId ? { projectId: job.projectId } : {}) },
+  });
+
+  const surface = SURFACE_NAMES[job.surfaceId] ?? job.surfaceId;
+  const short = job.prompt.length > 80 ? `${job.prompt.slice(0, 80)}…` : job.prompt;
+  useAssistantStore.getState().addActivity({
+    type: "order-fired",
+    label: `Ran in ${surface}: ${short}`.slice(0, 120),
+    orderId: job.id,
+  });
+  // Only when it is running out of sight — on the visible surface you watch it start.
+  if (useAppStore.getState().activeSurface !== job.surfaceId) {
+    notifyDesktop(`Scheduled job started in ${surface}`, short);
+  }
+}
+
+export function Schedulers() {
+  const onFire = useCallback((job: FiredJob) => fireAttendedJob(job), []);
 
   useCron(onFire);
 

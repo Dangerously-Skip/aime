@@ -11,7 +11,8 @@ import { test, expect } from '@playwright/test';
  *
  * So this drives the whole renderer chain in a real browser:
  *
- *     minute tick → useCron → isJobDue → onFire → surface + recorded run
+ *     minute tick → useCron → isJobDue → onFire → the job's surface runs it
+ *     (in the background — the active surface is not switched) + recorded run
  *
  * Jobs live in the ORDER MANIFEST now (DR-24). The browser cron store this
  * suite used to seed no longer exists, and an attended order is what a cron job
@@ -104,12 +105,22 @@ test.describe('a due job reaches its surface', () => {
     expect(listeners, 'nothing subscribed to the minute tick').toBeGreaterThan(0);
   });
 
-  test('a due job switches to its surface', async ({ page }) => {
+  test('a due job runs WITHOUT pulling you off the surface you are on', async ({ page }) => {
+    /*
+     * It used to switch the active surface when a job fired, so at 9:00 sharp
+     * whatever you were typing was yanked away. Every surface is mounted all
+     * the time, so the job runs in the background and a notification says so.
+     */
+    const posts: string[] = [];
+    await page.route('**/api/chat/**', async (route) => {
+      posts.push(route.request().url());
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: {"type":"done"}\n\n' });
+    });
     await page.getByRole('button', { name: 'Code', exact: true }).click().catch(() => {});
     await fireTick(page);
-    // The Browser surface's own chrome proves it is VISIBLE, not merely mounted
-    // — every surface always is.
-    await expect(page.getByPlaceholder('Enter URL or search...')).toBeVisible({ timeout: 10_000 });
+    await expect.poll(() => posts.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    // The Browser surface's own chrome would prove it had been brought forward.
+    await expect(page.getByPlaceholder('Enter URL or search...')).not.toBeVisible();
   });
 
   test('THE JOB ACTUALLY RUNS — a turn starts on that surface', async ({ page }) => {

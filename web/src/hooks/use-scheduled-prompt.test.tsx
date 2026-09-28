@@ -3,6 +3,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor, cleanup } from '@testing-library/react';
 import { useScheduledPrompt } from './use-scheduled-prompt';
 import { useContextBusStore } from '@/stores/context-bus-store';
+import { useCallback } from 'react';
+import { useChatStore } from '@/stores/chat-store';
+import { useConversationStore } from '@/stores/conversation-store';
+import { useProjectStore } from '@/stores/project-store';
+import { useAppStore } from '@/stores/app-store';
 
 /**
  * A DUE CRON JOB HAS TO ACTUALLY RUN.
@@ -153,5 +158,58 @@ describe('a busy surface defers the job instead of dropping it', () => {
     renderHook(() => useScheduledPrompt('browser', submit));
     act(() => { fireCron('browser', 'no guard'); });
     await waitFor(() => expect(submit).toHaveBeenCalledWith('no guard'));
+  });
+});
+
+/**
+ * A surface in miniature: its submit is bound to whatever conversation it had
+ * open WHEN IT RENDERED, exactly like the real ones (`handleSubmit` closes over
+ * `chatId`). That binding is the point of the test — a submit from the render
+ * before the switch would send the job into the user's conversation.
+ */
+function useFakeChatSurface(sent: Array<{ prompt: string; chatId: string | null }>) {
+  const chatId = useChatStore((s) => s.currentChatId);
+  const submit = useCallback((prompt: string) => { sent.push({ prompt, chatId }); }, [chatId, sent]);
+  useScheduledPrompt('chat', submit);
+}
+
+describe('a job runs in its own conversation, filed under its project', () => {
+  beforeEach(() => {
+    useChatStore.setState({ currentChatId: 'user-conv' } as never);
+    useConversationStore.setState({ conversations: [], activeId: 'user-conv' } as never);
+    useProjectStore.setState({
+      projects: [{ id: 'p1', name: 'Launch', conversationIds: {} } as never],
+    } as never);
+    useAppStore.setState({ activeSurface: 'code' } as never);
+  });
+
+  it('opens a new project conversation and submits from it — not the one the user had open', async () => {
+    const sent: Array<{ prompt: string; chatId: string | null }> = [];
+    renderHook(() => useFakeChatSurface(sent));
+    act(() => {
+      useContextBusStore.getState().publish({
+        summary: 'weekly summary', source: 'cron:j1', priority: 'p0', targetSurface: 'chat',
+        payload: { prompt: 'weekly summary', cronJobId: 'j1', projectId: 'p1' },
+      });
+    });
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    const conv = useConversationStore.getState().conversations[0];
+    expect(sent[0]).toEqual({ prompt: 'weekly summary', chatId: conv.id });
+    expect(sent[0].chatId).not.toBe('user-conv');
+    // Filed under the project, so the surface's project context (instructions,
+    // knowledge) is derived for it.
+    expect(conv).toMatchObject({ surface: 'chat', projectId: 'p1', title: 'Scheduled: weekly summary' });
+    expect(useProjectStore.getState().projects[0].conversationIds.chat).toEqual([conv.id]);
+    // The user's SURFACE is left alone.
+    expect(useAppStore.getState().activeSurface).toBe('code');
+  });
+
+  it('a surface without conversations still runs the job directly', async () => {
+    const submit = vi.fn();
+    renderHook(() => useScheduledPrompt('browser', submit));
+    act(() => { fireCron('browser', 'check prices'); });
+    await waitFor(() => expect(submit).toHaveBeenCalledWith('check prices'));
+    expect(useConversationStore.getState().conversations).toHaveLength(0);
   });
 });

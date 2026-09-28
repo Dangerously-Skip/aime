@@ -2,9 +2,14 @@
 
 import { useEffect, useRef } from 'react';
 import { useContextBusStore } from '@/stores/context-bus-store';
+import { currentChatOf, hasJobConversations, openJobConversation } from '@/lib/schedule/job-conversation';
 
 /** How often a busy surface re-checks for room to run its due job. */
 const BUSY_RETRY_MS = 5_000;
+/** How often to check whether the surface has switched to the job's conversation. */
+const SWITCH_POLL_MS = 25;
+/** Give up waiting for that switch after this long and run the job anyway. */
+const SWITCH_DEADLINE_MS = 2_000;
 
 /**
  * Run a scheduled prompt on the surface it was addressed to.
@@ -62,21 +67,53 @@ export function useScheduledPrompt(
    * Declared BEFORE the subscription effect so it runs first: effects fire in
    * declaration order, so the ref is current by the time a job is dispatched.
    */
+  /** Commits seen — lets a pending job wait for a render AFTER its switch. */
+  const commitsRef = useRef(0);
   useEffect(() => {
     submitRef.current = submit;
     isBusyRef.current = isBusy;
     retryMsRef.current = opts?.retryMs;
+    commitsRef.current += 1;
   });
 
   const events = useContextBusStore((s) => s.events);
+
+  /**
+   * A job whose conversation has been opened and is waiting for the surface to
+   * re-render into it. Submitting in the same tick would send from the OLD
+   * render's submit, bound to the conversation the user had open — the very
+   * thing the fresh conversation exists to avoid. So the job waits until the
+   * surface reports the new conversation as current (normally the next commit).
+   */
+  const pendingRef = useRef<{ prompt: string; conversationId: string; deadline: number; commit: number } | null>(null);
 
   useEffect(() => {
     if (!surfaceId) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
+    const runPending = (): boolean => {
+      const pending = pendingRef.current;
+      if (!pending) return false;
+      // The store says so AND the surface has re-rendered since, so `submitRef`
+      // holds a submit bound to the new conversation, not the old one.
+      const switched =
+        currentChatOf(surfaceId) === pending.conversationId && commitsRef.current > pending.commit;
+      if (!switched && Date.now() < pending.deadline) {
+        retryTimer = setTimeout(tryRun, SWITCH_POLL_MS);
+        return true;
+      }
+      // Switched — or it never will; running it where it can beats dropping it.
+      pendingRef.current = null;
+      void Promise.resolve(submitRef.current(pending.prompt)).catch((err) => {
+        console.error(`[cron] ${surfaceId} failed to run a scheduled prompt:`, err);
+      });
+      return true;
+    };
+
     const tryRun = () => {
       if (cancelled) return;
+      if (runPending()) return;
       const due = events.find(
         (e) =>
           !e.consumed &&
@@ -92,10 +129,28 @@ export function useScheduledPrompt(
         return;
       }
 
-      const prompt = (due.payload as { prompt: string }).prompt;
+      const { prompt, projectId } = due.payload as { prompt: string; projectId?: string };
 
       // Consume FIRST — see the note above about doubling a run.
       useContextBusStore.getState().consume(due.id);
+
+      /*
+       * Its own conversation, filed under its project — see job-conversation.
+       * The submit waits for the surface to switch to it (runPending above).
+       */
+      if (hasJobConversations(surfaceId)) {
+        const conversationId = openJobConversation(surfaceId, { prompt, projectId });
+        if (conversationId) {
+          pendingRef.current = {
+            prompt,
+            conversationId,
+            deadline: Date.now() + SWITCH_DEADLINE_MS,
+            commit: commitsRef.current,
+          };
+          retryTimer = setTimeout(tryRun, 0);
+          return;
+        }
+      }
 
       void Promise.resolve(submitRef.current(prompt)).catch((err) => {
         console.error(`[cron] ${surfaceId} failed to run a scheduled prompt:`, err);

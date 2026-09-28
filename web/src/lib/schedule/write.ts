@@ -1,4 +1,5 @@
 import type { ManifestOrderLike } from './attended-jobs';
+import { validateTrigger, type Trigger } from './schedule';
 
 /**
  * Creating, pausing and deleting scheduled jobs — against the manifest.
@@ -25,8 +26,10 @@ import type { ManifestOrderLike } from './attended-jobs';
  */
 
 export interface NewAttendedJob {
-  /** Cron expression. Interval and event triggers come later. */
-  expression: string;
+  /** The schedule. Takes precedence over `expression`. */
+  trigger?: Trigger;
+  /** A cron expression — the older spelling of `trigger: { type: 'cron', … }`. */
+  expression?: string;
   prompt: string;
   surfaceId: string;
   /** When created from a project, so it stays visible there. */
@@ -65,6 +68,10 @@ async function writeOrders(orders: unknown[]): Promise<boolean> {
  * caller that ignores this silently loses the user's job.
  */
 export async function createAttendedJob(job: NewAttendedJob): Promise<string | null> {
+  const trigger: Trigger = job.trigger ?? { type: 'cron', expression: job.expression ?? '' };
+  // Refused here rather than saved to never fire: the tickers read the same parsers.
+  if (trigger.type === 'event' || validateTrigger(trigger)) return null;
+
   const existing = await readOrders();
   if (existing === null) return null;
 
@@ -75,7 +82,7 @@ export async function createAttendedJob(job: NewAttendedJob): Promise<string | n
     attended: true,
     surfaceId: job.surfaceId,
     projectId: job.projectId,
-    trigger: { type: 'cron' as const, expression: job.expression },
+    trigger: { type: trigger.type, expression: trigger.expression },
     status: 'active' as const,
     /*
      * STAMPED AS RUN NOW, for the same reason the migration does it: a job with
