@@ -42,6 +42,11 @@ function Switch({
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         "disabled:cursor-not-allowed disabled:opacity-50",
         "data-[checked]:bg-primary data-[unchecked]:bg-input",
+        // `--input` is barely distinguishable from the dark backgrounds, so an
+        // off switch all but vanished in dark mode. A faint border keeps its
+        // outline visible on every theme without changing the on state — a
+        // border rather than a ring, so it cannot fight the focus-visible ring.
+        "data-[unchecked]:border-foreground/15",
         className,
       )}
     >

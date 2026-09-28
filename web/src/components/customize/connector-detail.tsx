@@ -108,7 +108,12 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
         <h2 className="text-lg font-semibold">Connectors</h2>
         <p className="text-sm text-muted-foreground mt-1 max-w-sm">
           Connectors are MCP servers defined in{" "}
-          <code className="text-xs bg-muted px-1 py-0.5 rounded">~/.claude/{MCP_CONFIG_FILENAME}</code>.
+          <code
+            className="inline-block max-w-full truncate align-bottom whitespace-nowrap text-xs bg-muted px-1 py-0.5 rounded"
+            title={`~/.claude/${MCP_CONFIG_FILENAME}`}
+          >
+            ~/.claude/{MCP_CONFIG_FILENAME}
+          </code>.
           Select a connector from the sidebar or add a new one.
         </p>
         <div className="flex items-center gap-2 mt-4">
@@ -207,6 +212,8 @@ export function ConnectorDetail({ connectorId }: ConnectorDetailProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 text-destructive hover:text-destructive"
+            aria-label="Remove connector"
+            title="Remove connector"
             onClick={handleDelete}
           >
             <Trash2 className="h-3.5 w-3.5" />

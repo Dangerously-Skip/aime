@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { BrowseConnectors } from './browse-connectors';
 import { useConnectorStore } from '@/stores/connector-store';
 import type { ConnectorHealthReport } from '@/lib/connectors/health';
@@ -81,6 +81,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** Press the destructive button in the confirmation dialog. */
+function confirmDisconnect() {
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Disconnect' }));
+}
+
 /** github reads as connected in the client store, with a real credential. */
 function connectGithub(token = 'ghp_real') {
   useConnectorStore.setState({
@@ -95,6 +100,7 @@ describe('BrowseConnectors — Disconnect destroys, the toggle does not (DEFECT 
     render(<BrowseConnectors />);
 
     fireEvent.click(await screen.findByTitle('Disconnect'));
+    confirmDisconnect();
 
     await waitFor(() => expect(provisionCalls('DELETE')).toHaveLength(1));
     expect(String(provisionCalls('DELETE')[0][0])).toContain('intent=disconnect');
@@ -121,6 +127,7 @@ describe('BrowseConnectors — Disconnect destroys, the toggle does not (DEFECT 
     render(<BrowseConnectors />);
 
     fireEvent.click(await screen.findByTitle('Disconnect'));
+    confirmDisconnect();
     await waitFor(() => expect(callsTo('/api/connectors/revoke')).toHaveLength(1));
   });
 });

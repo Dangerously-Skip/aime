@@ -1,6 +1,7 @@
 import 'server-only';
 import * as fs from 'fs';
 import * as path from 'path';
+import { titleCase } from '@/lib/title-case';
 
 /**
  * The deck theme catalog, read from the vendored theme files.
@@ -75,11 +76,9 @@ function token(css: string, name: string, fallback: string): string {
   return m ? m[1].trim() : fallback;
 }
 
+/** `pitch-deck-vc` -> `Pitch Deck VC` (acronym-aware; was "Pitch Deck Vc"). */
 function labelFor(id: string): string {
-  return id
-    .split('-')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
+  return titleCase(id);
 }
 
 function groupFor(id: string): string {
