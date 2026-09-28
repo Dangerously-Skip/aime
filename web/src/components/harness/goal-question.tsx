@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
+import { useHarnessStatus } from '@/hooks/use-harness-status';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useHarnessRoute } from './use-start-goal';
@@ -31,33 +32,18 @@ export function GoalQuestion({
   surfaceId: 'cowork' | 'code';
   onAnswered?: () => void;
 }) {
-  const [question, setQuestion] = useState<ParkedQuestion | null>(null);
+  // The shared status poll (hooks/use-harness-status) — not a 2s poll of its own.
+  const { status, refresh } = useHarnessStatus(chatId, folder);
+  /** The question just answered, hidden until the next status stops reporting it. */
+  const [answeredId, setAnsweredId] = useState<string | null>(null);
+  const parked: ParkedQuestion | null = status?.question ?? null;
+  const question = parked && parked.id !== answeredId ? parked : null;
   const [busy, setBusy] = useState(false);
   const [other, setOther] = useState(false);
   const [text, setText] = useState('');
   /** Per-field answers, keyed by field id. Arrays so multi-select is not special. */
   const [values, setValues] = useState<Record<string, string[]>>({});
   const harnessRoute = useHarnessRoute(null);
-
-  const poll = useCallback(async () => {
-    if (!chatId || !folder) return;
-    try {
-      const res = await fetch(
-        `/api/harness?conversationId=${encodeURIComponent(chatId)}&workingDir=${encodeURIComponent(folder)}`,
-      );
-      if (!res.ok) return;
-      const s = (await res.json()) as { question?: ParkedQuestion | null };
-      setQuestion(s.question ?? null);
-    } catch {
-      // A failed poll is not worth surfacing; the next one is 2s away.
-    }
-  }, [chatId, folder]);
-
-  useEffect(() => {
-    void poll();
-    const id = setInterval(poll, 2000);
-    return () => clearInterval(id);
-  }, [poll]);
 
   const send = async (answer: string) => {
     if (!question || !answer.trim() || !folder) return;
@@ -75,11 +61,11 @@ export function GoalQuestion({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationId: chatId, workingDir: folder, surfaceId, ...harnessRoute() }),
       }).catch(() => {});
-      setQuestion(null);
+      setAnsweredId(question.id);
       setText('');
       setOther(false);
       onAnswered?.();
-      await poll();
+      await refresh();
     } finally {
       setBusy(false);
     }
