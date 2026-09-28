@@ -137,8 +137,10 @@ describe('Design is reachable in the UI', () => {
     readFileSync(resolvePath(process.cwd(), p), 'utf-8');
 
   it('appears in the Customize left rail', () => {
+    // The rail is one `CUSTOMIZE_NAV` array now; sidebar-customize.test.tsx
+    // also asserts every section has an entry.
     expect(read('src/components/layout/sidebar-customize.tsx')).toMatch(
-      /setCustomizeSection\("design"\)/,
+      /section: "design"/,
     );
   });
 
