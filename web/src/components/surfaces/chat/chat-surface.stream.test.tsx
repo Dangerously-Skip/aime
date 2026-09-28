@@ -7,6 +7,7 @@ import { ChatSurface } from './chat-surface';
 import { useChatStore } from '@/stores/chat-store';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useRunStore } from '@/stores/run-store';
+import { useComposerDrafts } from '@/components/shared/composer/draft-store';
 import { streamRegistry } from '@/lib/stream-registry';
 
 /**
@@ -80,6 +81,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
 
   useRunStore.setState({ runs: [], goals: [] });
+  useComposerDrafts.setState({ drafts: {}, lastSent: {} });
   useChatStore.setState({ messages: {}, currentChatId: CHAT, isStreaming: false, streamingChats: {} });
   useConversationStore.setState({ conversations: [], activeId: null });
   for (const id of [CHAT, OTHER]) {
@@ -189,6 +191,17 @@ describe('ChatSurface — a reply stays in the conversation it was asked in', ()
 
     expect(lastContent(CHAT)).toBe('Roses are red');
     expect(lastContent(OTHER)).toBe('unrelated work');
+  });
+});
+
+describe('ChatSurface — the composer keeps focus across the first message', () => {
+  it('the docked composer has focus after the empty-state composer sends', async () => {
+    render(<ChatSurface />);
+    await send('hello');
+    // The empty-state composer is gone; the one under the transcript must be
+    // where the next keystroke goes.
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('Reply...'));
+    streamRegistry.abort(CHAT);
   });
 });
 

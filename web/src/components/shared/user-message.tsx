@@ -25,7 +25,7 @@ function AttachmentChip({ name, category }: AttachmentInfo) {
 }
 
 /** Strip injected <document> blocks from display content */
-function stripDocumentBlocks(text: string): string {
+export function stripDocumentBlocks(text: string): string {
   return text.replace(/\n\n<document name="[^"]*">[\s\S]*?<\/document>/g, '').trim();
 }
 

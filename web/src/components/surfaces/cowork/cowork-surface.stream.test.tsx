@@ -5,6 +5,7 @@ import { CoworkSurface } from './cowork-surface';
 import { useCoworkStore } from '@/stores/cowork-store';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useRunStore } from '@/stores/run-store';
+import { useComposerDrafts } from '@/components/shared/composer/draft-store';
 
 /**
  * The real Cowork surface, driven through its composer, against the real stores
@@ -55,6 +56,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
 
   useRunStore.setState({ runs: [], goals: [] });
+  useComposerDrafts.setState({ drafts: {}, lastSent: {} });
   useCoworkStore.setState({ messages: {}, currentChatId: CHAT, isStreaming: false, streamingChats: {} });
   useConversationStore.setState({ conversations: [], activeId: null });
   for (const id of [CHAT, OTHER]) {
@@ -79,6 +81,27 @@ async function send(text: string) {
 }
 
 const conv = (id: string) => useConversationStore.getState().conversations.find((c) => c.id === id);
+
+describe('CoworkSurface — goal mode', () => {
+  it('Enter does what the button does: with goal mode on it starts a goal, not a chat turn', async () => {
+    render(<CoworkSurface />);
+    fireEvent.click(screen.getByTitle('Work towards a goal across many sessions'));
+    const box = screen.getByPlaceholderText('What would you like to work on?');
+    fireEvent.change(box, { target: { value: 'ship the release' } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter' });
+      await flush();
+    });
+
+    // No folder is picked, so the goal path refuses — and says why. Before,
+    // Enter ignored the toggle and sent the objective as a chat message.
+    expect(screen.getByText(/Pick a folder first/)).toBeTruthy();
+    expect(useCoworkStore.getState().messages[CHAT] ?? []).toHaveLength(0);
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/api/chat/'))).toBe(false);
+    // The objective is kept for when the folder is chosen.
+    expect((box as HTMLTextAreaElement).value).toBe('ship the release');
+  });
+});
 
 describe('CoworkSurface — a turn reports to the conversation it was started in', () => {
   it('records usage against the original chat after a mid-stream switch', async () => {

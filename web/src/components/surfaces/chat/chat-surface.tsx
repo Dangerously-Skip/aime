@@ -11,11 +11,11 @@ import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { streamRegistry } from "@/lib/stream-registry";
-import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, X, ImageIcon, FileText, File, FilePen, PanelRight, PanelRightClose, LayoutDashboard, Pencil, Sparkles, Code2, Lightbulb } from "lucide-react";
-import { AttachmentMenu } from "@/components/shared/attachment-menu";
+import { FileText, FilePen, PanelRight, PanelRightClose, LayoutDashboard, Pencil, Sparkles, Code2, Lightbulb } from "lucide-react";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
+import { Composer, type ComposerHandle } from "@/components/shared/composer/composer";
+import { addComposerAttachment, setComposerText } from "@/components/shared/composer/draft-store";
+import { lastUserPrompt } from "@/components/shared/composer/recall";
 import type { Message } from "@/stores/chat-store";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useFileDrop } from "@/hooks/use-file-drop";
@@ -24,22 +24,17 @@ import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
-import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { summarizeConversation } from "@/lib/memory/summarizer";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { ArtifactPanel } from "@/components/shared/artifact-panel";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
 import { useElectron } from "@/hooks/use-electron";
-import { VoiceButton } from "@/components/shared/voice-button";
-import { parseSlashCommand, applySlashCommand, getSlashSuggestions, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
+import { parseSlashCommand, applySlashCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
 import type { SessionControls } from "@/lib/slash-commands";
-import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
-import { useAtSuggestions, removeAtQuery } from "@/hooks/use-at-suggestions";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasOverlay } from "@/components/shared/canvas-overlay";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import type { CanvasArtifact } from "@/stores/chat-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
 import { categorizeToolCall, isValidSidebarEntry, artifactsFromMessages } from "@/lib/artifact-tracker";
 import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
@@ -48,8 +43,6 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { useToolBudgetStore } from "@/stores/tool-budget-store";
-import type { ToolBudgetReport } from "@/lib/mcp/filter";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useDeckTheme } from "@/hooks/use-deck-theme";
 import { useSearchSettings } from "@/hooks/use-search-settings";
@@ -59,14 +52,6 @@ import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
 const CAPABILITY = getSurfaceRoute("chat").capability;
 
 const EMPTY_SUGGESTIONS: string[] = [];
-
-function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
-  switch (category) {
-    case 'image': return <ImageIcon className="h-3 w-3" />
-    case 'document': return <File className="h-3 w-3" />
-    default: return <FileText className="h-3 w-3" />
-  }
-}
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_CANVAS_ARTIFACTS: CanvasArtifact[] = [];
@@ -87,19 +72,19 @@ function getGreeting(): string {
 }
 
 export function ChatSurface() {
-  const [inputValue, setInputValue] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
-  const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
-  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
-  const { fileSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
-    useAtSuggestions();
+  const composerRef = useRef<ComposerHandle>(null);
   // Cron jobs now route to standing orders via useAssistantStore (see cron_create handler)
   // Artifact tracking — files created by Write/Edit/Bash tool calls
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  // Dropped files join the draft of the conversation on screen — the same
+  // place the composer's own attach button and paste put them.
   const { isDragging, dropZoneProps } = useFileDrop(
-    useCallback((file: AttachmentFile) => setAttachments((prev) => [...prev, file]), [])
+    useCallback(
+      (file: AttachmentFile) => addComposerAttachment("chat", useChatStore.getState().currentChatId ?? "", file),
+      [],
+    )
   );
   const currentChatId = useChatStore((s) => s.currentChatId);
   const chatId = currentChatId ?? "";
@@ -353,9 +338,10 @@ export function ChatSurface() {
   });
 
   const handleSubmit = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { attachments?: AttachmentFile[] }) => {
       if (!text.trim()) return;
       const trimmed = text.trim();
+      const attachments = opts?.attachments ?? [];
 
       // ── Slash command interception ─────────────────────────────────────
       const parsed = parseSlashCommand(trimmed);
@@ -382,7 +368,6 @@ export function ChatSurface() {
           }
           addMessage(id, { id: crypto.randomUUID(), role: "user", content: trimmed, timestamp: Date.now() });
           addMessage(id, { id: crypto.randomUUID(), role: "assistant", content: result.message, timestamp: Date.now() });
-          setInputValue("");
           return;
         }
       }
@@ -427,11 +412,9 @@ export function ChatSurface() {
       });
 
       startStreaming(id);
-      setInputValue("");
 
       const currentAttachments = [...attachments];
       const currentWebSearch = webSearchEnabled;
-      setAttachments([]);
       setWebSearchEnabled(false);
 
       if (currentWebSearch) sendFeatureAdoptionEvent({ feature: 'web_search', surface: 'chat' });
@@ -516,7 +499,6 @@ export function ChatSurface() {
       setCurrentChat,
       personalPreferences,
       displayName,
-      attachments,
       webSearchEnabled,
       projectInstructions,
       projectKnowledge,
@@ -566,102 +548,33 @@ export function ChatSurface() {
     handleSubmit(lastUserMsg.content);
   }, [chatId, isStreaming, handleSubmit]);
 
-  // Both the mic button and the global dictation hotkey land here. The hotkey is
-  // owned once by the app shell (see app-shell / use-push-to-talk) and delivers
-  // to whichever surface is on screen, so this surface does not gate on being
-  // active — the comparison that used to live here is the router's job now.
-  const handleVoiceTranscript = useCallback(
-    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
-    []
+  const submitFromComposer = useCallback(
+    (text: string, attachments: AttachmentFile[]) => {
+      void handleSubmit(text, { attachments });
+    },
+    [handleSubmit],
   );
 
-  // Merged suggestions: slash takes priority
-  const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
-    ? cmdSuggestions
-    : fileSuggestions.map((f) => ({
-        type: 'at' as const,
-        value: f.path,
-        label: '@' + f.name,
-        description: undefined,
-        meta: f.relative,
-      }));
+  /** Up-arrow brings back the last thing you asked in THIS conversation. */
+  const recallText = useMemo(() => lastUserPrompt(messages), [messages]);
 
-  function handleSelectSuggestion(s: CommandSuggestion) {
-    if (s.type === 'slash') {
-      setInputValue(s.value + ' ');
-      setCmdSuggestions([]);
-    } else {
-      const newVal = removeAtQuery(inputValue);
-      setInputValue(newVal);
-      clearAtSuggestions();
-      resolveFileAsAttachment(s.value).then((att) => {
-        if (att) setAttachments((prev) => [...prev, att]);
-      });
-    }
-    setSelectedSuggestionIdx(0);
-  }
+  const attachmentMenu = {
+    onWebSearchToggle: () => setWebSearchEnabled((prev) => !prev),
+    webSearchEnabled,
+    currentProjectId,
+    onAddToProject: (pid: string) => assignToProject(chatId, pid),
+    onNewProject: () => setSidebarMode("projects"),
+    projects: allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon })),
+  };
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (activeSuggestions.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.min(i + 1, activeSuggestions.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === 'Tab' || (e.key === 'Enter' && activeSuggestions.length > 0)) {
-        e.preventDefault();
-        handleSelectSuggestion(activeSuggestions[selectedSuggestionIdx]);
-        return;
-      }
-      if (e.key === 'Escape') {
-        setCmdSuggestions([]);
-        clearAtSuggestions();
-        return;
-      }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (isStreaming) {
-        abort();
-      } else {
-        handleSubmit(inputValue);
-      }
-    }
-  }
-
-  function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const val = e.target.value;
-    setInputValue(val);
-    const textarea = e.target;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-    // Slash suggestions
-    setCmdSuggestions(
-      getSlashSuggestions(val).map((cmd) => ({
-        type: 'slash' as const,
-        value: cmd.name,
-        label: cmd.name,
-        description: cmd.args,
-        meta: cmd.description,
-      }))
-    );
-    // @ file suggestions: chat has no CWD so just clear them
-    clearAtSuggestions();
-    setSelectedSuggestionIdx(0);
-  }
-
-  function handleButtonClick() {
-    if (isStreaming) {
-      abort();
-    } else {
-      handleSubmit(inputValue);
-    }
-  }
+  const modelSelector = (
+    <ModelSelector
+      value={modelRoute?.id ?? ''}
+      onSelectModel={setModelRoute}
+      capability={CAPABILITY}
+      className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
+    />
+  );
 
   const handleArtifactSaved = useCallback(
     (artifactId: string, filePath: string) => {
@@ -723,73 +636,19 @@ export function ChatSurface() {
 
           {/* Centered input card */}
           <div className="w-full max-w-2xl">
-            <CommandPicker
-              suggestions={activeSuggestions}
-              selectedIndex={selectedSuggestionIdx}
-              onSelect={handleSelectSuggestion}
-              onSelectedIndexChange={setSelectedSuggestionIdx}
+            <Composer
+              ref={composerRef}
+              surface="chat"
+              conversationId={chatId}
+              variant="hero"
+              placeholder="How can I help you today?"
+              onSubmit={submitFromComposer}
+              isStreaming={isStreaming}
+              onStop={abort}
+              recallText={recallText}
+              attachmentMenu={attachmentMenu}
+              toolbarEnd={modelSelector}
             />
-            <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-              <Textarea
-                value={inputValue}
-                onChange={handleTextareaChange}
-                onKeyDown={handleKeyDown}
-                placeholder="How can I help you today?"
-                rows={3}
-                className="min-h-[120px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-              />
-              {/* Attachment chips */}
-              {attachments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-                  {attachments.map((att, i) => (
-                    <span
-                      key={i}
-                      className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                    >
-                      <AttachmentIcon category={att.category} />
-                      {att.name}
-                      <button
-                        type="button"
-                        onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                        className="hover:text-foreground"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center justify-between px-4 py-2.5">
-                <div className="flex items-center gap-1">
-                  <AttachmentMenu
-                    onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                    onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                    webSearchEnabled={webSearchEnabled}
-                    currentProjectId={currentProjectId}
-                    onAddToProject={(pid) => assignToProject(chatId, pid)}
-                    onNewProject={() => setSidebarMode("projects")}
-                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                  />
-                  <VoiceButton onTranscript={handleVoiceTranscript} />
-                </div>
-                <div className="flex items-center gap-2">
-                  <ModelSelector
-                    value={modelRoute?.id ?? ''}
-                    onSelectModel={setModelRoute}
-                    capability={CAPABILITY}
-                    className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                  />
-                  <Button
-                    size="icon"
-                    className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/80"
-                    onClick={handleButtonClick}
-                    disabled={!inputValue.trim()}
-                  >
-                    <ArrowUp className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
 
             {/* Quick-start suggestion pills */}
             <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
@@ -801,7 +660,7 @@ export function ChatSurface() {
               ].map((pill) => (
                 <button
                   key={pill.label}
-                  onClick={() => { setInputValue(pill.prompt); setTimeout(() => document.querySelector<HTMLTextAreaElement>('[placeholder="How can I help you today?"]')?.focus(), 50); }}
+                  onClick={() => { setComposerText("chat", chatId, pill.prompt); composerRef.current?.focus(); }}
                   className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-card hover:border-border transition-colors"
                 >
                   <pill.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -849,7 +708,7 @@ export function ChatSurface() {
                     {suggestions.map((s, i) => (
                       <button
                         key={i}
-                        onClick={() => setInputValue(s)}
+                        onClick={() => { setComposerText("chat", chatId, s); composerRef.current?.focus(); }}
                         className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                       >
                         {s}
@@ -862,82 +721,18 @@ export function ChatSurface() {
               {/* Bottom input card */}
               <div className="px-6 pb-4 pt-2">
                 <div className="max-w-3xl mx-auto">
-                  <CommandPicker
-                    suggestions={activeSuggestions}
-                    selectedIndex={selectedSuggestionIdx}
-                    onSelect={handleSelectSuggestion}
-                    onSelectedIndexChange={setSelectedSuggestionIdx}
+                  <Composer
+                    ref={composerRef}
+                    surface="chat"
+                    conversationId={chatId}
+                    placeholder="Reply..."
+                    onSubmit={submitFromComposer}
+                    isStreaming={isStreaming}
+                    onStop={abort}
+                    recallText={recallText}
+                    attachmentMenu={attachmentMenu}
+                    toolbarEnd={modelSelector}
                   />
-                  <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-                    <Textarea
-                      value={inputValue}
-                      onChange={handleTextareaChange}
-                      onKeyDown={handleKeyDown}
-                      placeholder="Reply..."
-                      rows={2}
-                      className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-                      style={{ opacity: isStreaming ? 0.6 : 1 }}
-                    />
-                    {/* Attachment chips */}
-                    {attachments.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-                        {attachments.map((att, i) => (
-                          <span
-                            key={i}
-                            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                          >
-                            {att.name}
-                            <button
-                              type="button"
-                              onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                              className="hover:text-foreground"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        <AttachmentMenu
-                          onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                          onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                          webSearchEnabled={webSearchEnabled}
-                          currentProjectId={currentProjectId}
-                          onAddToProject={(pid) => assignToProject(chatId, pid)}
-                          onNewProject={() => setSidebarMode("projects")}
-                          projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                        />
-                        <VoiceButton onTranscript={handleVoiceTranscript} />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <ModelSelector
-                          value={modelRoute?.id ?? ''}
-                                onSelectModel={setModelRoute}
-                          capability={CAPABILITY}
-                          className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                        />
-                        <Button
-                          size="icon"
-                          className={`h-8 w-8 rounded-lg ${
-                            isStreaming
-                              ? "bg-destructive hover:bg-destructive/80"
-                              : "bg-primary hover:bg-primary/80"
-                          }`}
-                          onClick={handleButtonClick}
-                          disabled={!isStreaming && !inputValue.trim()}
-                          aria-label={isStreaming ? "Stop" : "Send message"}
-                        >
-                          {isStreaming ? (
-                            <Square className="h-3.5 w-3.5" />
-                          ) : (
-                            <ArrowUp className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
