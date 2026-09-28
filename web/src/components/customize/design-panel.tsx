@@ -11,6 +11,7 @@ import { useChatStore } from '@/stores/chat-store'
 import { useConversationStore } from '@/stores/conversation-store';
 import { resolveDeckTheme } from '@/lib/themes/resolve';
 import { Check, Loader2, Palette } from 'lucide-react';
+import { APP_NAME } from '@/config/branding';
 
 /**
  * The deck design picker.
@@ -170,7 +171,7 @@ function ThemePreview({ id }: { id: string }) {
     <div class="card card-accent"><strong>2.1%</strong><br><span class="dim">Churn</span></div>
     <div class="card card-outline"><strong>114%</strong><br><span class="dim">NRR</span></div>
   </div>
-  <div class="deck-footer"><span class="dim2">AIME</span></div>
+  <div class="deck-footer"><span class="dim2">${APP_NAME}</span></div>
 </section></div>
 </body></html>`;
 

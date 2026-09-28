@@ -351,7 +351,7 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
         </div>
         <div>
           <span className="font-medium text-foreground">Invoked by:</span>{" "}
-          {fm["user-invocable"] !== false ? "User or Claude" : "Claude only"}
+          {fm["user-invocable"] !== false ? "You or the assistant" : "The assistant only"}
         </div>
         {fm.model && (
           <div>

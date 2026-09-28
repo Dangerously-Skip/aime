@@ -85,7 +85,7 @@ function MarketplaceContent({ onRetry }: { onRetry: () => void }) {
         <div className="flex-1">
           <h2 className="text-base font-semibold">Marketplace</h2>
           <p className="text-xs text-muted-foreground">
-            Official Claude Code plugins and MCP servers.
+            Plugins and MCP servers from Anthropic&apos;s official plugin directory.
           </p>
         </div>
         <div className="relative w-52">

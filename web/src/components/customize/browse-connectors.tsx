@@ -267,7 +267,7 @@ export function BrowseConnectors() {
             {
               title: 'Connect Snowflake',
               label: 'MCP server URL',
-              placeholder: 'https://ZY31549-LY01550.snowflakecomputing.com/api/v2/databases/AIME_MCP/schemas/MCP/mcp-servers/aime',
+              placeholder: 'https://myorg-myaccount.snowflakecomputing.com/api/v2/databases/AIME_MCP/schemas/MCP/mcp-servers/aime',
               inputType: 'text',
               buttonText: 'Next',
             }
@@ -393,13 +393,13 @@ export function BrowseConnectors() {
       }
 
       if (connector.auth.type === 'aws_iam') {
-        // Run `rqp auth` to authenticate via the nib CLI — opens browser SSO if needed
+        // The server signs in to AWS with the local CLI credentials — opens browser SSO if needed
         setConnectingId(connector.id);
         try {
           const res = await fetch('/api/connectors/aws/auth', { method: 'POST' });
           if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || 'rqp auth failed');
+            throw new Error(err.error || 'AWS sign-in failed. Check that the AWS CLI is installed and configured.');
           }
           setToken(connector.id, 'aws-iam');
           setEnabled(connector.id, true);
@@ -459,7 +459,7 @@ export function BrowseConnectors() {
               placeholder: string;
               hint: string;
             }> = [
-              { key: 'account', label: 'Account identifier', placeholder: 'ORG-ACCOUNT', hint: 'Find this in Snowflake → Account → Account Details → "Account identifier" (e.g. ZY31549-LY01550).' },
+              { key: 'account', label: 'Account identifier', placeholder: 'ORG-ACCOUNT', hint: 'Find this in Snowflake → Account → Account Details → "Account identifier" (e.g. MYORG-MYACCOUNT).' },
               { key: 'database', label: 'Database', placeholder: 'MY_DB', hint: 'Snowflake database containing your MCP server.' },
               { key: 'schema', label: 'Schema', placeholder: 'PUBLIC', hint: 'Schema containing your MCP server.' },
               { key: 'server', label: 'MCP server name', placeholder: 'MY_MCP_SERVER', hint: 'Name of the MCP server you created in Snowflake (CREATE MCP SERVER ...).' },
@@ -530,9 +530,9 @@ export function BrowseConnectors() {
             const msg = err instanceof Error ? err.message : String(err);
             if (msg.includes('Dynamic Client Registration') && connector.auth.fallbackClientIdEnv) {
               throw new Error(
-                `${connector.name} requires a pre-registered Azure AD app. ` +
-                `Ask IT to register an app (redirect URI: http://localhost:3000/api/connectors/oauth/callback) ` +
-                `and set ${connector.auth.fallbackClientIdEnv} in the ${APP_NAME} config.`
+                `${connector.name} needs a pre-registered Microsoft Entra (Azure AD) app. ` +
+                `Register one with the redirect URI http://localhost:3000/api/connectors/oauth/callback ` +
+                `(or have an administrator do it), then set ${connector.auth.fallbackClientIdEnv} in the ${APP_NAME} config.`
               );
             }
             throw err;
@@ -927,7 +927,7 @@ export function BrowseConnectors() {
         <div className="flex-1">
           <h2 className="text-base font-semibold">Connectors</h2>
           <p className="text-xs text-muted-foreground">
-            Connect Claude to your apps, files, and services.
+            Connect {APP_NAME} to your apps, files, and services.
           </p>
           {toolBudget && (
             <p
@@ -1028,11 +1028,11 @@ export function BrowseConnectors() {
             />
           </div>
 
-          {/* Official Plugins section */}
+          {/* Marketplace plugins section */}
           {marketplacePreview.length > 0 && (
             <>
               <div className="flex items-center justify-between mt-8 mb-3">
-                <h3 className="text-sm font-semibold">Official Plugins</h3>
+                <h3 className="text-sm font-semibold">Plugins from the Marketplace</h3>
                 <button
                   onClick={() => setCustomizeSection("browse-marketplace")}
                   className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
