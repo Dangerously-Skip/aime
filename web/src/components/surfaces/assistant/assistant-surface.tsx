@@ -56,6 +56,10 @@ import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useProviderStore } from "@/stores/provider-store";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { useRunRecorder } from "@/hooks/use-run-recorder";
+import { summarizeRuns } from "@/lib/runs/runs";
+import type { Run, RunTrigger } from "@/lib/runs/types";
+import type { StreamUsage } from "@/hooks/use-sse-stream";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -443,16 +447,27 @@ function CardFeed({
 
 // ── Status Bar ───────────────────────────────────────────────────────────────
 
-function StatusBar({ orders }: { orders: StandingOrder[] }) {
+/**
+ * The footer's numbers come from the SAME run log the rows above it render.
+ *
+ * It used to sum `order.runCount` — standing-order executions only — under the
+ * label "total runs", directly beneath a Recent Activity list of chat turns. So
+ * the list showed a run and the footer said "0 total runs", and neither was
+ * wrong about what it counted; they just were not counting the same thing.
+ */
+export function StatusBar({ orders, runs }: { orders: StandingOrder[]; runs: Run[] }) {
   const activeCount = orders.filter((o) => o.status === 'active').length;
   const unreadCount = useAssistantStore((s) => s.cards.filter((c) => c.unread).length);
-  const totalRuns = orders.reduce((sum, o) => sum + o.runCount, 0);
+  const summary = summarizeRuns(runs);
 
   return (
     <div className="flex items-center gap-4 px-4 py-1.5 border-t border-border text-xs text-muted-foreground">
-      <span>{activeCount} active order{activeCount !== 1 ? 's' : ''}</span>
+      <span>{activeCount} active schedule{activeCount !== 1 ? 's' : ''}</span>
       {unreadCount > 0 && <span className="text-primary">{unreadCount} unread</span>}
-      <span>{totalRuns} total run{totalRuns !== 1 ? 's' : ''}</span>
+      <span>{summary.total} run{summary.total !== 1 ? 's' : ''} recorded</span>
+      {summary.failed > 0 && (
+        <span className="text-red-600 dark:text-red-400">{summary.failed} failed</span>
+      )}
     </div>
   );
 }
@@ -497,6 +512,12 @@ export function AssistantSurface() {
   const providers = useProviderStore((s) => s.providers);
   const tierModels = useSettingsStore((s) => s.tierModels);
   const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
+  /*
+   * This surface's own turns are Runs too. It streamed through its own reader
+   * and recorded nothing, so a failed Assistant turn left no trace in the run
+   * log the Activity tab and the Cockpit both read.
+   */
+  const runRecorder = useRunRecorder("assistant");
 
   // Hydrate store on mount
   useEffect(() => {
@@ -562,7 +583,7 @@ export function AssistantSurface() {
    * happened to be sitting in it). A typed submit passes nothing and reads the
    * composer.
    */
-  const handleSubmit = useCallback(async (scheduledPrompt?: string) => {
+  const handleSubmit = useCallback(async (scheduledPrompt?: string, opts?: { trigger?: RunTrigger }) => {
     const prompt = (scheduledPrompt ?? inputValue).trim();
     if (!prompt || isStreaming) return;
     setInputValue("");
@@ -591,6 +612,10 @@ export function AssistantSurface() {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    runRecorder.begin({
+      trigger: opts?.trigger ?? (scheduledPrompt !== undefined ? "cron" : "manual"),
+      model: route?.model ?? undefined,
+    });
 
     try {
       const chatId = `assistant-${Date.now()}`;
@@ -618,11 +643,9 @@ export function AssistantSurface() {
         // The body carries the server's own words (auth failures, unknown
         // surfaces); statusText is frequently empty in fetch.
         const body = (await response.json().catch(() => ({}))) as { error?: string };
-        updateCard(cardId, {
-          summary: body.error ?? `Request failed (${response.status}).`,
-          unread: true,
-        });
-        setIsStreaming(false);
+        const failure = body.error ?? `Request failed (${response.status}).`;
+        updateCard(cardId, { summary: failure, unread: true });
+        runRecorder.fail(failure);
         return;
       }
 
@@ -641,7 +664,9 @@ export function AssistantSurface() {
       await readTurnEvents(
         response.body,
         (event) => {
-          if (event.type === 'text' && typeof event.content === 'string') {
+          if (event.type === 'done' && event.usage) {
+            runRecorder.onUsage(event.usage as StreamUsage);
+          } else if (event.type === 'text' && typeof event.content === 'string') {
             fullText += event.content;
             updateCard(cardId, { summary: fullText });
           } else if (
@@ -678,21 +703,25 @@ export function AssistantSurface() {
           summary: fullText ? `${fullText}\n\n_${streamError}_` : `Error: ${streamError}`,
           unread: true,
         });
-      } else if (fullText) {
-        updateCard(cardId, { summary: fullText, unread: true });
+        runRecorder.fail(streamError);
+      } else {
+        if (fullText) updateCard(cardId, { summary: fullText, unread: true });
+        runRecorder.succeed();
       }
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      updateCard(cardId, {
-        summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
-        unread: true,
-      });
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        runRecorder.cancel();
+        return;
+      }
+      const failure = err instanceof Error ? err.message : String(err);
+      updateCard(cardId, { summary: `Error: ${failure}`, unread: true });
+      runRecorder.fail(failure);
     } finally {
       setIsStreaming(false);
       isStreamingRef.current = false;
       abortRef.current = null;
     }
-  }, [inputValue, isStreaming, anthropicApiKey, addCard, updateCard, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown]);
+  }, [inputValue, isStreaming, anthropicApiKey, addCard, updateCard, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, runRecorder]);
 
   const handleAbort = useCallback(() => {
     abortRef.current?.abort();
@@ -737,7 +766,7 @@ export function AssistantSurface() {
      * turn had started in between, clicked what is then the STOP button,
      * aborting a live run.
      */
-    void handleSubmit(context + text);
+    void handleSubmit(context + text, { trigger: "manual" });
   }, [handleSubmit]);
 
   return (
@@ -888,7 +917,7 @@ export function AssistantSurface() {
         )}
 
         {/* Status bar */}
-        <StatusBar orders={orders} />
+        <StatusBar orders={orders} runs={runs} />
       </div>
 
       {/* Template customization dialog */}

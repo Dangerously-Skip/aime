@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useRunRecorder } from './use-run-recorder';
 import { useCloseRunOnAbort } from './use-close-run-on-abort';
+import { onTurnFailed } from '@/lib/runs/turn-outcome';
 
 /**
  * The bookkeeping every streaming surface needs around a turn.
@@ -66,6 +67,17 @@ export function useTurnWiring({
   // A Stop, a conversation switch or an inactivity timeout aborts the fetch, so
   // neither onDone nor onError runs — without this the Run stays 'running'.
   useCloseRunOnAbort(runRecorder.finish, ownsChat);
+  // A turn that REPORTED a failure (SSE `error`) still ends cleanly and reaches
+  // onDone → succeed(). Tell the recorder first, so it records what happened.
+  // Same ownership rule as aborts: another surface's failure is not ours.
+  const { noteFailure } = runRecorder;
+  useEffect(
+    () =>
+      onTurnFailed(({ chatId: failedChatId, message }) => {
+        if (ownsChat(failedChatId)) noteFailure(message);
+      }),
+    [noteFailure, ownsChat],
+  );
 
   // Both of these persist the answer on the MESSAGE. The answered state used to
   // live in the card's own useState while the message itself is persisted, so

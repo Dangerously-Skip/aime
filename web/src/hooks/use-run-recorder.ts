@@ -32,12 +32,19 @@ export function useRunRecorder(surfaceId: string) {
   // Usage arrives on the `done` event, which may land before or in the same
   // tick as our completion callback — stash it rather than racing for it.
   const usageRef = useRef<StreamUsage | null>(null);
+  /**
+   * A failure the stream REPORTED (an SSE `error`, or a `done` flagged as an
+   * error) without throwing. The stream still ends cleanly and reaches `onDone`,
+   * so without this `succeed()` recorded a failed turn as a success.
+   */
+  const failureRef = useRef<string | null>(null);
 
   const begin = useCallback(
     (params: { trigger: RunTrigger; goalId?: string | null; model?: string }) => {
       const id = globalThis.crypto.randomUUID();
       activeIdRef.current = id;
       usageRef.current = null;
+      failureRef.current = null;
       beginRun({
         id,
         now: Date.now(),
@@ -85,9 +92,21 @@ export function useRunRecorder(surfaceId: string) {
     [endRun],
   );
 
-  const succeed = useCallback(() => finish('succeeded'), [finish]);
+  /** Note a reported failure; the turn's eventual `succeed()` records it. */
+  const noteFailure = useCallback((message: string) => {
+    if (!activeIdRef.current) return;
+    // The first failure is the cause; later ones are usually its echo.
+    failureRef.current ??= message;
+  }, []);
+
+  const succeed = useCallback(() => {
+    const failure = failureRef.current;
+    failureRef.current = null;
+    if (failure) finish('failed', failure);
+    else finish('succeeded');
+  }, [finish]);
   const fail = useCallback((error?: string) => finish('failed', error), [finish]);
   const cancel = useCallback(() => finish('cancelled'), [finish]);
 
-  return { begin, onUsage, succeed, fail, cancel, finish, activeRunId: activeIdRef };
+  return { begin, onUsage, noteFailure, succeed, fail, cancel, finish, activeRunId: activeIdRef };
 }

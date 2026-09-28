@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
-import { AssistantSurface } from './assistant-surface';
+import { AssistantSurface, StatusBar } from './assistant-surface';
+import { useRunStore } from '@/stores/run-store';
+import type { Run } from '@/lib/runs/types';
 import { useAssistantStore } from '@/stores/assistant-store';
 import { useContextBusStore } from '@/stores/context-bus-store';
 import { useSettingsStore } from '@/stores/settings-store';
@@ -64,6 +66,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', stubFetch(() => undefined));
   calls = [];
   useAssistantStore.setState({ cards: [], orders: [] });
+  useRunStore.setState({ runs: [], goals: [] });
   useContextBusStore.setState({ events: [] });
   useProviderStore.setState({ providers: [] });
   useSettingsStore.setState({ anthropicApiKey: null, tierModels: {} });
@@ -240,5 +243,42 @@ describe('the model comes from the route chokepoint, not a hardcoded name', () =
     await waitFor(() => expect(chatPost()).toBeDefined());
     expect(chatPost()!.body.model).toBe('vendor/model-0');
     expect(chatPost()!.body.providerConfig).toMatchObject({ providerId: 'prov1' });
+  });
+});
+
+describe('this surface records its turns as Runs, with the right outcome', () => {
+  it('a turn that reports an error is recorded as failed', async () => {
+    vi.stubGlobal('fetch', stubFetch((url) =>
+      url === '/api/chat/assistant'
+        ? sseResponse([{ type: 'error', code: 'auth', message: 'No API key' }])
+        : undefined,
+    ));
+    renderSurface();
+    publishScheduledPrompt('remind me');
+    await waitFor(() => expect(useRunStore.getState().runs[0]?.status).toBe('failed'));
+    expect(useRunStore.getState().runs[0]).toMatchObject({ surfaceId: 'assistant', trigger: 'cron', error: 'No API key' });
+  });
+
+  it('a clean turn is recorded as succeeded', async () => {
+    vi.stubGlobal('fetch', stubFetch((url) =>
+      url === '/api/chat/assistant' ? sseResponse([{ type: 'text', content: 'ok' }]) : undefined,
+    ));
+    renderSurface();
+    publishScheduledPrompt('hello');
+    await waitFor(() => expect(useRunStore.getState().runs[0]?.status).toBe('succeeded'));
+  });
+});
+
+describe('StatusBar', () => {
+  const run = (status: Run['status']): Run => ({
+    id: crypto.randomUUID(), goalId: null, trigger: 'chat', status, startedAt: 1, deliverables: [],
+  } as unknown as Run);
+
+  it('counts the same runs the log shows — not the orders\' runCount', () => {
+    // The regression: a failed chat turn listed in Recent Activity while the
+    // footer, summing standing-order runCount, said "0 total runs".
+    render(<StatusBar orders={[]} runs={[run('succeeded'), run('failed')]} />);
+    expect(screen.getByText('2 runs recorded')).toBeTruthy();
+    expect(screen.getByText('1 failed')).toBeTruthy();
   });
 });
