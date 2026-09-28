@@ -206,8 +206,9 @@ export function PluginRow({ plugin, compact, onStateChange, installedState }: Pl
             )}
             <button
               onClick={handleUninstall}
-              className="flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+              className="flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               title="Uninstall"
+              aria-label={`Uninstall ${plugin.name}`}
             >
               <Trash2 className="h-3 w-3" />
             </button>

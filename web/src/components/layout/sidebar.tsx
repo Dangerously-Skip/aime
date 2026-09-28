@@ -196,6 +196,7 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
           {/* Avatar + name — opens settings */}
           <button
             onClick={() => setSettingsOpen(true)}
+            title="Profile and settings"
             className="flex items-center gap-2.5 text-xs text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors rounded-md px-1 py-1 flex-1 min-w-0"
           >
             <Avatar size="sm">
@@ -211,6 +212,8 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
           <button
             onClick={() => setActivityFeedOpen(!activityFeedOpen)}
             title="Updates"
+            aria-label={unreadCards > 0 ? `Updates (${unreadCards} unread)` : "Updates"}
+            aria-expanded={activityFeedOpen}
             className="relative p-1.5 rounded-md text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
           >
             <Heart className="h-3.5 w-3.5" />
@@ -233,6 +236,7 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
           <button
             onClick={() => setSettingsOpen(true)}
             title="Settings"
+            aria-label="Settings"
             className="p-1.5 rounded-md text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
           >
             <Settings className="h-3.5 w-3.5" />

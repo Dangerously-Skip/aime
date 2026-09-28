@@ -184,6 +184,7 @@ export function AgentsPanel() {
               setCustomizeSection("landing");
             }
           }}
+          aria-label={showEditor ? "Back to agents" : "Back to Customize"}
           className="p-1 rounded hover:bg-muted transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />

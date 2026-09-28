@@ -919,6 +919,7 @@ export function BrowseConnectors() {
       <div className="flex items-center gap-3 px-6 py-4 border-b border-border shrink-0">
         <button
           onClick={() => setCustomizeSection("connectors")}
+          aria-label="Back to Connectors"
           className="flex items-center justify-center h-8 w-8 rounded-lg hover:bg-muted transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -1146,7 +1147,7 @@ function ConnectorRow({
             <button
               onClick={onDisconnect}
               aria-label={`Disconnect ${connector.name}`}
-              className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
               title="Disconnect"
             >
               <Unplug className="h-3 w-3" />
@@ -1154,11 +1155,17 @@ function ConnectorRow({
           </>
         ) : (
           <>
-            {/* Toggle on/off */}
+            {/* Toggle on/off. A switch, and announced as one: it was a bare
+                button whose only state was its colour, so a screen reader
+                heard "Disable, button" with no hint that it was currently on. */}
             <button
+              type="button"
+              role="switch"
+              aria-checked={isEnabled}
+              aria-label={`Use ${connector.name}`}
               onClick={() => onToggle(isEnabled)}
-              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                isEnabled ? "bg-green-500" : "bg-muted"
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+                isEnabled ? "bg-green-500" : "bg-muted ring-1 ring-inset ring-foreground/15"
               }`}
               title={isEnabled ? "Disable" : "Enable"}
             >
@@ -1172,7 +1179,7 @@ function ConnectorRow({
             <button
               onClick={onDisconnect}
               aria-label={`Disconnect ${connector.name}`}
-              className="flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+              className="flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
               title="Disconnect"
             >
               <Unplug className="h-3 w-3" />

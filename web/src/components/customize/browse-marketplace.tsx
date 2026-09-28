@@ -77,6 +77,7 @@ function MarketplaceContent({ onRetry }: { onRetry: () => void }) {
       <div className="flex items-center gap-3 px-6 py-4 border-b border-border shrink-0">
         <button
           onClick={() => setCustomizeSection("landing")}
+          aria-label="Back to Customize"
           className="flex items-center justify-center h-8 w-8 rounded-lg hover:bg-muted transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
