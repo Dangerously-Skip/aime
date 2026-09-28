@@ -62,6 +62,7 @@ import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useTurnWiring } from "@/hooks/use-turn-wiring";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
+import { APP_NAME } from "@/config/branding";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
@@ -667,7 +668,7 @@ export function CodeSurface() {
         setPlanContent(chatId, lastMsg.content);
       }
       if (!document.hasFocus()) {
-        showNotification("Task complete", "Claude has finished working on your request.");
+        showNotification("Task complete", `${APP_NAME} has finished working on your request.`);
       }
     },
     onError: (error) => {
