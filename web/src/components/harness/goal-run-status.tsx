@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { useHarnessStatus } from '@/hooks/use-harness-status';
 import { Loader2 } from 'lucide-react';
 import { GoalPanel } from './goal-panel';
 
@@ -35,30 +36,14 @@ export function GoalRunStatus({
   /** Bumped by the caller to force an immediate re-check rather than waiting. */
   nudge?: number;
 }) {
-  const [hasGoal, setHasGoal] = useState(false);
+  // The shared status poll (hooks/use-harness-status) — not a 3s poll of its own.
+  const { status, refresh } = useHarnessStatus(chatId, folder);
+  const hasGoal = !!status?.goal;
 
+  // A nudge (a goal just started) re-checks now rather than at the next poll.
   useEffect(() => {
-    if (!folder || !chatId) return;
-    let cancelled = false;
-    const check = async () => {
-      try {
-        const res = await fetch(
-          `/api/harness?conversationId=${encodeURIComponent(chatId)}&workingDir=${encodeURIComponent(folder)}`,
-        );
-        if (!res.ok || cancelled) return;
-        const s = (await res.json()) as { goal?: unknown };
-        if (!cancelled) setHasGoal(!!s.goal);
-      } catch {
-        // A failed poll is not worth surfacing; the next one is 3s away.
-      }
-    };
-    void check();
-    const id = setInterval(check, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [chatId, folder, nudge]);
+    if (nudge) void refresh();
+  }, [nudge, refresh]);
 
   if (!folder) return null;
 

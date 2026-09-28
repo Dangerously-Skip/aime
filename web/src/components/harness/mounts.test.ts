@@ -14,6 +14,8 @@ const read = (...p: string[]) => fs.readFileSync(path.join(process.cwd(), 'src',
 
 const cowork = read('components', 'surfaces', 'cowork', 'cowork-surface.tsx');
 const codeSurface = read('components', 'surfaces', 'code', 'code-surface.tsx');
+// Code's composer body lives in its own module; the surface builds its props.
+const codeInput = read('components', 'surfaces', 'code', 'code-input.tsx');
 const layout = read('components', 'surfaces', 'code', 'workspace', 'workspace-layout.tsx');
 const slotTypes = read('lib', 'code-workspace', 'types.ts');
 
@@ -240,8 +242,8 @@ describe('goal mode reaches every composer', () => {
      * site alone, so deleting `{goalToggle}` from the composer body left it
      * green — a toggle passed to a component that never renders it.
      */
-    expect(codeSurface).toContain('{goalToggle}');
-    expect(codeSurface).toContain('{goalBar}');
+    expect(codeInput).toContain('{goalToggle}');
+    expect(codeInput).toContain('{goalBar}');
   });
 
   it('Code’s send branches on the mode rather than always chatting', () => {
@@ -250,8 +252,7 @@ describe('goal mode reaches every composer', () => {
   });
 
   it('Code names its chat from the objective too', () => {
-    const naming = /const untitled[\s\S]{0,400}?\}\)/.exec(codeSurface)?.[0] ?? '';
-    expect(naming).toMatch(/if \(untitled\)/);
+    const naming = /if \(isUntitledConversation\(existing\?\.title\)\)[\s\S]{0,300}?\}\)/.exec(codeSurface)?.[0] ?? '';
     expect(naming).toContain('title:');
   });
 });
@@ -280,9 +281,9 @@ describe('the goal panel cannot take the surface down', () => {
   it('Code shows status under the COMPOSER, not only in the panel', () => {
     // Feedback that a goal has started must not depend on a panel being
     // placeable — that is what left the last run with no indication at all.
-    expect(codeSurface).toContain('goalStatus=');
+    expect(codeSurface).toMatch(/goalStatus[=:]/);
     expect(codeSurface).toContain('GoalRunStatus');
-    expect(codeSurface).toContain('{goalStatus}');
+    expect(codeInput).toContain('{goalStatus}');
   });
 });
 
@@ -399,6 +400,6 @@ describe('the question is answerable from the conversation', () => {
   it('Code renders the slot, not merely receives it', () => {
     // A control handed to a component that never renders it is the recurring
     // shape of this whole feature's bugs.
-    expect(codeSurface).toContain('{goalQuestion}');
+    expect(codeInput).toContain('{goalQuestion}');
   });
 });

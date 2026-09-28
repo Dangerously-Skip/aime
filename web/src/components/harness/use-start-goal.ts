@@ -5,6 +5,7 @@ import { resolveSendRoute, type ModelOption } from '@/lib/models/client-options'
 import { useProviderStore } from '@/stores/provider-store';
 import { useSettingsStore } from '@/stores/settings-store';
 import { useBuiltinAccess } from '@/hooks/use-builtin-access';
+import { refreshHarnessStatus } from '@/hooks/use-harness-status';
 
 /**
  * Start a goal run from the ordinary composer.
@@ -151,6 +152,9 @@ export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOpti
           return false;
         }
         setPhase('idle');
+        // The shared status poll idles slowly while nothing runs; a run that
+        // just started should show up now, and switch it to fast polling.
+        void refreshHarnessStatus(args.conversationId, args.workingDir);
         return true;
       } catch (e) {
         setPhase('idle');

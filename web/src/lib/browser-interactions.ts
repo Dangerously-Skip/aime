@@ -122,11 +122,23 @@ export function getSelectionScript(): string {
 
 // ── Selection listener (injected into webview) ───────────────────────────────
 
+/** The console line the page emits when a selection is cleared. */
+export const SELECTION_CLEAR_MESSAGE = '__AIME_SELECTION_CLEAR__';
+/** The pre-rename spelling, still accepted from a page injected by an older build. */
+export const LEGACY_SELECTION_CLEAR_MESSAGE = '__QUARRY_SELECTION_CLEAR__';
+
+export function isSelectionClearMessage(msg: string): boolean {
+  return msg === SELECTION_CLEAR_MESSAGE || msg === LEGACY_SELECTION_CLEAR_MESSAGE;
+}
+
 export function getSelectionListenerScript(): string {
+  // A page still holding the pre-rename listener (__quarrySelection*) retires
+  // it first, so one page never runs two listeners.
   return `
 (function() {
-  if (window.__quarrySelectionActive) return;
-  window.__quarrySelectionActive = true;
+  if (window.__quarrySelectionCleanup) window.__quarrySelectionCleanup();
+  if (window.__aimeSelectionActive) return;
+  window.__aimeSelectionActive = true;
 
   function onMouseUp() {
     setTimeout(function() {
@@ -146,14 +158,14 @@ export function getSelectionListenerScript(): string {
   }
 
   function onMouseDown() {
-    console.log('__QUARRY_SELECTION_CLEAR__');
+    console.log('${SELECTION_CLEAR_MESSAGE}');
   }
 
-  window.__quarrySelectionCleanup = function() {
+  window.__aimeSelectionCleanup = function() {
     document.removeEventListener('mouseup', onMouseUp);
     document.removeEventListener('mousedown', onMouseDown);
-    window.__quarrySelectionActive = false;
-    delete window.__quarrySelectionCleanup;
+    window.__aimeSelectionActive = false;
+    delete window.__aimeSelectionCleanup;
   };
 
   document.addEventListener('mouseup', onMouseUp);
@@ -164,9 +176,8 @@ export function getSelectionListenerScript(): string {
 export function getSelectionCleanupScript(): string {
   return `
 (function() {
-  if (window.__quarrySelectionCleanup) {
-    window.__quarrySelectionCleanup();
-  }
+  if (window.__aimeSelectionCleanup) window.__aimeSelectionCleanup();
+  if (window.__quarrySelectionCleanup) window.__quarrySelectionCleanup();
 })()`;
 }
 

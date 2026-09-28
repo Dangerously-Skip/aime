@@ -691,12 +691,62 @@ function refOf(input: Record<string, unknown>): string {
   return String(input.ref ?? input.index ?? '');
 }
 
+/** How long the outline shows before the action lands, so a human sees it coming. */
+export const HIGHLIGHT_DWELL_MS = 150;
+
+/** Tools that act on one element, and so get it outlined first. */
+const HIGHLIGHTED_TOOLS = new Set(['click', 'type_text', 'hover', 'select_option']);
+
+/**
+ * Page script: outline the element `ref` points at, briefly.
+ *
+ * An agent clicking around a page the user is watching was invisible until the
+ * page changed — there was no way to tell what it was about to press. This
+ * draws a fixed-position box over the target (pointer-events: none, so it
+ * cannot intercept the click itself), scrolls it into view, and removes it
+ * after a second. Returns whether anything was outlined; a ref that does not
+ * resolve is left to the action, which explains why.
+ */
+export function highlightScript(ref: string): string {
+  return `
+    (function() {
+      ${RESOLVE_REF_JS}
+      var found = resolveRef(${JSON.stringify(ref)});
+      if (!found.el) return false;
+      try { found.el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+      var r = found.el.getBoundingClientRect();
+      var box = document.createElement('div');
+      box.setAttribute('data-aime-highlight', '');
+      box.style.cssText = 'position:fixed;left:' + (r.left - 3) + 'px;top:' + (r.top - 3) + 'px;' +
+        'width:' + (r.width + 6) + 'px;height:' + (r.height + 6) + 'px;' +
+        'border:2px solid #6366f1;border-radius:4px;background:rgba(99,102,241,0.12);' +
+        'box-shadow:0 0 0 4px rgba(99,102,241,0.25);pointer-events:none;' +
+        'z-index:2147483647;transition:opacity .3s ease;';
+      (document.body || document.documentElement).appendChild(box);
+      setTimeout(function() { box.style.opacity = '0'; }, 700);
+      setTimeout(function() { box.remove(); }, 1000);
+      return true;
+    })()
+  `;
+}
+
 export async function executeToolInWebview(
   webview: WebviewRef,
   toolName: string,
   input: Record<string, unknown>,
   consoleBuffer?: ConsoleLogBuffer,
 ): Promise<ToolResult> {
+  // type_text with no target types into the focused element: nothing to outline.
+  const targets = toolName !== 'type_text' || input.ref !== undefined || input.index !== undefined;
+  if (HIGHLIGHTED_TOOLS.has(toolName) && targets) {
+    try {
+      if (await webview.executeJavaScript(highlightScript(refOf(input)))) {
+        await new Promise((r) => setTimeout(r, HIGHLIGHT_DWELL_MS));
+      }
+    } catch {
+      // Cosmetic. The action below reports anything that matters.
+    }
+  }
   switch (toolName) {
     case 'navigate': {
       const url = input.url as string;

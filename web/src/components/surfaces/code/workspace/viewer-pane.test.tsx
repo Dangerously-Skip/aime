@@ -71,3 +71,55 @@ describe('ViewerPane — the diff button', () => {
     expect(diffTab?.path).toBe(`${WS}/src/b.ts`);
   });
 });
+
+describe('ViewerPane — ⌘S / ⌘F reach only the focused tab', () => {
+  /*
+   * Each open file tab mounts its own pane. When these were `window`
+   * listeners, ⌘S saved EVERY tab in edit mode and ⌘F opened a find bar in all
+   * of them, from any surface.
+   */
+  const mockedWrite = vi.mocked(ipc.writeFile);
+
+  async function openTwoEditing() {
+    mockedWrite.mockReset();
+    mockedWrite.mockResolvedValue({ ok: true });
+    render(
+      <>
+        <ViewerPane workspace={WS} forcedPath={`${WS}/a.ts`} />
+        <ViewerPane workspace={WS} forcedPath={`${WS}/b.ts`} />
+      </>,
+    );
+    expect(await screen.findAllByTestId('code-renderer-output')).toHaveLength(2);
+    for (const btn of screen.getAllByTitle(/Edit \(hand-edit/)) fireEvent.click(btn);
+    // Make both dirty so either could be saved.
+    for (const ta of screen.getAllByRole('textbox')) fireEvent.change(ta, { target: { value: 'changed' } });
+    return screen.getAllByTestId('file-editor');
+  }
+
+  it('⌘S in one pane saves that file only', async () => {
+    const [, paneB] = await openTwoEditing();
+    fireEvent.keyDown(paneB, { key: 's', metaKey: true });
+    await vi.waitFor(() => expect(mockedWrite).toHaveBeenCalledTimes(1));
+    expect(mockedWrite.mock.calls[0][0]).toBe(`${WS}/b.ts`);
+  });
+
+  it('⌘S on the window (focus elsewhere) saves nothing', async () => {
+    await openTwoEditing();
+    fireEvent.keyDown(window, { key: 's', metaKey: true });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockedWrite).not.toHaveBeenCalled();
+  });
+
+  it('⌘F opens find in the focused pane only', async () => {
+    render(
+      <>
+        <ViewerPane workspace={WS} forcedPath={`${WS}/a.ts`} />
+        <ViewerPane workspace={WS} forcedPath={`${WS}/b.ts`} />
+      </>,
+    );
+    await screen.findAllByTestId('code-renderer-output');
+    const [paneA] = screen.getAllByTestId('file-editor');
+    fireEvent.keyDown(paneA, { key: 'f', metaKey: true });
+    expect(screen.getAllByPlaceholderText('Find…')).toHaveLength(1);
+  });
+});

@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState } from 'react'
+import { useHarnessStatus } from '@/hooks/use-harness-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ChevronDown } from 'lucide-react'
@@ -74,7 +75,14 @@ export function GoalPanel({
   workingDir: string | null
   surfaceId: 'cowork' | 'code'
 }) {
-  const [status, setStatus] = useState<HarnessStatus | null>(null)
+  /*
+   * Polling rather than a stream. The run outlives any one request by design,
+   * so there is no stream to attach to — and a poll that misses is
+   * self-healing where a dropped SSE connection would silently freeze the
+   * panel on stale state. The poll is SHARED (hooks/use-harness-status): this
+   * panel, the question card, the run status and the transcript all read one.
+   */
+  const { status, refresh } = useHarnessStatus(conversationId, workingDir)
   const [busy, setBusy] = useState(false)
   const [answer, setAnswer] = useState('')
   const [showOther, setShowOther] = useState(false)
@@ -110,30 +118,6 @@ export function GoalPanel({
       setBusy(false)
     }
   }
-
-  const refresh = useCallback(async () => {
-    if (!workingDir) return
-    try {
-      const res = await fetch(
-        `/api/harness?conversationId=${encodeURIComponent(conversationId)}&workingDir=${encodeURIComponent(workingDir)}`,
-      )
-      if (res.ok) setStatus((await res.json()) as HarnessStatus)
-    } catch {
-      // A failed poll is not worth surfacing; the next one is 2s away.
-    }
-  }, [conversationId, workingDir])
-
-  useEffect(() => {
-    void refresh()
-    /*
-     * Polling rather than a stream. The run outlives any one request by design,
-     * so there is no stream to attach to — and a poll that misses is
-     * self-healing where a dropped SSE connection would silently freeze the
-     * panel on stale state.
-     */
-    const id = setInterval(refresh, 2000)
-    return () => clearInterval(id)
-  }, [refresh])
 
   const stop = async () => {
     setBusy(true)

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { useHarnessStatus } from '@/hooks/use-harness-status';
 
 /**
  * Open the Code surface's goal panel once a goal exists.
@@ -13,68 +14,32 @@ import { useEffect, useRef } from 'react';
  * there is something to show" is better than a menu item that is greyed out
  * whenever you are not running a goal.
  *
- * Polls rather than subscribing because the run lives in the server process and
- * outlives any one request; there is no stream to attach to. `__ideOpenGoal` is
- * idempotent, so re-firing is a focus rather than a duplicate panel.
+ * Reads the SHARED status poll (hooks/use-harness-status) rather than running a
+ * 5s poll of its own. `__ideOpenGoal` is idempotent, so re-firing is a focus
+ * rather than a duplicate panel — but see below for why it fires only once.
  */
 export function useGoalAutoOpen(conversationId: string, workingDir: string | null): void {
   /*
    * Opened at most once per conversation.
    *
-   * The poll re-added the panel every five seconds, so closing it was
+   * The old poll re-added the panel every five seconds, so closing it was
    * impossible for as long as a goal existed — the user's close was undone
-   * before they let go of the mouse.
+   * before they let go of the mouse. And while the guard sat only in the
+   * effect body, the interval kept calling the opener, which calls
+   * `setActive()` on an existing panel: click Chat, get thrown back to Goal
+   * five seconds later. The guard is checked on every status update now.
    */
   const opened = useRef<string>('');
+  const { status } = useHarnessStatus(conversationId, workingDir);
+  const hasGoal = !!status?.goal;
 
   useEffect(() => {
-    if (!workingDir || !conversationId) return;
+    if (!hasGoal || !conversationId || !workingDir) return;
     if (opened.current === conversationId) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-
-    const check = async () => {
-      /*
-       * THE GUARD HAS TO BE IN HERE, not only in the effect body above.
-       *
-       * Up there it is evaluated ONCE, when the effect runs. `check` is on a
-       * 5s interval, so after the panel opened it kept calling the opener
-       * forever — and the opener calls `setActive()` on an existing panel. The
-       * result: click Chat, get thrown back to Goal about five seconds later,
-       * again and again, with no way to stay on the tab you chose.
-       *
-       * "Opened at most once per conversation" was the stated intent; this is
-       * where it is actually enforced.
-       */
-      if (opened.current === conversationId) {
-        if (timer) clearInterval(timer);
-        return;
-      }
-      try {
-        const res = await fetch(
-          `/api/harness?conversationId=${encodeURIComponent(conversationId)}&workingDir=${encodeURIComponent(workingDir)}`,
-        );
-        if (!res.ok || cancelled) return;
-        const status = (await res.json()) as { goal?: unknown };
-        if (cancelled || !status.goal) return;
-        const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
-        if (typeof open === 'function') {
-          opened.current = conversationId;
-          (open as () => void)();
-        }
-      } catch {
-        // The panel is a convenience; a failed poll is not worth surfacing.
-      }
-    };
-
-    void check();
-    // Slower than the panel's own 2s refresh: this only has to notice that a
-    // goal has come into existence, which happens once — and once it has, the
-    // guard in `check` stops the interval rather than leaving it spinning.
-    timer = setInterval(check, 5000);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, [conversationId, workingDir]);
+    const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
+    if (typeof open === 'function') {
+      opened.current = conversationId;
+      (open as () => void)();
+    }
+  }, [hasGoal, conversationId, workingDir]);
 }

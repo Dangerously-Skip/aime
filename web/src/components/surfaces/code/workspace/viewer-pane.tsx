@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { readFile, writeFile } from "@/lib/code-workspace/ipc";
+import { subscribe as subscribeToFs } from "@/lib/code-workspace/file-watcher";
 import { getRenderer, UNPRINTABLE_BINARY_EXTS } from "@/components/shared/file-renderers";
 import { HighlightedEditor } from "./highlighted-editor";
 import { Button } from "@/components/ui/button";
@@ -162,6 +163,58 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
     };
   }, [path, ext, overrideLarge]);
 
+  /*
+   * KEEP THE TAB HONEST ABOUT THE DISK.
+   *
+   * Content was read once, on path change, and `save()` wrote the draft
+   * blindly. So a tab left open while the agent edited the file showed the old
+   * text indefinitely, and saving a hand-edit silently reverted the agent's
+   * work. Now: a change on disk reloads a clean tab, raises a "changed on disk"
+   * bar on a dirty one, and save refuses to clobber a version newer than the
+   * one this tab loaded (`load.content` is that baseline) without asking.
+   *
+   * Read through a ref because the watcher callback outlives renders.
+   */
+  const [diskConflict, setDiskConflict] = useState<{ content: string; onSave: boolean } | null>(null);
+  const liveRef = useRef({ content: "", editing: false, draft: "", skip: true });
+  useEffect(() => {
+    liveRef.current = {
+      content: load.content,
+      editing,
+      draft,
+      skip: load.loading || load.binary || load.needsConfirm || !!load.error,
+    };
+  });
+  useEffect(() => setDiskConflict(null), [path]);
+  useEffect(() => {
+    if (!path || !workspace || UNPRINTABLE_BINARY_EXTS.has(ext)) return;
+    let cancelled = false;
+    let off: (() => void) | null = null;
+    void subscribeToFs(workspace, (evt) => {
+      if (evt.path !== path || evt.kind === "delete") return;
+      void (async () => {
+        const disk = await readFile(path);
+        if (cancelled || !disk) return;
+        const live = liveRef.current;
+        if (live.skip || disk.content === live.content) return;
+        if (live.editing && live.draft !== live.content) {
+          setDiskConflict({ content: disk.content, onSave: false });
+          return;
+        }
+        const size = (disk as { size?: number }).size ?? disk.content.length;
+        setLoad((l) => ({ ...l, content: disk.content, size }));
+        if (live.editing) setDraft(disk.content);
+      })();
+    }).then((unsubscribe) => {
+      if (cancelled) unsubscribe();
+      else off = unsubscribe;
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [workspace, path, ext]);
+
   // Empty / diff / loading / error / large-file states — these render
   // without the toolbar.
 
@@ -242,13 +295,23 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
     setDraft("");
     setSaveError(null);
   }
-  async function save() {
+  async function save(opts: { force?: boolean } = {}) {
     if (!path) return;
     setSaving(true);
     setSaveError(null);
     try {
+      if (!opts.force) {
+        // Someone else (usually the agent) wrote since this tab loaded: ask.
+        // A failed read (file deleted) falls through — saving recreates it.
+        const disk = await readFile(path);
+        if (disk && disk.content !== load.content) {
+          setDiskConflict({ content: disk.content, onSave: true });
+          return;
+        }
+      }
       const res = await writeFile(path, draft);
       if (res.ok) {
+        setDiskConflict(null);
         setLoad((l) => ({ ...l, content: draft, size: draft.length }));
         setEditing(false);
         setJustSaved(true);
@@ -261,10 +324,53 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
     }
   }
 
+  /** Take the disk version, discarding this tab's edits. */
+  function reloadFromDisk() {
+    if (!diskConflict) return;
+    const content = diskConflict.content;
+    setLoad((l) => ({ ...l, content, size: content.length }));
+    setEditing(false);
+    setDraft("");
+    setDiskConflict(null);
+  }
+  /**
+   * Keep this tab's edits. The disk version becomes the baseline, so the draft
+   * stays dirty against it and the next save does not ask again; if the
+   * conflict came from a save, finish that save.
+   */
+  function keepMine() {
+    if (!diskConflict) return;
+    const { content, onSave } = diskConflict;
+    setLoad((l) => ({ ...l, content }));
+    setDiskConflict(null);
+    if (onSave) void save({ force: true });
+  }
+
   const Renderer = path ? getRenderer(ext) : null;
 
   return (
     <FileEditor
+      banner={
+        diskConflict ? (
+          <div
+            role="alert"
+            className="flex items-center gap-2 px-3 py-1.5 text-[11px] bg-amber-500/10 border-t border-amber-500/30 text-amber-700 dark:text-amber-300 shrink-0"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+            <span className="flex-1 min-w-0">
+              {diskConflict.onSave
+                ? "This file changed on disk since you opened it. Saving would overwrite that change."
+                : "This file changed on disk while you were editing it."}
+            </span>
+            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={reloadFromDisk}>
+              Reload
+            </Button>
+            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={keepMine}>
+              {diskConflict.onSave ? "Overwrite" : "Keep mine"}
+            </Button>
+          </div>
+        ) : null
+      }
       path={path}
       name={name}
       dirty={dirty}
@@ -279,7 +385,7 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
       onDiff={() => path && openDiff(path)}
       onEdit={startEdit}
       onCancelEdit={cancelEdit}
-      onSave={save}
+      onSave={() => void save()}
     >
       {editing ? (
         /*
@@ -326,6 +432,8 @@ interface FileEditorProps {
   onEdit: () => void;
   onCancelEdit: () => void;
   onSave: () => void;
+  /** A notice under the toolbar (e.g. "changed on disk"). */
+  banner?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -348,6 +456,7 @@ function FileEditor({
   onEdit,
   onCancelEdit,
   onSave,
+  banner,
   children,
 }: FileEditorProps) {
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -359,24 +468,35 @@ function FileEditor({
   }, [findOpen]);
 
   // Cmd/Ctrl+S — save. Cmd/Ctrl+F — find. Esc — close find.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && editing) {
-        e.preventDefault();
-        onSave();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        setFindOpen(true);
-      } else if (e.key === "Escape" && findOpen) {
-        setFindOpen(false);
-      }
+  //
+  // On this pane's own element, not `window`: every open file tab mounts one
+  // of these, and a window listener meant ⌘S saved EVERY tab in edit mode and
+  // ⌘F opened a find bar in all of them — from any surface. Keys now reach
+  // only the tab that has focus. `tabIndex={-1}` makes a click anywhere in the
+  // body focus the pane, so a read-only view still gets ⌘F.
+  function onKeyDown(e: React.KeyboardEvent) {
+    const cmd = e.metaKey || e.ctrlKey;
+    const key = e.key.toLowerCase();
+    if (cmd && key === "s") {
+      // Swallowed even when not editing: the browser's "Save page" is never
+      // what ⌘S in an editor means.
+      e.preventDefault();
+      if (editing) onSave();
+    } else if (cmd && key === "f") {
+      e.preventDefault();
+      setFindOpen(true);
+    } else if (e.key === "Escape" && findOpen) {
+      setFindOpen(false);
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [editing, findOpen, onSave]);
+  }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div
+      className="flex flex-col h-full min-h-0 outline-none"
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      data-testid="file-editor"
+    >
       <div className="flex items-center gap-1 px-2 h-8 shrink-0 min-w-0">
         <span className="flex-1 min-w-0 truncate font-mono text-[11px] text-muted-foreground">
           {path ?? name}
@@ -442,6 +562,7 @@ function FileEditor({
           </button>
         </div>
       )}
+      {banner}
       {saveError && (
         <div className="px-3 py-1 text-[11px] text-destructive bg-destructive/5 border-t border-destructive/20 shrink-0">
           {saveError}

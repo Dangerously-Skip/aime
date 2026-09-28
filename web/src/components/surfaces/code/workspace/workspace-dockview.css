@@ -70,7 +70,7 @@
 
 .dv-workspace,
 .dv-workspace [class*='dockview-theme-'] {
-  /* Dockview palette overrides (force `accent` to Quarry's amber). */
+  /* Dockview palette overrides (force `accent` to the app's amber). */
   --dv-color-abyss-dark: var(--dv-panel-surface);
   --dv-color-abyss: var(--dv-panel-surface);
   --dv-color-abyss-light: var(--muted);
