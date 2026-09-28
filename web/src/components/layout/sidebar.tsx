@@ -25,9 +25,11 @@ function getInitials(displayName: string, fullName: string): string {
 interface SidebarProps {
   isElectron?: boolean;
   onNewProject: () => void;
+  /** Opens the ⌘K search palette (owned by the shell). */
+  onSearch?: () => void;
 }
 
-export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
+export function Sidebar({ isElectron = false, onNewProject, onSearch }: SidebarProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const sidebarMode = useAppStore((s) => s.sidebarMode);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
@@ -104,7 +106,8 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
 
         {/* Search */}
         <button
-          onClick={() => { setSidebarMode("history"); setTimeout(() => document.querySelector<HTMLInputElement>('[placeholder="Search..."]')?.focus(), 50); }}
+          onClick={onSearch}
+          aria-keyshortcuts="Meta+K"
           className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
