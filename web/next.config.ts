@@ -31,6 +31,31 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: '100mb',
     },
+    // With a proxy (src/proxy.ts) in front of every route, Next buffers each
+    // request body through it and TRUNCATES it at this size — 10 MB by default —
+    // with only a server-side warning. Uploads and attachments over 10 MB then
+    // reached their routes cut short and failed as corrupt files. The name is
+    // Next 16's (`middlewareClientMaxBodySize` is the deprecated alias).
+    // `next.config.test.ts` holds this at >= 200 MB.
+    proxyClientMaxBodySize: '200mb',
+  },
+  // Security headers. A full Content-Security-Policy is deliberately NOT set —
+  // see next.config.test.ts for why (srcdoc artifact frames inherit it; Next's
+  // inline bootstrap needs 'unsafe-inline' without per-request nonces; local
+  // Whisper loads its runtime from a CDN). What is set cannot break the app:
+  // `frame-ancestors 'self'` stops any other page — including another tab on
+  // this machine, which can reach this loopback port — from framing the app to
+  // clickjack it, while the app's own same-origin frames keep working.
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+        ],
+      },
+    ];
   },
   // Suppress pdf.js optional Node canvas dependency
   turbopack: {
