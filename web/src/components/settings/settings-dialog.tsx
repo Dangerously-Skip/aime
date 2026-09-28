@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useAppStore } from "@/stores/app-store"
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
@@ -43,7 +43,8 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
-  const [activeSection, setActiveSection] = useState("profile")
+  const activeSection = useAppStore((s) => s.settingsSection)
+  const setActiveSection = useAppStore((s) => s.setSettingsSection)
 
   const ActiveComponent = sectionComponents[activeSection] ?? ProfileSection
 

@@ -2,6 +2,7 @@
 
 import { Brain, Code, Database, Fingerprint, Globe, Link, Palette, Share2, Shield, TrendingUp, User, Users, Wrench, BellOff } from 'lucide-react'
 import { cn } from "@/lib/utils"
+import type { SettingsSectionId } from "@/stores/app-store"
 
 const navItems = [
   { id: "profile", label: "Profile", icon: User },
@@ -24,11 +25,11 @@ const navItems = [
   { id: "notifications", label: "Notifications", icon: BellOff },
   { id: "roi", label: "Usage & ROI", icon: TrendingUp },
   { id: "data", label: "Data & Privacy", icon: Database },
-] as const
+] as const satisfies ReadonlyArray<{ id: SettingsSectionId; label: string; icon: unknown }>
 
 interface SettingsNavProps {
-  activeSection: string
-  onSectionChange: (section: string) => void
+  activeSection: SettingsSectionId
+  onSectionChange: (section: SettingsSectionId) => void
 }
 
 export function SettingsNav({ activeSection, onSectionChange }: SettingsNavProps) {
