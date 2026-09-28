@@ -65,7 +65,7 @@ beforeEach(() => {
   Element.prototype.getAnimations ??= () => [];
   vi.stubGlobal('fetch', stubFetch(() => undefined));
   calls = [];
-  useAssistantStore.setState({ cards: [], orders: [] });
+  useAssistantStore.setState({ cards: [], orders: [], activity: [] });
   useRunStore.setState({ runs: [], goals: [] });
   useContextBusStore.setState({ events: [] });
   useProviderStore.setState({ providers: [] });
@@ -422,5 +422,39 @@ describe('the sidebar', () => {
     expect(screen.getAllByText('Quick Start')).toHaveLength(1);
     // The centre empty state no longer duplicates it with its own buttons.
     expect(screen.queryByRole('button', { name: /Stretch reminder/ })).toBeNull();
+  });
+});
+
+describe('failures are visible on the Activity tab', () => {
+  it('leads with "Needs attention" and badges the tab when a schedule is failing', async () => {
+    useAssistantStore.setState({
+      orders: [{
+        id: 'o1', instruction: 'Nightly digest', trigger: { type: 'interval', expression: '1d' }, state: {},
+        status: 'active', notifyVia: 'toast', runCount: 3, errorCount: 1, createdAt: Date.now() - 3_600_000,
+        lastRun: Date.now() - 60_000, updatedAt: 1,
+      }],
+      activity: [{ id: 'a1', orderId: 'o1', type: 'order-error', label: 'Error: upstream 502', timestamp: Date.now() }],
+    });
+    renderSurface();
+    expect(screen.getByRole('region', { name: 'Schedules needing attention' })).toBeTruthy();
+    expect(screen.getByText('Error: upstream 502')).toBeTruthy();
+    expect(screen.getByLabelText('1 schedule need attention')).toBeTruthy();
+    // Clicking it opens that schedule.
+    fireEvent.click(screen.getByRole('button', { name: /Nightly digest.*upstream 502/ }));
+    expect(screen.getByRole('dialog', { name: 'Edit schedule' })).toBeTruthy();
+  });
+
+  it('renders a failure card as a failure', () => {
+    useAssistantStore.setState({
+      cards: [{ id: 'c1', title: 'Failed: Nightly digest', summary: 'upstream 502', tone: 'error', timestamp: Date.now(), unread: true, pinned: false }],
+    });
+    const { container } = renderSurface();
+    expect(container.querySelector('[data-tone="error"]')).toBeTruthy();
+    expect(screen.getByLabelText('Failed')).toBeTruthy();
+  });
+
+  it('shows nothing extra when all is well', () => {
+    renderSurface();
+    expect(screen.queryByRole('region', { name: 'Schedules needing attention' })).toBeNull();
   });
 });

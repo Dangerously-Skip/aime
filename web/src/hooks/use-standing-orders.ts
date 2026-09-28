@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { useAssistantStore, type StandingOrder } from '@/stores/assistant-store';
 import { useContextBusStore } from '@/stores/context-bus-store';
 import type { InboxEntry, ManifestOrder } from '@/lib/orders/manifest';
+import { notifyDesktop } from '@/lib/schedule/notify';
 
 /**
  * Standing-order SYNC + results replay (C5b).
@@ -80,15 +81,9 @@ export function applyInboxEntry(entry: InboxEntry): void {
       payload: { orderId: entry.orderId, fullText: (entry.summary ?? '').slice(0, 2000) },
     });
 
-    if (
-      (priority === 'p0' || entry.notifyVia === 'toast') &&
-      typeof window !== 'undefined' &&
-      'Notification' in window &&
-      Notification.permission === 'granted'
-    ) {
-      new Notification(`Standing Order: ${entry.title.slice(0, 40)}`, {
-        body: (entry.summary ?? '').slice(0, 100),
-      });
+    if (priority === 'p0' || entry.notifyVia === 'toast') {
+      // Through the one helper that asks about quiet hours (lib/schedule/notify).
+      notifyDesktop(entry.title.slice(0, 60), (entry.summary ?? '').slice(0, 120));
     }
 
     assistant.addActivity({ type: 'order-fired', label: `Executed: ${entry.title.slice(0, 60)}`, orderId: entry.orderId });
@@ -97,10 +92,20 @@ export function applyInboxEntry(entry: InboxEntry): void {
     assistant.addActivity({ type: 'order-fired', label: `Completed: ${entry.title.slice(0, 60)}`, orderId: entry.orderId });
   } else if (entry.kind === 'paused') {
     assistant.pauseOrder(entry.orderId);
-    assistant.addCard({ orderId: entry.orderId, title: entry.title, summary: entry.summary ?? '' });
+    assistant.addCard({ orderId: entry.orderId, title: entry.title, summary: entry.summary ?? '', tone: 'error' });
     assistant.addActivity({ type: 'order-error', label: entry.summary?.slice(0, 100) ?? 'Order paused', orderId: entry.orderId });
+    notifyDesktop(`Schedule paused: ${entry.title.slice(0, 40)}`, (entry.summary ?? 'It kept failing.').slice(0, 120));
   } else if (entry.kind === 'error') {
-    assistant.addActivity({ type: 'order-error', label: `Error: ${(entry.error ?? 'unknown').slice(0, 100)}`, orderId: entry.orderId });
+    /*
+     * A FAILURE IS A CARD, not only a log line. This used to add one activity
+     * row and nothing else, so a scheduled run that failed every night was
+     * indistinguishable from one that succeeded unless you went looking — and
+     * the point of scheduled work is that you are not looking.
+     */
+    const reason = (entry.error ?? 'unknown error').slice(0, 300);
+    assistant.addCard({ orderId: entry.orderId, title: `Failed: ${entry.title}`, summary: reason, tone: 'error' });
+    assistant.addActivity({ type: 'order-error', label: `Error: ${reason.slice(0, 100)}`, orderId: entry.orderId });
+    notifyDesktop(`Schedule failed: ${entry.title.slice(0, 40)}`, reason.slice(0, 120));
   }
 }
 

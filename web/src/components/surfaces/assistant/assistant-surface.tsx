@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useAssistantStore, type StandingOrder, type AssistantCard } from "@/stores/assistant-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useHydrated } from "@/components/store-hydration";
@@ -43,6 +43,10 @@ const TEMPLATE_ICONS: Record<string, LucideIcon> = {
 import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/standing-order-templates";
 import { TemplateDialog } from "./template-dialog";
 import { OrderEditor, confirmDeleteOrder } from "./order-editor";
+import { ScheduleHealth } from "./schedule-health";
+import { scheduleHealth } from "@/lib/schedule/health";
+import { useAttendedJobs } from "@/hooks/use-attended-jobs";
+import { APP_NAME } from "@/config/branding";
 import { describeTrigger, validateTrigger } from "@/lib/schedule/schedule";
 import { exportOrdersToJson } from "@/lib/standing-order-yaml";
 import { Cockpit } from "./cockpit";
@@ -328,11 +332,19 @@ function CardWidget({
   const hasQuestion = cardAsksQuestion(card.summary);
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card shadow-sm hover:shadow-md transition-all overflow-hidden">
+    <div
+      className={`group rounded-xl border bg-card shadow-sm hover:shadow-md transition-all overflow-hidden ${
+        card.tone === 'error' ? 'border-red-500/40' : 'border-border/50'
+      }`}
+      data-tone={card.tone}
+    >
       {/* Header — clean, no colored strips */}
       <div className="flex items-start justify-between px-5 pt-4 pb-1">
         <div className="flex-1 min-w-0 pr-2">
-          <p className="text-sm font-semibold text-foreground leading-snug">{card.title}</p>
+          <p className="text-sm font-semibold text-foreground leading-snug flex items-center gap-1.5">
+            {card.tone === 'error' && <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-500" aria-label="Failed" />}
+            {card.title}
+          </p>
           <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
             {formatCardTime(card.timestamp)}
             {card.pinned && ' · Pinned'}
@@ -590,6 +602,40 @@ export function AssistantSurface() {
    */
   const { runs, now: runsNow, loading: runsLoading } = useRunLog();
 
+  /*
+   * HEALTH, on the tab people actually look at. Failing, error-paused,
+   * unreadable and overdue schedules — standing orders and attended jobs alike —
+   * lead the Activity tab, so noticing a broken automation does not depend on
+   * remembering to open the Cockpit.
+   */
+  const activityLog = useAssistantStore((s) => s.activity);
+  const { jobs: attendedJobs } = useAttendedJobs();
+  const health = useMemo(
+    () =>
+      scheduleHealth({
+        orders: [
+          ...orders,
+          ...attendedJobs.map((j) => ({
+            id: j.id,
+            instruction: j.prompt,
+            trigger: j.trigger,
+            status: j.status,
+            lastRun: j.lastRun,
+            createdAt: j.createdAt,
+            runCount: j.runCount,
+            maxExecutions: j.maxExecutions,
+            expiresAt: j.expiresAt,
+            attended: true,
+          })),
+        ],
+        activity: activityLog,
+        runs,
+        now: runsNow,
+        appName: APP_NAME,
+      }),
+    [orders, attendedJobs, activityLog, runs, runsNow],
+  );
+
   // Auto-refresh dashboard widgets on the heartbeat
 
   // Clear selection when the selected order is deleted
@@ -739,9 +785,14 @@ export function AssistantSurface() {
           } else if (handleAgnosticChunk(event as Record<string, unknown>, {
             chatId,
             surface: 'Assistant',
-            // This surface owns the order feed, so a created order shows there
-            // rather than as a toast. The only genuinely surface-specific part.
-            notifyVia: 'assistant',
+            /*
+             * Card AND desktop notification by default. 'assistant' (card only)
+             * meant "remind me to stretch" never popped up — a reminder that
+             * lands silently in a feed you are not looking at is not a
+             * reminder. The card is added either way; the user can choose
+             * "card only" per schedule in the editor.
+             */
+            notifyVia: 'toast',
           })) {
             // handled centrally — see lib/sse/agnostic-chunks
           }
@@ -866,6 +917,14 @@ export function AssistantSurface() {
               }`}
             >
               {v === "feed" ? "Activity" : "Cockpit"}
+              {v === "feed" && health.length > 0 && (
+                <span
+                  className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white"
+                  aria-label={`${health.length} schedule${health.length === 1 ? "" : "s"} need attention`}
+                >
+                  {health.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -907,6 +966,7 @@ export function AssistantSurface() {
         {/* Card feed */}
         <ScrollArea className="flex-1 overflow-hidden">
           <div className="max-w-5xl mx-auto px-4 py-4">
+            <ScheduleHealth items={health} onOpenOrder={setSelectedOrderId} />
             {cards.length === 0 && orders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Bot className="h-12 w-12 mb-4 opacity-30" />

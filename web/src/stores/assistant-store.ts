@@ -45,6 +45,8 @@ export interface AssistantCard {
   timestamp: number;
   unread: boolean;
   pinned: boolean;
+  /** `error` for a failed or error-paused run — rendered as a failure, not a result. */
+  tone?: 'error';
   /*
    * The `widget:` block is GONE. A card carried one so a stock ticker could
    * live in the event feed and refresh itself — state wearing an event's
