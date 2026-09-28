@@ -33,6 +33,9 @@ import { classifyBrowserRequest } from "@/lib/browser/request-shape";
 import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useElectron } from "@/hooks/use-electron";
 import { useSurfaceKeydown } from "@/hooks/use-surface-active";
+import { APP_NAME } from "@/config/branding";
+import { useWebviewLoadState, LoadProgressBar, LoadErrorOverlay } from "./page-status";
+import { AgentControlBanner } from "./agent-control-banner";
 
 /** Same source of truth the other surfaces use for their capability. */
 const CAPABILITY = getSurfaceRoute("browser").capability;
@@ -43,6 +46,7 @@ import {
   getSelectionScript,
   getSelectionListenerScript,
   captureScreenshot,
+  isSelectionClearMessage,
   formatElementContext,
   type InspectorResult,
   type PendingContextItem,
@@ -187,7 +191,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
       } catch { /* ignore parse errors */ }
       return;
     }
-    if (msg === '__QUARRY_SELECTION_CLEAR__') {
+    if (isSelectionClearMessage(msg)) {
       setSelectionInfo(null);
       return;
     }
@@ -204,8 +208,13 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     }
   }
 
+  // Progress bar + error overlay, from the webview's own load events.
+  const pageLoad = useWebviewLoadState();
+  const attachLoadState = pageLoad.attach;
+
   const webviewCallbackRef = useCallback(
     (node: (HTMLElement & WebviewRef) | null) => {
+      attachLoadState(node);
       const prev = webviewNodeRef.current;
       if (prev) {
         prev.removeEventListener("did-navigate", handleNav);
@@ -413,6 +422,22 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
   const activeLoopRef = useRef<'quick-ask' | 'agent' | null>(null);
 
   /*
+   * Whether the agent is DRIVING THE PAGE right now, which is narrower than
+   * "a turn is running": the full agent may spend a whole turn on WebFetch and
+   * never touch this page. Quick-ask always drives it; the agent path counts
+   * from its first browser tool. Drives the "controlling this page" banner.
+   */
+  const [agentControl, setAgentControl] = useState<'quick-ask' | 'agent' | null>(null);
+  /** Steps taken when the quick-ask loop hit its limit and is waiting on the user. */
+  const [stepLimit, setStepLimit] = useState<number | null>(null);
+  const stepLimitResolveRef = useRef<((more: boolean) => void) | null>(null);
+  const answerStepLimit = useCallback((more: boolean) => {
+    stepLimitResolveRef.current?.(more);
+    stepLimitResolveRef.current = null;
+    setStepLimit(null);
+  }, []);
+
+  /*
    * The three relay handlers. Each one PAUSES THE TURN server-side, which is why
    * `CoreChunkContext` declares them required rather than optional — Code
    * shipped without them and a connector request stalled for 300s and a document
@@ -446,14 +471,23 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     onDone() {
       const cid = useBrowserStore.getState().currentChatId ?? "";
       stopStreaming(cid);
+      setAgentControl(null);
     },
     onError(error) {
       const cid = useBrowserStore.getState().currentChatId ?? "";
       stopStreaming(cid);
+      setAgentControl(null);
       appendToLastAssistant(cid, `\n\n**Error:** ${error.message}`);
     },
     onPhaseChange(phase) {
       setLoopPhase(phase);
+    },
+    // At the step limit, ask on the banner rather than stopping silently.
+    onStepLimit(steps) {
+      return new Promise<boolean>((resolve) => {
+        stepLimitResolveRef.current = resolve;
+        setStepLimit(steps);
+      });
     },
     apiKey: anthropicApiKey,
     memories: memoriesStr || undefined,
@@ -532,6 +566,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           },
         })
       ) {
+        // The agent has started driving the page: say so on the page.
+        setAgentControl('agent');
         return;
       }
 
@@ -570,12 +606,14 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
       completeRunningTools(chatId);
       stopStreaming(chatId);
       setLoopPhase('idle');
+      setAgentControl(null);
     },
     onError(error) {
       activeLoopRef.current = null;
       completeRunningTools(chatId);
       stopStreaming(chatId);
       setLoopPhase('idle');
+      setAgentControl(null);
       appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
     },
   });
@@ -591,7 +629,18 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     else abortQuickAsk();
     activeLoopRef.current = null;
     setLoopPhase('idle');
-  }, [abortAgent, abortQuickAsk, setLoopPhase]);
+    setAgentControl(null);
+    // A pending "continue?" is answered no, so the loop can finish unwinding.
+    answerStepLimit(false);
+  }, [abortAgent, abortQuickAsk, setLoopPhase, answerStepLimit]);
+
+  /** Stop the agent and hand the page back: focus lands in it, ready to use. */
+  const takeOver = useCallback(() => {
+    abort();
+    const cid = useBrowserStore.getState().currentChatId;
+    if (cid) appendToLastAssistant(cid, `\n\n_You took over — ${APP_NAME} stopped here._`);
+    (webviewNodeRef.current as HTMLElement | null)?.focus?.();
+  }, [abort, appendToLastAssistant]);
 
   // Ensure a browser conversation exists for tab management.
   // Returns the chatId (creating one if needed).
@@ -845,6 +894,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           return;
         }
         activeLoopRef.current = 'quick-ask';
+        setAgentControl('quick-ask');
         await runAgentLoop(
           text,
           { model, providerConfig: route?.providerConfig },
@@ -942,6 +992,15 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
 
   const phaseInfo = PHASE_LABELS[loopPhase];
 
+  /** Load the failed URL again. `did-start-loading` clears the overlay. */
+  const retryLoad = () => {
+    const url = pageLoad.failure?.url || webviewSrc;
+    pageLoad.clearFailure();
+    const wv = webviewNodeRef.current;
+    if (wv && url) wv.loadURL(url).catch(() => { /* did-fail-load reports it */ });
+    else wv?.reload();
+  };
+
   return (
     <div className="flex h-full flex-col">
       {/* Tab bar */}
@@ -971,6 +1030,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
                   removeTab(tab.id);
                 }
               }}
+              aria-label={`Close ${tab.title || "New Tab"}`}
+              title="Close tab"
               className="shrink-0 hover:text-destructive"
             >
               <X className="h-3 w-3" />
@@ -990,6 +1051,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
               isActive: true,
             });
           }}
+          aria-label="New tab"
+          title="New tab"
         >
           <Plus className="h-3 w-3" />
         </Button>
@@ -999,6 +1062,9 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           size="icon"
           className="h-6 w-6"
           onClick={() => setAgentVisible(!agentVisible)}
+          aria-label={agentVisible ? "Hide agent panel" : "Show agent panel"}
+          title={agentVisible ? "Hide agent panel" : "Show agent panel"}
+          aria-pressed={agentVisible}
         >
           {agentVisible ? (
             <PanelRightClose className="h-3.5 w-3.5" />
@@ -1015,6 +1081,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           size="icon"
           className="h-7 w-7"
           onClick={() => webviewNodeRef.current?.goBack()}
+          aria-label="Back"
+          title="Back"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
         </Button>
@@ -1023,6 +1091,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           size="icon"
           className="h-7 w-7"
           onClick={() => webviewNodeRef.current?.goForward()}
+          aria-label="Forward"
+          title="Forward"
         >
           <ArrowRight className="h-3.5 w-3.5" />
         </Button>
@@ -1031,6 +1101,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           size="icon"
           className="h-7 w-7"
           onClick={() => webviewNodeRef.current?.reload()}
+          aria-label="Reload"
+          title="Reload"
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </Button>
@@ -1045,6 +1117,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           className={`h-7 w-7 ${inspectorMode ? "text-blue-500 bg-blue-500/10" : ""}`}
           onClick={handleToggleInspector}
           title="Inspect element"
+          aria-label="Inspect element"
+          aria-pressed={inspectorMode}
         >
           <Crosshair className="h-3.5 w-3.5" />
         </Button>
@@ -1056,6 +1130,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           className="h-7 w-7"
           onClick={handleGrabSelection}
           title="Grab selected text"
+          aria-label="Grab selected text"
         >
           <Type className="h-3.5 w-3.5" />
         </Button>
@@ -1066,7 +1141,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
           size="icon"
           className="h-7 w-7"
           onClick={handleScreenshot}
-          title="Take screenshot (Cmd+Shift+S)"
+          title="Take screenshot (⌘⇧S)"
+          aria-label="Take screenshot"
         >
           <Camera className="h-3.5 w-3.5" />
         </Button>
@@ -1078,6 +1154,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
             if (e.key === "Enter") handleNavigate(urlInput);
           }}
           placeholder="Enter URL or search..."
+          aria-label="Address"
           className="h-7 text-xs flex-1 bg-card"
         />
       </div>
@@ -1114,6 +1191,18 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
             allowpopups={"true" as unknown as boolean}
             style={{ width: "100%", height: "100%", border: "none" }}
           />
+          {webviewSrc && pageLoad.loading && !pageLoad.failure && <LoadProgressBar />}
+          {webviewSrc && pageLoad.failure && (
+            <LoadErrorOverlay failure={pageLoad.failure} onRetry={retryLoad} />
+          )}
+          {agentControl && (
+            <AgentControlBanner
+              stepLimit={stepLimit}
+              onStop={abort}
+              onTakeOver={takeOver}
+              onContinue={() => answerStepLimit(true)}
+            />
+          )}
           {!webviewSrc && (
             // `absolute inset-0` — drawn OVER the webview, which is now always
             // mounted underneath. Opaque, so about:blank never shows through.
@@ -1256,6 +1345,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
                         <span className="truncate max-w-[120px]">{item.label}</span>
                         <button
                           onClick={() => removePendingContext(item.id)}
+                          aria-label={`Remove ${item.label}`}
                           className="hover:text-destructive shrink-0"
                         >
                           <X className="h-3 w-3" />

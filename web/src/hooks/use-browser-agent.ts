@@ -31,7 +31,9 @@ export interface BrowserTurnRoute {
 import { getBrowserConfig } from '@/lib/surfaces/browser-config';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 
-const MAX_ITERATIONS = 25;
+/** Steps per block before the user is asked whether to continue. */
+export const BROWSER_AGENT_STEP_LIMIT = 25;
+const MAX_ITERATIONS = BROWSER_AGENT_STEP_LIMIT;
 const DOM_EXTRACT_TIMEOUT = 5000; // 5s timeout for page state extraction
 
 /** Execute JS on webview with a timeout to prevent hanging during navigation */
@@ -77,6 +79,11 @@ interface UseBrowserAgentOptions {
   onNewTab?: (url: string) => Promise<number | null>;
   /** Close a tab by id. */
   onCloseTab?: (tabId: string) => Promise<boolean>;
+  /**
+   * The run used its step budget and still wants to act. Resolve true to grant
+   * another MAX_ITERATIONS steps; false (or no handler) ends the run.
+   */
+  onStepLimit?: (stepsTaken: number) => Promise<boolean>;
 }
 
 export function useBrowserAgent(options: UseBrowserAgentOptions) {
@@ -177,9 +184,28 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
 
         messages.push({ role: 'user', content: userContent });
 
-        // Agent loop
-        for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+        /*
+         * Agent loop, in blocks of MAX_ITERATIONS steps.
+         *
+         * Hitting the limit used to end the run SILENTLY: the loop fell out of
+         * its `for`, the phase went idle, and a task that needed step 26 just
+         * stopped with no message. Now the surface is asked; "Continue" grants
+         * another block, anything else ends the run with a line saying why.
+         */
+        let budget = MAX_ITERATIONS;
+        for (let iteration = 0; ; iteration++) {
           if (controller.signal.aborted) break;
+          if (iteration >= budget) {
+            const more = (await optionsRef.current.onStepLimit?.(iteration)) ?? false;
+            if (controller.signal.aborted) break;
+            if (!more) {
+              optionsRef.current.onText(
+                `\n\n_Stopped after ${iteration} steps — the step limit. Ask again to pick up from here._`,
+              );
+              break;
+            }
+            budget += MAX_ITERATIONS;
+          }
 
           // 2. Think — send to API
           optionsRef.current.onPhaseChange('thinking');
