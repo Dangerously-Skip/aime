@@ -6,7 +6,7 @@ import { homedir } from 'os';
 import { getMcpConfigPath, getMcpClientsPath } from '@/lib/app-paths';
 import { isBuiltInServerId, builtInIdOwnsUrl } from '@/lib/mcp/url-guard';
 
-const QUARRY_DIR = join(homedir(), '.claude');
+const CLAUDE_DIR = join(homedir(), '.claude');
 // Resolved per request, not at module load: Electron sets its paths after the
 // server module is imported, so a captured constant can point at the wrong file.
 
@@ -116,7 +116,7 @@ export async function POST(request: Request) {
     }
 
     // Write to the MCP config file with token + refresh metadata
-    await mkdir(QUARRY_DIR, { recursive: true });
+    await mkdir(CLAUDE_DIR, { recursive: true });
 
     let mcpConfig: { mcpServers?: Record<string, Record<string, unknown>> } = {};
     try {
@@ -142,7 +142,7 @@ export async function POST(request: Request) {
       },
       _meta: {
         mcpName,
-        managedBy: 'quarry-mcp-oauth',
+        managedBy: 'aime-mcp-oauth',
         // Used by loadProvisionedMcpServers() for auto-refresh
         ...(tokenData.refresh_token && { refreshToken: tokenData.refresh_token }),
         ...(expiresAt && { expiresAt }),

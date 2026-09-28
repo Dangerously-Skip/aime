@@ -2,10 +2,10 @@
 /**
  * Minimal Microsoft Graph MCP server.
  * Hand-rolls JSON-RPC over stdio so it has zero npm dependencies —
- * ships as a single file Quarry spawns via `node`.
+ * ships as a single file the app spawns via `node`.
  *
  * Auth: reads GRAPH_ACCESS_TOKEN env var (provisioned + auto-refreshed
- * by Quarry's OAuth layer). Each tool call uses that token; on 401 we
+ * by the app's OAuth layer). Each tool call uses that token; on 401 we
  * exit so the caller picks up the refreshed token on next spawn.
  */
 

@@ -14,7 +14,7 @@ import {
 import { getMcpClientsPath } from '@/lib/app-paths';
 import { APP_NAME } from '@/config/branding';
 
-const QUARRY_DIR = join(homedir(), '.claude');
+const CLAUDE_DIR = join(homedir(), '.claude');
 
 interface StoredClient {
   clientId: string;
@@ -38,7 +38,7 @@ async function readClients(): Promise<Record<string, StoredClient>> {
 }
 
 async function writeClients(clients: Record<string, StoredClient>) {
-  await mkdir(QUARRY_DIR, { recursive: true });
+  await mkdir(CLAUDE_DIR, { recursive: true });
   // Owner-only: this file holds OAuth client secrets. It was writing 0644 while
   // every sibling path (provision, exchange, uninstall) used 0600 — so the same
   // secret was AES-encrypted in one place and world-readable here.
@@ -163,7 +163,7 @@ export async function POST(request: Request) {
     let mcpUrl: string | null = directUrl || null;
     let pluginClientIdHint: string | undefined;
     if (!mcpUrl) {
-      const pluginDir = join(QUARRY_DIR, 'plugins', mcpName);
+      const pluginDir = join(CLAUDE_DIR, 'plugins', mcpName);
       const hint = await getMcpHintFromPlugin(pluginDir);
       if (hint) {
         mcpUrl = hint.url;

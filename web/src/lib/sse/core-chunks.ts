@@ -131,7 +131,7 @@ export interface CoreChunkContext {
    *
    * A migration affordance, not a design: cowork's `tool_use`/`tool_result` carry
    * a lot of surface-specific work (a stuck-tool watchdog, artifact
-   * categorisation, a QUARRY_CRON sniffer over both input and output) that would
+   * categorisation, a cron-marker sniffer over both input and output) that would
    * be misrepresented as a one-line callback. Listing them here keeps the opt-out
    * VISIBLE and typed, rather than a surface quietly not calling the shared
    * handler at all — which is the failure mode this whole exercise is about.
