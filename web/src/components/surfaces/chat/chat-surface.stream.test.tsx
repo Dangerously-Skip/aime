@@ -211,6 +211,114 @@ describe('ChatSurface — a reply stays in the conversation it was asked in', ()
   });
 });
 
+/** The request bodies the surface sent to the chat route. */
+const chatBodies = () =>
+  fetchMock.mock.calls
+    .filter(([u]) => String(u).includes('/api/chat/'))
+    .map(([, init]) => JSON.parse((init as RequestInit).body as string));
+
+describe('ChatSurface — Try again regenerates', () => {
+  it('replaces the failed reply and resends the same question, without duplicating it', async () => {
+    const failing = controllableFetch();
+    fetchMock.mockImplementation((url: string, init: RequestInit) =>
+      !String(url).includes('/api/chat/')
+        ? Promise.resolve(new Response(JSON.stringify(serverCreds)))
+        : chatBodies().length === 1
+          ? failing.fetch()
+          : stalledBodyFetch(url, init),
+    );
+    render(<ChatSurface />);
+    await send('what is 2+2?');
+    await act(async () => {
+      failing.push({ type: 'error', message: 'Overloaded', code: 'overloaded' });
+      failing.end();
+      await flush();
+    });
+    expect(screen.getByRole('alert').textContent).toMatch(/overloaded/i);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+      await flush();
+    });
+
+    const msgs = useChatStore.getState().messages[CHAT];
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(msgs[0].content).toBe('what is 2+2?');
+    expect(msgs[1].error).toBeUndefined();
+    expect(msgs[1].isStreaming).toBe(true);
+    const bodies = chatBodies();
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1].message).toBe('what is 2+2?');
+    // History is what came BEFORE the question — not the question, not the error.
+    expect(bodies[1].history).toBeUndefined();
+    streamRegistry.abort(CHAT);
+  });
+});
+
+describe('ChatSurface — the title is set once', () => {
+  it('titles an untitled chat from the first message and keeps it after that', async () => {
+    useConversationStore.getState().updateConversation(CHAT, { title: 'New Chat' });
+    render(<ChatSurface />);
+    await send('Plan a trip to Lisbon');
+    streamRegistry.abort(CHAT);
+    await act(async () => { await flush(); });
+    await send('ok thanks');
+    const conv = useConversationStore.getState().conversations.find((c) => c.id === CHAT);
+    expect(conv?.title).toBe('Plan a trip to Lisbon');
+    // The preview still follows the latest message.
+    expect(conv?.lastMessage).toBe('ok thanks');
+    streamRegistry.abort(CHAT);
+  });
+
+  it('never renames a chat that already has a name', async () => {
+    useConversationStore.getState().updateConversation(CHAT, { title: 'Quarterly report' });
+    render(<ChatSurface />);
+    await send('draft the intro');
+    expect(useConversationStore.getState().conversations.find((c) => c.id === CHAT)?.title).toBe('Quarterly report');
+    streamRegistry.abort(CHAT);
+  });
+});
+
+describe('ChatSurface — edit and resend, copy', () => {
+  function seed() {
+    const add = useChatStore.getState().addMessage;
+    add(CHAT, { id: 'u1', role: 'user', content: 'first question', timestamp: 1 });
+    add(CHAT, { id: 'a1', role: 'assistant', content: 'first answer', timestamp: 2 });
+    add(CHAT, { id: 'u2', role: 'user', content: 'second question', timestamp: 3 });
+    add(CHAT, { id: 'a2', role: 'assistant', content: 'second answer', timestamp: 4 });
+  }
+
+  it('editing a question replaces it and everything after it, and asks again', async () => {
+    seed();
+    render(<ChatSurface />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit and resend' })[0]);
+    fireEvent.change(screen.getByLabelText('Edit message'), { target: { value: 'better question' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save and send' }));
+      await flush();
+    });
+
+    const msgs = useChatStore.getState().messages[CHAT];
+    expect(msgs.map((m) => [m.role, m.content])).toEqual([
+      ['user', 'better question'],
+      ['assistant', ''],
+    ]);
+    const [body] = chatBodies();
+    expect(body.message).toBe('better question');
+    expect(body.history).toBeUndefined();
+    streamRegistry.abort(CHAT);
+  });
+
+  it('copies a user message', async () => {
+    seed();
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    render(<ChatSurface />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy message' })[1]);
+    expect(writeText).toHaveBeenCalledWith('second question');
+  });
+});
+
 describe('ChatSurface — nothing configured to answer', () => {
   it('shows Connect a model instead of sending a turn that can only fail', async () => {
     serverCreds = { anthropic: false, bedrock: false };

@@ -5,7 +5,7 @@ import { MessageList } from "@/components/shared/message-list";
 import { ModelSelector } from "@/components/shared/model-selector";
 import { ChatTitleBar } from "@/components/shared/chat-title-bar";
 import { useChatStore } from "@/stores/chat-store";
-import { useConversationStore } from "@/stores/conversation-store";
+import { useConversationStore, isUntitled } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useSSEStream, stripMessagesForHistory, turnErrorOf } from "@/hooks/use-sse-stream";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
@@ -16,6 +16,7 @@ import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import { Composer, type ComposerHandle } from "@/components/shared/composer/composer";
 import { addComposerAttachment, setComposerText } from "@/components/shared/composer/draft-store";
 import { lastUserPrompt } from "@/components/shared/composer/recall";
+import { rememberTurnAttachments, resendPayload } from "@/components/shared/composer/turn-attachments";
 import type { Message } from "@/stores/chat-store";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useFileDrop } from "@/hooks/use-file-drop";
@@ -135,6 +136,7 @@ export function ChatSurface() {
   const setCurrentChat = useChatStore((s) => s.setCurrentChat);
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
   const clearMessages = useChatStore((s) => s.clearMessages);
+  const truncateMessages = useChatStore((s) => s.truncateMessages);
   const updateConversation = useConversationStore(
     (s) => s.updateConversation
   );
@@ -342,6 +344,143 @@ export function ChatSurface() {
     },
   });
 
+  /**
+   * Run a turn for the user message that is ALREADY last in the transcript:
+   * the reply placeholder, the request, the run record.
+   *
+   * Split from `handleSubmit` so Retry and Edit can use it. Both used to call
+   * `handleSubmit` with the old text, which added the question a second time,
+   * left the failed reply in place above it, and renamed the chat.
+   */
+  const startTurn = useCallback(
+    async (id: string, trimmed: string, attachments: AttachmentFile[], webSearch = false) => {
+      addMessage(id, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+        isLoading: true,
+        isStreaming: true,
+      });
+
+      startStreaming(id);
+
+      const currentAttachments = [...attachments];
+      const currentWebSearch = webSearch;
+
+      if (currentWebSearch) sendFeatureAdoptionEvent({ feature: 'web_search', surface: 'chat' });
+      if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'chat' });
+      if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'chat' });
+
+      // Grab prior messages for history fallback (exclude the user message + assistant placeholder)
+      const priorMessages = useChatStore.getState().messages[id] || [];
+      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
+
+      // Register conversation with project
+      if (currentProjectId) {
+        useProjectStore.getState().addConversationToProject(currentProjectId, "chat", id);
+      }
+
+      // Retrieve relevant memories
+      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
+        projectId: currentProjectId,
+        query: trimmed,
+      });
+      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
+      // Touch accessed memories
+      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
+
+      // Clear prompt suggestions when a new turn starts
+      clearSuggestions(id);
+
+      // A tier route resolves here (it can land on a user provider's model); a
+      // pinned model passes through. Null ⇒ nothing resolved, so fall back to
+      // the surface's built-in model rather than send an empty one.
+      const route = resolveSendRoute(modelRoute, providers, {
+        capability: CAPABILITY,
+        tierModels,
+        hasAnthropicKey,
+        hasBedrock,
+        known: builtinAccessKnown,
+      });
+
+      // Open the run record before the turn starts so an immediate failure is
+      // still attributed rather than lost.
+      runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
+      await sendMessage(trimmed, id, "chat", route?.model ?? null, {
+        personalPreferences: personalPreferences || undefined,
+        displayName: displayName || undefined,
+        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
+        webSearch: currentWebSearch || undefined,
+        projectInstructions: projectInstructions || undefined,
+        projectKnowledge: projectKnowledge || undefined,
+        apiKey: anthropicApiKey || undefined,
+        history: history.length > 0 ? history : undefined,
+        memories: memoriesStr || undefined,
+        crossSurfaceContext: crossSurfaceContext || undefined,
+        sessionControls: sessionControls,
+        toolProfile: toolProfile,
+        providerConfig: route?.providerConfig,
+        securitySettings: {
+          blockDangerousCommands,
+          blockNetworkCommands,
+          restrictToProjectFolder,
+          disableBashTool,
+        },
+        searchSettings,
+        deckTheme,
+      });
+    },
+    [
+      runRecorder,
+      modelRoute,
+      providers,
+      tierModels,
+      anthropicApiKey,
+      hasAnthropicKey,
+      hasBedrock,
+      builtinAccessKnown,
+      addMessage,
+      startStreaming,
+      sendMessage,
+      personalPreferences,
+      displayName,
+      projectInstructions,
+      projectKnowledge,
+      // Read inside the callback and previously missing, so a slash command or a
+      // project change did not take effect until some other dep changed. All
+      // are primitives or stable store references, so adding them only affects
+      // this callback's identity — it is never used in an effect.
+      sessionControls,
+      clearSuggestions,
+      currentProjectId,
+      crossSurfaceContext,
+      toolProfile,
+      // Read inside the callback. Omitting them means a theme change, a search
+      // provider change or a security toggle does not take effect until some
+      // OTHER dependency happens to change — the stale-closure bug the cowork
+      // dep list already records.
+      deckTheme,
+      searchSettings,
+      blockDangerousCommands,
+      blockNetworkCommands,
+      restrictToProjectFolder,
+      disableBashTool,
+    ]
+  );
+
+  /** Record a new question: its preview in the sidebar, and a title if the chat has none yet. */
+  const touchConversation = useCallback(
+    (id: string, text: string) => {
+      const conv = useConversationStore.getState().conversations.find((c) => c.id === id);
+      updateConversation(id, {
+        ...(isUntitled(conv?.title) ? { title: truncateAtWordBoundary(text, 50) } : {}),
+        lastMessage: text,
+      });
+    },
+    [updateConversation],
+  );
+
   const handleSubmit = useCallback(
     async (text: string, opts?: { attachments?: AttachmentFile[] }) => {
       if (!text.trim()) return;
@@ -393,140 +532,33 @@ export function ChatSurface() {
         setCurrentChat(id);
       }
 
+      const userMessageId = crypto.randomUUID();
+      rememberTurnAttachments(userMessageId, attachments);
       addMessage(id, {
-        id: crypto.randomUUID(),
+        id: userMessageId,
         role: "user",
         content: trimmed,
         timestamp: Date.now(),
         attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
       });
+      touchConversation(id, trimmed);
 
-      updateConversation(id, {
-        title: trimmed.substring(0, 50),
-        lastMessage: trimmed,
-        updatedAt: Date.now(),
-      });
-
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        isLoading: true,
-        isStreaming: true,
-      });
-
-      startStreaming(id);
-
-      const currentAttachments = [...attachments];
-      const currentWebSearch = webSearchEnabled;
+      // Web search is a per-message switch: it applies to this send only.
+      const webSearch = webSearchEnabled;
       setWebSearchEnabled(false);
-
-      if (currentWebSearch) sendFeatureAdoptionEvent({ feature: 'web_search', surface: 'chat' });
-      if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'chat' });
-      if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'chat' });
-
-      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
-      const priorMessages = useChatStore.getState().messages[id] || [];
-      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
-
-      // Register conversation with project
-      if (currentProjectId) {
-        useProjectStore.getState().addConversationToProject(currentProjectId, "chat", id);
-      }
-
-      // Retrieve relevant memories
-      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
-        projectId: currentProjectId,
-        query: trimmed,
-      });
-      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
-      // Touch accessed memories
-      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
-
-      // Clear prompt suggestions when user sends a new message
-      if (chatId) clearSuggestions(chatId);
-
-      // A tier route resolves here (it can land on a user provider's model); a
-      // pinned model passes through. Null ⇒ nothing resolved, so fall back to
-      // the surface's built-in model rather than send an empty one.
-      const route = resolveSendRoute(modelRoute, providers, {
-        capability: CAPABILITY,
-        tierModels,
-        hasAnthropicKey,
-        hasBedrock,
-        known: builtinAccessKnown,
-      });
-
-      // Open the run record before the turn starts so an immediate failure is
-      // still attributed rather than lost.
-      runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
-      await sendMessage(trimmed, id, "chat", route?.model ?? null, {
-        personalPreferences: personalPreferences || undefined,
-        displayName: displayName || undefined,
-        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-        webSearch: currentWebSearch || undefined,
-        projectInstructions: projectInstructions || undefined,
-        projectKnowledge: projectKnowledge || undefined,
-        apiKey: anthropicApiKey || undefined,
-        history: history.length > 0 ? history : undefined,
-        memories: memoriesStr || undefined,
-        crossSurfaceContext: crossSurfaceContext || undefined,
-        sessionControls: sessionControls,
-        toolProfile: toolProfile,
-        providerConfig: route?.providerConfig,
-        securitySettings: {
-          blockDangerousCommands,
-          blockNetworkCommands,
-          restrictToProjectFolder,
-          disableBashTool,
-        },
-        searchSettings,
-        deckTheme,
-      });
+      await startTurn(id, trimmed, attachments, webSearch);
     },
     [
       chatId,
-      runRecorder,
-      modelRoute,
-      providers,
-      tierModels,
-      anthropicApiKey,
-      hasAnthropicKey,
-      hasBedrock,
-      builtinAccessKnown,
       addMessage,
-      startStreaming,
-      sendMessage,
-      updateConversation,
       addConversation,
       setActiveConversation,
       setCurrentChat,
-      personalPreferences,
-      displayName,
       webSearchEnabled,
-      projectInstructions,
-      projectKnowledge,
-      // Read inside the callback and previously missing, so a slash command or a
-      // project change did not take effect until some other dep changed. All
-      // six are primitives or stable store references, so adding them only
-      // affects this callback's identity — it is never used in an effect.
       sessionControls,
       setSessionControlsInStore,
-      clearSuggestions,
-      currentProjectId,
-      crossSurfaceContext,
-      toolProfile,
-      // Read inside the callback. Omitting them means a theme change, a search
-      // provider change or a security toggle does not take effect until some
-      // OTHER dependency happens to change — the stale-closure bug the cowork
-      // dep list already records.
-      deckTheme,
-      searchSettings,
-      blockDangerousCommands,
-      blockNetworkCommands,
-      restrictToProjectFolder,
-      disableBashTool,
+      touchConversation,
+      startTurn,
     ]
   );
 
@@ -543,15 +575,48 @@ export function ChatSurface() {
     return !!st.currentChatId && !!st.streamingChats[st.currentChatId];
   });
 
+  /**
+   * Regenerate the last reply: drop it (and anything after it) and run the
+   * same question again, with its attachments — without adding the question a
+   * second time or renaming the chat.
+   */
   const handleRetry = useCallback(() => {
     if (!chatId || isStreaming) return;
-    const msgs = useChatStore.getState().messages[chatId];
-    if (!msgs || msgs.length < 2) return;
-    // Find last user message
-    const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
-    if (!lastUserMsg) return;
-    handleSubmit(lastUserMsg.content);
-  }, [chatId, isStreaming, handleSubmit]);
+    const msgs = useChatStore.getState().messages[chatId] ?? [];
+    const lastUser = msgs.findLast((m) => m.role === "user" && !m.isAutoContinue);
+    if (!lastUser) return;
+    const { text, attachments } = resendPayload(lastUser);
+    truncateMessages(chatId, lastUser.id);
+    void startTurn(chatId, text, attachments);
+  }, [chatId, isStreaming, truncateMessages, startTurn]);
+
+  /**
+   * Edit a question and ask it again: everything from that question on is
+   * replaced by the edited question and a fresh reply.
+   */
+  const handleEditMessage = useCallback(
+    (messageId: string, newText: string) => {
+      const trimmed = newText.trim();
+      if (!chatId || isStreaming || !trimmed) return;
+      const msgs = useChatStore.getState().messages[chatId] ?? [];
+      const original = msgs.find((m) => m.id === messageId && m.role === "user");
+      if (!original) return;
+      const { text, attachments } = resendPayload(original, trimmed);
+      truncateMessages(chatId, messageId, { inclusive: true });
+      const userMessageId = crypto.randomUUID();
+      rememberTurnAttachments(userMessageId, attachments);
+      addMessage(chatId, {
+        id: userMessageId,
+        role: "user",
+        content: text,
+        timestamp: Date.now(),
+        attachments: original.attachments,
+      });
+      touchConversation(chatId, trimmed);
+      void startTurn(chatId, text, attachments);
+    },
+    [chatId, isStreaming, truncateMessages, addMessage, touchConversation, startTurn],
+  );
 
   /*
    * Nothing configured could answer, so say that instead of sending a turn that
@@ -717,7 +782,7 @@ export function ChatSurface() {
             {/* Messages column */}
             <div className="flex flex-1 flex-col min-w-0">
               {/* Messages */}
-              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
+              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
 
               {/* Prompt suggestions */}
               {suggestions.length > 0 && !isStreaming && (

@@ -249,6 +249,12 @@ interface ChatActions {
   stopStreaming: (chatId: string) => void;
   setCurrentChat: (chatId: string) => void;
   clearMessages: (chatId: string) => void;
+  /**
+   * Drop everything after `messageId` — or from it, with `inclusive`. How Retry
+   * replaces a failed reply and Edit replaces a question, instead of stacking a
+   * duplicate question and a second answer under the first.
+   */
+  truncateMessages: (chatId: string, messageId: string, opts?: { inclusive?: boolean }) => void;
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   updateMessageContent: (chatId: string, messageId: string, content: string) => void;
@@ -393,6 +399,16 @@ export const useChatStore = create<ChatStore>()(
         set((state) => {
           const { [chatId]: _, ...rest } = state.messages;
           return { messages: rest };
+        }),
+
+      truncateMessages: (chatId, messageId, opts) =>
+        set((state) => {
+          const msgs = state.messages[chatId];
+          const idx = msgs?.findIndex((m) => m.id === messageId) ?? -1;
+          if (!msgs || idx < 0) return state;
+          return {
+            messages: { ...state.messages, [chatId]: msgs.slice(0, opts?.inclusive ? idx : idx + 1) },
+          };
         }),
 
       addToolCall: (chatId, toolCall) =>

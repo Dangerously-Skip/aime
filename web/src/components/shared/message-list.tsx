@@ -62,6 +62,8 @@ interface MessageListProps {
   onArtifactClick?: (pathOrArtifact: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
   onRetry?: () => void;
+  /** Replace a question with an edited one and ask again. Omit while a turn runs. */
+  onEditMessage?: (messageId: string, text: string) => void;
   /** Cancels the active stream — wired to streamRegistry.abort by the surface. */
   onCancel?: () => void;
   conversationId?: string;
@@ -69,7 +71,7 @@ interface MessageListProps {
   surfaceId?: 'chat' | 'cowork';
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onConnectorSettled, onArtifactClick, onPreviewUrl, onRetry, onCancel, conversationId, surfaceId }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onConnectorSettled, onArtifactClick, onPreviewUrl, onRetry, onEditMessage, onCancel, conversationId, surfaceId }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -153,6 +155,8 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
         ) : msg.role === "user" ? (
           <UserMessage
             key={msg.id}
+            id={msg.id}
+            onEdit={msg.isCommandEcho ? undefined : onEditMessage}
             content={msg.content}
             timestamp={msg.timestamp}
             attachments={msg.attachments}

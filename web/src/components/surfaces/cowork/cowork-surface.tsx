@@ -6,7 +6,7 @@ import { ModelSelector } from "@/components/shared/model-selector";
 import { FolderPicker } from "@/components/shared/folder-picker";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import { useCoworkStore } from "@/stores/cowork-store";
-import { useConversationStore } from "@/stores/conversation-store";
+import { useConversationStore, isUntitled } from "@/stores/conversation-store";
 import { useSearchSettings } from '@/hooks/use-search-settings'
 import { useDeckTheme } from '@/hooks/use-deck-theme'
 import { useSettingsStore } from "@/stores/settings-store";
@@ -82,6 +82,7 @@ import {
 import { Composer, type ComposerHandle } from "@/components/shared/composer/composer";
 import { addComposerAttachment, draftKey, useComposerDrafts } from "@/components/shared/composer/draft-store";
 import { lastUserPrompt } from "@/components/shared/composer/recall";
+import { rememberTurnAttachments, resendPayload } from "@/components/shared/composer/turn-attachments";
 import {
   parseSlashCommand,
   applySlashCommand,
@@ -781,6 +782,7 @@ export function CoworkSurface() {
   const startStreaming = useCoworkStore((s) => s.startStreaming);
   const stopStreaming = useCoworkStore((s) => s.stopStreaming);
   const setCurrentChat = useCoworkStore((s) => s.setCurrentChat);
+  const truncateMessages = useCoworkStore((s) => s.truncateMessages);
   const setIsStreaming = useCoworkStore((s) => s.setIsStreaming);
   const updateConversation = useConversationStore((s) => s.updateConversation);
   const updateConversationMetrics = useConversationStore((s) => s.updateConversationMetrics);
@@ -1393,20 +1395,107 @@ export function CoworkSurface() {
     },
   });
 
-  // Retry: ref holds handleSubmit so the retry callback can call it without circular deps
-  const handleSubmitRef = useRef<((text: string) => void) | null>(null);
-  const handleRetry = useCallback(() => {
-    if (!chatId || isStreaming) return;
-    const msgs = useCoworkStore.getState().messages[chatId];
-    if (!msgs || msgs.length < 2) return;
-    const lastUserMsg = [...msgs].reverse().find((m: { role: string }) => m.role === 'user');
-    if (!lastUserMsg) return;
-    handleSubmitRef.current?.(lastUserMsg.content);
-  }, [chatId, isStreaming]);
-
   // Ref to break circular dependency: handleSubmit uses resetIdleTimer, but
   // useHeartbeat (which provides resetIdleTimer) is called after handleSubmit.
   const resetIdleTimerRef = useRef<(() => void) | null>(null);
+
+  /**
+   * Run a turn for the user message that is ALREADY last in the transcript.
+   * Split out so Retry and Edit reuse it rather than calling `handleSubmit`
+   * with the old text — which added the question again, kept the failed reply
+   * above it, and renamed the chat.
+   */
+  const startTurn = useCallback(
+    async (id: string, trimmed: string, attachments: AttachmentFile[]) => {
+      addMessage(id, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+        isLoading: true,
+        isStreaming: true,
+      });
+      startStreaming(id);
+      const currentAttachments = [...attachments];
+      if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'cowork' });
+      if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'cowork' });
+      if (sessionControls.agentName) sendFeatureAdoptionEvent({ feature: 'agent_routing', surface: 'cowork' });
+      // Grab prior messages for history fallback (exclude the user message + assistant placeholder)
+      const priorMessages = useCoworkStore.getState().messages[id] || [];
+      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
+
+      // Register conversation with project
+      if (currentProjectId) {
+        useProjectStore.getState().addConversationToProject(currentProjectId, "cowork", id);
+      }
+
+      // Retrieve relevant memories
+      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
+        projectId: currentProjectId,
+        query: trimmed,
+      });
+      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
+      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
+
+      // Drain context bus events for this surface
+      const { useContextBusStore } = await import('@/stores/context-bus-store');
+      const busEvents = useContextBusStore.getState().getUnconsumed('cowork')
+        .filter(e => e.priority === 'p0' || e.priority === 'p1')
+        .map(e => ({ summary: e.summary, source: e.source, priority: e.priority }));
+      if (busEvents.length > 0) {
+        useContextBusStore.getState().consumeAll('cowork');
+      }
+
+      const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
+      const route = resolveRoute();
+      // Everything that describes the USER's setup rather than this particular
+      // message. Built in one place because the auto-continue path below sends
+      // its own turn, and a hand-copied subset there silently dropped eight
+      // fields — `deckTheme` among them, which is why a themed deck came back
+      // unstyled on an auto-continued turn.
+      // Open the run record before the turn starts so an immediate failure is
+      // still attributed rather than lost.
+      runRecorder.begin({ trigger: "manual", model: route?.model ?? undefined });
+      await sendMessage(trimmed, id, "cowork", route?.model ?? null, {
+        ...turnContext(),
+        providerConfig: route?.providerConfig,
+        // Per-message, so deliberately not part of the shared context.
+        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
+        history: history.length > 0 ? history : undefined,
+        memories: memoriesStr || undefined,
+        contextBusEvents: busEvents.length > 0 ? busEvents : undefined,
+        sessionControls: currentControls,
+      });
+    },
+    [
+      runRecorder,
+      resolveRoute,
+      // Carries the settings half of the turn; omitting it is how a theme or
+      // security change fails to take effect until some other dep happens to
+      // change — the same stale-closure bug this list already documents below.
+      turnContext,
+      addMessage,
+      startStreaming,
+      sendMessage,
+      // Read inside the callback and previously missing, so a slash command, a
+      // project switch or a security-setting change did not take effect until
+      // another dep changed. All are primitives or stable store references.
+      sessionControls,
+      currentProjectId,
+    ]
+  );
+
+  /** Record a new question: its sidebar preview, and a title if the chat has none yet. */
+  const touchConversation = useCallback(
+    (id: string, text: string) => {
+      const conv = useConversationStore.getState().conversations.find((c) => c.id === id);
+      updateConversation(id, {
+        ...(isUntitled(conv?.title) ? { title: truncateAtWordBoundary(text, 50) } : {}),
+        lastMessage: text,
+      });
+    },
+    [updateConversation],
+  );
 
   const handleSubmit = useCallback(
     async (text: string, opts?: { attachments?: AttachmentFile[] }) => {
@@ -1455,102 +1544,70 @@ export function CoworkSurface() {
         }
       }
 
+      const userMessageId = crypto.randomUUID();
+      rememberTurnAttachments(userMessageId, attachments);
       addMessage(id, {
-        id: crypto.randomUUID(),
+        id: userMessageId,
         role: "user",
         content: trimmed,
         timestamp: Date.now(),
         attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
       });
-      updateConversation(id, {
-        title: trimmed.substring(0, 50),
-        lastMessage: trimmed,
-        updatedAt: Date.now(),
-      });
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        isLoading: true,
-        isStreaming: true,
-      });
-      startStreaming(id);
-      const currentAttachments = [...attachments];
-      if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'cowork' });
-      if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'cowork' });
-      if (sessionControls.agentName) sendFeatureAdoptionEvent({ feature: 'agent_routing', surface: 'cowork' });
-      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
-      const priorMessages = useCoworkStore.getState().messages[id] || [];
-      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
-
-      // Register conversation with project
-      if (currentProjectId) {
-        useProjectStore.getState().addConversationToProject(currentProjectId, "cowork", id);
-      }
-
-      // Retrieve relevant memories
-      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
-        projectId: currentProjectId,
-        query: trimmed,
-      });
-      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
-      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
-
-      // Drain context bus events for this surface
-      const { useContextBusStore } = await import('@/stores/context-bus-store');
-      const busEvents = useContextBusStore.getState().getUnconsumed('cowork')
-        .filter(e => e.priority === 'p0' || e.priority === 'p1')
-        .map(e => ({ summary: e.summary, source: e.source, priority: e.priority }));
-      if (busEvents.length > 0) {
-        useContextBusStore.getState().consumeAll('cowork');
-      }
-
-      const currentControls = useCoworkStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS;
-      const route = resolveRoute();
-      // Everything that describes the USER's setup rather than this particular
-      // message. Built in one place because the auto-continue path below sends
-      // its own turn, and a hand-copied subset there silently dropped eight
-      // fields — `deckTheme` among them, which is why a themed deck came back
-      // unstyled on an auto-continued turn.
-      // Open the run record before the turn starts so an immediate failure is
-      // still attributed rather than lost.
-      runRecorder.begin({ trigger: "manual", model: route?.model ?? undefined });
-      await sendMessage(trimmed, id, "cowork", route?.model ?? null, {
-        ...turnContext(),
-        providerConfig: route?.providerConfig,
-        // Per-message, so deliberately not part of the shared context.
-        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-        history: history.length > 0 ? history : undefined,
-        memories: memoriesStr || undefined,
-        contextBusEvents: busEvents.length > 0 ? busEvents : undefined,
-        sessionControls: currentControls,
-      });
+      touchConversation(id, trimmed);
+      await startTurn(id, trimmed, attachments);
     },
     [
       chatId,
-      runRecorder,
-      resolveRoute,
-      // Carries the settings half of the turn; omitting it is how a theme or
-      // security change fails to take effect until some other dep happens to
-      // change — the same stale-closure bug this list already documents below.
-      turnContext,
       addMessage,
-      startStreaming,
-      sendMessage,
-      updateConversation,
       addConversation,
       setActiveConversation,
       setCurrentChat,
-      // Read inside the callback and previously missing, so a slash command, a
-      // project switch or a security-setting change did not take effect until
-      // another dep changed. All are primitives or stable store references.
       sessionControls,
       setSessionControls,
       pendingFolder,
       setFolder,
-      currentProjectId,
+      touchConversation,
+      startTurn,
     ]
+  );
+
+  /**
+   * Regenerate the last reply: drop it and run the same question again, with
+   * its attachments — no duplicate question, no rename.
+   */
+  const handleRetry = useCallback(() => {
+    if (!chatId || isStreaming) return;
+    const msgs = useCoworkStore.getState().messages[chatId] ?? [];
+    const lastUser = msgs.findLast((m) => m.role === "user" && !m.isAutoContinue);
+    if (!lastUser) return;
+    const { text, attachments } = resendPayload(lastUser);
+    truncateMessages(chatId, lastUser.id);
+    void startTurn(chatId, text, attachments);
+  }, [chatId, isStreaming, truncateMessages, startTurn]);
+
+  /** Edit a question and ask again: it and everything after it are replaced. */
+  const handleEditMessage = useCallback(
+    (messageId: string, newText: string) => {
+      const trimmed = newText.trim();
+      if (!chatId || isStreaming || !trimmed) return;
+      const msgs = useCoworkStore.getState().messages[chatId] ?? [];
+      const original = msgs.find((m) => m.id === messageId && m.role === "user");
+      if (!original) return;
+      const { text, attachments } = resendPayload(original, trimmed);
+      truncateMessages(chatId, messageId, { inclusive: true });
+      const userMessageId = crypto.randomUUID();
+      rememberTurnAttachments(userMessageId, attachments);
+      addMessage(chatId, {
+        id: userMessageId,
+        role: "user",
+        content: text,
+        timestamp: Date.now(),
+        attachments: original.attachments,
+      });
+      touchConversation(chatId, trimmed);
+      void startTurn(chatId, text, attachments);
+    },
+    [chatId, isStreaming, truncateMessages, addMessage, touchConversation, startTurn],
   );
 
   /*
@@ -1566,7 +1623,6 @@ export function CoworkSurface() {
     return !!st.currentChatId && !!st.streamingChats[st.currentChatId];
   });
 
-  handleSubmitRef.current = handleSubmit;
 
   /*
    * The ONE submit — Enter and the button both land here, so goal mode cannot
@@ -1795,7 +1851,7 @@ export function CoworkSurface() {
                 />
               </div>
             )}
-            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
+            <MessageList messages={messages} surfaceId="cowork" onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onArtifactClick={(v) => { if (typeof v === 'string') setPreviewPath(v); }} onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }} onRetry={handleRetry} onEditMessage={isStreaming ? undefined : handleEditMessage} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} conversationId={chatId} />
 
             {/* Bottom input card */}
             <div className="px-6 pb-4 pt-2">

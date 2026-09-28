@@ -59,6 +59,16 @@ export interface Conversation {
   userRating?: 1 | -1;
 }
 
+/**
+ * A conversation still carrying a placeholder name. Only these are titled from
+ * the prompt — every send used to rename the chat to its latest message, so a
+ * conversation you had named, or one whose first question described it well,
+ * was renamed "ok thanks".
+ */
+export function isUntitled(title: string | null | undefined): boolean {
+  return !title?.trim() || /^new (chat|conversation)$/i.test(title.trim());
+}
+
 interface ConversationState {
   conversations: Conversation[];
   activeId: string | null;
