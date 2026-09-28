@@ -90,6 +90,9 @@ export function useResponsiveSidebar(): boolean {
  * unmounting it while collapsed would make ⌘, and every `openSettings(...)`
  * deep link silently do nothing.
  */
+/** The sidebar's element id, for the toggle's `aria-controls`. */
+export const SIDEBAR_ID = "app-sidebar";
+
 export function SidebarFrame({
   narrow,
   open,
@@ -113,7 +116,12 @@ export function SidebarFrame({
   if (!narrow) {
     return (
       <div
+        id={SIDEBAR_ID}
         data-sidebar-mode="docked"
+        // Collapsed to zero width, its links were still in the tab order — Tab
+        // walked focus through a sidebar nobody could see.
+        inert={!open}
+        aria-hidden={!open || undefined}
         className={`h-full shrink-0 transition-all duration-200 ${open ? "w-[250px]" : "w-0"} overflow-hidden`}
       >
         {children}
@@ -132,6 +140,7 @@ export function SidebarFrame({
         />
       )}
       <div
+        id={SIDEBAR_ID}
         data-sidebar-mode="overlay"
         aria-hidden={!open}
         className={`fixed inset-y-0 left-0 z-50 w-[250px] shadow-xl transition-transform duration-200 ${
