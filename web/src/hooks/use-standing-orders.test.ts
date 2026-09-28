@@ -28,6 +28,7 @@ function installMinuteTickMock() {
         await Promise.all([...listeners].map((l) => l(ts)));
       });
     },
+    listenerCount: () => listeners.size,
   };
 }
 
@@ -171,6 +172,20 @@ describe('useStandingOrders (sync + replay)', () => {
     await mock.tick(Date.now());
     await mock.tick(Date.now() + 60_000);
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/chat'))).toBe(false);
+  });
+});
+
+describe('minute-tick listener lifecycle', () => {
+  it('removes its tick listener on unmount, so remounts do not stack them', () => {
+    // The unsubscribe `onMinuteTick` returns was discarded: every remount left
+    // one more listener replaying the inbox on every tick.
+    const mock = installMinuteTickMock();
+    for (let i = 0; i < 3; i++) renderHook(() => useStandingOrders()).unmount();
+    expect(mock.listenerCount()).toBe(0);
+    const { unmount } = renderHook(() => useStandingOrders());
+    expect(mock.listenerCount()).toBe(1);
+    unmount();
+    expect(mock.listenerCount()).toBe(0);
   });
 });
 

@@ -240,11 +240,19 @@ export function useStandingOrders() {
 
     // Tick: replay new results while the window is open (registered once —
     // the listener-leak discipline shared with the other minute-tick hooks).
-    const api = (window as unknown as { electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => void } }).electronAPI;
-    api?.onMinuteTick?.(() => {
+    // The UNSUBSCRIBE is kept and called: it was discarded, so every remount
+    // (a surface re-keyed, Strict Mode's double effect, HMR) left one more
+    // listener replaying the inbox on every tick.
+    const api = (window as unknown as {
+      electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => (() => void) | void };
+    }).electronAPI;
+    const stopTick = api?.onMinuteTick?.(() => {
       void replayInbox().then(pullManifest);
     });
 
-    return () => unsub();
+    return () => {
+      unsub();
+      if (typeof stopTick === 'function') stopTick();
+    };
   }, []);
 }
