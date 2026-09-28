@@ -28,3 +28,25 @@ describe('Sidebar — Customize', () => {
     expect(useAppStore.getState().customizeSection).toBe('landing');
   });
 });
+
+describe('Sidebar — feedback without a FeedlyBackly key', () => {
+  it('is labelled for what it does, opens GitHub Issues, and loads no widget script', () => {
+    vi.stubEnv('NEXT_PUBLIC_FEEDLYBACKLY_API_KEY', '');
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    try {
+      render(<Sidebar onNewProject={() => {}} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Report an issue on GitHub' }));
+
+      expect(open).toHaveBeenCalledWith(
+        'https://github.com/Dangerously-Skip/aime/issues/new',
+        '_blank',
+        'noopener,noreferrer',
+      );
+      expect(document.getElementById('feedlybackly-script')).toBeNull();
+    } finally {
+      open.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+});

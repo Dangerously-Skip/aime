@@ -9,25 +9,8 @@ import { SidebarChats } from "./sidebar-chats";
 import { SidebarProjects } from "./sidebar-projects";
 import { SidebarProjectDetail } from "./sidebar-project-detail";
 import { SidebarCustomize } from "./sidebar-customize";
+import { loadFeedbackWidget, openFeedback } from "./feedback";
 import { Flag, FolderKanban, Heart, MessageCircle, Plus, Search, Settings, Wrench } from "lucide-react";
-
-// FeedlyBackly widget globals
-declare global {
-  interface Window {
-    feedlybacklySettings?: {
-      apiKey: string;
-      apiUrl: string;
-      hideLauncher?: boolean;
-      guestEnabled: boolean;
-    };
-    FeedlyBackly?: {
-      open: () => void;
-      close: () => void;
-      setUser: (user: { email?: string; name?: string }) => void;
-      setCustomData: (data: Record<string, unknown>) => void;
-    };
-  }
-}
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 
@@ -64,40 +47,20 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
    */
   const unreadCards = useAssistantStore((s) => s.cards.filter((c) => c.unread).length);
 
-  // FeedlyBackly widget — loads with hidden launcher, triggered via sidebar Flag button.
-  // Note: their API may return 500s intermittently (server-side issue on their end).
-  //
-  // The key was hardcoded here and in the proxy route, which put it in 575 commits
-  // and in every shipped client bundle. A widget key reaching the browser is
-  // inherent — the widget calls the API from the page — so this env var does not
-  // make it secret. What it does is keep it out of a public git history, where it
-  // is grep-able rather than merely extractable.
-  //
-  // Unset means NO widget rather than a widget that 401s on every call: a build
-  // without the key is the normal case for anyone who is not us.
-  useEffect(() => {
-    const apiKey = process.env.NEXT_PUBLIC_FEEDLYBACKLY_API_KEY;
-    if (!apiKey) return;
-    if (document.getElementById('feedlybackly-script')) return;
-    window.feedlybacklySettings = {
-      apiKey,
-      apiUrl: 'https://feedlybackly-api.apps.dangerouslyskip.com',
-      hideLauncher: true,
-      guestEnabled: true,
-    };
-    const script = document.createElement('script');
-    script.id = 'feedlybackly-script';
-    script.src = 'https://feedlybackly-widget.apps.dangerouslyskip.com/widget.js';
-    document.body.appendChild(script);
-  }, []);
+  // Resolved at build time (NEXT_PUBLIC_*). Unset is the normal open-source case.
+  const feedbackKey = process.env.NEXT_PUBLIC_FEEDLYBACKLY_API_KEY;
 
-  const openFeedback = useCallback(() => {
-    const name = displayName || fullName || undefined;
-    if (window.FeedlyBackly) {
-      if (name) window.FeedlyBackly.setUser({ name });
-      window.FeedlyBackly.open();
-    }
-  }, [displayName, fullName]);
+  // FeedlyBackly widget — loads with a hidden launcher, opened by the Flag
+  // button. Their API may 500 intermittently (their side). See feedback.ts for
+  // why nothing third-party loads without a key.
+  useEffect(() => {
+    loadFeedbackWidget(feedbackKey);
+  }, [feedbackKey]);
+
+  const handleFeedback = useCallback(() => {
+    openFeedback({ apiKey: feedbackKey, name: displayName || fullName || undefined });
+  }, [feedbackKey, displayName, fullName]);
+  const feedbackLabel = feedbackKey ? "Send feedback" : "Report an issue on GitHub";
   const activeSurface = useAppStore((s) => s.activeSurface);
   const addConversation = useConversationStore((s) => s.addConversation);
   const navigateTo = useConversationStore((s) => s.navigateTo);
@@ -259,8 +222,9 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
           </button>
           {/* Feedback button */}
           <button
-            onClick={openFeedback}
-            title="Send feedback"
+            onClick={handleFeedback}
+            title={feedbackLabel}
+            aria-label={feedbackLabel}
             className="p-1.5 rounded-md text-muted-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
           >
             <Flag className="h-3.5 w-3.5" />
