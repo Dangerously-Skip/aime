@@ -1,6 +1,6 @@
 export const runtime = 'nodejs';
 
-import { readFile, writeFile, mkdir, chmod } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { discoverMcpOAuth, registerOAuthClient } from '@/lib/mcp/oauth-discovery';
@@ -12,6 +12,7 @@ import {
   NAME_TAKEN_PHRASE,
 } from '@/lib/mcp/url-guard';
 import { getMcpClientsPath } from '@/lib/app-paths';
+import { updateJsonFile, SKIP_WRITE } from '@/lib/mcp/config-store';
 import { APP_NAME } from '@/config/branding';
 
 const CLAUDE_DIR = join(homedir(), '.claude');
@@ -37,14 +38,36 @@ async function readClients(): Promise<Record<string, StoredClient>> {
   }
 }
 
-async function writeClients(clients: Record<string, StoredClient>) {
-  await mkdir(CLAUDE_DIR, { recursive: true });
-  // Owner-only: this file holds OAuth client secrets. It was writing 0644 while
-  // every sibling path (provision, exchange, uninstall) used 0600 — so the same
-  // secret was AES-encrypted in one place and world-readable here.
-  const clientsPath = getMcpClientsPath();
-  await writeFile(clientsPath, JSON.stringify(clients, null, 2), { encoding: 'utf-8', mode: 0o600 });
-  await chmod(clientsPath, 0o600).catch(() => {});
+/**
+ * Record one registration in the clients file — under the config store's
+ * per-file lock, written atomically and owner-only (it holds client secrets).
+ *
+ * This used to write back the WHOLE map read before discovery. Discovery and
+ * registration are network round trips, so a second setup (another connector)
+ * or an uninstall landing in that window was silently undone by the older
+ * snapshot, and a plain writeFile truncated the file first. Now the merge
+ * happens on a fresh read inside the lock, and a name another origin claimed
+ * in the meantime is refused rather than overwritten.
+ */
+async function recordClient(
+  mcpName: string,
+  stored: StoredClient,
+): Promise<'ok' | { conflict: string }> {
+  let conflict: string | undefined;
+  const result = await updateJsonFile<Record<string, StoredClient>, 'ok' | { conflict: string }>(
+    getMcpClientsPath(),
+    () => ({}),
+    (clients) => {
+      const current = clients[mcpName];
+      if (current?.mcpUrl && !sameOrigin(current.mcpUrl, stored.mcpUrl)) {
+        conflict = originOf(current.mcpUrl);
+        return SKIP_WRITE;
+      }
+      clients[mcpName] = stored;
+      return 'ok';
+    },
+  );
+  return result ?? { conflict: conflict ?? 'another server' };
 }
 
 /** Origin for a message, or the raw value if it will not parse. */
@@ -287,8 +310,17 @@ export async function POST(request: Request) {
       redirectUri,
       registeredAt: Date.now(),
     };
-    clients[mcpName] = stored;
-    await writeClients(clients);
+    const recorded = await recordClient(mcpName, stored);
+    if (recorded !== 'ok') {
+      return Response.json(
+        {
+          error:
+            `"${mcpName}" is ${NAME_TAKEN_PHRASE} (${recorded.conflict}). ` +
+            `Disconnect that one first, or add this server under another name.`,
+        },
+        { status: 409 }
+      );
+    }
 
     return Response.json({
       authorizationEndpoint: stored.authorizationEndpoint,
