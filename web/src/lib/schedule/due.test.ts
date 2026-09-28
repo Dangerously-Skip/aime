@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { isJobDue, parseIntervalMs, matchesCron, type SchedulableJob } from './due';
+import { isJobDue, parseIntervalMs, type SchedulableJob } from './due';
 import { evaluateStandingOrders } from '@/lib/standing-order-engine';
 import { isOrderDue } from '@/lib/orders/scheduler-pass';
 
@@ -41,6 +41,25 @@ describe('the rule itself', () => {
      * the user's morning is twenty simultaneous agent runs.
      */
     expect(isJobDue(job(), AT)).toBe(true);
+  });
+
+  it('"remind me in 5 minutes" waits 5 minutes — the first interval counts from creation', () => {
+    /*
+     * The regression: the Assistant creates that reminder as `5m` with
+     * `maxExecutions: 1`, and nothing stamps `lastRun` at creation — so "never
+     * run ⇒ due now" fired it on the next minute tick.
+     */
+    const reminder = job({ trigger: { type: 'interval', expression: '5m' }, maxExecutions: 1, createdAt: AT });
+    expect(isJobDue(reminder, AT + 60_000)).toBe(false);
+    expect(isJobDue(reminder, AT + 4 * 60_000)).toBe(false);
+    expect(isJobDue(reminder, AT + 5 * 60_000)).toBe(true);
+    // …and fires once: after it runs, the cap holds it.
+    expect(isJobDue({ ...reminder, runCount: 1, lastRun: AT + 5 * 60_000 }, AT + 20 * 60_000)).toBe(false);
+  });
+
+  it('lastRun still wins over createdAt once a job has run', () => {
+    const j = job({ createdAt: AT - 10 * 60 * 60_000, lastRun: AT - 60_000 });
+    expect(isJobDue(j, AT)).toBe(false);
   });
 
   it('guards a same-minute double fire', () => {
@@ -110,15 +129,20 @@ describe('both tickers now agree, by construction', () => {
 });
 
 describe('the module boundary that caused the duplication', () => {
-  it('imports nothing, so the server can use it directly', () => {
+  it('imports nothing but its pure siblings, so the server can use it directly', () => {
     /*
      * The whole reason the server had its own copy. If this file ever imports a
      * store — or anything that reaches one — the dynamic-import workaround comes
      * back, and with it a second implementation.
+     *
+     * The parsers live in `cron.ts` / `interval.ts` now; those must import
+     * nothing at all, so the chain stays store-free end to end.
      */
-    const src = fs.readFileSync(path.join(process.cwd(), 'src/lib/schedule/due.ts'), 'utf8');
-    const imports = [...src.matchAll(/^import .*$/gm)].map((m) => m[0]);
-    expect(imports, `due.ts must import nothing, found: ${imports.join(' | ')}`).toEqual([]);
+    const read = (f: string) => fs.readFileSync(path.join(process.cwd(), 'src/lib/schedule', f), 'utf8');
+    const importsOf = (f: string) => [...read(f).matchAll(/^import .*$/gm)].map((m) => m[0]);
+    expect(importsOf('due.ts').every((i) => /from '\.\/(cron|interval)'/.test(i)), importsOf('due.ts').join(' | ')).toBe(true);
+    expect(importsOf('cron.ts')).toEqual([]);
+    expect(importsOf('interval.ts')).toEqual([]);
   });
 
   it('the server no longer lazily loads a cron matcher', () => {

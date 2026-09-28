@@ -135,6 +135,18 @@ describe('useWidgetRefresh (sync)', () => {
     expect(mock.listenerCount()).toBe(1);
   });
 
+  it('removes its tick listener on unmount, so remounts do not stack them', () => {
+    // The unsubscribe `onMinuteTick` returns was discarded: every remount left
+    // one more listener pulling (and notifying) every minute.
+    const mock = installMinuteTickMock();
+    for (let i = 0; i < 3; i++) renderHook(() => useWidgetRefresh()).unmount();
+    expect(mock.listenerCount()).toBe(0);
+    const { unmount } = renderHook(() => useWidgetRefresh());
+    expect(mock.listenerCount()).toBe(1);
+    unmount();
+    expect(mock.listenerCount()).toBe(0);
+  });
+
   it('skips the push when nothing material changed', async () => {
     useWidgetStore.setState({ widgets: [widget()] });
     installMinuteTickMock();

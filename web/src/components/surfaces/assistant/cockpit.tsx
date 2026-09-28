@@ -3,11 +3,15 @@
 import { useMemo, useState } from "react";
 import { useRunStore } from "@/stores/run-store";
 import { useAssistantStore } from "@/stores/assistant-store";
-import { standingOrdersToGoals } from "@/lib/runs/standing-order-goal";
+import { attendedJobToGoal, standingOrdersToGoals } from "@/lib/runs/standing-order-goal";
+import { useAttendedJobs } from "@/hooks/use-attended-jobs";
+import { APP_NAME } from "@/config/branding";
 import { summarizeRuns } from "@/lib/runs/runs";
 import {
   byNewest,
+  describeGoalSchedule,
   formatDuration,
+  formatRelative,
   formatUntil,
   formatUsd,
   healthLine,
@@ -25,8 +29,17 @@ import {
   RefreshCw,
   } from "lucide-react";
 
+/** Where a schedule runs — the difference users trip over. */
+export function runsWhereLabel(goal: Pick<Goal, "attended">): string {
+  return goal.attended ? `Needs ${APP_NAME} open` : "Runs in background";
+}
+
 /**
- * Cockpit — scheduled work and what actually came of it.
+ * Cockpit — schedules and what actually came of them.
+ *
+ * "Schedules" in the UI; `Goal` in the code and the persisted store key. The
+ * copy used to say "goals", which collided with the Code/Cowork harness's
+ * unrelated Goal mode — two features, one word.
  *
  * Reads runs through `useRunLog` — the durable JSONL log rather than the client
  * store, so it
@@ -59,17 +72,20 @@ function GoalCard({ goal, runs, now }: { goal: Goal; runs: Run[]; now: number })
               summary.currentlyFailing ? TONE_CLASS.danger : "text-muted-foreground"
             }`}
           >
-            {healthLine(summary, now)}
+            {summary.total === 0 && goal.lastRunAt
+              ? `Last ran ${formatRelative(goal.lastRunAt, now)}`
+              : healthLine(summary, now)}
           </p>
+          <p className="text-[11px] text-muted-foreground/80">{runsWhereLabel(goal)}</p>
         </div>
         <div className="shrink-0 text-right">
-          <p className="text-xs text-muted-foreground">
-            {goal.schedule?.cron
-              ? goal.schedule.cron
-              : next != null
-                ? formatUntil(next, now)
-                : "Manual"}
-          </p>
+          {/* In words and with the next run — never raw cron. */}
+          <p className="text-xs text-muted-foreground">{describeGoalSchedule(goal)}</p>
+          {next != null && (
+            <p className="text-xs text-muted-foreground" title={new Date(next).toLocaleString()}>
+              Next {formatUntil(next, now)}
+            </p>
+          )}
           <p className="text-xs tabular-nums text-muted-foreground">{formatUsd(summary.totalUsd)} total</p>
         </div>
       </div>
@@ -117,9 +133,11 @@ export function Cockpit() {
   // recreate it. Adapted on read (not copied into the store) so the order
   // remains the single source of truth and cannot drift.
   const orders = useAssistantStore((s) => s.orders);
+  // Attended jobs too — the ones that stop when the window closes.
+  const { jobs } = useAttendedJobs();
   const goals = useMemo(
-    () => [...standingOrdersToGoals(orders), ...ownGoals],
-    [orders, ownGoals],
+    () => [...standingOrdersToGoals(orders), ...jobs.map(attendedJobToGoal), ...ownGoals],
+    [orders, jobs, ownGoals],
   );
   // Shared with the Activity tab's run log — see `useRunLog`.
   const { runs: allRuns, now, loading, reload: load } = useRunLog();
@@ -174,7 +192,7 @@ export function Cockpit() {
           <span>{overall.total} runs</span>
           {/* The number none of OpenClaw, openworker or Burnbox can show you. */}
           <span title="Total spend across all recorded runs">{formatUsd(overall.totalUsd)} spent</span>
-          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={load} title="Refresh">
+          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={load} title="Refresh" aria-label="Refresh">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           </Button>
         </div>
@@ -186,12 +204,12 @@ export function Cockpit() {
 
           <section className="space-y-2">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Scheduled work
+              Schedules
             </h3>
             {goals.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border/60 px-4 py-6 text-center text-xs text-muted-foreground">
-                No goals yet. Standing orders and scheduled widgets will appear here with their run
-                history and cost.
+                No schedules yet. Reminders, standing orders and scheduled jobs appear here with
+                their next run, run history and cost.
               </p>
             ) : (
               <div className="space-y-2.5">

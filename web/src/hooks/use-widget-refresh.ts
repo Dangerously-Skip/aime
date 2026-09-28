@@ -27,7 +27,6 @@ import type { Widget } from '@/lib/widgets/widget';
  * IPC boundary. Manual refreshes (the tile button) still run client-initiated.
  */
 export function useWidgetRefresh() {
-  const quietHours = useSettingsStore((s) => s.quietHours) ?? null;
   const { showNotification } = useElectron();
   /*
    * Held in a ref so the pull effect does not re-register when the notifier
@@ -93,6 +92,9 @@ export function useWidgetRefresh() {
         }
 
         if (pending.length > 0 && !cancelled) {
+          // Read at alert time: this effect registers once, so a value captured
+          // at mount ignored every quiet-hours change until the next launch.
+          const quietHours = useSettingsStore.getState().quietHours ?? null;
           const decision = decideAlert(pending, { notify: true, quietHours }, new Date(), APP_NAME);
           if (decision.deliver) {
             notifyRef.current(decision.digest.title, decision.digest.body);
@@ -132,12 +134,17 @@ export function useWidgetRefresh() {
     const unsub = useWidgetStore.subscribe(() => void push());
 
     // PULL on the minute tick so renders land while the window is open too.
-    const api = (window as unknown as { electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => void } }).electronAPI;
-    api?.onMinuteTick?.(() => void pull());
+    // Unsubscribed on unmount — the return value used to be dropped, so each
+    // remount stacked another listener pulling (and notifying) every minute.
+    const api = (window as unknown as {
+      electronAPI?: { onMinuteTick?: (cb: (ts: number) => void) => (() => void) | void };
+    }).electronAPI;
+    const stopTick = api?.onMinuteTick?.(() => void pull());
 
     return () => {
       cancelled = true;
       unsub();
+      if (typeof stopTick === 'function') stopTick();
     };
   }, []);
 }

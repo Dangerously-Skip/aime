@@ -141,3 +141,22 @@ describe('pausing and deleting', () => {
     expect(written()).toHaveLength(2);
   });
 });
+
+describe('schedules other than cron', () => {
+  it('writes an interval trigger from the picker', async () => {
+    const id = await createAttendedJob({ ...NEW, expression: undefined, trigger: { type: 'interval', expression: '90m' } });
+    expect(id).toBeTruthy();
+    expect(written()[0].trigger).toEqual({ type: 'interval', expression: '90m' });
+  });
+
+  it('refuses a schedule the tickers cannot run instead of saving a dead job', async () => {
+    expect(await createAttendedJob({ ...NEW, expression: '0 9 * * FUNDAY' })).toBeNull();
+    expect(await createAttendedJob({ ...NEW, trigger: { type: 'event', event: 'x' } })).toBeNull();
+    expect(written()).toBeNull();
+  });
+
+  it('keeps the project, so the job runs there', async () => {
+    await createAttendedJob({ ...NEW, projectId: 'p1' });
+    expect(written()[0].projectId).toBe('p1');
+  });
+});

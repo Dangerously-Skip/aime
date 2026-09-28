@@ -17,7 +17,6 @@ import { ProjectSettings } from "@/components/projects/project-settings";
 import { ProjectCreate } from "@/components/projects/project-create";
 import { CustomizeView } from "@/components/customize/customize-view";
 import { UpdateBanner } from "@/components/shared/update-banner";
-import { ReminderModal } from "@/components/shared/reminder-modal";
 import { ActivityFeedPanel } from "./activity-feed-panel";
 import { SidebarFrame, useResponsiveSidebar } from "./responsive-sidebar";
 import { SearchPalette } from "./search-palette";
@@ -217,7 +216,6 @@ export function AppShell() {
 
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} onNewChat={handleNewChat} />
       <UpdateBanner />
-      <ReminderModal />
       <ActivityFeedPanel />
 
       {editingProjectId && (

@@ -13,9 +13,16 @@ import { markOrderRan } from '@/lib/schedule/write';
  *
  * Call this once in a top-level client component.
  */
-export function useCron(
-  onFire: (job: { id: string; prompt: string; surfaceId: string }) => void
-) {
+/** What a due job hands to its runner. */
+export interface FiredJob {
+  id: string;
+  prompt: string;
+  surfaceId: string;
+  /** The project it was created under — its run is filed there, with its instructions. */
+  projectId?: string;
+}
+
+export function useCron(onFire: (job: FiredJob) => void) {
   // Keep the latest onFire in a ref so the tick handler is registered exactly
   // once. Re-registering per render leaked ipcRenderer listeners (older
   // preloads had no unsubscribe), making each matching job fire once per
@@ -91,7 +98,7 @@ export function useCron(
         if (order) order.lastRun = ts;
         void markOrderRan(job.id, ts);
 
-        onFireRef.current({ id: job.id, prompt: job.prompt, surfaceId: job.surfaceId });
+        onFireRef.current({ id: job.id, prompt: job.prompt, surfaceId: job.surfaceId, projectId: job.projectId });
       }
     };
 

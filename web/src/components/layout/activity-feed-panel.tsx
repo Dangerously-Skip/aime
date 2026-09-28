@@ -66,14 +66,20 @@ const ACTIVITY_ICONS: Record<string, React.ReactNode> = {
 function MiniCard({ card, onDismiss, onView }: { card: AssistantCard; onDismiss: () => void; onView: () => void }) {
   return (
     <div className={`rounded-lg px-3 py-2.5 text-sm relative group transition-colors ${
-      card.unread ? 'bg-primary/5 border border-primary/20' : 'bg-muted/40 border border-transparent'
+      card.tone === 'error'
+        ? 'bg-red-500/5 border border-red-500/30'
+        : card.unread ? 'bg-primary/5 border border-primary/20' : 'bg-muted/40 border border-transparent'
     }`}>
       <div className="flex items-start gap-2">
-        <Bell className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
+        {card.tone === 'error'
+          ? <AlertCircle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />
+          : <Bell className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
             <span className="text-[10px] text-muted-foreground tabular-nums">{formatTime(card.timestamp)}</span>
-            {card.orderId && <span className="text-[10px] text-muted-foreground">Standing Order</span>}
+            {card.tone === 'error'
+              ? <span className="text-[10px] font-medium text-red-600 dark:text-red-400">Failed</span>
+              : card.orderId && <span className="text-[10px] text-muted-foreground">Schedule</span>}
           </div>
           <p className="text-xs font-medium text-foreground truncate">{card.title}</p>
           {card.summary && (
@@ -111,7 +117,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-muted-foreground tabular-nums">{formatTime(entry.timestamp)}</span>
         </div>
-        <p className="text-[11px] text-foreground">{entry.label}</p>
+        <p className={`text-[11px] ${entry.type === 'order-error' ? 'text-red-600 dark:text-red-400' : 'text-foreground'}`}>{entry.label}</p>
         {entry.detail && <p className="text-[10px] text-muted-foreground">{entry.detail}</p>}
       </div>
     </div>
@@ -180,7 +186,7 @@ export function ActivityFeedPanel() {
             )}
           </div>
           <SheetDescription className="sr-only">
-            Activity feed from standing orders and the assistant
+            Activity feed from schedules and the assistant
           </SheetDescription>
         </SheetHeader>
 
@@ -188,7 +194,7 @@ export function ActivityFeedPanel() {
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
             <Bell className="h-8 w-8 text-muted-foreground/50" />
             <p className="text-sm text-muted-foreground">
-              No updates yet. Standing order results, reminders, and alerts will appear here.
+              No updates yet. Schedule results, reminders, and alerts will appear here.
             </p>
             <Button
               variant="ghost"

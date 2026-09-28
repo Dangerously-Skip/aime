@@ -92,17 +92,26 @@ export function ProjectGrid({ onSelectProject, onNewProject }: ProjectGridProps)
       <div className="w-full max-w-3xl mx-auto px-6 py-10">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
-          <h1 className="text-3xl font-light text-foreground tracking-tight">Projects</h1>
-          <Button
-            variant="outline"
-            onClick={onNewProject}
-            className="gap-2 rounded-full"
-          >
-            <Plus className="h-4 w-4" />
-            New project
-          </Button>
+          <h1 className="text-2xl font-semibold text-foreground tracking-tight">Projects</h1>
+          {/*
+            * ONE "New project" on an empty page. The header's and the empty
+            * state's rendered together (with the sidebar's "+" a third), three
+            * buttons for one action on a page with nothing else on it.
+            */}
+          {projects.length > 0 && (
+            <Button
+              variant="outline"
+              onClick={onNewProject}
+              className="gap-2 rounded-full"
+            >
+              <Plus className="h-4 w-4" />
+              New project
+            </Button>
+          )}
         </div>
 
+        {projects.length > 0 && (
+        <>
         {/* Search */}
         <div className="relative mb-4">
           <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -127,6 +136,8 @@ export function ProjectGrid({ onSelectProject, onNewProject }: ProjectGridProps)
             <option value="created">Created</option>
           </select>
         </div>
+        </>
+        )}
 
         {/* Project cards — 2-column grid like Claude.ai */}
         {sorted.length > 0 ? (

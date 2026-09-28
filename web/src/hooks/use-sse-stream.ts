@@ -10,6 +10,7 @@ import {
 } from '@/lib/stream-registry';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
 import { resetTextBoundary } from '@/lib/sse/core-chunks';
+import { reportTurnEvent } from '@/lib/runs/turn-outcome';
 
 /** Abort the stream if no data arrives for this long (the server heartbeats every 15s). */
 const INACTIVITY_TIMEOUT_MS = 120_000;
@@ -370,6 +371,9 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           buffer = parseSSELines<SSEEvent>(
             buffer,
             (event) => {
+              // A reported failure must reach the run recorder even though the
+              // stream still ends cleanly (see lib/runs/turn-outcome).
+              reportTurnEvent(chatId, event);
               // Track TTFT on first text/thinking event
               if (!firstTokenAt && (event.type === 'text' || event.type === 'thinking')) {
                 firstTokenAt = Date.now();

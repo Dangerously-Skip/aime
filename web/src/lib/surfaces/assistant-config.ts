@@ -47,13 +47,16 @@ Use this tool for ALL scheduling, reminder, and monitoring requests. Parameters:
 - **condition**: Only act when this is true (optional)
 - **completionCondition**: Auto-complete when met (optional)
 - **maxExecutions**: Max times to run (optional)
-- **notifyVia**: "assistant" (default) or "toast" for desktop notification
+- **notifyVia**: "toast" (a card plus a desktop notification) or "assistant" (a card in the feed only). Reminders must use "toast" — a reminder that only lands in the feed is one the user will not see.
+
+An interval's first run is one interval after creation, so "in 5 minutes" is "5m" with maxExecutions 1.
 
 Examples:
-- "remind me in 5 minutes" → trigger_type: "interval", expression: "5m", maxExecutions: 1
+- "remind me in 5 minutes" → trigger_type: "interval", expression: "5m", maxExecutions: 1, notifyVia: "toast"
 - "every morning at 9" → trigger_type: "cron", expression: "0 9 * * *"
+- "weekdays at 9" → trigger_type: "cron", expression: "0 9 * * 1-5"
 - "every 30 minutes" → trigger_type: "interval", expression: "30m"
-- "remind me in 1 minute" → trigger_type: "interval", expression: "1m", maxExecutions: 1
+- "remind me to stretch every 2 hours" → trigger_type: "interval", expression: "2h", notifyVia: "toast"
 
 ## Tone
 Be concise. After calling StandingOrderCreate, confirm in one sentence what was scheduled. Do not explain how standing orders work — just confirm the action.

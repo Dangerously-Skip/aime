@@ -1,57 +1,63 @@
 import { NextRequest } from 'next/server';
+import { validateCron, describeCron } from '@/lib/schedule/cron';
 
 export const runtime = 'nodejs';
 
 /**
- * GET /api/cron — List cron jobs
- * POST /api/cron — Create a cron job
- * DELETE /api/cron — Delete a cron job by id
+ * GET /api/cron — health check
+ * POST /api/cron — validate a cron job before it is saved
+ * DELETE /api/cron — acknowledge a deletion by id
  *
- * Cron job state is managed client-side in cron-store.ts.
- * This route is a passthrough for server-side validation.
+ * Jobs themselves live in the order manifest (`lib/schedule/write`); this route
+ * is the server-side validation a creation path asks before writing one.
  */
 
 export async function GET() {
-  // State is stored client-side; this is a health-check endpoint
-  return Response.json({ ok: true, message: 'Cron jobs are managed client-side via cron-store' });
+  return Response.json({ ok: true, message: 'Scheduled jobs live in the order manifest' });
 }
 
 export async function POST(req: NextRequest) {
+  let body: { expression?: unknown; prompt?: unknown; surfaceId?: unknown };
   try {
-    const body = await req.json() as {
-      expression?: string;
-      prompt?: string;
-      surfaceId?: string;
-    };
-
-    const { expression, prompt, surfaceId } = body;
-
-    if (!expression || !prompt || !surfaceId) {
-      return Response.json({ error: 'expression, prompt, and surfaceId are required' }, { status: 400 });
-    }
-
-    // Validate cron expression (5 fields)
-    const parts = expression.trim().split(/\s+/);
-    if (parts.length !== 5) {
-      return Response.json({ error: 'Invalid cron expression — must have 5 fields (min hour dom month dow)' }, { status: 400 });
-    }
-
-    return Response.json({ ok: true, expression, prompt, surfaceId });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return Response.json({ error: msg }, { status: 500 });
+    body = (await req.json()) as typeof body;
+  } catch {
+    return Response.json({ error: 'Request body must be JSON' }, { status: 400 });
   }
+
+  const { expression, prompt, surfaceId } = body;
+  if (typeof expression !== 'string' || !expression.trim() || typeof prompt !== 'string' || !prompt.trim()
+    || typeof surfaceId !== 'string' || !surfaceId.trim()) {
+    return Response.json({ error: 'expression, prompt, and surfaceId are required' }, { status: 400 });
+  }
+
+  /*
+   * A REAL PARSE, not a field count. Counting to five accepted `0 9 * * MON-FRI`
+   * (which the old matcher could never match) and `60 * * * *` (no such minute),
+   * so the job was saved, listed, and silently never ran.
+   */
+  const error = validateCron(expression);
+  if (error) {
+    return Response.json({ error: `Invalid cron expression — ${error}` }, { status: 400 });
+  }
+
+  return Response.json({
+    ok: true,
+    expression: expression.trim(),
+    prompt,
+    surfaceId,
+    description: describeCron(expression),
+  });
 }
 
 export async function DELETE(req: NextRequest) {
+  let body: { id?: unknown };
   try {
-    const { id } = await req.json() as { id?: string };
-    if (!id) {
-      return Response.json({ error: 'id is required' }, { status: 400 });
-    }
-    return Response.json({ ok: true, id });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return Response.json({ error: msg }, { status: 500 });
+    body = (await req.json()) as typeof body;
+  } catch {
+    return Response.json({ error: 'Request body must be JSON' }, { status: 400 });
   }
+  if (typeof body.id !== 'string' || !body.id) {
+    return Response.json({ error: 'id is required' }, { status: 400 });
+  }
+  return Response.json({ ok: true, id: body.id });
 }
