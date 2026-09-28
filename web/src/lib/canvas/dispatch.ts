@@ -1,6 +1,46 @@
 'use client';
 
 import type { A2UIAction, A2UIDocument } from '@/lib/a2ui/types';
+import { resolveSendRoute } from '@/lib/models/client-options';
+import { getSurfaceRoute } from '@/lib/models/surface-routes';
+import type { ProviderExecConfig } from '@/lib/models/execution';
+import { getBuiltinAccess } from '@/hooks/use-builtin-access';
+import { useProviderStore } from '@/stores/provider-store';
+import { useSettingsStore } from '@/stores/settings-store';
+
+export interface CanvasDispatchOptions {
+  surfaceId?: string;
+  /**
+   * @deprecated Ignored. The server reads the Anthropic key saved in Settings
+   * from its credential store; the browser no longer sends it. Kept only so the
+   * existing caller type-checks until it stops passing one.
+   */
+  apiKey?: string | null;
+  cwd?: string | null;
+}
+
+/**
+ * The model route for a canvas subagent run: the surface's intent, resolved
+ * through `resolveSendRoute` like every turn, so the user's tier grid and BYOK
+ * providers govern it. `/api/subagent` used to receive neither, and resolved
+ * against the built-in Anthropic registry — dead for an OpenRouter-only user.
+ *
+ * Unpinned on purpose: a canvas action is not a turn in the conversation, so it
+ * follows Settings rather than whatever the composer happens to have selected.
+ */
+async function subagentRoute(
+  surfaceId: string,
+): Promise<{ model: string | null; providerConfig: ProviderExecConfig | null }> {
+  const access = await getBuiltinAccess();
+  const route = resolveSendRoute(null, useProviderStore.getState().providers, {
+    capability: getSurfaceRoute(surfaceId).capability,
+    tierModels: useSettingsStore.getState().tierModels,
+    hasAnthropicKey: access.hasAnthropicKey,
+    hasBedrock: access.hasBedrock,
+    known: access.known,
+  });
+  return { model: route?.model ?? null, providerConfig: route?.providerConfig ?? null };
+}
 
 /**
  * Dispatches a templated-canvas writeback action against a provisioned MCP
@@ -13,9 +53,9 @@ import type { A2UIAction, A2UIDocument } from '@/lib/a2ui/types';
  */
 export async function dispatchCanvasToolCall(
   action: Extract<A2UIAction, { type: 'tool-call' }>,
-  opts: { surfaceId?: string; apiKey?: string | null; cwd?: string | null } = {},
+  opts: CanvasDispatchOptions = {},
 ): Promise<string> {
-  const { surfaceId = 'cowork', apiKey = null, cwd = null } = opts;
+  const { surfaceId = 'cowork', cwd = null } = opts;
 
   // Build the task. Three modes:
   //   1. tool + args: call the tool exactly with args
@@ -45,7 +85,7 @@ export async function dispatchCanvasToolCall(
       parentChatId: 'canvas-action',
       task,
       surfaceId,
-      apiKey: apiKey || undefined,
+      ...(await subagentRoute(surfaceId)),
       cwd: cwd || undefined,
       extraAllowedTools,
     }),
@@ -70,9 +110,9 @@ export async function dispatchCanvasToolCall(
  */
 export async function refreshCanvasDoc(
   refreshPrompt: string,
-  opts: { surfaceId?: string; apiKey?: string | null; cwd?: string | null } = {},
+  opts: CanvasDispatchOptions = {},
 ): Promise<A2UIDocument | null> {
-  const { surfaceId = 'cowork', apiKey = null, cwd = null } = opts;
+  const { surfaceId = 'cowork', cwd = null } = opts;
 
   const response = await fetch('/api/subagent', {
     method: 'POST',
@@ -81,7 +121,7 @@ export async function refreshCanvasDoc(
       parentChatId: 'canvas-refresh',
       task: `${refreshPrompt}\n\nCall the \`canvas\` tool to render the result. Do not respond with prose — only call the canvas tool.`,
       surfaceId,
-      apiKey: apiKey || undefined,
+      ...(await subagentRoute(surfaceId)),
       cwd: cwd || undefined,
       // Refresh prompts often need MCP tools the surface doesn't expose
       // (e.g. Atlassian + canvas from chat). We don't know which exactly,

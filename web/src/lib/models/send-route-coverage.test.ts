@@ -154,3 +154,31 @@ describe('every turn-starting surface goes through the model-route chokepoint', 
     }
   });
 });
+
+/**
+ * A subagent run is a turn too. `/api/subagent` accepts `model` + `providerConfig`
+ * precisely so it can follow the user's route; a caller that omits them gets
+ * the built-in Anthropic registry, which for an OpenRouter-only user means a
+ * PR button and canvas writebacks that can never work.
+ */
+describe('every /api/subagent caller sends a resolved route', () => {
+  const SUBAGENT_FETCH = /fetch\(\s*['"`]\/api\/subagent['"`]/;
+  const callers = files.filter((f) => SUBAGENT_FETCH.test(f.text));
+
+  it('finds the callers (so this cannot pass by matching nothing)', () => {
+    expect(callers.map((f) => f.rel)).toEqual(
+      expect.arrayContaining([
+        path.join('components', 'surfaces', 'code', 'workspace', 'branch-header.tsx'),
+        path.join('lib', 'canvas', 'dispatch.ts'),
+      ]),
+    );
+  });
+
+  it.each(callers.map((f) => [f.rel, f.text] as const))(
+    '%s resolves through resolveSendRoute and sends providerConfig',
+    (rel, text) => {
+      expect(USES_CHOKEPOINT.test(text), `${rel} POSTs to /api/subagent without resolving a route`).toBe(true);
+      expect(text, `${rel} resolves a route but never sends providerConfig`).toMatch(/providerConfig/);
+    },
+  );
+});
