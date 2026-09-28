@@ -35,6 +35,13 @@ import { waitForDocumentPrint } from '../pending-documents';
 import { issueHandle } from '../rendezvous';
 import { expandCanvasTemplate } from '../canvas/templates';
 import {
+  MODEL_TRIGGER_TYPES,
+  TRIGGER_EXPRESSION_HELP,
+  refusedScheduleResult,
+  validateCronToolInput,
+  validateStandingOrderInput,
+} from '../schedule/tool-input';
+import {
   SHELL_TOOLS,
   classifyCommand,
   buildCommandApprovalQuestion,
@@ -1161,16 +1168,17 @@ export class ClaudeProvider extends BaseProvider {
           'CronCreate',
           'Schedule a recurring reminder or task using a cron expression. Use this whenever the user asks to be reminded about something at a future time or on a recurring schedule. Do NOT use Bash crontab commands.',
           {
-            expression: z.string().describe('5-field cron expression (min hour dom month dow). E.g. "32 9 * * *" for 9:32am daily, "*/10 * * * *" for every 10 minutes.'),
+            expression: z.string().describe('5-field cron expression (min hour dom month dow). E.g. "32 9 * * *" for 9:32am daily, "*/10 * * * *" for every 10 minutes. Validated before saving; an invalid one is refused with the reason.'),
             prompt: z.string().describe('The reminder message or task to run when the cron fires'),
             surfaceId: z.string().optional().describe('Surface to run on: cowork (default), chat, or code'),
           },
           async ({ expression, prompt, surfaceId }: { expression: string; prompt: string; surfaceId?: string }) => {
-            if (expression && prompt) {
-              pendingCronJobs.push({ expression, prompt, surfaceId: surfaceId ?? 'cowork' });
-            }
+            // Refused, not saved-to-never-fire — see lib/schedule/tool-input.
+            const invalid = validateCronToolInput({ expression, prompt });
+            if (invalid) return refusedScheduleResult('The reminder', invalid);
+            pendingCronJobs.push({ expression, prompt, surfaceId: surfaceId ?? 'cowork' });
             return {
-              content: [{ type: 'text' as const, text: `Reminder scheduled: "${prompt}" (${expression}). It will appear in Customize → Automation → Cron Jobs.` }],
+              content: [{ type: 'text' as const, text: `Reminder scheduled: "${prompt}" (${expression}). It will appear in Customize → Automation → Scheduled jobs.` }],
             };
           }
         ),
@@ -1180,16 +1188,20 @@ export class ClaudeProvider extends BaseProvider {
           'Create a standing order — a persistent, stateful instruction that runs on a schedule or interval. Use this for reminders, monitoring, recurring tasks, and any "watch for X and do Y" requests. Preferred over CronCreate for new orders.',
           {
             instruction: z.string().describe('What to do when this order fires — the task or prompt to execute'),
-            trigger_type: z.enum(['cron', 'interval']).describe('When to trigger: "cron" for specific times (cron expression), "interval" for recurring delays like "5m" or "1h"'),
-            expression: z.string().describe('Trigger expression: 5-field cron (e.g. "0 9 * * 1-5") or interval (e.g. "5m", "2h", "1d")'),
+            trigger_type: z.enum(MODEL_TRIGGER_TYPES).describe('When to trigger: "cron" for specific times (cron expression), "interval" for a recurring delay'),
+            expression: z.string().describe(`Trigger expression — ${TRIGGER_EXPRESSION_HELP} Validated before saving; an invalid one is refused with the reason.`),
             condition: z.string().optional().describe('Only act when this condition is true (natural language)'),
             completionCondition: z.string().optional().describe('Auto-complete the order when this condition is met'),
             agentName: z.string().optional().describe('Agent from AGENTS.md to execute the order'),
             notifyVia: z.enum(['assistant', 'toast']).optional().describe('How to notify: "assistant" shows in card feed (default), "toast" shows desktop notification'),
-            maxExecutions: z.number().optional().describe('Maximum number of times to run before auto-completing'),
-            expiresInHours: z.number().optional().describe('Auto-expire after this many hours'),
+            maxExecutions: z.number().int().positive().optional().describe('Maximum number of times to run before auto-completing'),
+            expiresInHours: z.number().positive().optional().describe('Auto-expire after this many hours'),
           },
           async (input: { instruction: string; trigger_type: string; expression: string; condition?: string; completionCondition?: string; agentName?: string; notifyVia?: string; maxExecutions?: number; expiresInHours?: number }) => {
+            // Validated with the scheduler's parsers: an unparseable schedule was
+            // saved as an order that never fired. See lib/schedule/tool-input.
+            const invalid = validateStandingOrderInput(input);
+            if (invalid) return refusedScheduleResult('The standing order', invalid);
             const triggerDesc = input.trigger_type === 'cron' ? `cron: ${input.expression}` : `every ${input.expression}`;
             const key = creationKey([input.instruction, input.trigger_type, input.expression]);
             if (!recordOnce(seenOrderKeys, key, true).isNew) {
@@ -2821,7 +2833,12 @@ export class ClaudeProvider extends BaseProvider {
                    * Reported as "it created 2 crons for 1 reminder".
                    */
                   const key = cronKey(toolInput);
-                  if (emittedEffects.has(key)) {
+                  const invalid = validateCronToolInput(toolInput);
+                  if (invalid) {
+                    // The handler refuses it and tells the model why; emitting
+                    // it here would save the very schedule it refused.
+                    console.log('[Claude] CronCreate with an invalid schedule — not emitting:', invalid);
+                  } else if (emittedEffects.has(key)) {
                     console.log('[Claude] CronCreate repeated with identical input — not emitting again');
                   } else {
                     emittedEffects.add(key);
@@ -2856,7 +2873,13 @@ export class ClaudeProvider extends BaseProvider {
                    * a guard that was already here, not a second mechanism.
                    */
                   const key = effectKey(type, toolInput);
-                  if (emittedEffects.has(key)) {
+                  const invalid =
+                    type === 'standing_order_create' ? validateStandingOrderInput(toolInput) : null;
+                  if (invalid) {
+                    // Refused by the handler, which tells the model why — see
+                    // lib/schedule/tool-input. Not emitted, so not saved.
+                    console.log(`[Claude] ${toolName} with an invalid schedule — not emitting:`, invalid);
+                  } else if (emittedEffects.has(key)) {
                     console.log(`[Claude] ${toolName} repeated with identical input — not emitting again`);
                   } else {
                     emittedEffects.add(key);

@@ -3474,3 +3474,71 @@ describe('a single CronCreate makes a single reminder', () => {
     expect(chunks.filter((c) => c.type === 'cron_create')).toHaveLength(2);
   });
 });
+
+/**
+ * A schedule the tickers cannot run is refused at save time, with the reason,
+ * instead of being saved as an order that never fires while the model tells
+ * the user it will. BOTH emitters are exercised — the handler (which answers
+ * the model) and the mid-stream tool_use block (which the client saves from):
+ * refusing in one and emitting from the other would still save the order.
+ */
+describe('model-created schedules are validated at save time', () => {
+  async function turnCalling(toolName: 'StandingOrderCreate' | 'CronCreate', input: Record<string, unknown>) {
+    let result: unknown;
+    queryMock.mockImplementation(async function* (args: { options: Record<string, unknown> }) {
+      const servers = (args.options.mcpServers ?? {}) as Record<
+        string,
+        { tools?: Array<{ name: string; handler: (i: unknown) => Promise<unknown> }> }
+      >;
+      const handler = Object.values(servers)
+        .flatMap((s) => s.tools ?? [])
+        .find((t) => t.name === toolName)?.handler;
+      expect(handler, `${toolName} is not registered`).toBeTruthy();
+      result = await handler!(input);
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: `mcp__aime__${toolName}`, input, id: 'tu1' }] },
+      };
+    });
+    const chunks = await run(new ClaudeProvider(), {});
+    return { chunks, result: result as { isError?: boolean; content: Array<{ text: string }> } };
+  }
+
+  it('refuses an unparseable standing-order cron and emits nothing', async () => {
+    const { chunks, result } = await turnCalling('StandingOrderCreate', {
+      instruction: 'Remind me to stretch', trigger_type: 'cron', expression: '0 9 * * MON-FRY',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/NOT saved[\s\S]*Invalid cron schedule/);
+    expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(0);
+  });
+
+  it('refuses an interval written as prose', async () => {
+    const { chunks, result } = await turnCalling('StandingOrderCreate', {
+      instruction: 'Check the queue', trigger_type: 'interval', expression: 'every couple of hours',
+    });
+    expect(result.isError).toBe(true);
+    expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(0);
+  });
+
+  it('still saves a valid order exactly once', async () => {
+    const { chunks, result } = await turnCalling('StandingOrderCreate', {
+      instruction: 'Check the queue', trigger_type: 'interval', expression: '2h',
+    });
+    expect(result.isError).toBeFalsy();
+    expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(1);
+  });
+
+  it('CronCreate refuses an impossible minute the same way', async () => {
+    const { chunks, result } = await turnCalling('CronCreate', { expression: '61 9 * * *', prompt: 'stand-up' });
+    expect(result.isError).toBe(true);
+    expect(chunks.filter((c) => c.type === 'cron_create')).toHaveLength(0);
+  });
+
+  it('offers only the trigger types the scheduler fires', async () => {
+    const { options } = await captureOptions(new ClaudeProvider());
+    const aime = (options.mcpServers as Record<string, { tools: Array<{ name: string; schema: Record<string, { options?: unknown }> }> }>).aime;
+    const schema = aime.tools.find((t) => t.name === 'StandingOrderCreate')!.schema;
+    expect(schema.trigger_type.options).toEqual(['cron', 'interval']);
+  });
+});

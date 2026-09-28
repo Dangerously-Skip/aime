@@ -66,8 +66,17 @@ export interface ParsedCron {
 
 export type CronParseResult = { ok: true; cron: ParsedCron } | { ok: false; error: string };
 
+/**
+ * An own-property lookup. A plain `obj[key]` on user text reaches the
+ * prototype: `__proto__` came back as an object (and `.split` threw), and
+ * `constructor` as a function where a number was expected.
+ */
+function lookup<T>(table: Record<string, T> | undefined, key: string): T | undefined {
+  return table && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
 function parseValue(token: string, def: FieldDef): number | null {
-  const named = def.names?.[token.toLowerCase()];
+  const named = lookup(def.names, token.toLowerCase());
   if (named !== undefined) return named;
   if (!/^\d+$/.test(token)) return null;
   return Number(token);
@@ -140,7 +149,7 @@ export function parseCron(expression: string | null | undefined): CronParseResul
 
 function parseUncached(text: string): CronParseResult {
   if (!text) return { ok: false, error: 'Schedule is empty' };
-  const expanded = MACROS[text.toLowerCase()] ?? text;
+  const expanded = lookup(MACROS, text.toLowerCase()) ?? text;
   const parts = expanded.split(/\s+/);
   if (parts.length !== 5) {
     return {
