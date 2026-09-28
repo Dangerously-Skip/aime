@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { queueEvent, flushBuffer } from '@/lib/telemetry/event-buffer';
-import type { AnalyticsEvent } from '@/lib/telemetry/analytics-client';
+import { isTelemetryEnabled, type AnalyticsEvent } from '@/lib/telemetry/analytics-client';
 
 export const runtime = 'nodejs';
 
@@ -16,14 +16,17 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const events = body.events ?? [];
+  // Telemetry is off without ANALYTICS_API_URL: nothing is queued, and
+  // `enabled: false` tells the client to stop posting.
+  const enabled = isTelemetryEnabled();
+  const events = enabled && Array.isArray(body.events) ? body.events : [];
   for (const event of events) {
     queueEvent(event);
   }
 
-  if (body.flush) {
+  if (enabled && body.flush) {
     await flushBuffer();
   }
 
-  return Response.json({ queued: events.length });
+  return Response.json({ queued: events.length, enabled });
 }

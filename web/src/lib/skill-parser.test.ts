@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import { load as loadYaml } from 'js-yaml';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   parseSkillMd,
   serializeSkillMd,
@@ -144,6 +147,18 @@ describe('evaluateSkillRequires', () => {
   it('passes when required binaries exist', () => {
     expect(evaluateSkillRequires({ bins: ['sh'] }).disabled).toBe(false);
   });
+
+  // REGRESSION: each `bins` entry went into `execSync(\`which ${bin}\`)`, so a
+  // SKILL.md listing `sh; touch <file>` ran touch when the skill was gated.
+  it.each(['sh; touch SENTINEL', '$(touch SENTINEL)', '`touch SENTINEL`'])(
+    'treats bins entry %j as a name, never a shell command',
+    (template) => {
+      const sentinel = join(tmpdir(), `aime-skill-bins-${process.pid}-${Date.now()}`);
+      const result = evaluateSkillRequires({ bins: [template.replace('SENTINEL', sentinel)] });
+      expect(result.disabled).toBe(true);
+      expect(existsSync(sentinel)).toBe(false);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

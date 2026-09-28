@@ -133,3 +133,88 @@ describe('llm-proxy shim — count_tokens & validation', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('llm-proxy shim — credentials', () => {
+  // REGRESSION: with no x-api-key, upstreamKey() fell back to the inbound
+  // `Authorization: Bearer`, which on this route is the LOCAL API token our own
+  // clients attach to get past src/proxy.ts — so it went to the provider.
+  it('never forwards the inbound Authorization header upstream', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+    await call({ model: 'm', messages: [{ role: 'user', content: 'x' }] }, ['v1', 'messages'], {
+      authorization: 'Bearer local-aime-api-token-0123456789',
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Record<string, string>;
+    expect(headers.authorization).toBeUndefined();
+    expect(JSON.stringify(headers)).not.toContain('local-aime-api-token');
+  });
+
+  it('forwards x-api-key even when a local Authorization header is also present', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+    await call({ model: 'm', messages: [{ role: 'user', content: 'x' }] }, ['v1', 'messages'], {
+      authorization: 'Bearer local-aime-api-token-0123456789',
+      'x-api-key': 'sk-provider',
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    expect((init.headers as Record<string, string>).authorization).toBe('Bearer sk-provider');
+  });
+});
+
+describe('llm-proxy shim — cancellation', () => {
+  function callWithSignal(body: unknown, signal: AbortSignal) {
+    const slug = ['prov-1', enc(UPSTREAM), 'v1', 'messages'];
+    const req = new Request('http://127.0.0.1:3100/api/llm-proxy/' + slug.join('/'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'k' },
+      body: JSON.stringify(body),
+      signal,
+    });
+    return POST(req, { params: Promise.resolve({ slug }) });
+  }
+
+  /** An upstream SSE body that sends one frame and then stays open. */
+  function neverEndingSse(): ReadableStream<Uint8Array> {
+    const e = new TextEncoder();
+    let sent = false;
+    return new ReadableStream({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(e.encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'));
+        }
+        return new Promise(() => {}); // generation still running
+      },
+    });
+  }
+
+  const streamingBody = { model: 'm', stream: true, messages: [{ role: 'user', content: 'x' }] };
+
+  it('passes an abort signal upstream that fires when the caller disconnects', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(neverEndingSse(), { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+    const caller = new AbortController();
+    const res = await callWithSignal(streamingBody, caller.signal);
+    const upstreamSignal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    expect(upstreamSignal).toBeInstanceOf(AbortSignal);
+    expect(upstreamSignal.aborted).toBe(false);
+
+    caller.abort();
+    expect(upstreamSignal.aborted).toBe(true);
+    await res.body?.cancel().catch(() => {});
+  });
+
+  it('aborts the upstream request when the response stream is cancelled (Stop)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(neverEndingSse(), { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    );
+    const res = await callWithSignal(streamingBody, new AbortController().signal);
+    const upstreamSignal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    const reader = res.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toContain('message_start');
+
+    await reader.cancel();
+    expect(upstreamSignal.aborted).toBe(true);
+  });
+});

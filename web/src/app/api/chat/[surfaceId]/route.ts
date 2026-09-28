@@ -869,10 +869,17 @@ export async function POST(
       // Run extraction on non-text/non-image attachments before sending to provider
       if (attachments && attachments.length > 0) {
         const { extractDocument } = await import('@/lib/extractors');
-        const { getScratchDir } = await import('@/lib/app-paths');
-        const { join: ej } = await import('path');
+        const { getScratchDir, getScratchRoot, isSafeChatId } = await import('@/lib/app-paths');
+        const { join: ej, dirname: eDirname } = await import('path');
         const { mkdirSync: eMkdir, writeFileSync: eWrite } = await import('fs');
+        const { writeUniqueFile, copyIntoUnique, isRealPathWithin } = await import('@/lib/uploads/store');
         const isToolSurface = surfaceId === 'cowork' || surfaceId === 'code';
+        // Stored names are unique per conversation (`a.png`, `a-2.png`) so two
+        // same-named attachments no longer overwrite each other; `att.name`
+        // stays the display name. No valid chatId → nothing is written to disk
+        // (getScratchDir refuses `../..`), and extraction runs on the content.
+        const uploadsDir = isSafeChatId(chatId) ? ej(getScratchDir(chatId), 'uploads') : null;
+        if (!uploadsDir) console.warn('[EXTRACT] No valid chatId; attachments are not saved to scratch');
 
         for (const att of attachments) {
           // Skip plain text (already handled by claude-provider inline)
@@ -880,13 +887,9 @@ export async function POST(
 
           // Images: save to scratch so the model can use Read tool to view them
           if (att.category === 'image') {
-            if (att.content) {
-              const imgDir = ej(getScratchDir(chatId as string), 'uploads');
-              eMkdir(imgDir, { recursive: true });
-              const imgName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-              const imgPath = ej(imgDir, imgName);
+            if (att.content && uploadsDir) {
               const base64Data = att.content.includes(',') ? att.content.split(',')[1] : att.content;
-              eWrite(imgPath, Buffer.from(base64Data, 'base64'));
+              const imgPath = await writeUniqueFile(uploadsDir, att.name, Buffer.from(base64Data, 'base64'));
               att.extractedPath = imgPath;
               att.content = ''; // Free memory
               console.log('[EXTRACT] Saved image to:', imgPath);
@@ -895,21 +898,27 @@ export async function POST(
           }
 
           // Always save the raw file to scratch so the model can read it if extraction fails
-          const scratchDir = ej(getScratchDir(chatId as string), 'uploads');
-          eMkdir(scratchDir, { recursive: true });
-          const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-          const savedPath = ej(scratchDir, safeName);
-
-          if (!att.filePath && att.content) {
+          if (!att.filePath && att.content && uploadsDir) {
             // Decode base64 and write to disk
             const rawBuffer = Buffer.from(att.content, 'base64');
-            eWrite(savedPath, rawBuffer);
+            const savedPath = await writeUniqueFile(uploadsDir, att.name, rawBuffer);
             att.filePath = savedPath;
             console.log('[EXTRACT] Saved raw file to:', savedPath, '(' + rawBuffer.length + ' bytes)');
           } else if (att.filePath) {
-            // Already on disk — copy to scratch for consistent path
-            const { copyFileSync } = await import('fs');
-            try { copyFileSync(att.filePath, savedPath); att.filePath = savedPath; } catch { /* keep original path */ }
+            // `filePath` comes from the request body. Only a file this app
+            // already stored under the scratch root (an /api/upload result) may
+            // be referenced — anything else would copy, say, ~/.ssh/id_rsa into
+            // scratch and hand it to the extractor and the model.
+            const real = await isRealPathWithin(getScratchRoot(), att.filePath);
+            if (!real) {
+              console.warn('[EXTRACT] Ignoring attachment path outside the scratch directory:', att.name);
+              att.filePath = undefined;
+            } else if (uploadsDir && eDirname(real) !== uploadsDir) {
+              // Uploaded under another id (e.g. before the chat had one) — copy it here.
+              try { att.filePath = await copyIntoUnique(real, uploadsDir, att.name); } catch { att.filePath = real; }
+            } else {
+              att.filePath = real;
+            }
           }
 
           try {

@@ -1,8 +1,6 @@
 export const runtime = 'nodejs';
 
-import { readFile, writeFile, mkdir, chmod } from 'fs/promises';
-import { dirname } from 'path';
-import { getMcpConfigPath } from '@/lib/app-paths';
+import { updateMcpConfig, SKIP_WRITE, McpConfigCorruptError } from '@/lib/mcp/config-store';
 import { decideProvision } from '@/lib/connectors/provision-guard';
 import { CONNECTOR_MAP } from '@/lib/connectors/registry';
 import type { ConnectorDefinition } from '@/lib/connectors/types';
@@ -71,28 +69,16 @@ function serverKeysFor(connectorId: string): string[] {
   );
 }
 
-async function readMcpConfig(): Promise<McpConfig> {
-  try {
-    const content = await readFile(getMcpConfigPath(), 'utf-8');
-    return JSON.parse(content);
-  } catch {
-    return { mcpServers: {} };
-  }
-}
-
 /**
- * The config holds live access tokens, refresh tokens and client secrets, so it
- * is owner-only. `mode` on writeFile only applies when the file is created, so
- * the explicit chmod re-tightens configs written before this was enforced.
- *
- * The directory is derived from the config path rather than hardcoded, so it
- * cannot drift from getMcpConfigPath().
+ * The config holds live access tokens, refresh tokens and client secrets; every
+ * read-modify-write goes through `updateMcpConfig` (locked, atomic, owner-only,
+ * and refuses to overwrite a file it cannot parse — see lib/mcp/config-store).
  */
-async function writeMcpConfig(config: McpConfig): Promise<void> {
-  const path = getMcpConfigPath();
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
-  await chmod(path, 0o600).catch(() => {});
+function configErrorResponse(error: unknown, fallback: string): Response {
+  if (error instanceof McpConfigCorruptError) {
+    return Response.json({ error: error.message }, { status: 409 });
+  }
+  return Response.json({ error: fallback }, { status: 500 });
 }
 
 /**
@@ -180,123 +166,128 @@ export async function POST(request: Request) {
 
     const connector = CONNECTOR_MAP[body.connectorId as string];
     const serverKey = validated.serverKey;
-    const config = await readMcpConfig();
-    if (!config.mcpServers) config.mcpServers = {};
-    const previous = config.mcpServers[serverKey] ?? config.disabledMcpServers?.[serverKey];
+    let refusal: Response | undefined;
 
-    const { extractSecrets, isEmptySecrets } = await import('@/lib/mcp/secrets');
-    const { getMcpSecretStore } = await import('@/lib/mcp/secret-store');
-    const store = getMcpSecretStore();
-    const storedSecrets = await store.get(serverKey).catch(() => undefined);
+    await updateMcpConfig(async (config: McpConfig) => {
+      if (!config.mcpServers) config.mcpServers = {};
+      const previous = config.mcpServers[serverKey] ?? config.disabledMcpServers?.[serverKey];
 
-    // ── Which token actually gets written ────────────────────────────────────
-    const existingCredential =
-      storedCredential(connector, storedSecrets) ?? inlineCredential(connector, previous);
-    const supplied = typeof body.token === 'string' ? body.token : '';
-    let token = supplied;
-    if (CREDENTIAL_FREE_AUTH.has(connector.auth.type)) {
-      token = '';
-    } else if (!supplied || NON_CREDENTIAL_TOKENS.has(supplied)) {
-      token = existingCredential ?? '';
-    }
-    // Re-enabling posts the credential the client already holds, so "did a token
-    // arrive?" cannot tell a toggle from a reconnect — whether it is a DIFFERENT
-    // credential can.
-    const isNewCredential = token !== '' && token !== existingCredential;
+      const { extractSecrets, isEmptySecrets } = await import('@/lib/mcp/secrets');
+      const { getMcpSecretStore } = await import('@/lib/mcp/secret-store');
+      const store = getMcpSecretStore();
+      const storedSecrets = await store.get(serverKey).catch(() => undefined);
 
-    const decision = token === supplied ? validated : decideProvision({ ...body, token }, { appDir });
-    if (!decision.ok) {
-      return Response.json({ error: decision.error }, { status: 400 });
-    }
-
-    // ── Metadata: inherited only when the credential is the one already there ─
-    //
-    // A RE-ENABLE reuses the stored credential, so its expiry, client id, token
-    // endpoint — and any recorded probe failure — all still describe it, and
-    // dropping them is what left a re-enabled connector unable to ever refresh.
-    //
-    // A genuine RECONNECT is the opposite case: the credential is new, so the old
-    // one's `expiresAt` says nothing about it. Inheriting that would date a
-    // freshly pasted long-lived token with a dead OAuth token's expiry and report
-    // it as needing a reconnect it just had.
-    const inherited = isNewCredential
-      ? {}
-      : ((previous?._meta as Record<string, unknown> | undefined) ?? {});
-    const meta: Record<string, unknown> = {
-      ...inherited,
-      connectorId: body.connectorId,
-      connectorName: decision.connectorName,
-      managedBy: 'aime',
-      // Token refresh metadata — used by loadProvisionedMcpServers() to
-      // auto-refresh. For byoCredentials connectors this includes the user's
-      // own OAuth client so refresh runs without re-authenticating.
-      ...decision.meta,
-    };
-
-    const fullEntry: Entry = { ...decision.entry, _meta: meta };
-
-    // ── argv is refused, never written ───────────────────────────────────────
-    //
-    // `env` and `headers` get split into the encrypted store. `args` cannot be:
-    // it is positional, unnamed, and executed — and the SDK serialises mcpServers
-    // into the `claude` CLI argv anyway, so an "encrypted" argv secret would still
-    // be in `ps auxww`. Refusing is the only answer that is not theatre; see
-    // credentialBearingArgs. Checked BEFORE any write, so a bad entry reaches
-    // neither the config nor the store.
-    //
-    // Unreachable today — `tokenInjection` supports only `env` and `header`, and
-    // args come from the static registry — which is exactly why it is a guard and
-    // not a migration. It fires the moment a registry entry starts carrying a token
-    // in argv, when moving it to `env` is still a one-line change.
-    const { credentialBearingArgs, describeArgvCredentials } = await import('@/lib/mcp/secrets');
-    // Split once and reuse. extractSecrets is pure and idempotent, but running it
-    // twice on an entry carrying a real token is a needless second copy.
-    const { entry: publicEntry, secrets } = extractSecrets(fullEntry);
-    const argvLeaks = credentialBearingArgs(fullEntry, secrets);
-    if (argvLeaks.length > 0) {
-      // The connector id, the positions and the reasons — never the value.
-      console.error(
-        `[Provisioner] Refusing to provision ${body.connectorId}: ` +
-          `command-line arguments would carry a credential — ${describeArgvCredentials(argvLeaks)}. ` +
-          `Move it to the entry's env (tokenInjection.method 'env'), which is encrypted at rest.`,
-      );
-      return Response.json(
-        {
-          error:
-            'This connector would pass a credential on the command line, where it is visible ' +
-            'to any process listing. Refusing to provision it.',
-        },
-        { status: 500 },
-      );
-    }
-
-    // Secrets go to the encrypted store; the config keeps structure and a visible
-    // placeholder (DR-14). With no master key the store is inert and the entry is
-    // written as-is, which is the documented fallback rather than a silent one.
-    if (store.mode === 'encrypted') {
-      if (!isEmptySecrets(secrets)) {
-        // MERGED, not replaced: a record is one blob, so setting it from a request
-        // that carries no refresh token (an api_key reconnect, a re-enable) used to
-        // erase the refresh token already stored for that server.
-        await store.set(serverKey, { ...(storedSecrets ?? {}), ...secrets });
+      // ── Which token actually gets written ────────────────────────────────────
+      const existingCredential =
+        storedCredential(connector, storedSecrets) ?? inlineCredential(connector, previous);
+      const supplied = typeof body.token === 'string' ? body.token : '';
+      let token = supplied;
+      if (CREDENTIAL_FREE_AUTH.has(connector.auth.type)) {
+        token = '';
+      } else if (!supplied || NON_CREDENTIAL_TOKENS.has(supplied)) {
+        token = existingCredential ?? '';
       }
-      config.mcpServers[serverKey] = publicEntry;
-    } else {
-      config.mcpServers[serverKey] = fullEntry;
-    }
+      // Re-enabling posts the credential the client already holds, so "did a token
+      // arrive?" cannot tell a toggle from a reconnect — whether it is a DIFFERENT
+      // credential can.
+      const isNewCredential = token !== '' && token !== existingCredential;
 
-    // It is mounted again, so it is no longer disabled.
-    if (config.disabledMcpServers) {
-      delete config.disabledMcpServers[serverKey];
-      if (Object.keys(config.disabledMcpServers).length === 0) delete config.disabledMcpServers;
-    }
+      const decision = token === supplied ? validated : decideProvision({ ...body, token }, { appDir });
+      if (!decision.ok) {
+        refusal = Response.json({ error: decision.error }, { status: 400 });
+        return SKIP_WRITE;
+      }
 
-    await writeMcpConfig(config);
+      // ── Metadata: inherited only when the credential is the one already there ─
+      //
+      // A RE-ENABLE reuses the stored credential, so its expiry, client id, token
+      // endpoint — and any recorded probe failure — all still describe it, and
+      // dropping them is what left a re-enabled connector unable to ever refresh.
+      //
+      // A genuine RECONNECT is the opposite case: the credential is new, so the old
+      // one's `expiresAt` says nothing about it. Inheriting that would date a
+      // freshly pasted long-lived token with a dead OAuth token's expiry and report
+      // it as needing a reconnect it just had.
+      const inherited = isNewCredential
+        ? {}
+        : ((previous?._meta as Record<string, unknown> | undefined) ?? {});
+      const meta: Record<string, unknown> = {
+        ...inherited,
+        connectorId: body.connectorId,
+        connectorName: decision.connectorName,
+        managedBy: 'aime',
+        // Token refresh metadata — used by loadProvisionedMcpServers() to
+        // auto-refresh. For byoCredentials connectors this includes the user's
+        // own OAuth client so refresh runs without re-authenticating.
+        ...decision.meta,
+      };
+
+      const fullEntry: Entry = { ...decision.entry, _meta: meta };
+
+      // ── argv is refused, never written ───────────────────────────────────────
+      //
+      // `env` and `headers` get split into the encrypted store. `args` cannot be:
+      // it is positional, unnamed, and executed — and the SDK serialises mcpServers
+      // into the `claude` CLI argv anyway, so an "encrypted" argv secret would still
+      // be in `ps auxww`. Refusing is the only answer that is not theatre; see
+      // credentialBearingArgs. Checked BEFORE any write, so a bad entry reaches
+      // neither the config nor the store.
+      //
+      // Unreachable today — `tokenInjection` supports only `env` and `header`, and
+      // args come from the static registry — which is exactly why it is a guard and
+      // not a migration. It fires the moment a registry entry starts carrying a token
+      // in argv, when moving it to `env` is still a one-line change.
+      const { credentialBearingArgs, describeArgvCredentials } = await import('@/lib/mcp/secrets');
+      // Split once and reuse. extractSecrets is pure and idempotent, but running it
+      // twice on an entry carrying a real token is a needless second copy.
+      const { entry: publicEntry, secrets } = extractSecrets(fullEntry);
+      const argvLeaks = credentialBearingArgs(fullEntry, secrets);
+      if (argvLeaks.length > 0) {
+        // The connector id, the positions and the reasons — never the value.
+        console.error(
+          `[Provisioner] Refusing to provision ${body.connectorId}: ` +
+            `command-line arguments would carry a credential — ${describeArgvCredentials(argvLeaks)}. ` +
+            `Move it to the entry's env (tokenInjection.method 'env'), which is encrypted at rest.`,
+        );
+        refusal = Response.json(
+          {
+            error:
+              'This connector would pass a credential on the command line, where it is visible ' +
+              'to any process listing. Refusing to provision it.',
+          },
+          { status: 500 },
+        );
+        return SKIP_WRITE;
+      }
+
+      // Secrets go to the encrypted store; the config keeps structure and a visible
+      // placeholder (DR-14). With no master key the store is inert and the entry is
+      // written as-is, which is the documented fallback rather than a silent one.
+      if (store.mode === 'encrypted') {
+        if (!isEmptySecrets(secrets)) {
+          // MERGED, not replaced: a record is one blob, so setting it from a request
+          // that carries no refresh token (an api_key reconnect, a re-enable) used to
+          // erase the refresh token already stored for that server.
+          await store.set(serverKey, { ...(storedSecrets ?? {}), ...secrets });
+        }
+        config.mcpServers[serverKey] = publicEntry;
+      } else {
+        config.mcpServers[serverKey] = fullEntry;
+      }
+
+      // It is mounted again, so it is no longer disabled.
+      if (config.disabledMcpServers) {
+        delete config.disabledMcpServers[serverKey];
+        if (Object.keys(config.disabledMcpServers).length === 0) delete config.disabledMcpServers;
+      }
+
+    });
+    if (refusal) return refusal;
 
     return Response.json({ success: true, serverKey });
   } catch (error) {
     console.error('[Provisioner] POST error:', error);
-    return Response.json({ error: 'Failed to provision connector' }, { status: 500 });
+    return configErrorResponse(error, 'Failed to provision connector');
   }
 }
 
@@ -326,24 +317,21 @@ export async function DELETE(request: Request) {
     }
     const intent: 'disable' | 'disconnect' = rawIntent === 'disconnect' ? 'disconnect' : 'disable';
 
-    const config = await readMcpConfig();
     const serverKeys = serverKeysFor(connectorId);
-
-    if (!config.mcpServers && !config.disabledMcpServers) {
-      return Response.json({ success: true, intent });
-    }
 
     if (intent === 'disable') {
       // Stash rather than delete. The client store keeps its token, and P3.5
       // already stops a disabled connector from being mounted; what was missing is
       // the refresh metadata, which lives only here.
-      for (const key of serverKeys) {
-        const entry = config.mcpServers?.[key];
-        if (!entry) continue;
-        (config.disabledMcpServers ??= {})[key] = entry;
-        delete config.mcpServers![key];
-      }
-      await writeMcpConfig(config);
+      await updateMcpConfig((config: McpConfig) => {
+        if (!config.mcpServers && !config.disabledMcpServers) return SKIP_WRITE;
+        for (const key of serverKeys) {
+          const entry = config.mcpServers?.[key];
+          if (!entry) continue;
+          (config.disabledMcpServers ??= {})[key] = entry;
+          delete config.mcpServers![key];
+        }
+      });
       return Response.json({ success: true, intent, credentialsPreserved: true });
     }
 
@@ -354,27 +342,27 @@ export async function DELETE(request: Request) {
 
     // Recover the credential before deleting it — revocation needs it.
     let token: string | undefined;
-    for (const key of serverKeys) {
-      const secrets = await store.get(key).catch(() => undefined);
-      const entry = config.mcpServers?.[key] ?? config.disabledMcpServers?.[key];
-      token ??= connector
-        ? (storedCredential(connector, secrets) ?? inlineCredential(connector, entry))
-        : undefined;
-    }
+    await updateMcpConfig(async (config: McpConfig) => {
+      for (const key of serverKeys) {
+        const secrets = await store.get(key).catch(() => undefined);
+        const entry = config.mcpServers?.[key] ?? config.disabledMcpServers?.[key];
+        token ??= connector
+          ? (storedCredential(connector, secrets) ?? inlineCredential(connector, entry))
+          : undefined;
+      }
 
-    for (const key of serverKeys) {
-      delete config.mcpServers?.[key];
-      delete config.disabledMcpServers?.[key];
-      // Or disconnecting would leave live credentials behind in the encrypted
-      // store. An `unreadable` store refuses deletes, which is correct — it must
-      // not be written over — and must not fail the disconnect.
-      await store.delete(key).catch(() => {});
-    }
-    if (config.disabledMcpServers && Object.keys(config.disabledMcpServers).length === 0) {
-      delete config.disabledMcpServers;
-    }
-
-    await writeMcpConfig(config);
+      for (const key of serverKeys) {
+        delete config.mcpServers?.[key];
+        delete config.disabledMcpServers?.[key];
+        // Or disconnecting would leave live credentials behind in the encrypted
+        // store. An `unreadable` store refuses deletes, which is correct — it must
+        // not be written over — and must not fail the disconnect.
+        await store.delete(key).catch(() => {});
+      }
+      if (config.disabledMcpServers && Object.keys(config.disabledMcpServers).length === 0) {
+        delete config.disabledMcpServers;
+      }
+    });
 
     // Best-effort: deleting our copy does not end the grant, and reconnecting
     // would silently reuse the old authorisation with its old scopes.
@@ -401,6 +389,6 @@ export async function DELETE(request: Request) {
     return Response.json({ success: true, intent, credentialsDeleted: true, revokedUpstream });
   } catch (error) {
     console.error('[Provisioner] DELETE error:', error);
-    return Response.json({ error: 'Failed to deprovision connector' }, { status: 500 });
+    return configErrorResponse(error, 'Failed to deprovision connector');
   }
 }

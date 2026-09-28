@@ -23,7 +23,9 @@ export async function register() {
   // (conversation_completed, feature_adoption — both flush=false) actually
   // leave the process. Without this they sit in memory until the next
   // user_feedback or app-quit event, which most users never trigger.
-  if (isNodeRuntime) {
+  // Opt-in: with no ANALYTICS_API_URL there is no timer at all (the function
+  // checks too; this just avoids loading the module for nothing).
+  if (isNodeRuntime && process.env.ANALYTICS_API_URL) {
     const { startBufferFlushTimer } = await import('./lib/telemetry/event-buffer');
     startBufferFlushTimer();
   }

@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { promises as fs } from 'fs';
 import path from 'path';
-import os from 'os';
+import { resolveUserPath } from '@/lib/security/user-file-access';
 
 const MAX_DEPTH = 4;
 const MAX_RESULTS = 50;
@@ -67,12 +67,10 @@ export async function GET(request: NextRequest) {
 
   if (!cwd) return Response.json({ files: [] });
 
-  // Security: restrict to home directory subtree
-  const home = os.homedir();
-  const resolved = path.resolve(cwd);
-  if (!resolved.startsWith(home) && !resolved.startsWith('/tmp')) {
-    return Response.json({ files: [] });
-  }
+  // Same gate as /api/files/read: real paths, home/temp only, no credential dirs.
+  const access = await resolveUserPath(cwd);
+  if (!access.ok) return Response.json({ files: [] });
+  const resolved = access.path;
 
   try {
     const results: FileResult[] = [];

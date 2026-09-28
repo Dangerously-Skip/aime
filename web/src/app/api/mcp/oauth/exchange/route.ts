@@ -1,13 +1,15 @@
 export const runtime = 'nodejs';
 
-import { readFile, writeFile, mkdir, chmod } from 'fs/promises';
-import { join } from 'path';
-import { homedir } from 'os';
+import { readFile } from 'fs/promises';
 import { getMcpConfigPath, getMcpClientsPath } from '@/lib/app-paths';
 import { isBuiltInServerId, builtInIdOwnsUrl } from '@/lib/mcp/url-guard';
+import {
+  updateMcpConfig,
+  McpConfigCorruptError,
+  MCP_OAUTH_MANAGED_BY,
+} from '@/lib/mcp/config-store';
 
-const CLAUDE_DIR = join(homedir(), '.claude');
-// Resolved per request, not at module load: Electron sets its paths after the
+// Paths are resolved per request, not at module load: Electron sets its paths after the
 // server module is imported, so a captured constant can point at the wrong file.
 
 /**
@@ -115,16 +117,6 @@ export async function POST(request: Request) {
       return Response.json({ error: 'No access token in response' }, { status: 502 });
     }
 
-    // Write to the MCP config file with token + refresh metadata
-    await mkdir(CLAUDE_DIR, { recursive: true });
-
-    let mcpConfig: { mcpServers?: Record<string, Record<string, unknown>> } = {};
-    try {
-      mcpConfig = JSON.parse(await readFile(mcpConfigFile, 'utf-8'));
-    } catch {}
-
-    if (!mcpConfig.mcpServers) mcpConfig.mcpServers = {};
-
     const expiresAt = tokenData.expires_in
       ? Date.now() + tokenData.expires_in * 1000
       : undefined;
@@ -134,7 +126,7 @@ export async function POST(request: Request) {
     const transport = isSse ? 'sse' : 'streamable-http';
 
     const serverKey = `aime-mcp-${mcpName}`;
-    mcpConfig.mcpServers[serverKey] = {
+    let entry: Record<string, unknown> = {
       transport, // Gets translated to 'sse' or 'http' for the SDK
       url: mcpUrl,
       headers: {
@@ -142,7 +134,7 @@ export async function POST(request: Request) {
       },
       _meta: {
         mcpName,
-        managedBy: 'aime-mcp-oauth',
+        managedBy: MCP_OAUTH_MANAGED_BY,
         // Used by loadProvisionedMcpServers() for auto-refresh
         ...(tokenData.refresh_token && { refreshToken: tokenData.refresh_token }),
         ...(expiresAt && { expiresAt }),
@@ -160,20 +152,18 @@ export async function POST(request: Request) {
       const { getMcpSecretStore } = await import('@/lib/mcp/secret-store');
       const store = getMcpSecretStore();
       if (store.mode === 'encrypted') {
-        const { entry: publicEntry, secrets } = extractSecrets(mcpConfig.mcpServers[serverKey]);
+        const { entry: publicEntry, secrets } = extractSecrets(entry);
         if (!isEmptySecrets(secrets)) await store.set(serverKey, secrets);
-        mcpConfig.mcpServers[serverKey] = publicEntry as Record<string, unknown>;
+        entry = publicEntry as Record<string, unknown>;
       }
     }
 
-    // Owner-only: this file may still hold a live access token, a refresh token and
-    // possibly a client secret. `mode` only applies on create, so chmod covers
-    // configs written before this was enforced.
-    await writeFile(mcpConfigFile, JSON.stringify(mcpConfig, null, 2), {
-      encoding: 'utf-8',
-      mode: 0o600,
-    });
-    await chmod(mcpConfigFile, 0o600).catch(() => {});
+    // Locked, atomic, owner-only, and never written over an unparseable file
+    // (lib/mcp/config-store) — this entry may still hold a live access token,
+    // a refresh token and possibly a client secret.
+    await updateMcpConfig((mcpConfig) => {
+      (mcpConfig.mcpServers ??= {})[serverKey] = entry;
+    }, mcpConfigFile);
     console.log(`[MCP OAuth Exchange] Provisioned ${mcpName} at ${serverKey}`);
 
     return Response.json({
@@ -185,6 +175,9 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error('[MCP OAuth Exchange] Error:', error);
+    if (error instanceof McpConfigCorruptError) {
+      return Response.json({ error: error.message }, { status: 409 });
+    }
     return Response.json(
       { error: error instanceof Error ? error.message : 'Token exchange failed' },
       { status: 500 }
