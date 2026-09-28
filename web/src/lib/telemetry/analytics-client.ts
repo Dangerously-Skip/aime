@@ -4,11 +4,23 @@
  * Falls back to unsigned requests for local dev.
  */
 
-const ANALYTICS_API_URL = process.env.ANALYTICS_API_URL ?? '';
-const ANALYTICS_AWS_REGION = process.env.ANALYTICS_AWS_REGION ?? 'ap-southeast-2';
+import { STORAGE_PREFIX } from '@/config/branding';
+
+// Read at call time, not import time, so the enabled check and the send agree
+// with each other and with whatever the environment says now.
+const analyticsUrl = (): string => process.env.ANALYTICS_API_URL ?? '';
+const analyticsRegion = (): string => process.env.ANALYTICS_AWS_REGION ?? 'ap-southeast-2';
+
+/**
+ * Telemetry is opt-in: nothing is queued, persisted or sent unless an ingest
+ * URL is configured.
+ */
+export function isTelemetryEnabled(): boolean {
+  return analyticsUrl() !== '';
+}
 
 export interface AnalyticsIdentity {
-  app?: string;           // 'quarry' | 'claude-code'
+  app?: string;           // 'aime' (formerly 'quarry') | 'claude-code'
   app_version?: string;
   user_email?: string;
   machine_id?: string;
@@ -25,10 +37,6 @@ export interface AnalyticsEvent {
   data: Record<string, unknown>;
 }
 
-// Throttle "ANALYTICS_API_URL not set" warning to once per process — the
-// flush timer fires every 5 minutes and would otherwise spam the log.
-let warnedMissingUrl = false;
-
 /**
  * Send a batch of analytics events to the pipeline.
  * Returns true if the events were accepted by the server (2xx),
@@ -40,13 +48,8 @@ let warnedMissingUrl = false;
  */
 export async function sendEvents(events: AnalyticsEvent[]): Promise<boolean> {
   if (events.length === 0) return true;
-  if (!ANALYTICS_API_URL) {
-    if (!warnedMissingUrl) {
-      console.warn('[telemetry] ANALYTICS_API_URL is not set; events will be buffered locally and not delivered');
-      warnedMissingUrl = true;
-    }
-    return false;
-  }
+  const baseUrl = analyticsUrl();
+  if (!baseUrl) return false;
 
   const ndjson = events.map((e) => JSON.stringify(e)).join('\n');
   let headers: Record<string, string> = { 'Content-Type': 'application/x-ndjson' };
@@ -55,11 +58,11 @@ export async function sendEvents(events: AnalyticsEvent[]): Promise<boolean> {
     const { SignatureV4 } = await import('@smithy/signature-v4');
     const { fromNodeProviderChain } = await import('@aws-sdk/credential-providers');
     const { Sha256 } = await import('@aws-crypto/sha256-js');
-    const url = new URL(`${ANALYTICS_API_URL}/v1/events`);
+    const url = new URL(`${baseUrl}/v1/events`);
 
     const signer = new SignatureV4({
       credentials: fromNodeProviderChain(),
-      region: ANALYTICS_AWS_REGION,
+      region: analyticsRegion(),
       service: 'execute-api',
       sha256: Sha256,
     });
@@ -82,7 +85,7 @@ export async function sendEvents(events: AnalyticsEvent[]): Promise<boolean> {
   }
 
   try {
-    const res = await fetch(`${ANALYTICS_API_URL}/v1/events`, {
+    const res = await fetch(`${baseUrl}/v1/events`, {
       method: 'POST',
       headers,
       body: ndjson,
@@ -102,7 +105,7 @@ export async function sendEvents(events: AnalyticsEvent[]): Promise<boolean> {
 /** Build an identity object from available context. */
 export function buildIdentity(overrides: Partial<AnalyticsIdentity> = {}): AnalyticsIdentity {
   return {
-    app: 'quarry',
+    app: STORAGE_PREFIX,
     app_version: process.env.npm_package_version ?? '1.0.0',
     ...overrides,
   };

@@ -4,6 +4,7 @@
  */
 
 import type { AnalyticsIdentity } from './analytics-client';
+import { STORAGE_PREFIX, storageKey } from '@/config/branding';
 
 export interface ConversationCompletedData {
   // Identity / session context
@@ -67,7 +68,7 @@ function getAppIdentity(): AnalyticsIdentity {
   if (cachedIdentity) return cachedIdentity;
 
   const identity: AnalyticsIdentity = {
-    app: 'quarry',
+    app: STORAGE_PREFIX,
   };
 
   if (typeof window !== 'undefined') {
@@ -106,11 +107,16 @@ function getAppIdentity(): AnalyticsIdentity {
   return identity;
 }
 
+// Set once the server says telemetry is off (no ANALYTICS_API_URL). It cannot
+// turn on without a restart, so every later post would be a wasted request.
+let serverTelemetryDisabled = false;
+
 /** Post events to the local Next.js telemetry endpoint (which queues + forwards to cloud). */
 async function postEvents(
   events: Array<{ event_type: string; data: Record<string, unknown>; identity?: AnalyticsIdentity }>,
   flush = false,
 ): Promise<void> {
+  if (serverTelemetryDisabled) return;
   try {
     const baseIdentity = getAppIdentity();
     const payload = events.map((e) => ({
@@ -120,11 +126,13 @@ async function postEvents(
       identity: { ...baseIdentity, ...e.identity },
       data: e.data,
     }));
-    await fetch('/api/telemetry/events', {
+    const res = await fetch('/api/telemetry/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ events: payload, flush }),
     });
+    const body = (await res.json().catch(() => null)) as { enabled?: boolean } | null;
+    if (body?.enabled === false) serverTelemetryDisabled = true;
   } catch {
     // Never throw — telemetry must not affect the main flow
   }
@@ -147,11 +155,13 @@ export interface FeatureAdoptionData {
 
 // Track which features have already been reported this session to avoid duplicates.
 // Persisted in localStorage so we only fire once per feature per device.
-const ADOPTION_STORAGE_KEY = 'quarry:adopted_features';
+const ADOPTION_STORAGE_KEY = storageKey('adopted_features');
+const LEGACY_ADOPTION_STORAGE_KEY = 'quarry:adopted_features';
 
 function getAdoptedFeatures(): Set<string> {
   try {
-    const stored = localStorage.getItem(ADOPTION_STORAGE_KEY);
+    const stored =
+      localStorage.getItem(ADOPTION_STORAGE_KEY) ?? localStorage.getItem(LEGACY_ADOPTION_STORAGE_KEY);
     return stored ? new Set(JSON.parse(stored)) : new Set();
   } catch { return new Set(); }
 }
@@ -179,6 +189,12 @@ export interface AppLifecycleData {
   action: 'launch' | 'quit' | 'open' | 'close';
   sessionDurationMs?: number;
   version?: string;
+}
+
+/** Test seam: forget a previous "telemetry disabled" answer. */
+export function __resetTelemetryClientForTests(): void {
+  serverTelemetryDisabled = false;
+  cachedIdentity = null;
 }
 
 /** Fire on app launch and quit for app-level lifecycle tracking. */
