@@ -124,6 +124,11 @@ export interface Goal {
   capability?: Capability;
   tier?: Tier;
   surfaceId?: string;
+  /**
+   * Runs in the renderer, so only while the app window is open (DR-24's
+   * "attended" jobs), rather than on the server in the background.
+   */
+  attended?: boolean;
   lastRunAt?: number;
   /** Consecutive failures — drives escalation and "this is broken" in the UI. */
   consecutiveFailures?: number;

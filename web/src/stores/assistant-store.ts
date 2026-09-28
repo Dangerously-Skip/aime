@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { A2UIDocument } from '@/lib/a2ui/types';
+import { validateTrigger } from '@/lib/schedule/schedule';
 
 // ── Standing Order ───────────────────────────────────────────────────────────
 
@@ -114,6 +115,14 @@ export const useAssistantStore = create<AssistantStore>()(
       addOrder: (order) => {
         const id = crypto.randomUUID();
         const now = Date.now();
+        /*
+         * VALIDATED AT SAVE. An order whose schedule cannot be read used to be
+         * saved as active and then simply never fire — listed, counted, and
+         * dead. It is still saved (the agent already told the user it was, and
+         * dropping it would be a silent loss of a different kind), but PAUSED,
+         * with the reason in the activity log where the health panel finds it.
+         */
+        const scheduleError = validateTrigger(order.trigger);
         set((state) => ({
           orders: [
             ...state.orders,
@@ -121,7 +130,7 @@ export const useAssistantStore = create<AssistantStore>()(
               ...order,
               id,
               state: {},
-              status: 'active' as const,
+              status: scheduleError ? ('paused' as const) : ('active' as const),
               runCount: 0,
               errorCount: 0,
               createdAt: now,
@@ -130,6 +139,13 @@ export const useAssistantStore = create<AssistantStore>()(
           ],
         }));
         get().addActivity({ type: 'order-created', label: `Created: ${order.instruction.slice(0, 60)}`, orderId: id });
+        if (scheduleError) {
+          get().addActivity({
+            type: 'order-error',
+            label: `Paused — schedule not valid: ${scheduleError}`.slice(0, 160),
+            orderId: id,
+          });
+        }
         import('@/lib/telemetry/events').then(({ sendFeatureAdoptionEvent }) => {
           sendFeatureAdoptionEvent({ feature: 'standing_order', surface: 'assistant' });
         }).catch(() => {});

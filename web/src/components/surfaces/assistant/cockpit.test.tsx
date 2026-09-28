@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { Cockpit } from './cockpit';
+import { APP_NAME } from '@/config/branding';
 import { useRunStore } from '@/stores/run-store';
 import { useAssistantStore } from '@/stores/assistant-store';
 import type { Goal, Run } from '@/lib/runs/types';
@@ -31,10 +32,12 @@ const run = (over: Partial<Run> = {}): Run => ({
 
 const fetchMock = vi.fn();
 
-/** Serve the durable log. */
+let manifestOrders: unknown[] = [];
+
+/** Serve the durable log (and the order manifest the attended jobs come from). */
 function serveRuns(runs: Run[]) {
-  fetchMock.mockResolvedValue(
-    new Response(JSON.stringify({ runs, summary: {} }), {
+  fetchMock.mockImplementation(async (url: string) =>
+    new Response(JSON.stringify(url.startsWith('/api/schedule/orders') ? { orders: manifestOrders } : { runs, summary: {} }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     }),
@@ -43,6 +46,7 @@ function serveRuns(runs: Run[]) {
 
 beforeEach(() => {
   fetchMock.mockReset();
+  manifestOrders = [];
   serveRuns([]);
   vi.stubGlobal('fetch', fetchMock);
   useRunStore.setState({ goals: [], runs: [] });
@@ -56,7 +60,11 @@ afterEach(() => {
 describe('Cockpit', () => {
   it('shows an empty state before anything exists', async () => {
     render(<Cockpit />);
-    expect(await screen.findByText(/No goals yet/i)).toBeTruthy();
+    // "Schedules", not "goals": the Code/Cowork harness has an unrelated Goal mode.
+    expect(await screen.findByText(/No schedules yet/i)).toBeTruthy();
+    expect(screen.queryByText(/goal/i)).toBeNull();
+    // addGoal has no caller, so the copy must not promise scheduled widgets here.
+    expect(screen.queryByText(/scheduled widgets/i)).toBeNull();
   });
 
   /*
@@ -147,8 +155,12 @@ describe('Cockpit', () => {
     });
     render(<Cockpit />);
     expect(await screen.findByText('Watch main for build failures')).toBeTruthy();
-    expect(screen.getByText('0 9 * * *')).toBeTruthy();
-    expect(screen.queryByText(/No goals yet/i)).toBeNull();
+    // In words, with a next run — not the raw cron it was saved as.
+    expect(screen.getByText('Every day at 9:00 AM')).toBeTruthy();
+    expect(screen.queryByText('0 9 * * *')).toBeNull();
+    expect(screen.getByText(/^Next in /)).toBeTruthy();
+    expect(screen.getByText('Runs in background')).toBeTruthy();
+    expect(screen.queryByText(/No schedules yet/i)).toBeNull();
   });
 
   it('shows pre-tracking history as context without inventing a success rate', async () => {
@@ -205,5 +217,32 @@ describe('Cockpit', () => {
     render(<Cockpit />);
     await waitFor(() => expect(screen.getByText(/^1 failing$/i)).toBeTruthy());
     expect(screen.queryByText(/Healthy/i)).toBeNull();
+  });
+});
+
+describe('Cockpit — attended jobs', () => {
+  it('lists jobs that need the window open, labelled as such', async () => {
+    manifestOrders = [
+      {
+        id: 'j1',
+        instruction: 'Open Browser and check my watchlist',
+        attended: true,
+        surfaceId: 'browser',
+        trigger: { type: 'cron', expression: '0 9 * * MON-FRI' },
+        status: 'active',
+        runCount: 3,
+        lastRun: NOW - 3_600_000,
+        createdAt: 0,
+      },
+      // Unattended manifest entries are the server's and appear via the store.
+      { id: 'srv', instruction: 'server one', trigger: { type: 'interval', expression: '1h' }, status: 'active', runCount: 0 },
+    ];
+    serveRuns([]);
+    render(<Cockpit />);
+    expect(await screen.findByText('Open Browser and check my watchlist')).toBeTruthy();
+    expect(screen.getByText(`Needs ${APP_NAME} open`)).toBeTruthy();
+    expect(screen.getByText('Weekdays at 9:00 AM')).toBeTruthy();
+    expect(screen.getByText('Last ran 1h ago')).toBeTruthy();
+    expect(screen.queryByText('server one')).toBeNull();
   });
 });

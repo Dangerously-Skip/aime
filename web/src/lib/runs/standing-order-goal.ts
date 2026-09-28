@@ -90,6 +90,47 @@ export function standingOrderToGoal(order: StandingOrderLike): Goal {
   };
 }
 
+/** The slice of an attended job (a manifest order run by the renderer) this adapter needs. */
+export interface AttendedJobLike {
+  id: string;
+  prompt: string;
+  surfaceId: string;
+  status: string;
+  trigger: { type: 'cron' | 'interval' | 'event'; expression?: string };
+  lastRun?: number;
+  createdAt?: number;
+  runCount: number;
+}
+
+/**
+ * An attended job as a Goal, so the Cockpit lists EVERY schedule.
+ *
+ * Jobs created from Customize or a project run in the renderer against a
+ * surface, and the Cockpit only ever adapted standing orders — so the schedules
+ * that most need watching (they stop when the window closes) were the ones it
+ * could not show.
+ */
+export function attendedJobToGoal(job: AttendedJobLike): Goal {
+  const everySeconds = job.trigger.type === 'interval' ? parseIntervalSeconds(job.trigger.expression) : null;
+  return {
+    id: `job:${job.id}`,
+    sourceId: job.id,
+    objective: job.prompt,
+    approvalPolicy: 'consequential',
+    schedule:
+      job.trigger.type === 'cron' && job.trigger.expression
+        ? { cron: job.trigger.expression }
+        : everySeconds != null
+          ? { everySeconds }
+          : undefined,
+    enabled: job.status === 'active',
+    createdAt: job.createdAt ?? 0,
+    lastRunAt: job.lastRun,
+    surfaceId: job.surfaceId,
+    attended: true,
+  };
+}
+
 /** Adapt a list, skipping orders with no instruction to show. */
 export function standingOrdersToGoals(orders: StandingOrderLike[]): Goal[] {
   return orders.filter((o) => o.instruction?.trim()).map(standingOrderToGoal);
