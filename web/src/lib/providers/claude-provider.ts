@@ -76,6 +76,11 @@ export interface SystemInitData {
   [key: string]: unknown;
 }
 
+/** Escape text placed inside the history XML envelope. */
+function escapeXml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 /**
  * Claude Agent SDK provider implementation.
  * Matches the exact behavior from the original server.js.
@@ -2329,11 +2334,24 @@ export class ClaudeProvider extends BaseProvider {
       console.log('[Claude] Resuming session:', existingSessionId);
     }
 
-    // Build prompt — prepend conversation history as XML when no session to resume
+    /*
+     * Build prompt — prepend conversation history as XML whenever this query
+     * is NOT resuming a session.
+     *
+     * The test used to be `!existingSessionId`, which is a different question:
+     * picking a folder mid-conversation leaves a session id on record but
+     * starts a fresh session (the old one's cwd is baked in), so the model got
+     * neither the session nor the history and the conversation began again
+     * from nothing.
+     *
+     * Escaped because the content is the user's and the model's own text, and
+     * a message containing `</msg>` or `</conversation_history>` would
+     * otherwise close the envelope and put the rest outside it.
+     */
     let queryPrompt: unknown = prompt;
-    if (!existingSessionId && history?.length) {
+    if (!queryOptions.resume && history?.length) {
       const historyXml = history
-        .map((m) => `<msg role="${m.role}">${m.content}</msg>`)
+        .map((m) => `<msg role="${m.role === 'assistant' ? 'assistant' : 'user'}">${escapeXml(m.content)}</msg>`)
         .join('\n');
       queryPrompt = `<conversation_history>\n${historyXml}\n</conversation_history>\n\n${prompt}`;
       console.log('[Claude] Prepended conversation history (' + history.length + ' messages) as XML fallback');

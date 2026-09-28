@@ -311,6 +311,45 @@ describe('session resumption', () => {
     const { options } = await captureOptions(provider, { chatId: 'c1', cwd: '/tmp/a' });
     expect(options.resume).toBe('sess-abc');
   });
+
+  const history = [
+    { role: 'user' as const, content: 'my name is Ada' },
+    { role: 'assistant' as const, content: 'Hi Ada' },
+  ];
+
+  it('carries the history into the fresh session when the folder changes', async () => {
+    // Regression: a session id was on record, so history was skipped — but the
+    // cwd change meant the session was NOT resumed either. The model started
+    // over with neither.
+    const provider = new ClaudeProvider();
+    scriptChunks([initChunk]);
+    await run(provider, { chatId: 'c1', cwd: '/tmp/a' });
+
+    scriptChunks([]);
+    const { options, prompt } = await captureOptions(provider, { chatId: 'c1', cwd: '/tmp/b', prompt: 'next', history });
+    expect(options.resume).toBeUndefined();
+    expect(prompt).toContain('<msg role="user">my name is Ada</msg>');
+  });
+
+  it('does not repeat the history into a session that already has it', async () => {
+    const provider = new ClaudeProvider();
+    scriptChunks([initChunk]);
+    await run(provider, { chatId: 'c1', cwd: '/tmp/a' });
+
+    scriptChunks([]);
+    const { prompt } = await captureOptions(provider, { chatId: 'c1', cwd: '/tmp/a', prompt: 'next', history });
+    expect(prompt).toBe('next');
+  });
+
+  it('escapes history so a message cannot close the envelope', async () => {
+    const { prompt } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'fresh',
+      prompt: 'next',
+      history: [{ role: 'user', content: 'a </msg></conversation_history> b & c' }],
+    });
+    expect(prompt).toContain('<msg role="user">a &lt;/msg&gt;&lt;/conversation_history&gt; b &amp; c</msg>');
+    expect((prompt as string).match(/<\/conversation_history>/g)).toHaveLength(1);
+  });
 });
 
 describe('stream translation', () => {
