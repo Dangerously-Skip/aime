@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import { beginHydrationApply, endHydrationApply } from '@/lib/hydration-signal';
+import { moveSecretsToKeychain, stashSecretsForKeychain } from '@/lib/settings-secrets';
 import { DEFAULT_PUSH_TO_TALK, validateAccelerator } from '@/lib/voice/accelerator';
 import type { Tier } from '@/lib/models/types';
 import type { SearchProviderId } from '@/lib/search/providers';
@@ -70,11 +71,14 @@ interface SettingsState {
   recentFolders: string[];
   trustedFolders: string[];
 
-  // GitHub
-  githubToken: string | null;
-  githubUser: string | null;
-
-  // API access
+  /**
+   * API access. The ONE secret still persisted with settings, and not by choice:
+   * every surface sends it with each request, and the routes that receive it
+   * have no server-side fallback yet. It is always mirrored to the encrypted
+   * credential store (id `anthropic`) as well, and excluded from Export — see
+   * `SECRET_SETTINGS_KEYS`. The search key and the unused GitHub token that
+   * used to sit here moved out in v14.
+   */
   anthropicApiKey: string | null;
 
   /**
@@ -96,7 +100,6 @@ interface SettingsState {
    * has opted into yet.
    */
   quietHours: { fromHour: number; toHour: number } | null;
-  searchApiKey: string | null;
   /**
    * Where "Share" publishes a deck, when the user has configured a bucket.
    *
@@ -114,7 +117,11 @@ interface SettingsState {
     publicBaseUrl: string;
   } | null;
   searchInstanceUrl: string | null;
-  /** Model-provider id whose stored key search borrows. An id, never a secret. */
+  /**
+   * Credential-store id whose key search uses: a model provider's (borrowing
+   * the OpenRouter key) or `search` for a key entered for search itself. An id,
+   * never a secret — the key is resolved server-side.
+   */
   searchCredentialProviderId: string | null;
   /**
    * Which model generates images. `null` means the user has not chosen, which is
@@ -179,13 +186,9 @@ interface SettingsActions {
   setCoworkInstructions: (instructions: string) => void;
   addRecentFolder: (path: string) => void;
   addTrustedFolder: (path: string) => void;
-  setGithubToken: (token: string | null) => void;
-  setGithubUser: (user: string | null) => void;
-  clearGithubAuth: () => void;
   setAnthropicApiKey: (key: string | null) => void;
   setSearchProvider: (id: SearchProviderId | 'none' | null) => void;
   setQuietHours: (hours: { fromHour: number; toHour: number } | null) => void;
-  setSearchApiKey: (key: string | null) => void;
   setDeckStorage: (v: SettingsState['deckStorage']) => void;
   setSearchInstanceUrl: (url: string | null) => void;
   setSearchCredentialProviderId: (id: string | null) => void;
@@ -222,12 +225,9 @@ export const INITIAL_SETTINGS: SettingsState = {
   coworkInstructions: '',
   recentFolders: [],
   trustedFolders: [],
-  githubToken: null,
-  githubUser: null,
   anthropicApiKey: null,
   searchProvider: null,
   quietHours: null,
-  searchApiKey: null,
   deckStorage: null,
   searchInstanceUrl: null,
   searchCredentialProviderId: null,
@@ -278,12 +278,9 @@ export const PERSISTED_SETTINGS_KEYS = [
   'coworkInstructions',
   'recentFolders',
   'trustedFolders',
-  'githubToken',
-  'githubUser',
   'anthropicApiKey',
   'searchProvider',
   'quietHours',
-  'searchApiKey',
   'deckStorage',
   'searchInstanceUrl',
   'searchCredentialProviderId',
@@ -309,6 +306,26 @@ export const PERSISTED_SETTINGS_KEYS = [
 export const EPHEMERAL_SETTINGS_KEYS = [] as const satisfies readonly (keyof SettingsState)[];
 
 type PersistedSettingsKey = (typeof PERSISTED_SETTINGS_KEYS)[number];
+
+/**
+ * Persisted fields that are secrets. Never exported, never displayed back.
+ *
+ * `anthropicApiKey` is still persisted because every surface sends it per
+ * request (see its note on `SettingsState`); this list is what keeps it out of
+ * everything ELSE — the Export file wrote the whole store, key included, to a
+ * JSON file in Downloads.
+ */
+export const SECRET_SETTINGS_KEYS = ['anthropicApiKey'] as const satisfies readonly PersistedSettingsKey[];
+
+/** The persisted settings minus secrets — what Export writes. */
+export function exportableSettings(state: SettingsState): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const secret = new Set<string>(SECRET_SETTINGS_KEYS);
+  for (const key of PERSISTED_SETTINGS_KEYS) {
+    if (!secret.has(key)) out[key] = state[key];
+  }
+  return out;
+}
 
 function pickPersisted(state: SettingsStore): Pick<SettingsState, PersistedSettingsKey> {
   const out: Record<string, unknown> = {};
@@ -363,14 +380,9 @@ export const useSettingsStore = create<SettingsStore>()(
           return { trustedFolders: updated.length > 100 ? updated.slice(-100) : updated };
         }),
 
-      setGithubToken: (githubToken) => set({ githubToken }),
-      setGithubUser: (githubUser) => set({ githubUser }),
-      clearGithubAuth: () => set({ githubToken: null, githubUser: null }),
-
       setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
       setSearchProvider: (searchProvider) => set({ searchProvider }),
       setQuietHours: (quietHours) => set({ quietHours }),
-      setSearchApiKey: (searchApiKey) => set({ searchApiKey }),
       setDeckStorage: (deckStorage) => set({ deckStorage }),
       setSearchInstanceUrl: (searchInstanceUrl) => set({ searchInstanceUrl }),
       setSearchCredentialProviderId: (searchCredentialProviderId) => set({ searchCredentialProviderId }),
@@ -410,9 +422,16 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 13,
+      version: 14,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
+        // v14: secrets out of the plaintext payload. The search key is parked
+        // for the credential store (moved after hydration, deleted only once
+        // that write succeeds); the unused GitHub token/user are dropped. Up
+        // front, like v11/v13, because the per-version branches return early.
+        if (version < 14) {
+          stashSecretsForKeychain(state);
+        }
         // v13: three Settings controls that nothing read were removed — the
         // tool-access mode, and Code's worktree location and branch prefix.
         // Dropped rather than left, for the same reason as `teamId` below:
@@ -429,7 +448,6 @@ export const useSettingsStore = create<SettingsStore>()(
         // through the legacy path in `resolveSearchRoute`.
         if (version < 12) {
           if (state.searchProvider === undefined) state.searchProvider = null;
-          if (state.searchApiKey === undefined) state.searchApiKey = null;
           if (state.searchInstanceUrl === undefined) state.searchInstanceUrl = null;
           if (state.searchCredentialProviderId === undefined) state.searchCredentialProviderId = null;
           if (state.deckTheme === undefined) state.deckTheme = null;
@@ -514,7 +532,11 @@ export const useSettingsStore = create<SettingsStore>()(
        */
       onRehydrateStorage: () => {
         beginHydrationApply();
-        return () => endHydrationApply();
+        return () => {
+          endHydrationApply();
+          // Finishes the v14 move; a no-op when nothing is parked.
+          void moveSecretsToKeychain();
+        };
       },
       partialize: pickPersisted,
     }

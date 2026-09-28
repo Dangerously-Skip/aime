@@ -238,15 +238,6 @@ describe('settings actions', () => {
     expect(s().trustedFolders.at(-1)).toBe('/t/99');
   });
 
-  it('clearGithubAuth wipes token and user together', () => {
-    const s = () => useSettingsStore.getState();
-    s().setGithubToken('gh-token');
-    s().setGithubUser('adam');
-    s().clearGithubAuth();
-    expect(s().githubToken).toBeNull();
-    expect(s().githubUser).toBeNull();
-  });
-
   it('resetAll restores initial state', () => {
     const s = () => useSettingsStore.getState();
     s().setFullName('Someone');

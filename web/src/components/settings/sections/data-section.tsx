@@ -7,7 +7,8 @@ import { useCoworkStore } from '@/stores/cowork-store'
 import { useCodeStore } from '@/stores/code-store'
 import { useBrowserStore } from '@/stores/browser-store'
 import { useConversationStore } from '@/stores/conversation-store'
-import { useSettingsStore } from '@/stores/settings-store'
+import { useSettingsStore, exportableSettings } from '@/stores/settings-store'
+import { APP_NAME } from '@/config/branding'
 import { Download, Trash2, AlertTriangle, RotateCcw } from 'lucide-react'
 
 interface CostBreakdown {
@@ -23,6 +24,14 @@ interface CostBreakdown {
 interface CostData {
   surfaces: Record<string, CostBreakdown>
   total: CostBreakdown
+}
+
+/** `aime-settings-2026-09-29.json` — named for the product and the day. */
+export function exportFileName(now: Date = new Date()): string {
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${APP_NAME.toLowerCase()}-settings-${y}-${m}-${d}.json`
 }
 
 export function DataSection() {
@@ -86,7 +95,8 @@ export function DataSection() {
   const handleExport = () => {
     const exportData = {
       exportedAt: new Date().toISOString(),
-      settings: useSettingsStore.getState(),
+      // Never the raw store: it held API keys, and this file lands in Downloads.
+      settings: exportableSettings(useSettingsStore.getState()),
       chat: useChatStore.getState(),
       cowork: useCoworkStore.getState(),
       code: useCodeStore.getState(),
@@ -100,7 +110,7 @@ export function DataSection() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'open-claude-cowork-export.json'
+    a.download = exportFileName()
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -167,7 +177,7 @@ export function DataSection() {
           Export conversations
         </Button>
         <p className="text-xs text-muted-foreground mt-1">
-          Download all conversations and settings as JSON
+          Download your conversations and settings as JSON. API keys are never included.
         </p>
       </div>
 
