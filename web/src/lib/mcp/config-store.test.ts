@@ -53,17 +53,30 @@ describe('updateMcpConfig', () => {
 
   it('a naive read-modify-write in the same shape DOES lose updates (control)', async () => {
     // Proves the test above can fail: same interleaving without the lock.
+    // Unlocked, non-atomic writers fail in one of two ways and which one wins is
+    // up to the scheduler: updates overwrite each other, or two writeFile calls
+    // interleave and leave torn JSON on disk. Both are the loss the lock
+    // prevents, so both count — asserting only one of them made this flaky.
     await fs.writeFile(file, JSON.stringify({ mcpServers: {} }));
     await Promise.all(
       Array.from({ length: 20 }, async (_, i) => {
-        const config = JSON.parse(await fs.readFile(file, 'utf-8'));
-        await tick();
-        config.mcpServers[`s${i}`] = { n: i };
-        await fs.writeFile(file, JSON.stringify(config));
+        try {
+          const config = JSON.parse(await fs.readFile(file, 'utf-8'));
+          await tick();
+          config.mcpServers[`s${i}`] = { n: i };
+          await fs.writeFile(file, JSON.stringify(config));
+        } catch {
+          // Read a torn file mid-write: this writer's update is lost too.
+        }
       }),
     );
-    const servers = JSON.parse(await fs.readFile(file, 'utf-8')).mcpServers;
-    expect(Object.keys(servers).length).toBeLessThan(20);
+    let surviving = 0;
+    try {
+      surviving = Object.keys(JSON.parse(await fs.readFile(file, 'utf-8')).mcpServers).length;
+    } catch {
+      surviving = 0; // torn on disk
+    }
+    expect(surviving).toBeLessThan(20);
   });
 
   it('quarantines a corrupt file and throws instead of writing over it', async () => {
