@@ -5,8 +5,8 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { getMcpConfigPath } from '@/lib/app-paths';
 
-const QUARRY_DIR = join(homedir(), '.claude');
-const PLUGINS_DIR = join(QUARRY_DIR, 'plugins');
+const CLAUDE_DIR = join(homedir(), '.claude');
+const PLUGINS_DIR = join(CLAUDE_DIR, 'plugins');
 const MCP_CONFIG_FILE = getMcpConfigPath();
 
 export interface InstalledPlugin {

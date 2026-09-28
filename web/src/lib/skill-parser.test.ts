@@ -121,17 +121,17 @@ describe('evaluateSkillRequires', () => {
   });
 
   it('disables when a required env var is missing', () => {
-    const result = evaluateSkillRequires({ env: ['QUARRY_TEST_DEFINITELY_UNSET_VAR'] });
+    const result = evaluateSkillRequires({ env: ['AIME_TEST_DEFINITELY_UNSET_VAR'] });
     expect(result.disabled).toBe(true);
-    expect(result.reason).toContain('QUARRY_TEST_DEFINITELY_UNSET_VAR');
+    expect(result.reason).toContain('AIME_TEST_DEFINITELY_UNSET_VAR');
   });
 
   it('passes when required env vars are present', () => {
-    process.env.QUARRY_TEST_SET_VAR = '1';
+    process.env.AIME_TEST_SET_VAR = '1';
     try {
-      expect(evaluateSkillRequires({ env: ['QUARRY_TEST_SET_VAR'] }).disabled).toBe(false);
+      expect(evaluateSkillRequires({ env: ['AIME_TEST_SET_VAR'] }).disabled).toBe(false);
     } finally {
-      delete process.env.QUARRY_TEST_SET_VAR;
+      delete process.env.AIME_TEST_SET_VAR;
     }
   });
 

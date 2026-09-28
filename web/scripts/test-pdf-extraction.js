@@ -35,7 +35,7 @@ async function main() {
   console.log('   Matches original:', rawBuffer.equals(decodedBuffer) ? '✅ YES' : '❌ NO');
 
   // Step 3: Save to scratch dir (simulates route.ts saving to disk)
-  const scratchDir = path.join(os.homedir(), '.quarry', 'scratch', 'test-extraction', 'uploads');
+  const scratchDir = path.join(os.homedir(), '.aime', 'scratch', 'test-extraction', 'uploads');
   fs.mkdirSync(scratchDir, { recursive: true });
   const savedPath = path.join(scratchDir, 'test.pdf');
   fs.writeFileSync(savedPath, decodedBuffer);
@@ -113,7 +113,7 @@ async function main() {
   }
 
   // Cleanup
-  fs.rmSync(path.join(os.homedir(), '.quarry', 'scratch', 'test-extraction'), { recursive: true });
+  fs.rmSync(path.join(os.homedir(), '.aime', 'scratch', 'test-extraction'), { recursive: true });
   console.log('\n=== Test complete ===');
 }
 

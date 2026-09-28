@@ -3,8 +3,9 @@
 import { useAssistantStore } from '@/stores/assistant-store';
 
 /**
- * `QUARRY_CRON:<expression>:<prompt>` — the marker the model echoes through a
- * Bash call to schedule a reminder.
+ * `AIME_CRON:<expression>:<prompt>` — a marker the model can echo through a Bash
+ * call to schedule a reminder. The first-class path is the `CronCreate` tool;
+ * this catches the model that reaches for the shell instead.
  *
  * It has to be looked for in two places, and that is not redundancy: the model
  * either writes the expression into the command directly, or computes it with a
@@ -13,12 +14,26 @@ import { useAssistantStore } from '@/stores/assistant-store';
  * for exactly that reason — same parse, same dedup, same store write, differing
  * only in the log suffix.
  *
- * The legacy prefix is kept as-is deliberately. It appears in the surface's system
- * prompt and in models' learned behaviour, so renaming it to `AIME_CRON` would
- * silently stop recognising the thing it exists to catch. Worth doing with a
- * transition period that accepts both, not as a drive-by rename.
+ * `QUARRY_CRON:` is the pre-rename spelling and stays accepted: it sits in old
+ * transcripts that a resumed session carries forward, and in whatever models
+ * picked up from them. Dropping it would silently stop recognising the thing
+ * this exists to catch. New text should only ever say `AIME_CRON:`.
+ *
+ * (The file keeps its old name because its importer lives in cowork-surface;
+ * rename it together with that import.)
  */
-const MARKER = 'QUARRY_CRON:';
+export const CRON_MARKER = 'AIME_CRON:';
+const LEGACY_CRON_MARKER = 'QUARRY_CRON:';
+
+/** The earliest marker in the text, in either spelling, or null. */
+function findMarker(text: string): { at: number; length: number } | null {
+  let found: { at: number; length: number } | null = null;
+  for (const marker of [CRON_MARKER, LEGACY_CRON_MARKER]) {
+    const at = text.indexOf(marker);
+    if (at !== -1 && (!found || at < found.at)) found = { at, length: marker.length };
+  }
+  return found;
+}
 
 export interface ParsedCron {
   expression: string;
@@ -29,15 +44,15 @@ export interface ParsedCron {
  * Pull the expression and prompt out of a string containing the marker, or null.
  *
  * Quotes and backslashes are stripped because the marker arrives having been
- * through a shell — the model writes `echo "QUARRY_CRON:0 9 * * *:stand-up"`, so
+ * through a shell — the model writes `echo "AIME_CRON:0 9 * * *:stand-up"`, so
  * the payload carries whatever quoting survived.
  */
-export function parseQuarryCron(text: unknown): ParsedCron | null {
+export function parseCronMarker(text: unknown): ParsedCron | null {
   if (typeof text !== 'string') return null;
-  const at = text.indexOf(MARKER);
-  if (at === -1) return null;
+  const marker = findMarker(text);
+  if (!marker) return null;
 
-  const rest = text.slice(at + MARKER.length).replace(/['"\\]/g, '');
+  const rest = text.slice(marker.at + marker.length).replace(/['"\\]/g, '');
   const sep = rest.indexOf(':');
   if (sep === -1) return null;
 
@@ -58,8 +73,8 @@ export function parseQuarryCron(text: unknown): ParsedCron | null {
  *
  * Returns true when an order was created, so a caller can log meaningfully.
  */
-export function scheduleFromQuarryCron(text: unknown, surface: string, source: string): boolean {
-  const parsed = parseQuarryCron(text);
+export function scheduleFromCronMarker(text: unknown, surface: string, source: string): boolean {
+  const parsed = parseCronMarker(text);
   if (!parsed) return false;
 
   /*
@@ -81,3 +96,9 @@ export function scheduleFromQuarryCron(text: unknown, surface: string, source: s
   console.log(`[${surface}] Cron job scheduled from Bash ${source}:`, parsed.expression, parsed.prompt);
   return true;
 }
+
+/**
+ * @deprecated The pre-rename name, kept only because `cowork-surface.tsx` still
+ * imports it. Switch that import to `scheduleFromCronMarker` and delete this.
+ */
+export const scheduleFromQuarryCron = scheduleFromCronMarker;

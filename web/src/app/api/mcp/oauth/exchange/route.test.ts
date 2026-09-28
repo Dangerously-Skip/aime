@@ -152,6 +152,9 @@ describe('POST /api/mcp/oauth/exchange — basics', () => {
     expect(entry.url).toBe('https://mcp.acme.com/mcp');
     expect(entry.headers.Authorization).toBe('Bearer AT');
     expect(entry.transport).toBe('streamable-http');
+    // Informational owner tag. Nothing compares it, so pre-rename entries
+    // (`quarry-mcp-oauth`) on disk keep working; new ones name the product.
+    expect(entry._meta.managedBy).toBe('aime-mcp-oauth');
   });
 
   it('uses the legacy sse transport only for /sse URLs', async () => {

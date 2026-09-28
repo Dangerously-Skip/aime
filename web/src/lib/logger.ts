@@ -1,7 +1,20 @@
 import pino from "pino";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { APP_NAME } from "@/config/branding";
 
 const ENV = process.env.NODE_ENV || process.env.ENVIRONMENT || "development";
+
+/**
+ * The fields stamped on every log line. The defaults were "quarry" and "kaos" —
+ * the internal tool's name and its internal environment — so every line an
+ * open-source install wrote named a product it is not.
+ */
+export function logBase(env: string, applicationName: string | undefined) {
+  return {
+    application: applicationName || APP_NAME.toLowerCase(),
+    environment: env === "production" ? "prod" : "dev",
+  };
+}
 
 export interface CorrelationContext {
   correlationId: string;
@@ -13,10 +26,7 @@ export const logger = pino({
   formatters: {
     level: (label) => ({ level: label }),
   },
-  base: {
-    application: process.env.APPLICATION_NAME || "quarry",
-    environment: ENV === "production" ? "prod" : "kaos",
-  },
+  base: logBase(ENV, process.env.APPLICATION_NAME),
   ...(ENV === "production"
     ? {} // raw JSON output for log shipping
     : { transport: { target: "pino-pretty" } }),

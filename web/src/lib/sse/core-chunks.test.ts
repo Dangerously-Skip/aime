@@ -169,7 +169,7 @@ describe('handleCoreChunk', () => {
  * What each surface still owns, recorded so shrinking the list is deliberate and
  * growing it is a conversation. Chat is fully migrated; cowork and code keep
  * tool_use/tool_result because theirs carry real surface work (a stuck-tool
- * watchdog, artifact categorisation, a QUARRY_CRON sniffer) that a one-line
+ * watchdog, artifact categorisation, a cron-marker sniffer) that a one-line
  * callback would misrepresent.
  */
 describe('migration status is explicit, not accidental', () => {

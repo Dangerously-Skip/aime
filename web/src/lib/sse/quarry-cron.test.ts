@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
-import { parseQuarryCron, scheduleFromQuarryCron } from './quarry-cron';
+import { parseCronMarker, scheduleFromCronMarker, scheduleFromQuarryCron } from './quarry-cron';
 import { useAssistantStore } from '@/stores/assistant-store';
 
 /**
- * `QUARRY_CRON:<expression>:<prompt>` is how the model schedules a reminder
+ * `AIME_CRON:<expression>:<prompt>` is how the model schedules a reminder
  * through a Bash call. The parse existed TWICE, verbatim, in cowork-surface —
  * once for the command on the way in, once for the output on the way back,
  * because the model either writes the expression or computes it with a script.
@@ -17,21 +17,21 @@ beforeEach(() => {
   useAssistantStore.setState({ orders: [], cards: [] } as never);
 });
 
-describe('parseQuarryCron', () => {
+describe('parseCronMarker', () => {
   it('pulls the expression and prompt out', () => {
-    expect(parseQuarryCron('QUARRY_CRON:0 9 * * *:stand-up')).toEqual({
+    expect(parseCronMarker('AIME_CRON:0 9 * * *:stand-up')).toEqual({
       expression: '0 9 * * *',
       prompt: 'stand-up',
     });
   });
 
   it('finds the marker mid-string, as it arrives inside a shell command', () => {
-    expect(parseQuarryCron('echo "QUARRY_CRON:0 9 * * *:stand-up"')?.expression).toBe('0 9 * * *');
+    expect(parseCronMarker('echo "AIME_CRON:0 9 * * *:stand-up"')?.expression).toBe('0 9 * * *');
   });
 
   /** The payload has been through a shell, so quoting survives into it. */
   it('strips quotes and backslashes', () => {
-    expect(parseQuarryCron(`QUARRY_CRON:'0 9 * * *':\\"water the plants\\"`)).toEqual({
+    expect(parseCronMarker(`AIME_CRON:'0 9 * * *':\\"water the plants\\"`)).toEqual({
       expression: '0 9 * * *',
       prompt: 'water the plants',
     });
@@ -39,27 +39,56 @@ describe('parseQuarryCron', () => {
 
   it('takes only the first line of the prompt', () => {
     // The command prints more after it; the reminder is the first line.
-    expect(parseQuarryCron('QUARRY_CRON:0 9 * * *:stand-up\nnext line\nand more')?.prompt)
+    expect(parseCronMarker('AIME_CRON:0 9 * * *:stand-up\nnext line\nand more')?.prompt)
       .toBe('stand-up');
   });
 
   it('returns null when there is nothing to schedule', () => {
     for (const bad of [
       'echo hello',
-      'QUARRY_CRON:',              // no separator
-      'QUARRY_CRON:0 9 * * *',     // expression but no prompt
-      'QUARRY_CRON::prompt',       // no expression
-      'QUARRY_CRON:0 9 * * *:',    // no prompt
+      'AIME_CRON:',              // no separator
+      'AIME_CRON:0 9 * * *',     // expression but no prompt
+      'AIME_CRON::prompt',       // no expression
+      'AIME_CRON:0 9 * * *:',    // no prompt
       undefined, null, 42, {},
     ]) {
-      expect(parseQuarryCron(bad as never), JSON.stringify(bad)).toBeNull();
+      expect(parseCronMarker(bad as never), JSON.stringify(bad)).toBeNull();
     }
   });
 });
 
-describe('scheduleFromQuarryCron', () => {
+/**
+ * The marker was `QUARRY_CRON:` before the rename. Old transcripts carry it, so
+ * it must keep scheduling — renaming it outright would have silently stopped
+ * recognising the thing this exists to catch.
+ */
+describe('legacy QUARRY_CRON marker', () => {
+  it('still parses the pre-rename spelling', () => {
+    expect(parseCronMarker('echo "QUARRY_CRON:0 9 * * *:stand-up"')).toEqual({
+      expression: '0 9 * * *',
+      prompt: 'stand-up',
+    });
+  });
+
+  it('uses whichever marker comes first when both appear', () => {
+    expect(parseCronMarker('QUARRY_CRON:0 8 * * *:old\nAIME_CRON:0 9 * * *:new')?.prompt).toBe('old');
+    expect(parseCronMarker('AIME_CRON:0 9 * * *:new\nQUARRY_CRON:0 8 * * *:old')?.prompt).toBe('new');
+  });
+
+  it('dedups across spellings: the same reminder is one order', () => {
+    expect(scheduleFromCronMarker('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'command')).toBe(true);
+    expect(scheduleFromCronMarker('AIME_CRON:0 9 * * *:stand-up', 'Cowork', 'output')).toBe(false);
+    expect(useAssistantStore.getState().orders).toHaveLength(1);
+  });
+
+  it('keeps the old export name working for existing importers', () => {
+    expect(scheduleFromQuarryCron).toBe(scheduleFromCronMarker);
+  });
+});
+
+describe('scheduleFromCronMarker', () => {
   it('creates a standing order', () => {
-    expect(scheduleFromQuarryCron('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'command')).toBe(true);
+    expect(scheduleFromCronMarker('AIME_CRON:0 9 * * *:stand-up', 'Cowork', 'command')).toBe(true);
     expect(useAssistantStore.getState().orders).toEqual([
       expect.objectContaining({
         instruction: 'stand-up',
@@ -74,9 +103,9 @@ describe('scheduleFromQuarryCron', () => {
    * command AND prints it would otherwise schedule the same reminder twice.
    */
   it('does not schedule the same reminder from both the command and the output', () => {
-    const text = 'QUARRY_CRON:0 9 * * *:stand-up';
-    expect(scheduleFromQuarryCron(text, 'Cowork', 'command')).toBe(true);
-    expect(scheduleFromQuarryCron(text, 'Cowork', 'output')).toBe(false);
+    const text = 'AIME_CRON:0 9 * * *:stand-up';
+    expect(scheduleFromCronMarker(text, 'Cowork', 'command')).toBe(true);
+    expect(scheduleFromCronMarker(text, 'Cowork', 'output')).toBe(false);
     expect(useAssistantStore.getState().orders).toHaveLength(1);
   });
 
@@ -88,21 +117,21 @@ describe('scheduleFromQuarryCron', () => {
      * always order-based, so the check now has one thing to look at — which is
      * the point of the removal.
      */
-    scheduleFromQuarryCron('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'command');
+    scheduleFromCronMarker('AIME_CRON:0 9 * * *:stand-up', 'Cowork', 'command');
     expect(useAssistantStore.getState().orders).toHaveLength(1);
 
-    expect(scheduleFromQuarryCron('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'output')).toBe(false);
+    expect(scheduleFromCronMarker('AIME_CRON:0 9 * * *:stand-up', 'Cowork', 'output')).toBe(false);
     expect(useAssistantStore.getState().orders, 'the same reminder was scheduled twice').toHaveLength(1);
   });
 
   it('still schedules a genuinely different reminder', () => {
-    scheduleFromQuarryCron('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'command');
-    expect(scheduleFromQuarryCron('QUARRY_CRON:0 17 * * *:wrap-up', 'Cowork', 'command')).toBe(true);
+    scheduleFromCronMarker('AIME_CRON:0 9 * * *:stand-up', 'Cowork', 'command');
+    expect(scheduleFromCronMarker('AIME_CRON:0 17 * * *:wrap-up', 'Cowork', 'command')).toBe(true);
     expect(useAssistantStore.getState().orders).toHaveLength(2);
   });
 
   it('does nothing when the marker is absent', () => {
-    expect(scheduleFromQuarryCron('npm test', 'Cowork', 'command')).toBe(false);
+    expect(scheduleFromCronMarker('npm test', 'Cowork', 'command')).toBe(false);
     expect(useAssistantStore.getState().orders).toHaveLength(0);
   });
 });
