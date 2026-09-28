@@ -6,6 +6,8 @@ import {
   buildSelectorOptions,
   dispatchSelection,
   displayValue,
+  emptyTierIds,
+  AUTO_LABEL,
 } from './model-selector';
 import { useProviderStore } from '@/stores/provider-store';
 import { useSettingsStore } from '@/stores/settings-store';
@@ -203,6 +205,58 @@ describe('ModelSelector — the wiring, through a real render', () => {
     expect(combo.getAttribute('data-state')).toBeDefined();
     // 'sonnet' is not on offer, so nothing is selected — every item is a change.
     expect(combo.textContent).toContain('Good');
+  });
+});
+
+describe('ModelSelector — the closed button names the model', () => {
+  it('an unpinned surface with a reachable built-in reads "Auto", not blank', async () => {
+    resetServerCredentials();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ anthropic: true, bedrock: false })));
+    render(<ModelSelector value="" onSelectModel={vi.fn()} />);
+    await waitFor(() => expect(useServerCredentialsStore.getState().server).not.toBeNull());
+    const combo = screen.getByRole('combobox');
+    expect(combo.textContent).toContain(AUTO_LABEL);
+    expect(combo.getAttribute('aria-label')).toBe(`Model: ${AUTO_LABEL}`);
+  });
+
+  it('a pinned model is named on the button and in its accessible name', async () => {
+    resetServerCredentials();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ anthropic: true, bedrock: false })));
+    render(<ModelSelector value="opus" onSelectModel={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('combobox').textContent).toContain('Opus 4.7'));
+    expect(screen.getByRole('combobox').getAttribute('aria-label')).toBe('Model: Opus 4.7');
+  });
+});
+
+describe('emptyTierIds — tiers with nothing in them are not offered as choices', () => {
+  const opts = (providers: ProviderWithModels[]) =>
+    buildSelectorOptions(providers, {}, '', true, false);
+
+  it('an OpenRouter-only user cannot pick Stallion/Smort/Good when only Cheap has a model', () => {
+    const empty = emptyTierIds(opts([PRICED_PROVIDER]), [PRICED_PROVIDER], {
+      capability: 'chat',
+      hasAnthropicKey: false,
+      known: true,
+    });
+    expect([...empty].sort()).toEqual(['tier:good', 'tier:smort', 'tier:stallion']);
+  });
+
+  it('Stallion is empty for chat even with Claude reachable — chat has no stallion model', () => {
+    const empty = emptyTierIds(buildSelectorOptions([], {}, '', true, true), [], {
+      capability: 'chat',
+      hasAnthropicKey: true,
+      known: true,
+    });
+    expect([...empty]).toEqual(['tier:stallion']);
+  });
+
+  it('does not disable anything while reachability is still unknown', () => {
+    const empty = emptyTierIds(buildSelectorOptions([], {}, '', true, true), [], {
+      capability: 'code',
+      hasAnthropicKey: false,
+      known: false,
+    });
+    expect(empty.size).toBe(0);
   });
 });
 
