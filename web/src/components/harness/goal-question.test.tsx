@@ -11,7 +11,7 @@ import { GoalQuestion } from './goal-question';
  * thing blocking the run is a sentence away.
  */
 vi.mock('./use-start-goal', () => ({
-  useHarnessRoute: () => () => ({ model: 'm', providerConfig: null, apiKey: 'k' }),
+  useHarnessRoute: () => () => ({ model: 'm', providerConfig: null }),
 }));
 
 const parked = {
@@ -79,6 +79,6 @@ describe('GoalQuestion', () => {
     expect(posts[0].url).toContain('/api/harness/answer');
     expect(posts[0].body).toMatchObject({ id: 'q1', answer: 'net' });
     expect(posts[1].url).toBe('/api/harness');
-    expect(posts[1].body).toMatchObject({ model: 'm', apiKey: 'k' });
+    expect(posts[1].body).toMatchObject({ model: 'm', providerConfig: null });
   });
 });

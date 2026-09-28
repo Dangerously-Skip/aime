@@ -161,9 +161,9 @@ export function ProjectDetail({
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
   const displayName = useSettingsStore((s) => s.displayName);
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   // Built-in (Claude) reachability, which is the user's key OR the server's env
-  // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
+  // key OR Bedrock. The key itself is never sent: the server reads the one
+  // saved in Settings from its credential store.
   const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
@@ -364,7 +364,6 @@ export function ProjectDetail({
       projectInstructions,
       projectKnowledge,
       crossSurfaceContext: crossSurfaceContext || undefined,
-      apiKey: anthropicApiKey || undefined,
       providerConfig: route?.providerConfig,
     });
   }

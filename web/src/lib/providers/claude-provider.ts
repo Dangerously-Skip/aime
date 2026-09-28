@@ -75,6 +75,21 @@ export interface SystemInitData {
 }
 
 /** Escape text placed inside the history XML envelope. */
+/**
+ * The Anthropic key saved in Settings, or undefined. Imported lazily — the
+ * credential store reaches `fs` and the keychain-derived master key — and never
+ * thrown: an unreadable store means "no stored key", and the turn then fails
+ * with the SDK's own (typed) auth error rather than a crash here.
+ */
+async function storedAnthropicKey(): Promise<string | undefined> {
+  try {
+    const { getServerAnthropicKey } = await import('../models/credentials');
+    return await getServerAnthropicKey();
+  } catch {
+    return undefined;
+  }
+}
+
 function escapeXml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -2242,13 +2257,26 @@ export class ClaudeProvider extends BaseProvider {
       CLAUDE_CONFIG_DIR: getDataDir(),
     };
 
+    /*
+     * The key for the built-in path: the request's, else the one saved in
+     * Settings (the encrypted credential store). Resolved HERE, where the SDK
+     * environment is built, so no caller can forget it — the surfaces are
+     * moving the key out of the browser and stop sending it, and a caller that
+     * did not look the stored key up itself (the goal-run routes did not) would
+     * otherwise boot a subprocess with no credential and get "Not logged in".
+     * A user-added provider (base URL) or a Bedrock/Vertex provider (env)
+     * brings its own credential, so the Anthropic key is never handed to one.
+     */
+    const effectiveApiKey =
+      apiKey || (baseUrl || providerEnv ? undefined : await storedAnthropicKey());
+
     // BYOK: a user-provided API key routes directly to the Anthropic API
     // and takes priority over Bedrock env.
-    if (apiKey) {
+    if (effectiveApiKey) {
       queryOptions.env = {
         ...safeEnv,
         ...(queryOptions.env as Record<string, string> || {}),
-        ANTHROPIC_API_KEY: apiKey,
+        ANTHROPIC_API_KEY: effectiveApiKey,
       };
       console.log('[Claude] API key provided, routing to the Anthropic API');
     } else if (isBedrockConfigured()) {

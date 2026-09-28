@@ -9,9 +9,9 @@
  *   githubToken /  — written by nothing and read by nothing for a long time.
  *   githubUser       Dropped.
  *
- * (`anthropicApiKey` is NOT moved here — every surface still sends it with each
- * request, so removing it from the renderer needs a server-side fallback in
- * each route first. See the note on `SECRET_SETTINGS_KEYS` in settings-store.)
+ * (`anthropicApiKey` is NOT moved here. Every server path now falls back to the
+ * credential store's `anthropic` record, but Chat and Cowork still send it; once
+ * they stop, the field goes. See anthropic-key-not-sent.test.ts.)
  *
  * ## Why two steps, and why the middle one is on disk
  *

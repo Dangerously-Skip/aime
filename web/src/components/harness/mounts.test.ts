@@ -308,11 +308,13 @@ describe('regressions the review found — UI', () => {
   const transcript = read('components', 'harness', 'use-goal-transcript.ts');
   const route = read('app', 'api', 'harness', 'route.ts');
 
-  it('sends the user’s BYOK key, like every other surface', () => {
-    // Without it a Settings-only key user gets "Not logged in · Please run
-    // /login" — the same failure 335e0ca fixed one layer down.
-    expect(startHook).toContain('anthropicApiKey');
-    expect(startHook).toMatch(/apiKey:\s*anthropicApiKey/);
+  it('never sends the BYOK key — the server reads the saved one', () => {
+    // A Settings-only key user once got "Not logged in · Please run /login"
+    // here because nothing supplied the key. The provider now reads it from the
+    // credential store (claude-provider.stored-key.test.ts proves that against
+    // a real store), so the browser has no reason to hold or send it.
+    expect(startHook).not.toContain('anthropicApiKey');
+    expect(startHook).not.toMatch(/\bapiKey:/);
   });
 
   it('answering RESTARTS the run, not just records the answer', () => {
@@ -375,7 +377,10 @@ describe('resuming a run carries credentials', () => {
   it('start and resume share ONE route builder, so they cannot diverge again', () => {
     const hook = read('components', 'harness', 'use-start-goal.ts');
     expect(hook).toContain('export function useHarnessRoute');
-    expect(hook).toMatch(/apiKey:\s*anthropicApiKey/);
+    // Exactly one place builds the route; the start path spreads it too.
+    expect(hook.match(/providerConfig: route\?\.providerConfig/g)).toHaveLength(1);
+    expect(hook).toMatch(/const harnessRoute = useHarnessRoute\(modelRoute\)/);
+    expect(hook).toMatch(/\.\.\.harnessRoute\(\)/);
   });
 });
 

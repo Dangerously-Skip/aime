@@ -155,7 +155,6 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
   const completeRunningTools = useBrowserStore((s) => s.completeRunningTools);
   const startStreaming = useBrowserStore((s) => s.startStreaming);
   const stopStreaming = useBrowserStore((s) => s.stopStreaming);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const setCurrentChat = useBrowserStore((s) => s.setCurrentChat);
   const setLoopPhase = useBrowserStore((s) => s.setLoopPhase);
   const inspectorMode = useBrowserStore((s) => s.inspectorMode);
@@ -489,7 +488,6 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
         setStepLimit(steps);
       });
     },
-    apiKey: anthropicApiKey,
     memories: memoriesStr || undefined,
     consoleBuffer: consoleBufferRef.current,
     getTabs() {
@@ -853,8 +851,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
       }
 
       // No client-side key gate. It used to refuse the turn unless
-      // `settings.anthropicApiKey` was set — and pointed at the nib AI Studio
-      // Gateway, which was deleted in P0.4 — so the surface was unusable for
+      // `settings.anthropicApiKey` was set — and pointed at a corporate gateway
+      // that was deleted in P0.4 — so the surface was unusable for
       // anyone whose credentials live server-side (env, the encrypted credential
       // store, a user-added provider). The server resolves credentials now and
       // returns a specific, actionable message when there genuinely are none.
@@ -936,7 +934,6 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
          * on demand, and the same fallback Cowork uses when it has no folder.
          */
         cwd: scratchDir || undefined,
-        apiKey: anthropicApiKey || undefined,
         providerConfig: route?.providerConfig,
         /*
          * `.slice(0, -2)` — the same as every other surface, and it was missing.

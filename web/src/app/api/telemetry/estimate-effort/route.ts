@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { getServerAnthropicKey } from '@/lib/models/credentials';
 
 export const runtime = 'nodejs';
 
@@ -57,9 +58,9 @@ function estimateLocally(
 
 /**
  * POST /api/telemetry/estimate-effort
- * Calls Claude Haiku to estimate human effort and classify the task type.
- * Routes through nib gateway if apiKey provided, direct API if ANTHROPIC_API_KEY set,
- * otherwise falls back to a local heuristic.
+ * Asks the turn's model to estimate human effort and classify the task type,
+ * with the request's key, else ANTHROPIC_API_KEY, else the key saved in
+ * Settings; with none of those it falls back to a local heuristic.
  */
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -85,8 +86,9 @@ export async function POST(req: NextRequest) {
     apiKey?: string | null;
   };
 
-  // Determine which backend to use: direct API > local heuristic
-  const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
+  // Determine which backend to use: direct API > local heuristic. The key saved
+  // in Settings lives in the credential store, and the client no longer sends it.
+  const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY || (await getServerAnthropicKey());
 
   // No LLM available — use local heuristic
   if (!effectiveKey) {

@@ -70,8 +70,9 @@ interface SettingsState {
 
   /**
    * API access. The ONE secret still persisted with settings, and not by choice:
-   * every surface sends it with each request, and the routes that receive it
-   * have no server-side fallback yet. It is always mirrored to the encrypted
+   * Chat and Cowork still send it with each request. Every server path falls
+   * back to the credential store without it, and every other surface has
+   * stopped sending it (anthropic-key-not-sent.test.ts). It is always mirrored to the encrypted
    * credential store (id `anthropic`) as well, and excluded from Export — see
    * `SECRET_SETTINGS_KEYS`. The search key and the unused GitHub token that
    * used to sit here moved out in v14.
@@ -301,8 +302,9 @@ type PersistedSettingsKey = (typeof PERSISTED_SETTINGS_KEYS)[number];
 /**
  * Persisted fields that are secrets. Never exported, never displayed back.
  *
- * `anthropicApiKey` is still persisted because every surface sends it per
- * request (see its note on `SettingsState`); this list is what keeps it out of
+ * `anthropicApiKey` is still persisted because the Chat and Cowork surfaces
+ * still send it per request (the server falls back to the credential store for
+ * everything else — see anthropic-key-not-sent.test.ts); this list keeps it out of
  * everything ELSE — the Export file wrote the whole store, key included, to a
  * JSON file in Downloads.
  */
