@@ -26,8 +26,12 @@ import * as path from 'path';
  */
 
 const create = vi.fn();
+const construct = vi.fn();
 vi.mock('@anthropic-ai/sdk', () => ({
   default: class {
+    constructor(opts: unknown) {
+      construct(opts);
+    }
     messages = { create };
   },
 }));
@@ -44,6 +48,7 @@ let extractMemories: typeof import('./extractor').extractMemories;
 beforeEach(async () => {
   vi.resetModules();
   create.mockReset();
+  construct.mockReset();
   create.mockResolvedValue(ok([]));
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   delete process.env.MEMORY_EXTRACTION_MODEL;
@@ -124,9 +129,26 @@ describe('no Anthropic model id survives anywhere in the module', () => {
     expect([...src.matchAll(/model:\s*'[^']+'/g)].map((m) => m[0])).toEqual([]);
   });
 
-  it('the chat route passes the model the turn ran on', () => {
-    const route = read('src/app/api/chat/[surfaceId]/route.ts');
-    const call = /extractMemories\([\s\S]{0,500}?\);/.exec(route)?.[0] ?? '';
-    expect(call, 'extractMemories is called without a model').toMatch(/effectiveModel/);
+  // Which model the chat route passes is asserted behaviourally in its own
+  // suite (route.test.ts → "memory extraction") and in extraction-model.test.ts.
+});
+
+describe('where the call goes', () => {
+  it('uses the turn’s provider endpoint when there is one', async () => {
+    await extractMemories('hi', RESPONSE, 'key', 'm', { baseUrl: 'https://openrouter.ai/api' });
+    expect(construct).toHaveBeenCalledWith(expect.objectContaining({ baseURL: 'https://openrouter.ai/api' }));
+  });
+
+  it('does not retry and honours the caller’s cancellation', async () => {
+    const signal = AbortSignal.timeout(20_000);
+    await extractMemories('hi', RESPONSE, 'key', 'm', { signal });
+    expect(construct).toHaveBeenCalledWith(expect.objectContaining({ maxRetries: 0 }));
+    expect(create.mock.calls[0][1]).toEqual({ signal });
+  });
+
+  it('comes back empty rather than throwing when it is cancelled', async () => {
+    create.mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(extractMemories('hi', RESPONSE, 'key', 'm', { signal: AbortSignal.abort() })).resolves.toEqual([]);
   });
 });

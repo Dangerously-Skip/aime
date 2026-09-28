@@ -3,6 +3,7 @@ import { getProvider, getAvailableProviders } from '@/lib/providers';
 import { getSurfaceConfig, getAvailableSurfaces } from '@/lib/surfaces';
 import { createSSEStream } from '@/lib/sse';
 import { extractMemories } from '@/lib/memory/extractor';
+import { stashExtractedMemories, takeExtractedMemories } from '@/lib/memory/pending-extractions';
 import { type SessionControls } from '@/lib/slash-commands';
 import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
@@ -98,6 +99,9 @@ async function readDailyMemoryLog(): Promise<string> {
     return '';
   }
 }
+
+/** Budget for the post-turn memory extraction call. It is a nicety, not the turn. */
+const MEMORY_EXTRACTION_TIMEOUT_MS = 20_000;
 
 // ── Request validation limits ─────────────────────────────────────────
 const MAX_MESSAGE_LENGTH = 100_000;
@@ -358,6 +362,8 @@ export async function POST(
 
   // Stream in background
   (async () => {
+    /** Set by the turn; run once the stream has closed. */
+    let runAfterClose: (() => Promise<void>) | null = null;
     // Heartbeat interval
     const heartbeatInterval = setInterval(async () => {
       await sse.writeHeartbeat();
@@ -365,6 +371,12 @@ export async function POST(
 
     try {
       await sse.writeEvent({ type: 'connected', message: 'Processing request...' });
+
+      // Memories extracted after this conversation's previous turn closed.
+      const carriedMemories = takeExtractedMemories(chatId);
+      if (carriedMemories.length > 0) {
+        await sse.writeEvent({ type: 'memory_extract', memories: carriedMemories });
+      }
 
       // All surfaces use ClaudeProvider (Agent SDK) for consistent tool access,
       // connector support, and session management. Gateway routing for billing is
@@ -956,10 +968,15 @@ export async function POST(
               att.category,
               att.filePath,
             );
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Extraction timed out after 30 seconds')), 30000)
+            // Cleared either way: a timer left armed after a fast extraction
+            // held the handler's closure (and the attachment) for 30s per file.
+            let extractionTimer: ReturnType<typeof setTimeout> | undefined;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              extractionTimer = setTimeout(() => reject(new Error('Extraction timed out after 30 seconds')), 30000);
+            });
+            const result = await Promise.race([extractionPromise, timeoutPromise]).finally(() =>
+              clearTimeout(extractionTimer),
             );
-            const result = await Promise.race([extractionPromise, timeoutPromise]);
             console.log('[EXTRACT] Success:', att.name, 'text length:', result.text.length, 'pages:', result.pageCount || 'n/a');
 
             // Zero-text extraction is common for image-based PDFs (scanned
@@ -1409,29 +1426,44 @@ export async function POST(
         if (queryTimer) clearTimeout(queryTimer);
       }
 
-      // Auto-extract memories after stream completes
-      if (autoExtractMemories && collectedResponse.length >= 50) {
-        try {
+      /*
+       * Memory extraction is QUEUED here and run after the stream closes.
+       *
+       * It used to run right here, before `done`: a whole model call on the
+       * turn's own model, holding the composer locked for however long that
+       * took — and still made after the client had gone. Now the turn ends
+       * first, and extraction only runs for a turn that succeeded, for a client
+       * that was still listening when it did. `req.signal` is read NOW: once the
+       * response closes, the request's signal can fire for a normal completion
+       * too, so it says nothing about the user after this point.
+       */
+      if (
+        autoExtractMemories &&
+        collectedResponse.length >= 50 &&
+        !turnFailed &&
+        !req.signal.aborted &&
+        chatId
+      ) {
+        const { resolveExtractionModel } = await import('@/lib/memory/extraction-model');
+        const extractionModel = resolveExtractionModel({
+          onUserProvider: !!providerConfig,
+          turnModel: effectiveModel,
+        });
+        const turnMessage = message as string;
+        const turnResponse = collectedResponse;
+        runAfterClose = async () => {
           const extracted = await extractMemories(
-            message as string,
-            collectedResponse,
-            (apiKey as string) || undefined,
-            // The model the TURN ran on. Extraction used to hardcode an
-            // Anthropic id, which 400s against any other provider — on every
-            // turn, invisibly, for anyone on OpenRouter.
-            effectiveModel,
+            turnMessage,
+            turnResponse,
+            exec.apiKey,
+            extractionModel,
+            { baseUrl: exec.baseUrl, signal: AbortSignal.timeout(MEMORY_EXTRACTION_TIMEOUT_MS) },
           );
           if (extracted.length > 0) {
-            await sse.writeEvent({
-              type: 'memory_extract',
-              memories: extracted,
-            });
-            console.log('[MEMORY] Extracted', extracted.length, 'memories');
+            stashExtractedMemories(chatId as string, extracted);
+            console.log('[MEMORY] Extracted', extracted.length, 'memories — delivered with the next turn');
           }
-        } catch (extractErr) {
-          console.error('[MEMORY] Extraction error:', extractErr);
-          // Non-fatal — don't send error to client
-        }
+        };
       }
 
       /**
@@ -1489,6 +1521,14 @@ export async function POST(
     } finally {
       clearInterval(heartbeatInterval);
       await sse.close();
+    }
+
+    // Background work that must not hold the stream open (see above).
+    if (runAfterClose) {
+      await runAfterClose().catch((extractErr: unknown) => {
+        // Non-fatal, and nobody is listening any more to be told.
+        console.error('[MEMORY] Extraction error:', extractErr);
+      });
     }
   })();
 

@@ -3,35 +3,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createSSEStream } from '@/lib/sse';
 import type { ProviderExecConfig } from '@/lib/models/execution';
 import type { Capability, Tier } from '@/lib/models/types';
+import { toApiModelId } from '@/lib/models/api-model-id';
 
 export const runtime = 'nodejs';
-
-/**
- * SDK model aliases → concrete Messages API model ids.
- *
- * Every other surface hands `opus`/`sonnet`/`haiku` to the Agent SDK, which
- * resolves them itself. The raw Messages API does not accept an alias, so this
- * route has to resolve it — and the registry cannot answer: its `driverModel` IS
- * the alias, and its `id` is a registry-internal key (`claude-opus`). Neither is
- * an API model id.
- *
- * These were pinned to Claude 4 (`claude-sonnet-4-20250514` and siblings), so the
- * browser surface has been running a deprecated generation while every other
- * surface got current models for free by going through the SDK. That is the cost
- * of a second inference path, and it is the reason this route now resolves
- * through the registry rather than a hardcoded map of its own.
- */
-const ALIAS_TO_MODEL_ID: Record<string, string> = {
-  fable: 'claude-fable-5',
-  opus: 'claude-opus-5',
-  sonnet: 'claude-sonnet-5',
-  haiku: 'claude-haiku-4-5',
-};
-
-/** An alias resolves; anything else is assumed to be a concrete id already. */
-function toApiModelId(model: string): string {
-  return ALIAS_TO_MODEL_ID[model] ?? model;
-}
 
 /**
  * Single-turn streaming endpoint for the browser agent.

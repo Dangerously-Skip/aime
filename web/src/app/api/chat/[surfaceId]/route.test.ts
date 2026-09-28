@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from './route';
 import type { QueryParams, StreamChunk } from '@/lib/providers/base-provider';
+import { resetPendingExtractions } from '@/lib/memory/pending-extractions';
 
 const mocks = vi.hoisted(() => ({
   queryMock: vi.fn(),
@@ -73,6 +74,7 @@ beforeEach(() => {
   mocks.readAgentPromptMock.mockReturnValue('');
   mocks.extractMemoriesMock.mockResolvedValue([]);
   mocks.loadProvisionedMock.mockResolvedValue({});
+  resetPendingExtractions();
   // The route refuses a turn with no model credentials before calling the
   // provider; every test but the no-model ones has a key.
   vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
@@ -605,52 +607,118 @@ describe('agent routing', () => {
 });
 
 describe('memory extraction', () => {
-  it('emits memory_extract when the response is substantial', async () => {
-    scriptProvider([
-      { type: 'text', content: 'a'.repeat(60), provider: 'claude' },
-    ]);
-    mocks.extractMemoriesMock.mockResolvedValue([
-      { content: 'User works on Quarry', category: 'fact', tags: [], confidence: 0.8 },
-    ]);
+  const substantial = () => scriptProvider([{ type: 'text', content: 'a'.repeat(60), provider: 'claude' }]);
+
+  it('runs after done, on the cheap tier, and does not hold the stream open', async () => {
+    substantial();
+    // An extraction that never finishes must not delay the turn at all.
+    mocks.extractMemoriesMock.mockReturnValue(new Promise(() => {}));
 
     const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
 
+    expect(events.at(-1)?.type).toBe('done');
+    expect(events.some((e) => e.type === 'memory_extract')).toBe(false);
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalled());
     /*
-     * The fourth argument is the model the turn ran on, and it is the point.
-     * Extraction used to hardcode `claude-haiku-4-5-20251001` and build a bare
-     * Anthropic client; with ANTHROPIC_BASE_URL pointing at the llm-proxy, that
-     * id reached whatever provider the user configured and came back
-     * "not a valid model ID" — on every turn, silently, for anyone not on
-     * Anthropic.
+     * The built-in cheap tier, as an API id — not the turn's model. Extraction
+     * used to run on the turn's model, so an Opus turn paid for a second Opus
+     * call, and it sent the bare SDK alias (`sonnet`), which the Messages API
+     * rejects.
      */
-    expect(mocks.extractMemoriesMock).toHaveBeenCalledWith(
-      'hi',
-      'a'.repeat(60),
-      undefined,
-      'sonnet',
+    const [msg, response, , model, opts] = mocks.extractMemoriesMock.mock.calls[0];
+    expect([msg, response, model]).toEqual(['hi', 'a'.repeat(60), 'claude-haiku-4-5']);
+    expect((opts as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('delivers what it found with the next turn in the same conversation', async () => {
+    substantial();
+    mocks.extractMemoriesMock.mockResolvedValue([
+      { content: 'User works on AIME', category: 'fact', tags: [], confidence: 0.8 },
+    ]);
+    await post('chat', { message: 'hi', chatId: 'mem-1' });
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 0));
+
+    scriptProvider([]);
+    const other = await post('chat', { message: 'elsewhere', chatId: 'mem-2' });
+    expect(other.events.some((e) => e.type === 'memory_extract')).toBe(false);
+
+    const next = await post('chat', { message: 'and now', chatId: 'mem-1' });
+    const memEvent = next.events.find((e) => e.type === 'memory_extract');
+    expect(memEvent?.memories).toEqual([
+      { content: 'User works on AIME', category: 'fact', tags: [], confidence: 0.8 },
+    ]);
+    // Delivered once.
+    const again = await post('chat', { message: 'once more', chatId: 'mem-1' });
+    expect(again.events.some((e) => e.type === 'memory_extract')).toBe(false);
+  });
+
+  it('uses the turn’s own model on a user-added provider, whose tiers the server cannot see', async () => {
+    substantial();
+    await post('chat', {
+      message: 'hi',
+      chatId: 'c1',
+      model: 'deepseek/deepseek-v4-pro',
+      providerConfig: { providerId: 'or', transport: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' },
+      apiKey: 'sk-or',
+    });
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalled());
+    const [, , key, model, opts] = mocks.extractMemoriesMock.mock.calls[0];
+    expect(key).toBe('sk-or');
+    expect(model).toBe('deepseek/deepseek-v4-pro');
+    expect((opts as { baseUrl?: string }).baseUrl).toContain('/api/llm-proxy/or/');
+  });
+
+  it('skips a turn that failed', async () => {
+    scriptProvider([
+      { type: 'text', content: 'a'.repeat(60), provider: 'claude' },
+      { type: 'error', message: 'overloaded', code: 'overloaded', provider: 'claude' },
+    ]);
+    await post('chat', { message: 'hi', chatId: 'c1' });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mocks.extractMemoriesMock).not.toHaveBeenCalled();
+  });
+
+  it('skips a turn whose client had already gone', async () => {
+    const controller = new AbortController();
+    mocks.queryMock.mockImplementation(async function* () {
+      yield { type: 'text', content: 'a'.repeat(60), provider: 'claude' };
+      controller.abort();
+    });
+    const res = await POST(
+      new NextRequest('http://localhost/api/chat/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'hi', chatId: 'c1' }),
+        signal: controller.signal,
+      }),
+      { params: Promise.resolve({ surfaceId: 'chat' }) },
     );
-    const memEvent = events.find((e) => e.type === 'memory_extract');
-    expect(memEvent).toBeDefined();
-    expect((memEvent!.memories as unknown[])).toHaveLength(1);
+    await res.text().catch(() => '');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mocks.extractMemoriesMock).not.toHaveBeenCalled();
   });
 
   it('skips extraction for short responses and when disabled', async () => {
     scriptProvider([{ type: 'text', content: 'short', provider: 'claude' }]);
     await post('chat', { message: 'hi', chatId: 'c1' });
+    await new Promise((r) => setTimeout(r, 10));
     expect(mocks.extractMemoriesMock).not.toHaveBeenCalled();
 
-    scriptProvider([{ type: 'text', content: 'a'.repeat(60), provider: 'claude' }]);
+    substantial();
     await post('chat', { message: 'hi', chatId: 'c1', autoExtractMemories: false });
+    await new Promise((r) => setTimeout(r, 10));
     expect(mocks.extractMemoriesMock).not.toHaveBeenCalled();
   });
 
   it('keeps the stream healthy when extraction fails', async () => {
-    scriptProvider([{ type: 'text', content: 'a'.repeat(60), provider: 'claude' }]);
+    substantial();
     mocks.extractMemoriesMock.mockRejectedValue(new Error('haiku down'));
 
     const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(events.at(-1)?.type).toBe('done');
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalled());
   });
 });
 
