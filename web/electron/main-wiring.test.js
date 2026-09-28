@@ -23,6 +23,37 @@ function body(fnName) {
   return code.slice(start, next === -1 ? undefined : start + 1 + next);
 }
 
+describe('first-launch setup window', () => {
+  it('runs without Node: isolated, sandboxed, talking only through its preload', () => {
+    const setup = body('ensureSetup');
+    expect(setup).not.toMatch(/nodeIntegration:\s*true/);
+    expect(setup).not.toMatch(/contextIsolation:\s*false/);
+    expect(setup).toMatch(/contextIsolation:\s*true/);
+    expect(setup).toMatch(/sandbox:\s*true/);
+    expect(setup).toMatch(/preload:\s*path\.join\(__dirname,\s*"electron",\s*"setup-preload\.js"\)/);
+    // Its two channels still go through the guard, trusting only that window.
+    expect(setup).toMatch(/ipc\.on\("setup:retry",[^\n]*fromSetupWindow\)/);
+    expect(setup).toMatch(/ipc\.on\("setup:skip",[^\n]*fromSetupWindow\)/);
+  });
+
+  it('its page no longer requires anything', () => {
+    const html = readFileSync(path.resolve(__dirname, '..', 'setup-window.html'), 'utf-8');
+    expect(html).not.toMatch(/require\(/);
+    expect(html).not.toMatch(/ipcRenderer/);
+    expect(html).toMatch(/window\.setupAPI/);
+  });
+});
+
+describe('MCP config repair at launch', () => {
+  it('goes through the atomic migration module, not a truncating write', () => {
+    expect(code).toMatch(/require\("\.\/electron\/mcp-config-migration"\)/);
+    const migrate = body('migrateMcpConfig');
+    expect(migrate).toMatch(/migrateMcpConfigFile\(/);
+    expect(code).not.toMatch(/function migrateMcpConfigFile\(/);
+    expect(migrate).not.toMatch(/writeFileSync/);
+  });
+});
+
 describe('main window', () => {
   it('guards both will-navigate and will-redirect with the navigation policy', () => {
     const guard = body('guardMainWindowNavigation');
