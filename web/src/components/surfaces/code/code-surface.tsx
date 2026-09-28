@@ -79,6 +79,7 @@ import { CommandPicker, type CommandSuggestion } from "@/components/shared/comma
 import { getSlashSuggestions, parseSlashCommand, applySlashCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
 import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
 import { WorkspaceLayout } from "./workspace/workspace-layout";
+import { tagSecurityWarning } from "./security-warning";
 import { useProviderStore } from "@/stores/provider-store";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
@@ -105,21 +106,6 @@ const THINKING_WORDS = [
   "Tinkering",
   "Contemplating",
 ];
-
-const DANGEROUS_PATTERNS = [
-  /\brm\s+(-[rRf]+\s+|.*\/)/,
-  /\bsudo\b/,
-  /\bmkfs\b/,
-  /\bdd\s+if=/,
-  /\bchmod\s+777\b/,
-  /curl.*\|\s*(sh|bash)/,
-  /wget.*\|\s*(sh|bash)/,
-  /\bnc\s+-/,
-];
-
-function isDangerousCommand(command: string): boolean {
-  return DANGEROUS_PATTERNS.some((p) => p.test(command));
-}
 
 /* ── Pixel mascot (jiggling character) ── */
 function Mascot() {
@@ -973,15 +959,8 @@ export function CodeSurface() {
             status: "running",
             startTime: Date.now(),
           };
-          // Tag dangerous Bash commands with a warning
-          if (
-            toolName === "Bash" &&
-            typeof toolInput.command === "string" &&
-            isDangerousCommand(toolInput.command) &&
-            (useSettingsStore.getState().blockDangerousCommands || useSettingsStore.getState().blockNetworkCommands)
-          ) {
-            toolCallData.input = { ...toolInput, __securityWarning: true };
-          }
+          // Tag risky Bash commands — the same classifier as the server's gate.
+          toolCallData.input = tagSecurityWarning(toolName, toolInput, useSettingsStore.getState());
           addToolCall(chatId, toolCallData);
           // Register Write/Edit artifacts with project and track HTML/web asset files
           if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
