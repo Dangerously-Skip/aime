@@ -9,7 +9,7 @@ import { useSettingsStore } from '@/stores/settings-store';
  *
  * Three credentials get you there and only one of them lives in the browser:
  *
- *  - the user's key in Settings → API Access (`settings-store.anthropicApiKey`)
+ *  - the user's key in Settings → Models & API keys (`settings-store.anthropicApiKey`)
  *  - `ANTHROPIC_API_KEY` in the server's env / `.env`
  *  - a configured Bedrock region
  *

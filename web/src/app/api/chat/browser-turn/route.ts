@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
     return Response.json(
       {
         error:
-          'No API key is configured. Add one in Settings → API Access, or set ANTHROPIC_API_KEY.',
+          'No API key is configured. Add one in Settings → Models & API keys, or set ANTHROPIC_API_KEY.',
         code: 'no_model',
       },
       { status: 400 },

@@ -176,7 +176,8 @@ describe('credentials are resolved server-side', () => {
     delete process.env.ANTHROPIC_API_KEY;
     const res = await post({ messages });
     expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toMatch(/Settings|ANTHROPIC_API_KEY/);
+    // Names the section as the Settings nav does ("API Access" was renamed).
+    expect(JSON.stringify(await res.json())).toMatch(/Settings → Models & API keys/);
     expect(streamMock).not.toHaveBeenCalled();
   });
 
