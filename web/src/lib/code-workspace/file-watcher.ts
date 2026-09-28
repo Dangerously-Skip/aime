@@ -31,6 +31,31 @@ interface WatchRegistration {
 }
 
 const registry = new Map<string, WatchRegistration>();
+/**
+ * Watchers being started. Without this, two subscribers mounting in the same
+ * tick (the file tree and an open editor tab) both missed the registry, both
+ * started a chokidar watcher, and the first one leaked.
+ */
+const starting = new Map<string, Promise<WatchRegistration | null>>();
+
+async function register(workspace: string): Promise<WatchRegistration | null> {
+  const watchId = await watchPath(workspace);
+  if (!watchId) return null;
+  const listeners = new Set<Listener>();
+  const unsubscribe = onFsChange((evt) => {
+    if (evt.watchId !== watchId) return;
+    for (const l of listeners) {
+      try {
+        l(evt);
+      } catch {
+        // ignore listener errors
+      }
+    }
+  });
+  const reg = { workspace, watchId, listeners, unsubscribe };
+  registry.set(workspace, reg);
+  return reg;
+}
 
 /**
  * Subscribe to fs changes for a workspace. Lazily creates a single shared
@@ -41,26 +66,16 @@ export async function subscribe(
   workspace: string,
   listener: Listener,
 ): Promise<() => void> {
-  let reg = registry.get(workspace);
+  let reg = registry.get(workspace) ?? null;
   if (!reg) {
-    const watchId = await watchPath(workspace);
-    if (!watchId) {
-      // No bridge available (e.g. running in browser SSR). Return a no-op.
-      return () => {};
+    let pending = starting.get(workspace);
+    if (!pending) {
+      pending = register(workspace).finally(() => starting.delete(workspace));
+      starting.set(workspace, pending);
     }
-    const listeners = new Set<Listener>();
-    const unsubscribe = onFsChange((evt) => {
-      if (evt.watchId !== watchId) return;
-      for (const l of listeners) {
-        try {
-          l(evt);
-        } catch {
-          // ignore listener errors
-        }
-      }
-    });
-    reg = { workspace, watchId, listeners, unsubscribe };
-    registry.set(workspace, reg);
+    reg = await pending;
+    // No bridge available (e.g. running in browser SSR). Return a no-op.
+    if (!reg) return () => {};
   }
 
   reg.listeners.add(listener);
