@@ -112,45 +112,30 @@ function loadCss(file: string): Promise<string> {
   return p;
 }
 
-function ThemePreview({ id }: { id: string }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(0);
-  const [css, setCss] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    Promise.all([loadCss('fonts.css'), loadCss('base.css'), loadCss(`themes/${id}.css`)])
-      .then(([fonts, base, theme]) => {
-        if (alive) setCss(`${fonts}\n${base}\n${theme}`);
-      })
-      .catch(() => {
-        if (alive) setFailed(true);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [id]);
-
-  /**
-   * Scale is measured, not expressed in CSS, because CSS cannot express it: a
-   * unitless factor derived from the container width has no viewport-unit form
-   * that `scale()` accepts. The cards are a responsive grid, so it is observed
-   * rather than computed once.
-   */
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setScale(entry.contentRect.width / DECK_W);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const srcDoc = `<!doctype html>
+/**
+ * The preview document. No script can run in it, twice over.
+ *
+ * Opening Design logged 36 console errors — one per card — from a script
+ * touching `localStorage` inside each `sandbox=""` frame, where an opaque
+ * origin makes any storage access throw. The template itself has never
+ * contained a script: whatever runs there is injected per-frame by the host
+ * (a devtools hook, an automation harness), which is exactly why the fix is
+ * structural rather than a try/catch around code we do not own:
+ *
+ *   - the CSP below forbids script outright (`default-src 'none'`), so nothing
+ *     that is part of the document can run, and anything added to it later
+ *     cannot either; and
+ *   - frames are created only as their card scrolls into view (see
+ *     `ThemePreview`), so a host that injects into every frame does it for the
+ *     handful on screen rather than all 36 at once.
+ *
+ * Styles and Google Fonts stay allowed — they are what the preview is for.
+ */
+export function previewDocument(css: string): string {
+  return `<!doctype html>
 <html><head><meta charset="utf-8">
-<style>${css ?? ''}</style>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; img-src data:">
+<style>${css}</style>
 <style>
   /* The deck renders at its true 1280x720 here and the IFRAME ELEMENT is
      scaled from outside. The obvious in-frame version —
@@ -174,6 +159,79 @@ function ThemePreview({ id }: { id: string }) {
   <div class="deck-footer"><span class="dim2">${APP_NAME}</span></div>
 </section></div>
 </body></html>`;
+}
+
+/**
+ * True once the element has come within `margin` of the viewport; stays true.
+ *
+ * One-way on purpose: unmounting a frame that scrolled away would rebuild it
+ * (and re-run whatever the host injects) every time it came back.
+ */
+function useSeenOnce<T extends Element>(ref: React.RefObject<T | null>, margin = '200px'): boolean {
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || seen) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      // No observer (very old engine): render rather than never.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- capability fallback; there is no event to wait for
+      setSeen(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: margin },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, margin, seen]);
+  return seen;
+}
+
+function ThemePreview({ id }: { id: string }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0);
+  const [css, setCss] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const visible = useSeenOnce(wrapRef);
+
+  // Fetched only once visible, too — no reason to pull 36 theme files for a
+  // gallery most people scroll a third of.
+  useEffect(() => {
+    if (!visible) return;
+    let alive = true;
+    Promise.all([loadCss('fonts.css'), loadCss('base.css'), loadCss(`themes/${id}.css`)])
+      .then(([fonts, base, theme]) => {
+        if (alive) setCss(`${fonts}\n${base}\n${theme}`);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [id, visible]);
+
+  /**
+   * Scale is measured, not expressed in CSS, because CSS cannot express it: a
+   * unitless factor derived from the container width has no viewport-unit form
+   * that `scale()` accepts. The cards are a responsive grid, so it is observed
+   * rather than computed once.
+   */
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setScale(entry.contentRect.width / DECK_W);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return (
     <div
@@ -190,14 +248,13 @@ function ThemePreview({ id }: { id: string }) {
           Preview unavailable
         </div>
       )}
-      {scale > 0 && css !== null && (
+      {visible && scale > 0 && css !== null && (
         <iframe
           title=""
           aria-hidden
           tabIndex={-1}
-          loading="lazy"
           sandbox=""
-          srcDoc={srcDoc}
+          srcDoc={previewDocument(css)}
           style={{
             width: DECK_W,
             height: DECK_H,
