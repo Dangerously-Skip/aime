@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useAppStore } from "@/stores/app-store";
+import { useCustomizeUiStore } from "@/stores/customize-ui-store";
 import { useMarketplace } from "@/lib/use-marketplace";
 import { PluginRow } from "./plugin-row";
 import { Zap, FileText, Trash2, Pencil, Loader2, Plus, Check, X, ChevronRight } from "lucide-react";
@@ -33,9 +34,16 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
+  /** Why the last create / save / delete failed, shown where it happened. */
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Create skill form
-  const [creating, setCreating] = useState(false);
+  // Shared with the sidebar `+`, so either one opens the same composer.
+  const creating = useCustomizeUiStore((s) => s.composingSkill);
+  const startSkillComposer = useCustomizeUiStore((s) => s.startSkillComposer);
+  const closeSkillComposer = useCustomizeUiStore((s) => s.closeSkillComposer);
+  const skillsChanged = useCustomizeUiStore((s) => s.skillsChanged);
+  const setSelectedSkillId = useAppStore((s) => s.setSelectedSkillId);
   const [newName, setNewName] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [newContent, setNewContent] = useState("");
@@ -60,35 +68,72 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
   }, []);
 
   useEffect(() => {
+    // A failure belongs to the skill it happened on, not the next one opened.
+    setActionError(null);
     if (skillId) {
       fetchSkill(skillId);
-      setCreating(false);
+      closeSkillComposer();
     } else {
       setSkill(null);
     }
-  }, [skillId, fetchSkill]);
+  }, [skillId, fetchSkill, closeSkillComposer]);
+
+  // Leaving the section closes the composer rather than reopening it later.
+  useEffect(() => closeSkillComposer, [closeSkillComposer]);
+
+  /**
+   * The server's reason, or a plain fallback.
+   *
+   * Save and create used to check `res.ok` and do nothing when it was false —
+   * no message; the spinner stopped and the form sat there as if the click had
+   * not registered. A 409 ("Skill directory already exists") or a 400 for an
+   * unusable name was invisible, so the user tried again, got the same silence,
+   * and concluded the button was broken.
+   */
+  async function failureReason(res: Response, fallback: string): Promise<string> {
+    const body = await res.json().catch(() => ({}));
+    return typeof body?.error === "string" && body.error ? body.error : fallback;
+  }
 
   async function handleDelete() {
     if (!skill) return;
     if (!confirm(`Delete skill "${skill.name}"? This removes the entire skill directory.`)) return;
-    await fetch(`/api/customize/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/customize/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
+      if (!res.ok) {
+        setActionError(await failureReason(res, "Couldn't delete the skill."));
+        return;
+      }
+    } catch {
+      setActionError("Couldn't delete the skill. Check that the app is running and try again.");
+      return;
+    }
     setSkill(null);
+    setSelectedSkillId(null);
+    skillsChanged();
   }
 
   async function handleSaveEdit() {
     if (!skill) return;
     setSaving(true);
+    setActionError(null);
     try {
       const res = await fetch(`/api/customize/skills/${encodeURIComponent(skill.id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: editContent }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setSkill(data.skill);
-        setEditing(false);
+      if (!res.ok) {
+        setActionError(await failureReason(res, "Couldn't save the skill."));
+        return;
       }
+      const data = await res.json();
+      setSkill(data.skill);
+      setEditing(false);
+      skillsChanged();
+    } catch {
+      setActionError("Couldn't save the skill. Check that the app is running and try again.");
     } finally {
       setSaving(false);
     }
@@ -97,6 +142,7 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
   async function handleCreate() {
     if (!newName.trim()) return;
     setSaving(true);
+    setActionError(null);
     try {
       const res = await fetch("/api/customize/skills", {
         method: "POST",
@@ -107,14 +153,21 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
           content: newContent.trim(),
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setSkill(data.skill);
-        setCreating(false);
-        setNewName("");
-        setNewDescription("");
-        setNewContent("");
+      if (!res.ok) {
+        setActionError(await failureReason(res, "Couldn't create the skill."));
+        return;
       }
+      const data = await res.json();
+      setNewName("");
+      setNewDescription("");
+      setNewContent("");
+      closeSkillComposer();
+      // Select it: with no selection the pane fell back to the empty state, so
+      // a successful create looked exactly like a cancelled one.
+      setSelectedSkillId(data.skill.id);
+      skillsChanged();
+    } catch {
+      setActionError("Couldn't create the skill. Check that the app is running and try again.");
     } finally {
       setSaving(false);
     }
@@ -137,7 +190,7 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
           variant="outline"
           size="sm"
           className="mt-4"
-          onClick={() => setCreating(true)}
+          onClick={startSkillComposer}
         >
           <Plus className="h-3.5 w-3.5 mr-1.5" />
           Create skill
@@ -175,8 +228,9 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
         <h2 className="text-lg font-semibold mb-4">Create New Skill</h2>
         <div className="space-y-4">
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Name</label>
+            <label htmlFor="new-skill-name" className="text-xs font-medium text-muted-foreground">Name</label>
             <input
+              id="new-skill-name"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="my-skill"
@@ -184,8 +238,9 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
             />
           </div>
           <div>
-            <label className="text-xs font-medium text-muted-foreground">Description</label>
+            <label htmlFor="new-skill-description" className="text-xs font-medium text-muted-foreground">Description</label>
             <input
+              id="new-skill-description"
               value={newDescription}
               onChange={(e) => setNewDescription(e.target.value)}
               placeholder="What does this skill do?"
@@ -193,10 +248,11 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
             />
           </div>
           <div>
-            <label className="text-xs font-medium text-muted-foreground">
+            <label htmlFor="new-skill-content" className="text-xs font-medium text-muted-foreground">
               Instructions (SKILL.md body)
             </label>
             <textarea
+              id="new-skill-content"
               value={newContent}
               onChange={(e) => setNewContent(e.target.value)}
               placeholder="Write the skill instructions in markdown..."
@@ -204,12 +260,15 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
               className="mt-1 flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono text-xs"
             />
           </div>
+          {actionError && (
+            <p role="alert" className="text-xs text-destructive">{actionError}</p>
+          )}
           <div className="flex items-center gap-2">
             <Button onClick={handleCreate} disabled={saving || !newName.trim()} size="sm">
               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Check className="h-3.5 w-3.5 mr-1.5" />}
               Create
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+            <Button variant="ghost" size="sm" onClick={closeSkillComposer}>
               <X className="h-3.5 w-3.5 mr-1.5" />
               Cancel
             </Button>
@@ -257,6 +316,8 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8"
+            aria-label="Edit skill"
+            title="Edit skill"
             onClick={() => {
               setEditing(true);
               setEditContent(skill.content);
@@ -268,12 +329,20 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 text-destructive hover:text-destructive"
+            aria-label="Delete skill"
+            title="Delete skill"
             onClick={handleDelete}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
+
+      {actionError && (
+        <p role="alert" className="-mt-3 mb-4 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {actionError}
+        </p>
+      )}
 
       {/* Metadata */}
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted-foreground mb-6">

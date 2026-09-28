@@ -48,6 +48,7 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const sidebarMode = useAppStore((s) => s.sidebarMode);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
+  const setCustomizeSection = useAppStore((s) => s.setCustomizeSection);
   const settingsOpen = useAppStore((s) => s.settingsOpen);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const displayName = useSettingsStore((s) => s.displayName);
@@ -156,7 +157,13 @@ export function Sidebar({ isElectron = false, onNewProject }: SidebarProps) {
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         <button
-          onClick={() => setSidebarMode("customize")}
+          onClick={() => {
+            // Always the landing page: from inside a section this was a no-op
+            // (the mode was already "customize"), so the only way back to the
+            // overview was each panel's own back arrow.
+            setSidebarMode("customize");
+            setCustomizeSection("landing");
+          }}
           className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
             sidebarMode === "customize"
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
