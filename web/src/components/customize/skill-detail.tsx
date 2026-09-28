@@ -183,7 +183,7 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
         <h2 className="text-lg font-semibold">Skills</h2>
         <p className="text-sm text-muted-foreground mt-1 max-w-sm">
           Skills are reusable prompts and workflows stored in{" "}
-          <code className="text-xs bg-muted px-1 py-0.5 rounded">~/.claude/skills/</code>.
+          <code className="whitespace-nowrap text-xs bg-muted px-1 py-0.5 rounded">~/.claude/skills/</code>.
           Select a skill from the sidebar or create a new one.
         </p>
         <Button
@@ -200,7 +200,12 @@ export function SkillDetail({ skillId }: SkillDetailProps) {
         {skillPlugins.length > 0 && (
           <div className="w-full max-w-xl mt-8">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-left">From the Marketplace</h3>
+              <div className="text-left">
+                <h3 className="text-sm font-semibold">Related plugins</h3>
+                <p className="text-xs text-muted-foreground">
+                  From the Marketplace. Plugins can bundle skills alongside connectors and commands.
+                </p>
+              </div>
               <button
                 onClick={() => setCustomizeSection("browse-marketplace")}
                 className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"

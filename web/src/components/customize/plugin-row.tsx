@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import type { MarketplacePlugin } from "@/lib/marketplace";
 import { MARKETPLACE_CATEGORIES } from "@/lib/marketplace";
+import { titleCase } from "@/lib/title-case";
 import { runMcpOAuthFlow } from "@/lib/mcp/oauth-flow";
 import {
   Code2,
@@ -57,12 +58,21 @@ interface PluginRowProps {
   };
 }
 
+/**
+ * A category's display name. Categories outside the known map rendered raw
+ * (`automation`, `ai-ml`) beside curated ones (`Productivity`), so the chip row
+ * mixed lower- and title-case.
+ */
+export function marketplaceCategoryLabel(category: string): string {
+  return MARKETPLACE_CATEGORIES[category] ?? titleCase(category);
+}
+
 export function PluginRow({ plugin, compact, onStateChange, installedState }: PluginRowProps) {
   const category = plugin.category || "development";
   const Icon = CATEGORY_ICONS[category] || Puzzle;
   const colorClass = CATEGORY_COLORS[category] || "bg-muted text-muted-foreground";
   const authorName = plugin.author?.name;
-  const label = MARKETPLACE_CATEGORIES[category] || category;
+  const label = marketplaceCategoryLabel(category);
 
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -149,7 +159,10 @@ export function PluginRow({ plugin, compact, onStateChange, installedState }: Pl
   }, [plugin, onStateChange]);
 
   return (
-    <div className="group flex items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 hover:border-border/80 hover:bg-accent/30 transition-colors">
+    // `text-left` explicitly: the Skills/Connectors empty states that list
+    // these are `text-center`, so a description short enough not to truncate
+    // inherited the centring while its neighbours read left-aligned.
+    <div className="group flex items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 text-left hover:border-border/80 hover:bg-accent/30 transition-colors">
       {/* Category icon */}
       <div className={`shrink-0 flex items-center justify-center h-10 w-10 rounded-lg ${colorClass}`}>
         <Icon className={compact ? "h-4 w-4" : "h-5 w-5"} />

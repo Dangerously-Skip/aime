@@ -196,10 +196,12 @@ export function AgentsPanel() {
               : draft?.name || "Edit Agent"
             : "Agents"}
         </span>
-        {!showEditor && (
+        {/* One "New agent" at a time: with no agents the empty state has its
+            own, and showing both put two identical actions on one screen. */}
+        {!showEditor && !loading && agents.length > 0 && (
           <Button size="sm" variant="outline" onClick={handleNewAgent}>
             <Plus className="h-3.5 w-3.5 mr-1" />
-            New
+            New agent
           </Button>
         )}
       </div>

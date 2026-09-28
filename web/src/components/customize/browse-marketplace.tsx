@@ -3,8 +3,8 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useAppStore } from "@/stores/app-store";
 import { useMarketplace } from "@/lib/use-marketplace";
-import { MARKETPLACE_CATEGORIES } from "@/lib/marketplace";
-import { PluginRow } from "./plugin-row";
+import { PluginRow, marketplaceCategoryLabel } from "./plugin-row";
+import { ChipRow } from "./chip-row";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, ArrowLeft, Search, Loader2, Puzzle, RefreshCw } from "lucide-react";
 
@@ -100,9 +100,10 @@ function MarketplaceContent({ onRetry }: { onRetry: () => void }) {
       </div>
 
       {/* Category filter pills */}
-      <div className="flex items-center gap-1.5 px-6 py-2.5 border-b border-border shrink-0 overflow-x-auto">
+      <ChipRow label="Plugin categories">
         <button
           onClick={() => setCategoryFilter("all")}
+          aria-pressed={categoryFilter === "all"}
           className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
             categoryFilter === "all"
               ? "bg-primary text-primary-foreground"
@@ -115,16 +116,17 @@ function MarketplaceContent({ onRetry }: { onRetry: () => void }) {
           <button
             key={cat}
             onClick={() => setCategoryFilter(cat)}
+            aria-pressed={categoryFilter === cat}
             className={`px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
               categoryFilter === cat
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
             }`}
           >
-            {MARKETPLACE_CATEGORIES[cat] || cat}
+            {marketplaceCategoryLabel(cat)}
           </button>
         ))}
-      </div>
+      </ChipRow>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto min-h-0">
