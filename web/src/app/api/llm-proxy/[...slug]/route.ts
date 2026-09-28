@@ -4,6 +4,7 @@ import {
   type AnthropicMessagesRequest,
 } from '@/lib/models/llm-proxy/translate';
 import { parseOpenAISSE, translateStream, serializeSSE } from '@/lib/models/llm-proxy/stream';
+import { upstreamKey } from '@/lib/models/llm-proxy/upstream-key';
 
 export const runtime = 'nodejs';
 
@@ -57,14 +58,6 @@ function retryHeaders(res: Response): Record<string, string> {
     if (v) out[h] = v;
   }
   return out;
-}
-
-function upstreamKey(req: Request): string | undefined {
-  const xkey = req.headers.get('x-api-key');
-  if (xkey) return xkey;
-  const auth = req.headers.get('authorization');
-  if (auth?.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
-  return undefined;
 }
 
 function estimateInputTokens(req: AnthropicMessagesRequest): number {
@@ -144,6 +137,19 @@ export async function POST(
     }
   }
 
+  /*
+   * Tie the upstream request to the caller. When the user presses Stop the SDK
+   * drops its connection; without this the upstream generation ran to
+   * completion anyway — and a metered provider billed every token of it.
+   * `request.signal` covers the connection going away; the stream's `cancel()`
+   * below covers the response body being abandoned.
+   */
+  const upstreamAbort = new AbortController();
+  const abortUpstream = () => upstreamAbort.abort();
+  if (request.signal?.aborted) abortUpstream();
+  else request.signal?.addEventListener('abort', abortUpstream, { once: true });
+  const detach = () => request.signal?.removeEventListener('abort', abortUpstream);
+
   let upstreamRes: Response;
   try {
     upstreamRes = await fetch(target, {
@@ -153,12 +159,15 @@ export async function POST(
         ...(key ? { authorization: `Bearer ${key}` } : {}),
       },
       body: JSON.stringify(oaReq),
+      signal: upstreamAbort.signal,
     });
   } catch (err) {
+    detach();
     return anthropicError(502, `Upstream request failed: ${err instanceof Error ? err.message : 'unknown'}`, 'api_error');
   }
 
   if (!upstreamRes.ok) {
+    detach();
     const detail = await upstreamRes.text().catch(() => '');
     /**
      * Log it, because the response body goes to the SDK subprocess and nowhere
@@ -187,26 +196,50 @@ export async function POST(
   // Non-streaming: translate the single JSON response.
   if (!body.stream) {
     const data = await upstreamRes.json().catch(() => ({}));
+    detach();
     return Response.json(openAIToAnthropic(data, body.model));
   }
 
   // Streaming: OpenAI SSE → Anthropic SSE.
-  if (!upstreamRes.body) return anthropicError(502, 'Upstream returned no stream body', 'api_error');
+  if (!upstreamRes.body) {
+    detach();
+    return anthropicError(502, 'Upstream returned no stream body', 'api_error');
+  }
   const messageId = `msg_${globalThis.crypto.randomUUID()}`;
   const inputTokens = estimateInputTokens(body);
   const encoder = new TextEncoder();
   const oaChunks = parseOpenAISSE(upstreamRes.body as unknown as AsyncIterable<Uint8Array>);
-  const events = translateStream(oaChunks, { messageId, model: body.model, inputTokens });
+  const events = translateStream(oaChunks, { messageId, model: body.model, inputTokens })[
+    Symbol.asyncIterator
+  ]();
 
+  // Pull-based, so an abandoned response stops reading upstream instead of
+  // buffering the rest of the generation into a stream nobody drains.
   const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
+    async pull(controller) {
       try {
-        for await (const evt of events) controller.enqueue(encoder.encode(serializeSSE(evt)));
+        const { value, done } = await events.next();
+        if (done) {
+          detach();
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode(serializeSSE(value)));
       } catch {
         // stream aborted / upstream hiccup — close what we have
-      } finally {
-        controller.close();
+        detach();
+        try {
+          controller.close();
+        } catch {
+          // already closed or cancelled
+        }
       }
+    },
+    cancel() {
+      // The consumer went away (the user pressed Stop): end the upstream
+      // request so the provider stops generating — and billing.
+      detach();
+      upstreamAbort.abort();
     },
   });
 
