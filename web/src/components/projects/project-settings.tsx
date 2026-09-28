@@ -321,7 +321,7 @@ export function ProjectSettings({ projectId, open, onOpenChange }: ProjectSettin
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Upload text files that Claude can reference in this project&apos;s conversations.
+              Upload text files the assistant can reference in this project&apos;s conversations.
             </p>
 
             <input

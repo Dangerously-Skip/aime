@@ -782,7 +782,7 @@ export function ProjectDetail({
                 <Textarea
                   value={instructionsDraft}
                   onChange={(e) => setInstructionsDraft(e.target.value)}
-                  placeholder="Add instructions to tailor Claude's responses..."
+                  placeholder="Add instructions to tailor the assistant's responses..."
                   rows={4}
                   className="resize-none text-sm"
                   autoFocus
@@ -809,7 +809,7 @@ export function ProjectDetail({
             ) : (
               <div className="px-5 py-3">
                 <p className="text-sm text-muted-foreground">
-                  Add instructions to tailor Claude&apos;s responses
+                  Add instructions to tailor the assistant&apos;s responses
                 </p>
               </div>
             )}
