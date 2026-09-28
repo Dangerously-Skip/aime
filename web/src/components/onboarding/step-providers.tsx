@@ -7,6 +7,7 @@ import { PROVIDER_PRESETS, getPreset } from "@/lib/models/providers";
 import type { CredentialField, ScannedModel } from "@/lib/models/providers";
 import { planProviderSetup, executeProviderSetup } from "@/lib/models/provider-setup";
 import { ProviderFields, providerHint } from "@/components/shared/provider-fields";
+import { saveCredentials } from "@/lib/models/credentials-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Check, KeyRound, Globe, HardDrive, Loader2, MoreHorizontal } from "lucide-react";
@@ -29,18 +30,6 @@ import { ArrowLeft, Check, KeyRound, Globe, HardDrive, Loader2, MoreHorizontal }
 interface StepProvidersProps {
   onContinue: () => void;
   onBack: () => void;
-}
-
-async function saveCredentials(providerId: string, values: Record<string, string>): Promise<void> {
-  const res = await fetch("/api/models/providers/credentials", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ providerId, values }),
-  });
-  if (!res.ok) {
-    const d = await res.json().catch(() => ({}));
-    throw new Error(typeof d.error === "string" ? d.error : `Could not store key (${res.status})`);
-  }
 }
 
 async function scan(presetId: string, opts: { apiKey?: string; baseUrl?: string }): Promise<ScannedModel[]> {
@@ -112,6 +101,12 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [configured, setConfigured] = useState<string | null>(null);
+  /**
+   * Did saving actually CHECK anything? True only when the preset could be
+   * scanned and the scan answered. Bedrock, Vertex and Azure have no scan, and
+   * this step used to report "Saved and verified" for them regardless.
+   */
+  const [verified, setVerified] = useState(false);
 
   const setAnthropicApiKey = useSettingsStore((s) => s.setAnthropicApiKey);
   const addProvider = useProviderStore((s) => s.addProvider);
@@ -145,7 +140,10 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
         return;
       }
       const { plan } = planned;
-      const models = await executeProviderSetup(plan, { scan, saveCredentials });
+      const models = await executeProviderSetup(plan, {
+        scan,
+        saveCredentials: (id, values) => saveCredentials(id, values),
+      });
 
       // The built-in path also lives in the settings store, which is how the
       // client knows the Claude models are reachable at all.
@@ -160,6 +158,7 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
         models,
       });
       if (plan.values.apiKey) setHasCredentials(plan.id, true);
+      setVerified(plan.canScan);
       setConfigured(presetId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Setup failed");
@@ -289,7 +288,9 @@ export function StepProviders({ onContinue, onBack }: StepProvidersProps) {
           // reads as "I entered my key and nothing happened".
           <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400">
             <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
-            Saved and verified — press Continue below.
+            {verified
+              ? "Verified — press Continue below."
+              : "Saved (not checked) — this provider is tested the first time you use it."}
           </p>
         )}
 
