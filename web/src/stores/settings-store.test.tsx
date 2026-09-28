@@ -214,6 +214,51 @@ describe('v13 — dead-control keys are dropped', () => {
   });
 });
 
+/**
+ * v15: the session-reset settings are dropped. `useSessionReset` read them and
+ * was never mounted (it has since been deleted), so they configured nothing —
+ * and the v3 branch used to ADD them, so every path has to be checked.
+ */
+describe('v15 — the session-reset settings are dropped', () => {
+  const DEAD = ['sessionResetMode', 'sessionResetTime', 'sessionIdleMinutes'];
+
+  it('drops them from a v14 payload and keeps the rest', async () => {
+    await rehydrateWith(14, {
+      fullName: 'Ada',
+      sessionResetMode: 'daily',
+      sessionResetTime: '05:00',
+      sessionIdleMinutes: 30,
+      loopDetectionThreshold: 4,
+    });
+    const s = useSettingsStore.getState() as unknown as Record<string, unknown>;
+    for (const k of DEAD) expect(s[k], k).toBeUndefined();
+    expect(s.fullName).toBe('Ada');
+    expect(s.loopDetectionThreshold).toBe(4);
+    // And they are not written back on the next save.
+    useSettingsStore.getState().setFullName('Ada L');
+    const saved = JSON.parse(localStorage.getItem(KEY)!) as { state: Record<string, unknown>; version: number };
+    expect(saved.version).toBe(15);
+    for (const k of DEAD) expect(saved.state[k], k).toBeUndefined();
+  });
+
+  it('is not re-added by the v3 → v4 branch, or kept from any older payload', async () => {
+    for (const version of [1, 3, 4, 9, 13]) {
+      localStorage.clear();
+      useSettingsStore.getState().resetAll();
+      await rehydrateWith(version, { sessionResetMode: 'idle', sessionIdleMinutes: 5 });
+      const s = useSettingsStore.getState() as unknown as Record<string, unknown>;
+      for (const k of DEAD) expect(s[k], `v${version}: ${k}`).toBeUndefined();
+    }
+  });
+
+  it('has no setters left', () => {
+    const s = useSettingsStore.getState() as unknown as Record<string, unknown>;
+    expect(s.setSessionResetMode).toBeUndefined();
+    expect(s.setSessionResetTime).toBeUndefined();
+    expect(s.setSessionIdleMinutes).toBeUndefined();
+  });
+});
+
 describe('settings actions', () => {
   it('addRecentFolder deduplicates, prepends, and caps at 10', () => {
     const s = () => useSettingsStore.getState();

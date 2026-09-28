@@ -229,7 +229,6 @@ describe('richContext (Cowork) vs files-only (Chat)', () => {
   const RICH = { richContext: true };
 
   it.each([
-    ['spawn_agent', { agentName: 'researcher', task: 'find comparable filings' }],
     ['mcp__web-search__web_search', { query: 'iso 27001 scope' }],
     ['WebSearch', { query: 'iso 27001 scope' }],
     ['Bash', { command: 'npm run typecheck' }],
@@ -238,7 +237,6 @@ describe('richContext (Cowork) vs files-only (Chat)', () => {
   });
 
   it.each([
-    ['spawn_agent', { agentName: 'researcher', task: 'find comparable filings' }],
     ['mcp__web-search__web_search', { query: 'iso 27001 scope' }],
     ['WebSearch', { query: 'iso 27001 scope' }],
     ['Bash', { command: 'npm run typecheck' }],
@@ -247,16 +245,10 @@ describe('richContext (Cowork) vs files-only (Chat)', () => {
   });
 
   it('labels activity entries so the sidebar can tell them from paths', () => {
-    expect(categorizeToolCall('spawn_agent', { agentName: 'scout', task: 'dig' }, RICH)?.path)
-      .toContain('scout');
     expect(categorizeToolCall('WebSearch', { query: 'acme ltd' }, RICH)?.path)
       .toContain('acme ltd');
     expect(categorizeToolCall('Bash', { command: 'npm run build' }, RICH)?.path)
       .toContain('npm run build');
-  });
-
-  it('falls back to a generic label when a subagent is unnamed', () => {
-    expect(categorizeToolCall('spawn_agent', { task: 'dig' }, RICH)?.path).toContain('subagent');
   });
 
   it('truncates a long command rather than pasting it into the sidebar', () => {
@@ -319,26 +311,6 @@ describe('guards that nothing was checking', () => {
       ]),
       'a dotfile was listed as an artifact',
     ).toEqual([]);
-  });
-
-  it('truncates a long subagent task instead of pasting it into the sidebar', () => {
-    const path = categorizeToolCall(
-      'spawn_agent',
-      { agentName: 'scout', task: 'x'.repeat(200) },
-      { richContext: true },
-    )!.path;
-    expect(path).toContain('…');
-    expect(path.length).toBeLessThan(70);
-  });
-
-  it('leaves a short subagent task whole', () => {
-    const path = categorizeToolCall(
-      'spawn_agent',
-      { agentName: 'scout', task: 'find filings' },
-      { richContext: true },
-    )!.path;
-    expect(path).toBe('agent: scout: find filings');
-    expect(path).not.toContain('…');
   });
 
   it('leaves a short command whole', () => {

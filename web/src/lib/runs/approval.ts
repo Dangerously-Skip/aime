@@ -40,7 +40,6 @@ const BUILTIN: Record<string, ToolClass> = {
   Skill: 'app',
   AskUserQuestion: 'app',
   canvas: 'app',
-  spawn_agent: 'app',
   CronCreate: 'app',
   StandingOrderCreate: 'app',
   NotebookEdit: 'consequential',
