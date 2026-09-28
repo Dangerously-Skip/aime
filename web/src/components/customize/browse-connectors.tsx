@@ -56,6 +56,14 @@ const NON_CREDENTIAL_MARKERS = new Set<string>([
   "provisioned",
 ]);
 
+/** The server's `error`, or a status-based fallback. */
+async function failureReason(res: Response): Promise<string> {
+  const body = await res.json().catch(() => ({}));
+  return typeof body?.error === "string" && body.error
+    ? body.error
+    : `The server refused the request (${res.status}).`;
+}
+
 export function BrowseConnectors() {
   const setCustomizeSection = useAppStore((s) => s.setCustomizeSection);
   const connectorStates = useConnectorStore((s) => s.connectorStates);
@@ -70,7 +78,10 @@ export function BrowseConnectors() {
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [awsError, setAwsError] = useState<string | null>(null);
-  const [connectorError, setConnectorError] = useState<{ name: string; message: string } | null>(null);
+  const [connectorError, setConnectorError] = useState<{ name: string; message: string; action?: "connect" | "disconnect" } | null>(null);
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
+  /** The connector waiting on "Disconnect X?" — destructive, so it asks first. */
+  const [confirmDisconnect, setConfirmDisconnect] = useState<ConnectorDefinition | null>(null);
   const [mcpSelfAuthNotice, setMcpSelfAuthNotice] = useState<{ name: string; hint: string } | null>(null);
 
   function reportConnectorError(connector: ConnectorDefinition, err: unknown) {
@@ -673,64 +684,71 @@ export function BrowseConnectors() {
     [setEnabled, clearToken, tokens]
   );
 
+  /**
+   * Disconnect, reporting what actually happened.
+   *
+   * This used to clear the client store FIRST — the card went grey and read as
+   * disconnected on the click — and then console-log whatever the server said.
+   * A failed uninstall left the credential on disk and the tools mounted while
+   * the UI claimed otherwise, and `/api/connectors/hydrate` flipped the card
+   * back to connected on the next visit with no explanation. Every branch now
+   * checks the response, the store changes only on success, and a failure is
+   * shown in the same dialog a failed connect uses.
+   */
   const handleDisconnect = useCallback(
-    async (connectorId: string) => {
+    async (connector: ConnectorDefinition) => {
+      const connectorId = connector.id;
       const token = tokens[connectorId];
-      const connector = CONNECTOR_MAP[connectorId];
-      setEnabled(connectorId, false);
-      clearToken(connectorId);
-
-      // For mcp-oauth connectors, the entry is written as `aime-mcp-<id>` by the
-      // exchange endpoint. Use the MCP uninstall path which cleans up both the
-      // MCP config entry and the stored DCR registration.
-      if (connector?.auth.type === 'mcp-oauth') {
-        try {
-          await fetch('/api/mcp/uninstall', {
+      setDisconnectingId(connectorId);
+      try {
+        if (connector.auth.type === 'mcp-oauth') {
+          // For mcp-oauth connectors, the entry is written as `aime-mcp-<id>` by
+          // the exchange endpoint. The MCP uninstall path cleans up both the MCP
+          // config entry and the stored DCR registration.
+          const res = await fetch('/api/mcp/uninstall', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: connectorId }),
           });
-        } catch (err) {
-          console.error(`Failed to uninstall MCP for ${connectorId}:`, err);
+          if (!res.ok) throw new Error(await failureReason(res));
+        } else if (connector.auth.type === 'app-password') {
+          /*
+           * An app-password connector stores its secret in the credential store,
+           * not in `.mcp.json`, so `deprovisionConnector` — which edits that file —
+           * had nothing to remove and removed nothing: the card went grey while
+           * the Apple ID and app-specific password stayed encrypted on disk and
+           * the provider kept mounting all five mail/calendar/contacts tools.
+           */
+          const res = await fetch('/api/icloud/connect', { method: 'DELETE' });
+          if (!res.ok) throw new Error(await failureReason(res));
+        } else {
+          // DESTRUCTIVE, and asked for: the user confirmed Disconnect, not the
+          // toggle. Without the explicit intent the route defaults to `disable`,
+          // which leaves the credential encrypted at rest and the grant live
+          // upstream — the app says "disconnected" while the secret is on disk.
+          await deprovisionConnector(connectorId, 'disconnect');
         }
-        return;
-      }
-
-      /*
-       * An app-password connector stores its secret in the credential store,
-       * not in `.mcp.json`, so `deprovisionConnector` — which edits that file —
-       * had nothing to remove and removed nothing.
-       *
-       * The result was the failure the comment below this one warns about,
-       * happening for real: the card went grey, and the Apple ID and
-       * app-specific password stayed encrypted on disk, so
-       * `loadICloudCredentials()` kept returning them, the provider kept
-       * mounting all five mail/calendar/contacts tools with full inbox access,
-       * and `/api/connectors/hydrate` flipped the card back to "connected" on
-       * the next reload. `DELETE /api/icloud/connect` existed for this and had
-       * zero callers anywhere in the app.
-       */
-      if (connector?.auth.type === 'app-password') {
-        try {
-          await fetch('/api/icloud/connect', { method: 'DELETE' });
-        } catch (err) {
-          console.error(`Failed to remove stored credentials for ${connectorId}:`, err);
-        }
-        return;
-      }
-
-      // DESTRUCTIVE, and asked for: the user pressed Disconnect, not the toggle.
-      // Without the explicit intent the route defaults to `disable`, which leaves
-      // the credential encrypted at rest and the grant live upstream — the app
-      // says "disconnected" while the secret is still on disk.
-      try {
-        await deprovisionConnector(connectorId, 'disconnect');
       } catch (err) {
         console.error(`Failed to disconnect ${connectorId}:`, err);
+        setConnectorError({
+          name: connector.name,
+          action: 'disconnect',
+          message: err instanceof Error && err.message ? err.message : 'The server did not confirm the disconnect.',
+        });
+        return;
+      } finally {
+        setDisconnectingId(null);
       }
+
+      setEnabled(connectorId, false);
+      clearToken(connectorId);
+      void refreshHealth();
+
       // Revoke the OAuth token with the provider so reconnecting triggers
-      // a fresh authorization flow (with updated scopes if changed)
-      if (token) {
+      // a fresh authorization flow (with updated scopes if changed). Best
+      // effort: the local credential is already gone, which is the part the
+      // user asked for.
+      if (token && connector.auth.type !== 'mcp-oauth' && connector.auth.type !== 'app-password') {
         fetch('/api/connectors/revoke', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -738,7 +756,7 @@ export function BrowseConnectors() {
         }).catch((err) => console.warn(`Token revocation failed for ${connectorId}:`, err));
       }
     },
-    [setEnabled, clearToken, tokens]
+    [setEnabled, clearToken, tokens, refreshHealth]
   );
 
   return (
@@ -765,7 +783,9 @@ export function BrowseConnectors() {
     <Dialog open={!!connectorError} onOpenChange={(open) => { if (!open) setConnectorError(null); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Couldn&apos;t connect {connectorError?.name}</DialogTitle>
+          <DialogTitle>
+            Couldn&apos;t {connectorError?.action === "disconnect" ? "disconnect" : "connect"} {connectorError?.name}
+          </DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground py-2 whitespace-pre-wrap leading-relaxed">{connectorError?.message}</p>
         <DialogFooter>
@@ -774,6 +794,37 @@ export function BrowseConnectors() {
             className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
           >
             OK
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    {/* Disconnect confirmation */}
+    <Dialog open={!!confirmDisconnect} onOpenChange={(open) => { if (!open) setConfirmDisconnect(null); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Disconnect {confirmDisconnect?.name}?</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground py-2 leading-relaxed">
+          This removes the stored credentials and revokes access, so you will need to sign in
+          again to reconnect. To pause it instead, use the on/off switch.
+        </p>
+        <DialogFooter>
+          <button
+            onClick={() => setConfirmDisconnect(null)}
+            className="inline-flex items-center justify-center rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              const target = confirmDisconnect;
+              setConfirmDisconnect(null);
+              if (target) void handleDisconnect(target);
+            }}
+            className="inline-flex items-center justify-center rounded-md bg-destructive px-4 py-2 text-sm font-medium text-white hover:bg-destructive/90 transition-colors"
+          >
+            Disconnect
           </button>
         </DialogFooter>
       </DialogContent>
@@ -957,9 +1008,10 @@ export function BrowseConnectors() {
                   connector={connector}
                   state={connectorStates[connector.id]}
                   isConnecting={connectingId === connector.id}
+                  isDisconnecting={disconnectingId === connector.id}
                   onConnect={() => handleConnect(connector)}
                   onToggle={(enabled) => handleToggle(connector, enabled)}
-                  onDisconnect={() => handleDisconnect(connector.id)}
+                  onDisconnect={() => setConfirmDisconnect(connector)}
                   health={healthOf(connector.id)}
                 />
               ))}
@@ -1012,6 +1064,7 @@ function ConnectorRow({
   connector,
   state,
   isConnecting,
+  isDisconnecting = false,
   onConnect,
   onToggle,
   onDisconnect,
@@ -1020,6 +1073,7 @@ function ConnectorRow({
   connector: ConnectorDefinition;
   state?: { enabled: boolean; authenticated: boolean };
   isConnecting: boolean;
+  isDisconnecting?: boolean;
   onConnect: () => void;
   onToggle: (currentlyEnabled: boolean) => void;
   onDisconnect: () => void;
@@ -1062,10 +1116,10 @@ function ConnectorRow({
           <span className="inline-flex items-center rounded-full bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
             Coming soon
           </span>
-        ) : isConnecting ? (
+        ) : isConnecting || isDisconnecting ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
-            Connecting
+            {isDisconnecting ? "Disconnecting" : "Connecting"}
           </span>
         ) : !isAuthenticated ? (
           <button
@@ -1091,6 +1145,7 @@ function ConnectorRow({
             </button>
             <button
               onClick={onDisconnect}
+              aria-label={`Disconnect ${connector.name}`}
               className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
               title="Disconnect"
             >
@@ -1116,6 +1171,7 @@ function ConnectorRow({
             {/* Disconnect button */}
             <button
               onClick={onDisconnect}
+              aria-label={`Disconnect ${connector.name}`}
               className="flex items-center justify-center h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
               title="Disconnect"
             >

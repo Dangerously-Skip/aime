@@ -5,7 +5,8 @@ import { useAppStore } from "@/stores/app-store";
 import { useMarketplace } from "@/lib/use-marketplace";
 import { MARKETPLACE_CATEGORIES } from "@/lib/marketplace";
 import { PluginRow } from "./plugin-row";
-import { ArrowLeft, Search, Loader2, Puzzle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { AlertCircle, ArrowLeft, Search, Loader2, Puzzle, RefreshCw } from "lucide-react";
 
 interface InstalledState {
   installed: boolean;
@@ -13,9 +14,19 @@ interface InstalledState {
   hasMcpOAuth: boolean;
 }
 
+/**
+ * Retry remounts the content, which is what re-runs `useMarketplace`'s fetch —
+ * the hook has no reload of its own, and one fetch per mount is the right
+ * shape for every other caller.
+ */
 export function BrowseMarketplace() {
+  const [attempt, setAttempt] = useState(0);
+  return <MarketplaceContent key={attempt} onRetry={() => setAttempt((n) => n + 1)} />;
+}
+
+function MarketplaceContent({ onRetry }: { onRetry: () => void }) {
   const setCustomizeSection = useAppStore((s) => s.setCustomizeSection);
-  const { plugins, categories, loading } = useMarketplace();
+  const { plugins, categories, loading, error } = useMarketplace();
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [installed, setInstalled] = useState<Record<string, InstalledState>>({});
@@ -121,11 +132,26 @@ export function BrowseMarketplace() {
             <div className="flex items-center justify-center py-16">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
+          ) : error ? (
+            // Before this branch a failed load fell through to the empty-search
+            // message: "No plugins match your search." to someone who had not
+            // searched, with nothing to press.
+            <div role="alert" className="flex flex-col items-center justify-center py-16 text-center">
+              <AlertCircle className="h-8 w-8 text-muted-foreground/60 mb-3" />
+              <p className="text-sm font-medium">Couldn&apos;t load the Marketplace</p>
+              <p className="text-xs text-muted-foreground mt-1 max-w-xs">
+                The plugin directory could not be reached. Check your connection and try again.
+              </p>
+              <Button variant="outline" size="sm" className="mt-4" onClick={onRetry}>
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                Retry
+              </Button>
+            </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Puzzle className="h-8 w-8 text-muted-foreground/40 mb-3" />
               <p className="text-sm text-muted-foreground">
-                No plugins match your search.
+                {plugins.length === 0 ? "The plugin directory is empty." : "No plugins match your search."}
               </p>
             </div>
           ) : (
