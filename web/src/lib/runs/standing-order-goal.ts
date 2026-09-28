@@ -10,6 +10,7 @@
  * Pure — no store access — so it can be tested and reused server-side.
  */
 import type { Goal } from './types';
+import { parseIntervalMs } from '@/lib/schedule/interval';
 
 /** The slice of a StandingOrder this adapter needs. */
 export interface StandingOrderLike {
@@ -27,25 +28,15 @@ export interface StandingOrderLike {
 }
 
 /**
- * Parse an interval expression into seconds. Standing orders express intervals
- * as free text ("30m", "2 hours", "90"), so be permissive and return null when
- * it can't be read rather than guessing a schedule that would fire wrongly.
+ * An interval expression in seconds, or null when it cannot be read.
+ *
+ * DELEGATES to the one parser the tickers use. This had its own, more permissive
+ * grammar ("1.5h", "90 minutes", a bare "90") while the tickers rejected those —
+ * so the Cockpit showed a next run for an order that never fired.
  */
 export function parseIntervalSeconds(expression?: string): number | null {
-  if (!expression) return null;
-  const text = expression.trim().toLowerCase();
-
-  const match = text.match(/^(\d+(?:\.\d+)?)\s*([a-z]*)$/);
-  if (!match) return null;
-  const value = Number(match[1]);
-  if (!Number.isFinite(value) || value <= 0) return null;
-
-  const unit = match[2];
-  if (!unit || unit.startsWith('s')) return Math.round(value);
-  if (unit.startsWith('m') && !unit.startsWith('mo')) return Math.round(value * 60);
-  if (unit.startsWith('h')) return Math.round(value * 3_600);
-  if (unit.startsWith('d')) return Math.round(value * 86_400);
-  return null;
+  const ms = parseIntervalMs(expression);
+  return ms === null ? null : Math.round(ms / 1_000);
 }
 
 /**

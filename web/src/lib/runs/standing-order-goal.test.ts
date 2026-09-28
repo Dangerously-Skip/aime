@@ -19,7 +19,6 @@ const order = (over: Partial<StandingOrderLike> = {}): StandingOrderLike => ({
 
 describe('parseIntervalSeconds', () => {
   it('reads the units standing orders actually use', () => {
-    expect(parseIntervalSeconds('90')).toBe(90); // bare number ⇒ seconds
     expect(parseIntervalSeconds('45s')).toBe(45);
     expect(parseIntervalSeconds('30m')).toBe(1_800);
     expect(parseIntervalSeconds('30 minutes')).toBe(1_800);
@@ -35,6 +34,8 @@ describe('parseIntervalSeconds', () => {
     expect(parseIntervalSeconds('')).toBeNull();
     expect(parseIntervalSeconds('whenever')).toBeNull();
     expect(parseIntervalSeconds('0')).toBeNull();
+    // Ambiguous — seconds or minutes? — so refused rather than guessed.
+    expect(parseIntervalSeconds('90')).toBeNull();
     expect(parseIntervalSeconds('-5m')).toBeNull();
     expect(parseIntervalSeconds('1 month')).toBeNull(); // 'mo' is not minutes
   });

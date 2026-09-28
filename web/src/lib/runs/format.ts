@@ -2,7 +2,9 @@
  * Presentation helpers for runs. Pure and unit-testable, so the Cockpit
  * component stays about layout rather than arithmetic.
  */
-import type { Run, RunStatus, RunSummary } from './types';
+import type { GoalSchedule, Run, RunStatus, RunSummary } from './types';
+import { describeTrigger, nextRunForTrigger, type Trigger } from '@/lib/schedule/schedule';
+import { canonicalInterval } from '@/lib/schedule/interval';
 
 /** Compact duration: 850ms, 3.2s, 1m 04s, 2h 11m. */
 export function formatDuration(ms?: number): string {
@@ -65,19 +67,46 @@ export function formatUntil(ts: number | undefined, now: number): string {
   return `in ${Math.floor(hours / 24)}d`;
 }
 
+type GoalTiming = {
+  enabled: boolean;
+  lastRunAt?: number;
+  createdAt?: number;
+  schedule?: GoalSchedule;
+};
+
+/** A goal's schedule as the trigger the tickers run — one vocabulary for both. */
+function goalTrigger(schedule?: GoalSchedule): Trigger | null {
+  if (schedule?.cron) return { type: 'cron', expression: schedule.cron };
+  if (schedule?.everySeconds && schedule.everySeconds > 0) {
+    return { type: 'interval', expression: canonicalInterval(schedule.everySeconds * 1_000) };
+  }
+  return null;
+}
+
 /**
- * When an interval-scheduled goal next fires. Returns undefined for goals with
- * no interval (cron is evaluated elsewhere) so the UI can say so rather than
- * inventing a time.
+ * When a goal next fires, or undefined when it is not scheduled.
+ *
+ * Computed by the SAME parsers the tickers use (`lib/schedule`), cron included —
+ * this used to handle intervals only and show a cron goal's raw expression, and
+ * to read its own looser interval grammar, which is how the Cockpit could
+ * promise a next run for an order that never fired.
  */
-export function nextRunAt(
-  goal: { enabled: boolean; lastRunAt?: number; schedule?: { everySeconds?: number } },
-  now: number,
-): number | undefined {
-  const every = goal.schedule?.everySeconds;
-  if (!goal.enabled || !every || every <= 0) return undefined;
-  if (goal.lastRunAt == null) return now; // never run ⇒ due immediately
-  return goal.lastRunAt + every * 1_000;
+export function nextRunAt(goal: GoalTiming, now: number): number | undefined {
+  const trigger = goalTrigger(goal.schedule);
+  if (!trigger) return undefined;
+  return (
+    nextRunForTrigger(
+      trigger,
+      { status: goal.enabled ? 'active' : 'paused', lastRun: goal.lastRunAt, createdAt: goal.createdAt },
+      now,
+    ) ?? undefined
+  );
+}
+
+/** `Weekdays at 9:00 AM`, `Every 90 minutes`, or `Manual`. */
+export function describeGoalSchedule(goal: { schedule?: GoalSchedule }): string {
+  const trigger = goalTrigger(goal.schedule);
+  return trigger ? describeTrigger(trigger) : 'Manual';
 }
 
 export type StatusTone = 'success' | 'danger' | 'warn' | 'info' | 'neutral';

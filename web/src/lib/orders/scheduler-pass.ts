@@ -2,8 +2,8 @@
  * The server-side standing-order scheduler pass — C5b's other half.
  *
  * Due-checking mirrors evaluateStandingOrders exactly (active only, expiry,
- * max-executions, cron with same-minute double-fire guard, interval with
- * fire-immediately-when-never-run) but is implemented here rather than
+ * max-executions, cron with same-minute double-fire guard, interval counted
+ * from the last run or from creation) but is implemented here rather than
  * imported: the engine module pulls in a 'use client' zustand store, and this
  * code runs from the instrumentation-started ticker where that import chain
  * has no business existing. matchesCron alone is loaded dynamically and
@@ -13,22 +13,6 @@
 import { readOrderManifest, patchManifestOrder, appendInbox, type ManifestOrder } from './manifest';
 import { isJobDue } from '@/lib/schedule/due';
 import type { OrderExecutionResult } from './execute-service';
-
-/** Interval parsing identical to the engine's ("5m", "1h", "30s", "2 days"). */
-function parseIntervalMs(expression: string): number | null {
-  const match = expression.match(/^(\d+)\s*(s|sec|m|min|h|hr|d|day)s?$/i);
-  if (!match) return null;
-  const value = parseInt(match[1], 10);
-  switch (match[2].toLowerCase()) {
-    case 's': case 'sec': return value * 1_000;
-    case 'm': case 'min': return value * 60_000;
-    case 'h': case 'hr': return value * 3_600_000;
-    case 'd': case 'day': return value * 86_400_000;
-    default: return null;
-  }
-}
-
-
 
 /**
  * Is this order due? Delegates to the shared rule (DR-24 step 1).

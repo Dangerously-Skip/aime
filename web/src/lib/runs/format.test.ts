@@ -6,6 +6,7 @@ import {
   formatRelative,
   formatUntil,
   nextRunAt,
+  describeGoalSchedule,
   statusTone,
   healthLine,
   byNewest,
@@ -71,6 +72,15 @@ describe('nextRunAt', () => {
   });
   it('is lastRun + interval once it has run', () => {
     expect(nextRunAt({ enabled: true, lastRunAt: NOW, schedule: { everySeconds: 60 } }, NOW)).toBe(NOW + 60_000);
+  });
+  it('counts a never-run goal from its creation, like the ticker does', () => {
+    expect(nextRunAt({ enabled: true, createdAt: NOW, schedule: { everySeconds: 300 } }, NOW)).toBe(NOW + 300_000);
+  });
+  it('computes cron goals too instead of leaving them blank', () => {
+    const next = nextRunAt({ enabled: true, schedule: { cron: '0 9 * * *' } }, NOW);
+    expect(next).toBeGreaterThan(NOW);
+    expect(new Date(next!).getHours()).toBe(9);
+    expect(new Date(next!).getMinutes()).toBe(0);
   });
   it('is undefined when disabled or not interval-scheduled', () => {
     expect(nextRunAt({ enabled: false, schedule: { everySeconds: 60 } }, NOW)).toBeUndefined();
@@ -147,5 +157,13 @@ describe('byNewest', () => {
   it('sorts newest first', () => {
     const sorted = [run({ id: 'old', startedAt: 1 }), run({ id: 'new', startedAt: 9 })].sort(byNewest);
     expect(sorted.map((r) => r.id)).toEqual(['new', 'old']);
+  });
+});
+
+describe('describeGoalSchedule', () => {
+  it('reads cron and intervals in words, never raw cron', () => {
+    expect(describeGoalSchedule({ schedule: { cron: '0 9 * * 1-5' } })).toBe('Weekdays at 9:00 AM');
+    expect(describeGoalSchedule({ schedule: { everySeconds: 5_400 } })).toBe('Every 90 minutes');
+    expect(describeGoalSchedule({})).toBe('Manual');
   });
 });
