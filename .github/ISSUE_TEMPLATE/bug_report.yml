@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in AIME does not work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security vulnerabilities: please do NOT file them here — see SECURITY.md.
+        Remove API keys, tokens and private file paths from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Cowork on a folder
+        2. Ask …
+        3. See …
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      multiple: true
+      options: [Chat, Cowork, Code, Browser, Assistant, Settings, Customize / connectors, Other]
+  - type: input
+    id: provider
+    attributes:
+      label: Model provider
+      description: e.g. Anthropic API, OpenRouter, Bedrock, local (Ollama)
+  - type: input
+    id: version
+    attributes:
+      label: AIME version and OS
+      placeholder: v1.7.2, macOS 15.5 (arm64) — or "from source @ <commit>"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Relevant terminal output from `npm run electron:dev`, or screenshots.
+      render: text
