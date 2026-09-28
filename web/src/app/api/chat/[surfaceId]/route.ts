@@ -3,10 +3,12 @@ import { getProvider, getAvailableProviders } from '@/lib/providers';
 import { getSurfaceConfig, getAvailableSurfaces } from '@/lib/surfaces';
 import { createSSEStream } from '@/lib/sse';
 import { extractMemories } from '@/lib/memory/extractor';
+import { stashExtractedMemories, takeExtractedMemories } from '@/lib/memory/pending-extractions';
 import { type SessionControls } from '@/lib/slash-commands';
 import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
 import { baseToolName, toolMatches } from '@/lib/security/tool-names';
+import { classifyThrownTurnError } from '@/lib/providers/turn-errors';
 
 /** Tool profile → allowed tool sets (intersected with surface defaults) */
 const TOOL_PROFILES: Record<string, string[]> = {
@@ -58,7 +60,6 @@ const TOOL_PROFILES: Record<string, string[]> = {
 const PLUMBING_TOOLS = new Set([
   'AskUserQuestion',
   'Agent',
-  'spawn_agent',
   'TodoWrite',
   'mcp__aime__canvas',
   'mcp__aime__RequestConnector',
@@ -98,6 +99,9 @@ async function readDailyMemoryLog(): Promise<string> {
     return '';
   }
 }
+
+/** Budget for the post-turn memory extraction call. It is a nicety, not the turn. */
+const MEMORY_EXTRACTION_TIMEOUT_MS = 20_000;
 
 // ── Request validation limits ─────────────────────────────────────────
 const MAX_MESSAGE_LENGTH = 100_000;
@@ -358,6 +362,8 @@ export async function POST(
 
   // Stream in background
   (async () => {
+    /** Set by the turn; run once the stream has closed. */
+    let runAfterClose: (() => Promise<void>) | null = null;
     // Heartbeat interval
     const heartbeatInterval = setInterval(async () => {
       await sse.writeHeartbeat();
@@ -365,6 +371,12 @@ export async function POST(
 
     try {
       await sse.writeEvent({ type: 'connected', message: 'Processing request...' });
+
+      // Memories extracted after this conversation's previous turn closed.
+      const carriedMemories = takeExtractedMemories(chatId);
+      if (carriedMemories.length > 0) {
+        await sse.writeEvent({ type: 'memory_extract', memories: carriedMemories });
+      }
 
       // All surfaces use ClaudeProvider (Agent SDK) for consistent tool access,
       // connector support, and session management. Gateway routing for billing is
@@ -394,6 +406,38 @@ export async function POST(
           console.error('[CHAT] Abort on client disconnect failed:', e);
         }
       });
+
+      // ── Execution resolution ───────────────────────────────────────────
+      // For a model on a user-added provider, resolve the key (keychain by
+      // providerId, or the transient request key) and the Anthropic-compat
+      // base URL. No providerConfig ⇒ the built-in BYOK/env/Bedrock path.
+      const { resolveTurnExecution } = await import('@/lib/models/server-turn');
+      const { exec, usable } = await resolveTurnExecution({
+        providerConfig,
+        requestApiKey: apiKey,
+        // openai-compat providers route through the shim on this same server.
+        shimOrigin: new URL(req.url).origin,
+      });
+      if (providerConfig) {
+        console.log('[CHAT] Provider config:', providerConfig.providerId,
+          providerConfig.transport ?? 'anthropic-native',
+          exec.baseUrl ? '(custom base URL)' : '');
+      }
+
+      /*
+       * No model, no turn — decided before anything expensive happens.
+       *
+       * A user with nothing configured used to wait for the SDK subprocess to
+       * boot and then read "Not logged in · Please run /login" as the
+       * assistant's reply. See lib/models/credential-check.ts.
+       */
+      if (!usable) {
+        const { NO_MODEL_MESSAGE } = await import('@/lib/models/credential-check');
+        console.warn('[CHAT] No usable model credentials — refusing the turn before starting the SDK');
+        await sse.writeEvent({ type: 'error', message: NO_MODEL_MESSAGE, code: 'no_model' });
+        await sse.writeEvent({ type: 'done', error: true });
+        return;
+      }
 
       // ── Every independent read, started at once ────────────────────────
       // Nine serialized filesystem round-trips used to sit between the request
@@ -801,69 +845,22 @@ export async function POST(
         // a hardcoded name. The surface supplies the (capability, tier) intent
         // (SURFACE_ROUTES); an explicit request capability/tier overrides it —
         // that's how a user's per-surface tier preference arrives.
-        const { resolveRoute, createDefaultRegistry } = await import('@/lib/models/registry');
-        const { getSurfaceRoute } = await import('@/lib/models/surface-routes');
-        const { isBedrockConfigured } = await import('@/lib/bedrock-env');
-        // Availability for the default (Claude) registry: an API key (BYOK/env)
-        // makes the anthropic provider usable; a region makes Bedrock usable.
-        const availableIds = new Set<string>();
-        if (apiKey || process.env.ANTHROPIC_API_KEY) availableIds.add('anthropic');
-        if (isBedrockConfigured()) availableIds.add('bedrock');
-
-        const route = getSurfaceRoute(surfaceId);
-        const wantCapability = capability ?? route.capability;
-        const wantTier = tier ?? route.tier;
-
-        const resolved = resolveRoute(
-          createDefaultRegistry(),
-          wantCapability,
-          wantTier,
-          (p) => availableIds.has(p.id),
-        );
+        const { resolveBuiltinSurfaceModel } = await import('@/lib/models/server-turn');
+        const resolved = resolveBuiltinSurfaceModel({
+          surfaceId,
+          capability,
+          tier,
+          // A user-added provider's key is not an Anthropic key.
+          hasAnthropicKey: !providerConfig && !!exec.apiKey,
+        });
         if (resolved) {
-          effectiveModel = resolved.model.driverModel;
-          console.log('[CHAT] Registry resolved', wantCapability, wantTier, '→', effectiveModel,
+          effectiveModel = resolved.model;
+          console.log('[CHAT] Registry resolved', resolved.capability, resolved.tier, '→', effectiveModel,
             resolved.degraded ? '(degraded)' : '');
         }
         // else: keep surfaceConfig.model as the last-resort fallback.
       }
 
-      // ── Execution resolution (user-added providers) ────────────────────
-      // For a model on a user-added provider, resolve the key (keychain by
-      // providerId, or the transient request key) and the Anthropic-compat
-      // base URL. No providerConfig ⇒ default BYOK/env/Bedrock path unchanged.
-      const { resolveExecution } = await import('@/lib/models/execution');
-      const exec = await resolveExecution({
-        providerConfig,
-        requestApiKey: apiKey,
-        // openai-compat providers route through the shim on this same server.
-        shimOrigin: new URL(req.url).origin,
-        // Every stored field, not just the key: Bedrock and Vertex are driven by
-        // environment built from region/project/credentials.
-        loadFields: async (id) => {
-          try {
-            const { getCredentialStore } = await import('@/lib/models/credentials');
-            return await getCredentialStore().get(id);
-          } catch {
-            return undefined;
-          }
-        },
-        loadKey: async (id) => {
-          try {
-            const { getCredentialStore } = await import('@/lib/models/credentials');
-            return await getCredentialStore().getField(id, 'apiKey');
-          } catch {
-            // CredentialStoreUnavailable (no AIME_CRED_KEY) or read error →
-            // fall back to whatever the request supplied.
-            return undefined;
-          }
-        },
-      });
-      if (providerConfig) {
-        console.log('[CHAT] Provider config:', providerConfig.providerId,
-          providerConfig.transport ?? 'anthropic-native',
-          exec.baseUrl ? '(custom base URL)' : '');
-      }
 
       // Thinking and effort are now handled natively by the SDK via ClaudeProvider
       // (passed as queryOptions.thinking and queryOptions.effort)
@@ -932,10 +929,15 @@ export async function POST(
               att.category,
               att.filePath,
             );
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Extraction timed out after 30 seconds')), 30000)
+            // Cleared either way: a timer left armed after a fast extraction
+            // held the handler's closure (and the attachment) for 30s per file.
+            let extractionTimer: ReturnType<typeof setTimeout> | undefined;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              extractionTimer = setTimeout(() => reject(new Error('Extraction timed out after 30 seconds')), 30000);
+            });
+            const result = await Promise.race([extractionPromise, timeoutPromise]).finally(() =>
+              clearTimeout(extractionTimer),
             );
-            const result = await Promise.race([extractionPromise, timeoutPromise]);
             console.log('[EXTRACT] Success:', att.name, 'text length:', result.text.length, 'pages:', result.pageCount || 'n/a');
 
             // Zero-text extraction is common for image-based PDFs (scanned
@@ -1013,6 +1015,12 @@ export async function POST(
       let toolCallCount = 0;
       const streamStartMs = Date.now();
       let queryTimedOut = false;
+      /**
+       * Did the turn fail? Set from the provider's typed `error` chunk, the
+       * silence timeout, or a throw — and carried onto the final `done` so the
+       * client can tell a failed turn from a finished one.
+       */
+      let turnFailed = false;
 
       /*
        * THE TIMEOUT MEASURES SILENCE, NOT DURATION.
@@ -1061,8 +1069,10 @@ export async function POST(
          * a run that had been working the whole time, and the advice that
          * followed sent the user off to simplify a request that was fine.
          */
+        turnFailed = true;
         await sse.writeEvent({
           type: 'error',
+          code: 'timeout',
           message:
             `The run stopped producing output for ${timeoutSecs} seconds and was cancelled. ` +
             `Anything already produced above is kept.`,
@@ -1292,6 +1302,7 @@ export async function POST(
           if (queryTimedOut) continue;
           // A chunk is a sign of life — see `noteActivity`.
           noteActivity();
+          if (chunk.type === 'error') turnFailed = true;
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);
             toolCallCount++;
@@ -1368,35 +1379,52 @@ export async function POST(
             if (errObj.cause) console.error('[CHAT] cause:', errObj.cause);
             if (errObj.stack) console.error('[CHAT] stack:', errObj.stack);
           }
-          await sse.writeEvent({ type: 'error', message: errMsg });
+          turnFailed = true;
+          const { code, message: shown } = classifyThrownTurnError(streamError);
+          await sse.writeEvent({ type: 'error', message: shown, code });
         }
       } finally {
         if (queryTimer) clearTimeout(queryTimer);
       }
 
-      // Auto-extract memories after stream completes
-      if (autoExtractMemories && collectedResponse.length >= 50) {
-        try {
+      /*
+       * Memory extraction is QUEUED here and run after the stream closes.
+       *
+       * It used to run right here, before `done`: a whole model call on the
+       * turn's own model, holding the composer locked for however long that
+       * took — and still made after the client had gone. Now the turn ends
+       * first, and extraction only runs for a turn that succeeded, for a client
+       * that was still listening when it did. `req.signal` is read NOW: once the
+       * response closes, the request's signal can fire for a normal completion
+       * too, so it says nothing about the user after this point.
+       */
+      if (
+        autoExtractMemories &&
+        collectedResponse.length >= 50 &&
+        !turnFailed &&
+        !req.signal.aborted &&
+        chatId
+      ) {
+        const { resolveExtractionModel } = await import('@/lib/memory/extraction-model');
+        const extractionModel = resolveExtractionModel({
+          onUserProvider: !!providerConfig,
+          turnModel: effectiveModel,
+        });
+        const turnMessage = message as string;
+        const turnResponse = collectedResponse;
+        runAfterClose = async () => {
           const extracted = await extractMemories(
-            message as string,
-            collectedResponse,
-            (apiKey as string) || undefined,
-            // The model the TURN ran on. Extraction used to hardcode an
-            // Anthropic id, which 400s against any other provider — on every
-            // turn, invisibly, for anyone on OpenRouter.
-            effectiveModel,
+            turnMessage,
+            turnResponse,
+            exec.apiKey,
+            extractionModel,
+            { baseUrl: exec.baseUrl, signal: AbortSignal.timeout(MEMORY_EXTRACTION_TIMEOUT_MS) },
           );
           if (extracted.length > 0) {
-            await sse.writeEvent({
-              type: 'memory_extract',
-              memories: extracted,
-            });
-            console.log('[MEMORY] Extracted', extracted.length, 'memories');
+            stashExtractedMemories(chatId as string, extracted);
+            console.log('[MEMORY] Extracted', extracted.length, 'memories — delivered with the next turn');
           }
-        } catch (extractErr) {
-          console.error('[MEMORY] Extraction error:', extractErr);
-          // Non-fatal — don't send error to client
-        }
+        };
       }
 
       /**
@@ -1427,6 +1455,7 @@ export async function POST(
 
       await sse.writeEvent({
         type: 'done',
+        ...(turnFailed ? { error: true } : {}),
         usage: {
           inputTokens,
           outputTokens,
@@ -1446,10 +1475,21 @@ export async function POST(
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error('[CHAT] Error:', errMsg);
-      await sse.writeEvent({ type: 'error', message: errMsg });
+      const { code, message: shown } = classifyThrownTurnError(error);
+      await sse.writeEvent({ type: 'error', message: shown, code });
+      // Still a `done`: it is what clears the client's streaming state.
+      await sse.writeEvent({ type: 'done', error: true });
     } finally {
       clearInterval(heartbeatInterval);
       await sse.close();
+    }
+
+    // Background work that must not hold the stream open (see above).
+    if (runAfterClose) {
+      await runAfterClose().catch((extractErr: unknown) => {
+        // Non-fatal, and nobody is listening any more to be told.
+        console.error('[MEMORY] Extraction error:', extractErr);
+      });
     }
   })();
 

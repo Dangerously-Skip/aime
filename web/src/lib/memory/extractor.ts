@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MemoryCategory } from './types';
+import { internalAuthHeaders } from '../auth/internal-credential';
 
 /**
  * An operator override, and the ONLY model this file names.
@@ -67,9 +68,20 @@ interface ExtractedMemory {
   confidence: number;
 }
 
+/** Where and how long the extraction call may run. */
+export interface ExtractOptions {
+  /**
+   * The Anthropic-compatible endpoint the turn used (a user-added provider or
+   * the local openai-compat shim). Absent ⇒ the Anthropic API.
+   */
+  baseUrl?: string;
+  /** Cancels the call — a background task must not outlive its budget. */
+  signal?: AbortSignal;
+}
+
 /**
- * Extract memories from a conversation turn using Haiku.
- * Returns extracted memories or empty array if none found.
+ * Extract memories from a conversation turn with the model the caller chose
+ * (see extraction-model.ts). Returns extracted memories or an empty array.
  */
 export async function extractMemories(
   userMessage: string,
@@ -81,6 +93,7 @@ export async function extractMemories(
    * means "skip", never "fail the turn".
    */
   model?: string | null,
+  opts: ExtractOptions = {},
 ): Promise<ExtractedMemory[]> {
   // Skip trivial responses
   if (assistantResponse.length < 50) return [];
@@ -99,7 +112,15 @@ export async function extractMemories(
   }
 
   try {
-    const client = new Anthropic({ apiKey: key });
+    const client = new Anthropic({
+      apiKey: key,
+      ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
+      // Our own llm-proxy refuses a request without the local credential; a
+      // real provider gets nothing (see internal-credential.ts).
+      defaultHeaders: internalAuthHeaders(opts.baseUrl),
+      // No retries: a background nicety should fail fast, not back off.
+      maxRetries: 0,
+    });
     const response = await client.messages.create({
       model: chosen,
       max_tokens: 1024,
@@ -110,7 +131,7 @@ export async function extractMemories(
           content: `User said: "${userMessage}"\n\nAssistant responded: "${assistantResponse.substring(0, 2000)}"`,
         },
       ],
-    });
+    }, opts.signal ? { signal: opts.signal } : undefined);
 
     const text = response.content
       .filter((b) => b.type === 'text')

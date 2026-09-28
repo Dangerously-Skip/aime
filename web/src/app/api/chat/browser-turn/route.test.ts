@@ -259,4 +259,39 @@ describe('the turn itself', () => {
     await post({ messages });
     expect(streamMock.mock.calls[0][0].tools).toBeUndefined();
   });
+
+  it('ties the model stream to the request, so a client that goes away stops it', async () => {
+    const controller = new AbortController();
+    const res = await POST(
+      new NextRequest('http://localhost/api/chat/browser-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+        signal: controller.signal,
+      }),
+    );
+    await res.text();
+    const signal = (streamMock.mock.calls[0][1] as { signal?: AbortSignal } | undefined)?.signal;
+    expect(signal, 'the stream was started without the request signal').toBeInstanceOf(AbortSignal);
+    controller.abort();
+    expect(signal!.aborted).toBe(true);
+  });
+
+  it('classifies a provider failure for the client', async () => {
+    streamMock.mockImplementation(() => ({
+      on: vi.fn(),
+      finalMessage: async () => {
+        throw Object.assign(new Error('Overloaded'), { status: 529 });
+      },
+    }));
+    const res = await POST(
+      new NextRequest('http://localhost/api/chat/browser-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      }),
+    );
+    const text = await res.text();
+    expect(text).toContain('"code":"overloaded"');
+  });
 });
