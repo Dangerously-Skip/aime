@@ -2766,7 +2766,7 @@ export class ClaudeProvider extends BaseProvider {
                 // Intercept canvas tool — emit canvas SSE event instead of regular tool_use.
                 // If the agent passed { templateId, input }, expand via the template registry
                 // so downstream consumers always see a fully-rendered A2UIDocument.
-                // The tool may arrive as bare `canvas` or MCP-prefixed `mcp__quarry__canvas`.
+                // The tool may arrive as bare `canvas` or MCP-prefixed `mcp__aime__canvas`.
                 if (toolName === CANVAS_TOOL_NAME || toolName === 'mcp__aime__canvas') {
                   const expanded = expandCanvasTemplate(toolInput);
                   const doc = expanded ?? toolInput;
