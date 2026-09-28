@@ -46,7 +46,19 @@ async function srcdocOf(page: Page, n: number): Promise<string> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(([k, v]) => window.localStorage.setItem(k, v), [
+  /*
+   * Top frame only, and guarded. Playwright runs init scripts in EVERY frame,
+   * including each `sandbox=""` preview, where an opaque origin makes
+   * `localStorage` throw — that was one console error per preview card.
+   */
+  await page.addInitScript(([k, v]) => {
+    if (window.top !== window) return;
+    try {
+      window.localStorage.setItem(k, v);
+    } catch {
+      /* not a storage-capable frame */
+    }
+  }, [
     'aime:settings',
     JSON.stringify({ state: { onboardingComplete: true }, version: 6 }),
   ]);
