@@ -18,6 +18,7 @@ const KEYBINDS: Array<{ keys: string; description: string }> = [
   { keys: "⌘\\", description: "Toggle chat" },
   { keys: "⌘E", description: "Toggle editor" },
   { keys: "⌘S / ⌘F", description: "Save / find in the focused editor tab" },
+  { keys: "Enter / ⇧Enter, ⌘G", description: "Next / previous match while finding" },
   { keys: "?", description: "Show this help" },
   { keys: "Click file", description: "Open in a new editor tab (dedupes)" },
   { keys: "⌘-click file", description: "Open in an additional tab" },

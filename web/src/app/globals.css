@@ -611,6 +611,20 @@ code {
 }
 
 /*
+ * Find-in-file matches in the Code viewer (find-in-pane.ts). CSS Custom
+ * Highlights, not <mark> elements: the body is React-owned HTML and must not be
+ * rewritten. In edit mode these paint on the overlay, which shows through the
+ * transparent textarea.
+ */
+::highlight(code-find) {
+  background-color: color-mix(in oklab, #facc15 40%, transparent);
+}
+::highlight(code-find-current) {
+  background-color: color-mix(in oklab, #f97316 65%, transparent);
+  color: var(--foreground);
+}
+
+/*
  * MOTION THAT NEVER STOPS.
  *
  * The empty-state mascot ran a 2.4s translate/rotate loop for as long as the
