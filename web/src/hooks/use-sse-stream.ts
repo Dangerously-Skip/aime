@@ -184,6 +184,61 @@ const nextFrame: (cb: () => void) => unknown =
     ? (cb) => requestAnimationFrame(cb)
     : (cb) => setTimeout(cb, 16);
 
+/** Everything a turn's request carries besides the message, chat and model. */
+export interface SendExtra {
+  personalPreferences?: string
+  displayName?: string
+  attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string }>
+  webSearch?: boolean
+  projectInstructions?: string
+  projectKnowledge?: string
+  apiKey?: string
+  cwd?: string
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  memories?: string
+  crossSurfaceContext?: string
+  deckTheme?: { id: string; source: string } | null;
+  searchSettings?: {
+    searchProvider?: string | null;
+    searchApiKey?: string | null;
+    searchInstanceUrl?: string | null;
+    searchCredentialProviderId?: string | null;
+  };
+  securitySettings?: {
+    blockDangerousCommands?: boolean
+    blockNetworkCommands?: boolean
+    restrictToProjectFolder?: boolean
+    disableBashTool?: boolean
+  }
+  sessionControls?: {
+    thinkLevel?: string
+    verboseMode?: boolean
+    reasoningVisible?: boolean
+    modelOverride?: string | null
+  }
+  toolProfile?: string;
+  /**
+   * This client has a live webview and can execute browser tools.
+   *
+   * Client-declared because only the renderer knows: Code's preview panel
+   * can be closed, and the server builds `onBrowserToolUse` for every
+   * surface regardless. Registering tools nothing can run is DR-21's
+   * infinite loop.
+   */
+  browserToolsAvailable?: boolean;
+  /**
+   * `false` when this client renders no question or connect cards (the
+   * Assistant feed). The server defaults it to true and would otherwise park
+   * the turn for 300s on an approval nobody can answer; false takes the
+   * documented "cannot ask" path instead. Only ever sent when false.
+   */
+  canRelayToClient?: boolean;
+  contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
+  capability?: string
+  tier?: string
+  providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
+}
+
 interface UseSSEStreamReturn {
   sendMessage: (
     message: string,
@@ -191,52 +246,7 @@ interface UseSSEStreamReturn {
     surfaceId: string,
     /** null ⇒ nothing pinned; the server resolves from the registry. */
     model: string | null,
-    extra?: {
-      personalPreferences?: string
-      displayName?: string
-      attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string }>
-      webSearch?: boolean
-      projectInstructions?: string
-      projectKnowledge?: string
-      apiKey?: string
-      cwd?: string
-      history?: Array<{ role: 'user' | 'assistant'; content: string }>
-      memories?: string
-      crossSurfaceContext?: string
-      deckTheme?: { id: string; source: string } | null;
-      searchSettings?: {
-        searchProvider?: string | null;
-        searchApiKey?: string | null;
-        searchInstanceUrl?: string | null;
-        searchCredentialProviderId?: string | null;
-      };
-      securitySettings?: {
-        blockDangerousCommands?: boolean
-        blockNetworkCommands?: boolean
-        restrictToProjectFolder?: boolean
-        disableBashTool?: boolean
-      }
-      sessionControls?: {
-        thinkLevel?: string
-        verboseMode?: boolean
-        reasoningVisible?: boolean
-        modelOverride?: string | null
-      }
-      toolProfile?: string;
-      /**
-       * This client has a live webview and can execute browser tools.
-       *
-       * Client-declared because only the renderer knows: Code's preview panel
-       * can be closed, and the server builds `onBrowserToolUse` for every
-       * surface regardless. Registering tools nothing can run is DR-21's
-       * infinite loop.
-       */
-      browserToolsAvailable?: boolean;
-      contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
-      capability?: string
-      tier?: string
-      providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
-    }
+    extra?: SendExtra,
   ) => Promise<void>;
   abort: () => void;
 }
@@ -304,44 +314,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       chatId: string,
       surfaceId: string,
       model: string | null,
-      extra?: {
-        personalPreferences?: string
-        displayName?: string
-        attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string }>
-        webSearch?: boolean
-        projectInstructions?: string
-        projectKnowledge?: string
-        apiKey?: string
-        cwd?: string
-        history?: Array<{ role: 'user' | 'assistant'; content: string }>
-        memories?: string
-        crossSurfaceContext?: string
-        contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
-        deckTheme?: { id: string; source: string } | null;
-      searchSettings?: {
-        searchProvider?: string | null;
-        searchApiKey?: string | null;
-        searchInstanceUrl?: string | null;
-        searchCredentialProviderId?: string | null;
-      };
-      securitySettings?: {
-          blockDangerousCommands?: boolean
-          blockNetworkCommands?: boolean
-          restrictToProjectFolder?: boolean
-          disableBashTool?: boolean
-        }
-        sessionControls?: {
-          thinkLevel?: string
-          verboseMode?: boolean
-          reasoningVisible?: boolean
-          modelOverride?: string | null
-        }
-        toolProfile?: string;
-        browserToolsAvailable?: boolean;
-        capability?: string
-        tier?: string
-        providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
-      }
+      extra?: SendExtra,
     ): Promise<void> => {
       // A new turn replaces any stream still running for this chat. Tagged
       // 'superseded' so the outgoing stream knows the chat's UI state now
@@ -438,6 +411,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
             ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
             ...(extra?.browserToolsAvailable ? { browserToolsAvailable: true } : {}),
+            ...(extra?.canRelayToClient === false ? { canRelayToClient: false } : {}),
             ...(extra?.capability ? { capability: extra.capability } : {}),
             ...(extra?.tier ? { tier: extra.tier } : {}),
             ...(extra?.providerConfig ? { providerConfig: extra.providerConfig } : {}),

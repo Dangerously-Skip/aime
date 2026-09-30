@@ -4,38 +4,27 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { FolderPicker } from "@/components/shared/folder-picker";
 import { CloneFromGitHub } from "@/components/shared/clone-from-github";
 import { useConnectorStore } from "@/stores/connector-store";
-import { ToolCallCard } from "@/components/shared/tool-call-card";
-import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
-import { StreamingCursor } from "@/components/shared/streaming-cursor";
-import { QuestionCard } from "@/components/shared/question-card";
+import { MessageList } from "@/components/shared/message-list";
+import { ModelSelector } from "@/components/shared/model-selector";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
+import { Composer } from "@/components/shared/composer/composer";
+import { addComposerAttachment } from "@/components/shared/composer/draft-store";
 import { DropOverlay } from "@/components/shared/drop-overlay";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { useCodeStore } from "@/stores/code-store";
-import { useConversationStore } from "@/stores/conversation-store";
-import { useSearchSettings } from '@/hooks/use-search-settings'
-import { useDeckTheme } from '@/hooks/use-deck-theme'
+import { useConversationStore, isUntitled } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
-import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
-import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { handleBrowserToolChunk } from "@/lib/sse/browser-tool-chunk";
-import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
-import { useMemoryStore } from "@/stores/memory-store";
-import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
-import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectContext } from "@/hooks/use-project-context";
-import { useElectron } from "@/hooks/use-electron";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { Button } from "@/components/ui/button";
 import { ConnectionSelector } from "@/components/shared/connection-selector";
-import { Folder, Github } from "lucide-react";
+import { Folder, Github, ListChecks } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
 import { PlanSheet } from "@/components/shared/plan-sheet";
-import { ThinkingSection } from "@/components/shared/thinking-section";
 import { EditorPicker } from "@/components/shared/editor-picker";
 import { detectServerUrl, isWebAsset, findHtmlEntryPoint } from "@/lib/artifacts/server-detector";
 import { previewUrlFor } from "@/lib/preview/client";
@@ -49,40 +38,22 @@ import { GoalRunStatus } from "@/components/harness/goal-run-status";
 import { GoalQuestion } from "@/components/harness/goal-question";
 import { useGoalTranscript } from "@/components/harness/use-goal-transcript";
 import { ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
-import type { Message } from "@/stores/chat-store";
-import { ListChecks } from "lucide-react";
-import { parseSlashCommand, applySlashCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
+import { DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
 import { WorkspaceLayout } from "./workspace/workspace-layout";
 import { tagSecurityWarning } from "./security-warning";
-import { CodeInput, type CodeInputProps } from "./code-input";
-import { isUntitledConversation } from "./composer-keys";
-import { useProviderStore } from "@/stores/provider-store";
-import { resolveSendRoute } from "@/lib/models/client-options";
+import { PermissionModeMenu } from "./permission-mode-menu";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useTurnWiring } from "@/hooks/use-turn-wiring";
-import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
-import { APP_NAME } from "@/config/branding";
+import { useSurfaceTurn, type SessionControlsAccess } from "@/hooks/use-surface-turn";
+import { useTurnSettings, memoriesFor, drainContextBus } from "@/hooks/use-turn-settings";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
 
-const EMPTY_MESSAGES: Message[] = [];
-
-const THINKING_WORDS = [
-  "Pondering",
-  "Wibbling",
-  "Puzzling",
-  "Noodling",
-  "Mulling",
-  "Conjuring",
-  "Ruminating",
-  "Percolating",
-  "Brainstorming",
-  "Scheming",
-  "Tinkering",
-  "Contemplating",
-];
+/** Slash-command settings live per conversation in the code store. */
+const SESSION_CONTROLS: SessionControlsAccess = {
+  get: (id) => useCodeStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS,
+  set: (id, controls) => useCodeStore.getState().setSessionControls(id, controls),
+};
 
 /* ── Pixel mascot (jiggling character) ── */
 function Mascot() {
@@ -94,131 +65,6 @@ function Mascot() {
       height={80}
       className="mb-4 mascot-jiggle"
     />
-  );
-}
-
-/* ── Terminal message output ── */
-interface TerminalMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  toolCalls?: Array<{
-    id: string;
-    name: string;
-    input: Record<string, unknown>;
-    output?: string;
-    status: "running" | "complete" | "error";
-    startTime: number;
-    endTime?: number;
-  }>;
-  thinking?: string;
-  isStreaming?: boolean;
-  isLoading?: boolean;
-  questionData?: unknown;
-  questionToolUseId?: string;
-  questionAnswered?: boolean;
-  attachments?: Array<{ name: string; category: string }>;
-}
-
-function TerminalOutput({
-  messages,
-  onQuestionAnswered,
-  onPreviewUrl,
-  endRef,
-}: {
-  messages: TerminalMessage[];
-  onQuestionAnswered?: (toolUseId: string, answers: Record<string, string>) => void;
-  onPreviewUrl?: (url: string) => void;
-  endRef?: React.RefObject<HTMLDivElement | null>;
-}) {
-  const [thinkingWordIndex, setThinkingWordIndex] = useState(() =>
-    Math.floor(Math.random() * THINKING_WORDS.length)
-  );
-  const hasLoading = messages.some((m) => m.isLoading && !m.content);
-
-  useEffect(() => {
-    if (!hasLoading) return;
-    const interval = setInterval(() => {
-      setThinkingWordIndex((i) => (i + 1) % THINKING_WORDS.length);
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [hasLoading]);
-
-  return (
-    <div className="space-y-3 text-sm">
-      {messages.map((msg) => {
-        if (msg.questionData) {
-          return (
-            <QuestionCard
-              key={msg.id}
-              toolUseId={msg.questionToolUseId || msg.id}
-              questions={msg.questionData as Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>}
-              answered={msg.questionAnswered}
-              onAnswer={onQuestionAnswered}
-            />
-          );
-        }
-        if (msg.role === "user") {
-          return (
-            <div key={msg.id} className="font-mono text-foreground">
-              {msg.attachments && msg.attachments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-1 ml-4">
-                  {msg.attachments.map((att: { name: string; category: string }, i: number) => (
-                    <span key={i} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground font-sans">
-                      {att.name}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <span className="text-muted-foreground select-none">&gt; </span>
-              <span>{msg.content}</span>
-            </div>
-          );
-        }
-        return (
-          <div key={msg.id} className="space-y-2">
-            {msg.thinking && (
-              <ThinkingSection content={msg.thinking} isComplete={!msg.isStreaming} />
-            )}
-            {msg.toolCalls?.map((tool) => (
-              <ToolCallCard
-                key={tool.id}
-                name={tool.name}
-                input={tool.input}
-                output={tool.output}
-                status={tool.status}
-                startTime={tool.startTime}
-                endTime={tool.endTime}
-                onPreviewUrl={onPreviewUrl}
-              />
-            ))}
-            {msg.content ? (
-              <div className="pl-1">
-                <MarkdownRenderer content={msg.content} />
-                {msg.isStreaming && <StreamingCursor />}
-              </div>
-            ) : msg.isStreaming && !msg.isLoading ? (
-              <div className="pl-1"><StreamingCursor /></div>
-            ) : null}
-            {msg.isLoading && !msg.content && (
-              <div className="flex items-center gap-2 py-2 pl-1">
-                <img
-                  src="/starburst-logo.png"
-                  alt="Loading"
-                  width={22}
-                  height={22}
-                  className="loading-pulse"
-                />
-                <span className="text-sm text-muted-foreground thinking-word-fade">
-                  {THINKING_WORDS[thinkingWordIndex]}...
-                </span>
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <div ref={endRef} />
-    </div>
   );
 }
 
@@ -247,34 +93,10 @@ function BottomBar({
 
 /* ── Main surface ── */
 export function CodeSurface() {
-  const [inputValue, setInputValue] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [pendingFolder, setPendingFolder] = useState<string | null>(null);
-  const currentChatId = useCodeStore((s) => s.currentChatId);
-  const chatId = currentChatId ?? "";
-  // Both were absent entirely; see the relay note in the onChunk handler.
-  const printDocument = useDocumentPrint();
-  const onCanvasEvent = useCanvasSseHandler("code", chatId);
-  const messages = useCodeStore(
-    (s) =>
-      (s.currentChatId ? s.messages[s.currentChatId] : undefined) ??
-      EMPTY_MESSAGES
-  );
+  const chatId = useCodeStore((s) => s.currentChatId) ?? "";
+  const onCanvas = useCanvasSseHandler("code");
   const modelRoute = useCodeStore((s) => s.modelRoute);
-  /** Sent with every turn; without it the server never learns search exists. */
-  const searchSettings = useSearchSettings();
-  const deckTheme = useDeckTheme(chatId);
-  // Built-in (Claude) reachability, which is the user's key OR the server's env
-  // key OR Bedrock. The key itself is never sent: the server reads the one
-  // saved in Settings from its credential store.
-  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
-  const tierModels = useSettingsStore((s) => s.tierModels);
-  const providers = useProviderStore((s) => s.providers);
-  const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
-  const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
-  const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
-  const disableBashTool = useSettingsStore((s) => s.disableBashTool);
-  const isStreaming = useCodeStore((s) => s.isStreaming);
   const storeFolder = useCodeStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
   const folder = storeFolder || pendingFolder;
   const permissionMode = useCodeStore((s) => s.permissionMode);
@@ -285,26 +107,11 @@ export function CodeSurface() {
   const sessionControls = useCodeStore(
     (s) => (chatId ? s.sessionControls[chatId] : undefined) ?? DEFAULT_SESSION_CONTROLS
   );
-  const setSessionControls = useCodeStore((s) => s.setSessionControls);
   const setModelRoute = useCodeStore((s) => s.setModelRoute);
   const setFolder = useCodeStore((s) => s.setFolder);
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode);
   const addMessage = useCodeStore((s) => s.addMessage);
-  const appendToLastAssistant = useCodeStore((s) => s.appendToLastAssistant);
-  const addToolCall = useCodeStore((s) => s.addToolCall);
-  const updateMessage = useCodeStore((s) => s.updateMessage);
-  const updateToolResult = useCodeStore((s) => s.updateToolResult);
-  const completeRunningTools = useCodeStore((s) => s.completeRunningTools);
-  const startStreaming = useCodeStore((s) => s.startStreaming);
-  const stopStreaming = useCodeStore((s) => s.stopStreaming);
-  const setCurrentChat = useCodeStore((s) => s.setCurrentChat);
-  const setIsStreaming = useCodeStore((s) => s.setIsStreaming);
-  const setSessionStatus = useCodeStore((s) => s.setSessionStatus);
   const updateConversation = useConversationStore((s) => s.updateConversation);
-  const addConversation = useConversationStore((s) => s.addConversation);
-  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
-  const activeConvId = useConversationStore((s) => s.activeId);
-  const allConversations = useConversationStore((s) => s.conversations);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   /*
@@ -316,7 +123,7 @@ export function CodeSurface() {
    * stale. Track the path we opened instead of re-deriving it from the URL.
    */
   const previewPathRef = useRef<string | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
+  const [, setPreviewOpen] = useState(false);
 
   /*
    * Let the USER open the preview.
@@ -417,14 +224,11 @@ export function CodeSurface() {
   // dockview tab that may not even be open.
   useGoalTranscript(chatId, folder, addMessage);
 
-
-  const { projectId: currentProjectId } = useProjectContext(chatId, "code");
+  const { projectId: currentProjectId, projectInstructions, projectKnowledge, crossSurfaceContext } = useProjectContext(chatId, "code");
+  const settings = useTurnSettings(chatId, { projectInstructions, projectKnowledge, crossSurfaceContext });
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
-  // Auto-project creation disabled — users create projects manually
-  const { showNotification } = useElectron();
-  const isEmpty = messages.length === 0;
 
   const handleFolderChange = useCallback(
     (f: string | null) => {
@@ -437,180 +241,84 @@ export function CodeSurface() {
     [setFolder, chatId]
   );
 
-  // Auto-scroll
-  const endRef = useRef<HTMLDivElement>(null);
-  const [userScrolledUp, setUserScrolledUp] = useState(false);
-  const userScrolledUpRef = useRef(false);
-
-  // Auto-scroll via ResizeObserver — fires on any content size change.
-  // A callback ref, not a mount effect: the transcript lives in a dockview
-  // panel that mounts after the surface does, so a `[]` effect found no node
-  // and never observed anything.
-  const contentRef = useCallback((content: HTMLDivElement | null) => {
-    if (!content) return;
-    const observer = new ResizeObserver(() => {
-      if (!userScrolledUpRef.current) {
-        requestAnimationFrame(() => {
-          endRef.current?.scrollIntoView({ behavior: "instant" });
-        });
-      }
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, []);
-
-  // Scroll to bottom on conversation switch
-  useEffect(() => {
-    if (messages.length > 0) {
-      userScrolledUpRef.current = false;
-      setUserScrolledUp(false);
-      requestAnimationFrame(() => {
-        endRef.current?.scrollIntoView({ behavior: "instant" });
-      });
-    }
-  }, [messages.length === 0]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleAttachmentAdd = useCallback(
-    (file: AttachmentFile) => setAttachments((prev) => [...prev, file]),
-    []
+  // Dropped files join the draft of the conversation on screen.
+  const { isDragging, dropZoneProps } = useFileDrop(
+    useCallback(
+      (file: AttachmentFile) => addComposerAttachment("code", useCodeStore.getState().currentChatId ?? "", file),
+      [],
+    ),
   );
 
-  const handleAttachmentRemove = useCallback(
-    (index: number) => setAttachments((prev) => prev.filter((_, i) => i !== index)),
-    []
-  );
-
-  const { isDragging, dropZoneProps } = useFileDrop(handleAttachmentAdd);
-
-  useEffect(() => {
-    if (!activeConvId) return;
-    const conv = allConversations.find((c) => c.id === activeConvId);
-    if (conv?.surface === "code") setCurrentChat(activeConvId);
-  }, [activeConvId, allConversations, setCurrentChat]);
-
-  const ownsChat = useCallback(
-    (id: string) => !!useCodeStore.getState().messages[id]?.length,
-    [],
-  );
-  // Run recording + the card-answer persisters, shared with the other three
-  // surfaces (see use-turn-wiring). This surface renders no connect card, so
-  // `onConnectorSettled` goes unused rather than being a fourth copy waiting to
-  // be needed.
-  const { runRecorder, onQuestionAnswered } = useTurnWiring({
-    surfaceId: "code",
-    chatId,
-    ownsChat,
-    updateMessage,
-  });
-
-  const { sendMessage, abort } = useSSEStream({
-    chatId,
-    setIsStreaming,
-    onUsage: runRecorder.onUsage,
-    onChunk(event) {
-      // Chunks whose handling is the same on every surface — cron jobs,
-      // standing orders, widgets, memory. Handled in ONE place
-      // (lib/sse/agnostic-chunks) because each surface having its own case
-      // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Code' })) return;
-
+  const turn = useSurfaceTurn({
+    surface: "code",
+    label: "Code",
+    store: useCodeStore,
+    capability: CAPABILITY,
+    modelRoute,
+    sessionControls: SESSION_CONTROLS,
+    onCanvas,
+    // The folder picked before any conversation existed belongs to this one.
+    onConversationCreated: (id) => {
+      if (!pendingFolder) return;
+      setFolder(id, pendingFolder);
+      setPendingFolder(null);
+    },
+    request: async ({ text }) => ({
+      ...settings,
+      cwd: folder || undefined,
       /*
-       * THE SHARED RELAY, which Code was supposed to be using already.
-       *
-       * `lib/sse/browser-tool-chunk` exists because copying forty lines is how
-       * two implementations of one idea drift apart — and Code kept its inline
-       * copy anyway, so the shared module's own comment ("shared with Code
-       * rather than copied") was aspirational.
-       *
-       * The drift was already real: the shared path grew tab handling and this
-       * one never did, while `browserMcpToolNames()` mounts new_tab/switch_tab/
-       * close_tab for EVERY surface with a webview. Code therefore offered three
-       * tools whose only possible answer was "Unknown tool" — DR-21's retry loop,
-       * reintroduced by the change that was meant to end it.
-       *
-       * Code has ONE preview view, so its tab callbacks say so actionably rather
-       * than pretending: the shared module turns an absent `tabs` into "this
-       * surface shows a single page, not tabs — use navigate".
+       * Only when the preview panel is actually open. The webview ref is null
+       * when it is closed, and offering `navigate` with nothing to navigate is
+       * DR-21's loop: the agent cannot discover that a step is impossible, so
+       * it repeats it until the turn dies.
        */
-      if (
+      browserToolsAvailable: !!previewWebviewRef.current,
+      // Scoped to the conversation's project, so memories from other folders
+      // don't leak into this one.
+      memories: memoriesFor(text, currentProjectId),
+      contextBusEvents: await drainContextBus("code"),
+    }),
+    chunks: {
+      /*
+       * THE SHARED BROWSER RELAY. Code has ONE preview view, so its tab
+       * callbacks are absent and the shared module answers new_tab/switch_tab
+       * with "this surface shows a single page, not tabs — use navigate" rather
+       * than "Unknown tool", which the agent would retry until the turn died.
+       */
+      before: (event, cid) =>
         handleBrowserToolChunk(event, {
-          chatId,
+          chatId: cid,
           webview: previewWebviewRef.current,
           consoleBuffer: consoleBufferRef.current,
-          addToolCall,
-          updateToolResult,
+          addToolCall: useCodeStore.getState().addToolCall,
+          updateToolResult: useCodeStore.getState().updateToolResult,
           noWebviewMessage:
             'The preview panel is not open, so there is no page to act on. Write an HTML file or start a dev server first, or use WebFetch to read a URL.',
           surface: 'CodeSurface',
-        })
-      ) {
-        return;
-      }
-
-      // The chunks whose handling is identical across surfaces, recorded once in
-      // lib/sse/core-chunks. `skip` names what this surface still owns — see the
-      // note there; it is a visible migration step, not a permanent carve-out.
-      if (
-        handleCoreChunk(event, {
-          chatId: chatId,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
-          // Code had NONE of the three relay handlers. Each one pauses the turn
-          // server-side, so their absence was not a missing feature — a connector
-          // request stalled for 300s and a document print for 60s before timing
-          // out, with nothing on screen to explain it.
-          printDocument,
-          onCanvas: onCanvasEvent,
-          notify: (title, body) => {
-            if (!document.hasFocus()) showNotification(title, body);
-          },
-          // The watchdog cowork has had all along. Code runs the longest tools of
-          // any surface and had no protection from one that stops progressing.
-          skip: ['tool_use', 'tool_result'],
-        })
-      ) {
-        return;
-      }
-
-      switch (event.type) {
-        case "tool_use": {
-          const toolName = (event.name as string) || "Unknown";
-          const toolInput = (event.input as Record<string, unknown>) || {};
-          const toolCallData: {
-            id: string;
-            name: string;
-            input: Record<string, unknown>;
-            status: "running";
-            startTime: number;
-          } = {
-            id: (event.id as string) || `tool_${Date.now()}`,
-            name: toolName,
-            input: toolInput,
-            status: "running",
-            startTime: Date.now(),
-          };
-          // Tag risky Bash commands — the same classifier as the server's gate.
-          toolCallData.input = tagSecurityWarning(toolName, toolInput, useSettingsStore.getState());
-          addToolCall(chatId, toolCallData);
-          // Register Write/Edit artifacts with project and track HTML/web asset files
+        }),
+      core: (cid) => ({
+        // Tag risky Bash commands — the same classifier as the server's gate.
+        normaliseToolInput: (name, input) => tagSecurityWarning(name, input, useSettingsStore.getState()),
+        onToolStarted: (_toolId, toolName, toolInput) => {
           if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
             const filePath = (toolInput.file_path || toolInput.notebook_path) as string | undefined;
             if (filePath) {
+              // HTML opens in the preview when the turn ends; other web assets
+              // refresh a preview that is already showing.
               if (/\.html?$/i.test(filePath)) {
                 pendingHtmlFiles.current.push(filePath);
               } else if (isWebAsset(filePath)) {
                 pendingWebAssets.current.push(filePath);
-                // Auto-refresh if we already have a file:// preview open
                 triggerPreviewRefresh(filePath);
               }
               if (currentProjectId) {
-                const fileName = filePath.split("/").pop() || filePath;
                 useProjectStore.getState().addArtifact(currentProjectId, {
                   id: crypto.randomUUID(),
-                  name: fileName,
+                  name: filePath.split("/").pop() || filePath,
                   path: filePath,
                   type: "file",
                   surface: "code",
-                  conversationId: chatId,
+                  conversationId: cid,
                   createdAt: Date.now(),
                   updatedAt: Date.now(),
                 });
@@ -618,35 +326,21 @@ export function CodeSurface() {
             }
           }
           // Detect plan file writes
-          if (toolName === "Write" && chatId) {
+          if (toolName === "Write") {
             const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
-            if (filePath.includes(".claude/plans/")) {
-              const content = typeof toolInput.content === "string" ? toolInput.content : "";
-              if (content) setPlanContent(chatId, content);
-            }
+            const content = typeof toolInput.content === "string" ? toolInput.content : "";
+            if (filePath.includes(".claude/plans/") && content) setPlanContent(cid, content);
           }
-          break;
-        }
-        case "tool_result": {
-          const toolResultId = (event.tool_use_id as string) || (event.id as string) || "";
-          const toolResult =
-            typeof event.result === "string"
-              ? event.result
-              : JSON.stringify(event.result);
-          updateToolResult(chatId, toolResultId, toolResult, event.is_error as boolean | undefined);
-          if (toolResult && !event.is_error) {
-            const detected = detectServerUrl(toolResult);
-            if (detected) { previewPathRef.current = null; setPreviewUrl(detected.url); }
-          }
-          break;
-        }
-      }
+        },
+        onToolResult: (_toolId, output, isError) => {
+          if (!output || isError) return;
+          const detected = detectServerUrl(output);
+          if (detected) { previewPathRef.current = null; setPreviewUrl(detected.url); }
+        },
+      }),
     },
-    onDone: () => {
-      runRecorder.succeed();
-      // Mark any remaining running tools as complete
-      completeRunningTools(chatId);
-      // Set preview URL for any HTML files written in the last turn and auto-open preview
+    onDone: (cid) => {
+      // Open the preview on any HTML written in this turn.
       if (pendingHtmlFiles.current.length > 0) {
         const lastHtml = pendingHtmlFiles.current[pendingHtmlFiles.current.length - 1];
         // Served over http, not file:// — a null origin breaks embeds, ES
@@ -657,274 +351,71 @@ export function CodeSurface() {
         pendingHtmlFiles.current = [];
         pendingWebAssets.current = [];
       } else if (pendingWebAssets.current.length > 0) {
-        resolveWebAssetEntryPoint();
+        void resolveWebAssetEntryPoint();
       }
-      stopStreaming(chatId);
-      setSessionStatus("idle");
       // Inline plan detection: check last assistant message for plan heading
-      const allMsgs = useCodeStore.getState().messages[chatId];
-      const lastMsg = allMsgs?.at(-1);
+      const lastMsg = useCodeStore.getState().messages[cid]?.at(-1);
       if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
-        setPlanContent(chatId, lastMsg.content);
+        setPlanContent(cid, lastMsg.content);
       }
-      if (!document.hasFocus()) {
-        showNotification("Task complete", `${APP_NAME} has finished working on your request.`);
-      }
-    },
-    onError: (error) => {
-      runRecorder.fail(error.message);
-      stopStreaming(chatId);
-      setSessionStatus("idle");
-      appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
     },
   });
-
-  // Returns true if handled as slash command (caller should not submit)
-  const handleSlashCommand = useCallback(
-    (text: string): boolean => {
-      const parsed = parseSlashCommand(text);
-      if (!parsed) return false;
-      const result = applySlashCommand(parsed, sessionControls);
-      if (!result) return false;
-      const effectiveId = chatId || (() => {
-        const id = crypto.randomUUID();
-        // "New Chat", not the command: `/think high` is not a name, and the
-        // first real message titles an untitled conversation.
-        addConversation({ id, title: 'New Chat', surface: 'code', lastMessage: text, createdAt: Date.now(), updatedAt: Date.now() });
-        setActiveConversation(id);
-        setCurrentChat(id);
-        // The folder picked before any conversation existed belongs to this one.
-        if (pendingFolder) {
-          setFolder(id, pendingFolder);
-          setPendingFolder(null);
-        }
-        return id;
-      })();
-      setSessionControls(effectiveId, result.controls);
-      addMessage(effectiveId, { id: crypto.randomUUID(), role: 'user', content: text, timestamp: Date.now() });
-      addMessage(effectiveId, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now() });
-      setInputValue('');
-      return true;
-    },
-    [chatId, sessionControls, setSessionControls, addMessage, addConversation, setActiveConversation, setCurrentChat, pendingFolder, setFolder]
-  );
-
-  const handleSubmit = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return;
-      const trimmed = text.trim();
-
-      // Goal mode is a property of the send, not a second composer.
-      if (goalMode) {
-        const settings = goalSettingsFrom(goalBudget, goalCap);
-        if (typeof settings === "string") return setGoalError(settings);
-        if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
-        // A goal needs a conversation; the branch returns before the auto-create
-        // below, so a brand new chat would post conversationId: "" and 400.
-        if (!chatId) {
-          setGoalError("Send a message first, or pick an existing chat — a goal needs a conversation to live in.");
-          return;
-        }
-        setGoalPending(trimmed);
-        const ok = await startGoal({
-          conversationId: chatId,
-          workingDir: folder,
-          objective: trimmed,
-          ...settings,
-        });
-        setGoalPending(null);
-        if (ok) {
-          setGoalNudge((n) => n + 1);
-          setInputValue("");
-          setGoalMode(false);
-          if (chatId) {
-            const existing = allConversations.find((c) => c.id === chatId);
-            if (isUntitledConversation(existing?.title)) {
-              updateConversation(chatId, {
-                title: trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed,
-              });
-            }
-          }
-          // Best effort. The run lives on the server and is unaffected if the
-          // panel cannot be placed; the inline status below the composer is the
-          // feedback that must not depend on dockview.
-          try {
-            // `true` — the user just pressed send on a goal, so moving them to
-            // the panel is what they asked for. The status poll passes nothing.
-            const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
-            if (typeof open === "function") (open as (focus?: boolean) => void)(true);
-          } catch {
-            /* the panel is a convenience, not the run */
-          }
-        }
-        return;
-      }
-
-      // Auto-create conversation if none active
-      let id = chatId;
-      if (!id) {
-        id = crypto.randomUUID();
-        addConversation({
-          id,
-          title: trimmed.substring(0, 50),
-          surface: "code",
-          lastMessage: trimmed,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-        setActiveConversation(id);
-        setCurrentChat(id);
-        // Apply pending folder selection from before conversation was created
-        if (pendingFolder) {
-          setFolder(id, pendingFolder);
-          setPendingFolder(null);
-        }
-      }
-
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        timestamp: Date.now(),
-        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
-      });
-      // Title only a conversation that has none yet. This renamed it on EVERY
-      // send, so a thread titled by its first request — or renamed by the user —
-      // ended up named after whatever was typed last.
-      const currentTitle = useConversationStore.getState().conversations.find((c) => c.id === id)?.title;
-      updateConversation(id, {
-        ...(isUntitledConversation(currentTitle) ? { title: trimmed.substring(0, 50) } : {}),
-        lastMessage: trimmed,
-        updatedAt: Date.now(),
-      });
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        isLoading: true,
-        isStreaming: true,
-      });
-      startStreaming(id);
-      setSessionStatus("streaming");
-      setInputValue("");
-      setAttachments([]);
-      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
-      const priorMessages = useCodeStore.getState().messages[id] || [];
-      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
-
-      // Retrieve relevant memories — scope to current project so memories from
-      // other folders don't leak into the conversation context.
-      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
-        query: trimmed,
-        projectId: useConversationStore.getState().conversations.find((c) => c.id === id)?.projectId ?? null,
-      });
-      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
-      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
-
-      const currentControls = useCodeStore.getState().sessionControls[id] ?? sessionControls;
-      const currentAttachments = [...attachments];
-      setAttachments([]);
-
-      // Drain context bus events for this surface
-      const { useContextBusStore } = await import('@/stores/context-bus-store');
-      const busEvents = useContextBusStore.getState().getUnconsumed('code')
-        .filter(e => e.priority === 'p0' || e.priority === 'p1')
-        .map(e => ({ summary: e.summary, source: e.source, priority: e.priority }));
-      if (busEvents.length > 0) {
-        useContextBusStore.getState().consumeAll('code');
-      }
-
-      // A tier route resolves here (it can land on a user provider's model); a
-      // pinned model passes through. Null ⇒ nothing resolved, so fall back to
-      // the surface's built-in model rather than send an empty one.
-      const route = resolveSendRoute(modelRoute, providers, {
-        capability: CAPABILITY,
-        tierModels,
-        hasAnthropicKey,
-        hasBedrock,
-        known: builtinAccessKnown,
-      });
-
-      // Open the run record before the turn starts so an immediate failure is
-      // still attributed rather than lost.
-      runRecorder.begin({ trigger: "manual", model: route?.model ?? undefined });
-      await sendMessage(trimmed, id, "code", route?.model ?? null, {
-        /*
-         * Only when the preview panel is actually open. The webview ref is null
-         * when it is closed, and offering `navigate` with nothing to navigate is
-         * DR-21's loop: the agent cannot discover that a step is impossible, so
-         * it repeats it until the turn dies.
-         */
-        browserToolsAvailable: !!previewWebviewRef.current,
-        providerConfig: route?.providerConfig,
-        cwd: folder || undefined,
-        history: history.length > 0 ? history : undefined,
-        memories: memoriesStr || undefined,
-        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-        contextBusEvents: busEvents.length > 0 ? busEvents : undefined,
-        sessionControls: currentControls,
-        securitySettings: {
-          blockDangerousCommands,
-          blockNetworkCommands,
-          restrictToProjectFolder,
-          disableBashTool,
-        },
-        searchSettings,
-        deckTheme,
-      });
-    },
-    [
-      chatId,
-      runRecorder,
-      modelRoute,
-      providers,
-      tierModels,
-      hasAnthropicKey,
-      hasBedrock,
-      builtinAccessKnown,
-      folder,
-      attachments,
-      addMessage,
-      addConversation,
-      setActiveConversation,
-      setCurrentChat,
-      startStreaming,
-      sendMessage,
-      setSessionStatus,
-      updateConversation,
-      // Read inside the callback and previously missing, so a slash command or a
-      // security-setting change did not take effect until another dep changed.
-      // All are primitives or stable store references.
-      sessionControls,
-      pendingFolder,
-      setFolder,
-      blockDangerousCommands,
-      blockNetworkCommands,
-      restrictToProjectFolder,
-      disableBashTool,
-    ]
-  );
+  const { messages, isStreaming } = turn;
+  const isEmpty = messages.length === 0;
 
   /*
-   * A due cron job runs HERE, through this surface's own submit — not through a
-   * scheduler with a send path of its own, which would be a fourth place that
-   * starts a turn. Before this, a job published to the bus, switched surface,
-   * and nothing ran it.
-   *
-   * The busy guard is load-bearing here in a way it is not elsewhere: without
-   * it, a job firing mid-turn called sendMessage, whose registry aborts the
-   * previous stream as 'superseded' — tearing down the user's running turn
-   * (mid-build, mid-refactor) silently, because 'superseded' deliberately
-   * reports nothing. A long-running task and a standing order on overlapping
-   * schedules is the normal case, not an edge case.
+   * The ONE submit — Enter and the button both land here. Goal mode is a
+   * property of the send, not a second composer; a scheduled prompt goes
+   * straight to the turn and never starts a goal because a toggle was left on.
    */
-  useScheduledPrompt('code', handleSubmit, () => useCodeStore.getState().isStreaming);
+  function submitFromComposer(text: string, attachments: AttachmentFile[]): boolean {
+    if (!turn.guardModel(text)) return false;
+    if (goalMode) return startGoalFrom(text);
+    void turn.submit(text, attachments);
+    return true;
+  }
 
-  const handleVoiceTranscript = useCallback(
-    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
-    []
-  );
+  /** Goal mode: plan and start a run. Returns false — the draft stays until it has started. */
+  function startGoalFrom(text: string): boolean {
+    const settings = goalSettingsFrom(goalBudget, goalCap);
+    if (typeof settings === "string") {
+      setGoalError(settings);
+      return false;
+    }
+    if (!folder) {
+      setGoalError("Pick a folder first — the plan and progress live there.");
+      return false;
+    }
+    // A goal needs a conversation; a brand new chat would post conversationId: "" and 400.
+    if (!chatId) {
+      setGoalError("Send a message first, or pick an existing chat — a goal needs a conversation to live in.");
+      return false;
+    }
+    setGoalPending(text);
+    void startGoal({ conversationId: chatId, workingDir: folder, objective: text, ...settings }).then((ok) => {
+      setGoalPending(null);
+      if (!ok) return;
+      setGoalNudge((n) => n + 1);
+      setGoalMode(false);
+      const existing = useConversationStore.getState().conversations.find((c) => c.id === chatId);
+      if (isUntitled(existing?.title)) {
+        updateConversation(chatId, { title: text.length > 60 ? `${text.slice(0, 57)}…` : text });
+      }
+      // Best effort. The run lives on the server and is unaffected if the
+      // panel cannot be placed; the inline status below the composer is the
+      // feedback that must not depend on dockview.
+      try {
+        // `true` — the user just pressed send on a goal, so moving them to
+        // the panel is what they asked for. The status poll passes nothing.
+        const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
+        if (typeof open === "function") (open as (focus?: boolean) => void)(true);
+      } catch {
+        /* the panel is a convenience, not the run */
+      }
+    });
+    // Kept until the goal has actually started — planning can still fail.
+    return false;
+  }
 
   const planButton = planContent ? (
     <Button
@@ -937,58 +428,6 @@ export function CodeSurface() {
       Plan
     </Button>
   ) : null;
-
-  /*
-   * ONE set of composer props, used by both states.
-   *
-   * There were two hand-written <CodeInput> calls and they drifted: the active
-   * one — the composer you use for every message after the first — was never
-   * given `cwd` or `onSlashCommand`, so @-mentions and slash commands silently
-   * stopped working once a conversation started, and it lost the goal question
-   * and run status too. Only the layout-specific bits differ now.
-   */
-  const composerProps: Omit<CodeInputProps, "placeholder" | "rows" | "minHeight"> = {
-    value: inputValue,
-    onChange: setInputValue,
-    onSubmit: handleSubmit,
-    onAbort: abort,
-    isStreaming,
-    cwd: folder,
-    onSlashCommand: handleSlashCommand,
-    permissionMode,
-    onPermissionModeChange: setPermissionMode,
-    model: modelRoute?.id ?? "",
-    onSelectModel: setModelRoute,
-    attachments,
-    onAttachmentAdd: handleAttachmentAdd,
-    onAttachmentRemove: handleAttachmentRemove,
-    currentProjectId,
-    onAddToProject: (pid) => assignToProject(chatId, pid),
-    onNewProject: () => setSidebarMode("projects"),
-    projects: allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon })),
-    onVoiceTranscript: handleVoiceTranscript,
-    planButton,
-    goalToggle: <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />,
-    goalQuestion: folder ? <GoalQuestion chatId={chatId} folder={folder} surfaceId="code" /> : null,
-    goalStatus: folder ? (
-      <GoalRunStatus
-        chatId={chatId} folder={folder} surfaceId="code"
-        nudge={goalNudge}
-        starting={
-          goalPending && goalPhase !== "idle"
-            ? { objective: goalPending, phase: goalPhase }
-            : null
-        }
-      />
-    ) : null,
-    goalBar: goalMode ? (
-      <GoalModeBar
-        budget={goalBudget} cap={goalCap}
-        onBudget={setGoalBudget} onCap={setGoalCap}
-        disabled={goalBusy} error={goalStartError}
-      />
-    ) : null,
-  };
 
   return (
     <div className="relative flex h-full flex-col bg-background" {...dropZoneProps}>
@@ -1037,35 +476,20 @@ export function CodeSurface() {
       ) : (
         /*
          * ── Workspace: tree + editor + terminal + chat, as soon as a folder is
-         * chosen. It used to wait for the first MESSAGE (`messages.length === 0`
-         * showed a mascot instead), so the file tree, editor and terminal of the
-         * folder you had just picked were hidden until you had asked the agent
-         * for something — you could not look at the code before talking about it.
+         * chosen. It used to wait for the first MESSAGE, so the file tree,
+         * editor and terminal of the folder you had just picked were hidden
+         * until you had asked the agent for something.
          */
         <WorkspaceLayout
           workspace={folder}
           chatId={chatId}
           /*
-           * The preview is a DOCKVIEW PANEL now, not an overlay.
-           *
-           * It used to render here as a sibling of the dock — floating over the
-           * chat panel with no tab, so it could not be docked, dragged or
-           * placed like every other region. The content still belongs to the
-           * surface, which owns the webview's lifecycle and hands its ref to
-           * the agent; only the framing moved.
+           * The preview is a DOCKVIEW PANEL, and mounted UNCONDITIONALLY: its
+           * address bar is the only way for a user to SET a url, so a panel that
+           * mounted only once a url was set could never be given one. The
+           * content still belongs to the surface, which owns the webview's
+           * lifecycle and hands its ref to the agent.
            */
-          /*
-             UNCONDITIONAL. It used to be `previewUrl ? <PreviewPanel/> : null`,
-             which is the same defect as the last two rounds, one layer up: the
-             panel's address bar is the only way for a user to SET a url, and it
-             lived inside a component that only mounted once a url was already
-             set. You needed a URL to reach the box that lets you type a URL, so
-             the panel opened as an empty dark rectangle and stayed that way.
-
-             The panel existing IS the user asking for it. What goes in it is
-             `about:blank` until somebody — the agent or the user — says
-             otherwise.
-          */
           previewSlot={
             <PreviewPanel
               url={previewUrl ?? ''}
@@ -1092,70 +516,91 @@ export function CodeSurface() {
                 )}
 
                 {/*
-                  The "Preview about:blank" chip lived here — the overlay's
-                  show/hide toggle, sitting inside the CHAT panel because that
-                  is where the overlay was anchored. The panel has its own tab
-                  now, so the chip was a second control for the same thing in
-                  the wrong place.
+                  The same transcript as Chat and Cowork: error banners with
+                  Try again, edit & resend, question AND connect cards. Code
+                  had its own terminal-styled copy, which rendered no connect
+                  card at all — a connector request here parked the turn for
+                  300s with nothing on screen.
                 */}
-
-                <div className="flex flex-1 min-h-0">
-                  {/* Messages + input column */}
-                  <div className="flex flex-1 flex-col min-w-0">
-                    <div
-                      className="flex-1 min-h-0 overflow-y-auto px-4 py-4"
-                      onScroll={(e) => {
-                        const el = e.currentTarget;
-                        const scrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight >= 50;
-                        setUserScrolledUp(scrolledUp);
-                        userScrolledUpRef.current = scrolledUp;
-                      }}
-                    >
-                      {isEmpty ? (
-                        <div
-                          className="flex h-full flex-col items-center justify-center text-center text-muted-foreground animate-in fade-in duration-300"
-                          data-testid="code-chat-empty"
-                        >
-                          <Mascot />
-                          <p className="text-sm">What should we work on in this folder?</p>
-                        </div>
-                      ) : (
-                        <div ref={contentRef} className="max-w-3xl mx-auto relative">
-                          <TerminalOutput
-                            messages={messages as TerminalMessage[]}
-                            onQuestionAnswered={onQuestionAnswered}
-                            onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }}
-                            endRef={endRef}
-                          />
-                        </div>
-                      )}
-                      {userScrolledUp && (
-                        <button
-                          onClick={() => {
-                            setUserScrolledUp(false);
-                            userScrolledUpRef.current = false;
-                            endRef.current?.scrollIntoView({ behavior: "smooth" });
-                          }}
-                          className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-primary/90 text-primary-foreground px-3 py-1.5 text-xs shadow-lg hover:bg-primary transition-colors"
-                        >
-                          Scroll to bottom
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="px-4 pb-3 pt-2 shrink-0">
-                      <div className="max-w-3xl mx-auto">
-                        <CodeInput
-                          {...composerProps}
-                          placeholder={isEmpty ? "Find a small todo in the codebase and do it" : "Describe a task..."}
-                          rows={isEmpty ? 2 : 1}
-                          minHeight={isEmpty ? "min-h-[72px]" : "min-h-[36px]"}
-                        />
-                        <BottomBar folder={folder} onFolderChange={handleFolderChange} />
-                      </div>
-                    </div>
+                {isEmpty ? (
+                  <div
+                    className="flex flex-1 flex-col items-center justify-center text-center text-muted-foreground animate-in fade-in duration-300"
+                    data-testid="code-chat-empty"
+                  >
+                    <Mascot />
+                    <p className="text-sm">What should we work on in this folder?</p>
                   </div>
+                ) : (
+                  <MessageList
+                    {...turn.transcript}
+                    surfaceId="code"
+                    onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }}
+                    showReasoning={sessionControls.reasoningVisible}
+                    expandToolCalls={sessionControls.verboseMode}
+                  />
+                )}
 
+                <div className="px-4 pb-3 pt-2 shrink-0">
+                  <div className="max-w-3xl mx-auto">
+                    <Composer
+                      {...turn.composer}
+                      onSubmit={submitFromComposer}
+                      placeholder={isEmpty ? "Find a small todo in the codebase and do it" : "Describe a task..."}
+                      submitDisabled={goalBusy}
+                      submitLabel={goalMode ? "Plan and start the goal" : "Send message"}
+                      mentionCwd={folder}
+                      attachmentMenu={{
+                        currentProjectId,
+                        onAddToProject: (pid) => assignToProject(chatId, pid),
+                        onNewProject: () => setSidebarMode("projects"),
+                        projects: allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon })),
+                      }}
+                      header={
+                        <>
+                          {turn.noModelCard}
+                          {/* The run's parked question, above the composer where the user is. */}
+                          <GoalQuestion chatId={chatId} folder={folder} surfaceId="code" />
+                        </>
+                      }
+                      belowInput={goalMode ? (
+                        <GoalModeBar
+                          budget={goalBudget} cap={goalCap}
+                          onBudget={setGoalBudget} onCap={setGoalCap}
+                          disabled={goalBusy} error={goalStartError}
+                        />
+                      ) : null}
+                      toolbarStart={
+                        <>
+                          {planButton}
+                          <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
+                          <PermissionModeMenu value={permissionMode} onChange={setPermissionMode} />
+                        </>
+                      }
+                      toolbarEnd={
+                        <ModelSelector
+                          value={modelRoute?.id ?? ""}
+                          onSelectModel={setModelRoute}
+                          capability={CAPABILITY}
+                          className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
+                        />
+                      }
+                    />
+                    {/*
+                      Run status, under the composer — not in the dockview panel,
+                      which can fail to open. Feedback that a goal has started
+                      must not depend on a panel being placeable.
+                    */}
+                    <GoalRunStatus
+                      chatId={chatId} folder={folder} surfaceId="code"
+                      nudge={goalNudge}
+                      starting={
+                        goalPending && goalPhase !== "idle"
+                          ? { objective: goalPending, phase: goalPhase }
+                          : null
+                      }
+                    />
+                    <BottomBar folder={folder} onFolderChange={handleFolderChange} />
+                  </div>
                 </div>
               </div>
             ),

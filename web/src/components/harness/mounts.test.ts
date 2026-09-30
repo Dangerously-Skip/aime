@@ -14,8 +14,6 @@ const read = (...p: string[]) => fs.readFileSync(path.join(process.cwd(), 'src',
 
 const cowork = read('components', 'surfaces', 'cowork', 'cowork-surface.tsx');
 const codeSurface = read('components', 'surfaces', 'code', 'code-surface.tsx');
-// Code's composer body lives in its own module; the surface builds its props.
-const codeInput = read('components', 'surfaces', 'code', 'code-input.tsx');
 const layout = read('components', 'surfaces', 'code', 'workspace', 'workspace-layout.tsx');
 const composer = read('components', 'shared', 'composer', 'composer.tsx');
 
@@ -251,11 +249,14 @@ describe('goal mode reaches every composer', () => {
     /*
      * And the composer must RENDER the slots, not merely be handed them.
      * Checking the file contained the component name was satisfied by the call
-     * site alone, so deleting `{goalToggle}` from the composer body left it
-     * green — a toggle passed to a component that never renders it.
+     * site alone, so a toggle passed to a component that never renders it
+     * stayed green. Code uses the shared Composer: the toggle and the bar go
+     * into its toolbar and below-input slots, which it renders.
      */
-    expect(codeInput).toContain('{goalToggle}');
-    expect(codeInput).toContain('{goalBar}');
+    expect(codeSurface).toMatch(/toolbarStart=\{[\s\S]{0,300}<GoalModeToggle/);
+    expect(codeSurface).toMatch(/belowInput=\{goalMode \? \([\s\S]{0,40}<GoalModeBar/);
+    expect(composer).toContain('{toolbarStart}');
+    expect(composer).toContain('{belowInput}');
   });
 
   it('Code’s send branches on the mode rather than always chatting', () => {
@@ -264,7 +265,7 @@ describe('goal mode reaches every composer', () => {
   });
 
   it('Code names its chat from the objective too', () => {
-    const naming = /if \(isUntitledConversation\(existing\?\.title\)\)[\s\S]{0,300}?\}\)/.exec(codeSurface)?.[0] ?? '';
+    const naming = /if \(isUntitled\(existing\?\.title\)\)[\s\S]{0,300}?\}\)/.exec(codeSurface)?.[0] ?? '';
     expect(naming).toContain('title:');
   });
 });
@@ -293,9 +294,8 @@ describe('the goal panel cannot take the surface down', () => {
   it('Code shows status under the COMPOSER, not only in the panel', () => {
     // Feedback that a goal has started must not depend on a panel being
     // placeable — that is what left the last run with no indication at all.
-    expect(codeSurface).toMatch(/goalStatus[=:]/);
-    expect(codeSurface).toContain('GoalRunStatus');
-    expect(codeInput).toContain('{goalStatus}');
+    // Rendered right after the composer in the chat slot.
+    expect(codeSurface).toMatch(/<Composer[\s\S]*?\/>\s*(\{\/\*[\s\S]*?\*\/\}\s*)?<GoalRunStatus/);
   });
 });
 
@@ -414,6 +414,7 @@ describe('the question is answerable from the conversation', () => {
   it('Code renders the slot, not merely receives it', () => {
     // A control handed to a component that never renders it is the recurring
     // shape of this whole feature's bugs.
-    expect(codeInput).toContain('{goalQuestion}');
+    expect(codeSurface).toMatch(/header=\{[\s\S]{0,300}<GoalQuestion/);
+    expect(composer).toContain('{header}');
   });
 });

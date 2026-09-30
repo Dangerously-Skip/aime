@@ -7,6 +7,7 @@ import { useConversationStore } from '@/stores/conversation-store';
 import { useRunStore } from '@/stores/run-store';
 import { useComposerDrafts } from '@/components/shared/composer/draft-store';
 import { resetServerCredentials } from '@/hooks/use-builtin-access';
+import { useSettingsStore } from '@/stores/settings-store';
 
 /**
  * The real Cowork surface, driven through its composer, against the real stores
@@ -144,5 +145,68 @@ describe('CoworkSurface — a turn reports to the conversation it was started in
 
     expect(useCoworkStore.getState().messages[CHAT]?.at(-1)?.content).toBe('one two');
     expect(useCoworkStore.getState().messages[OTHER]?.at(-1)?.content).toBe('unrelated');
+  });
+});
+
+/*
+ * Two things start a Cowork turn: the composer, and the auto-continue fired when
+ * the agent looks like it ran out of turns mid-task. The second used to
+ * hand-copy a subset of the request and had drifted eight fields short — a user
+ * who chose Magazine Bold got an unstyled deck whenever the turn
+ * auto-continued, because the continuation ran as a user with no theme set.
+ * Both now go through the one turn path; this holds them to the same request.
+ */
+describe('CoworkSurface — the auto-continue is the same user as the typed turn', () => {
+  const chatBodies = () =>
+    fetchMock.mock.calls
+      .filter(([u]) => String(u).includes('/api/chat/'))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+
+  it('carries the settings the typed turn carried', async () => {
+    useSettingsStore.setState({
+      deckTheme: 'magazine-bold',
+      personalPreferences: 'Be brief.',
+      displayName: 'Ada',
+      blockNetworkCommands: true,
+    } as never);
+    // Each request gets its own body; the continuation must not reuse a closed one.
+    let current = controllableFetch();
+    fetchMock.mockImplementation((url: string) => {
+      if (!String(url).includes('/api/chat/')) return Promise.resolve(new Response('{}', { status: 200 }));
+      stream = current;
+      const response = current.fetch();
+      current = controllableFetch();
+      return response;
+    });
+
+    // Not the first exchange: a first turn is never auto-continued.
+    useCoworkStore.getState().addMessage(CHAT, { id: 'u0', role: 'user', content: 'hello', timestamp: 1 });
+    useCoworkStore.getState().addMessage(CHAT, { id: 'a0', role: 'assistant', content: 'Hi.', timestamp: 2 });
+    render(<CoworkSurface />);
+    await send('build the quarterly deck');
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        stream.push({ type: 'tool_use', id: `t${i}`, name: 'Read', input: { file_path: `/tmp/f${i}.md` } });
+      }
+      stream.push({ type: 'text', content: 'Now let me build the slides.' });
+      stream.end();
+      await flush();
+    });
+    // The continuation waits a beat so the partial reply shows first.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1600));
+      await flush();
+    });
+
+    const [typed, continued] = chatBodies();
+    expect(continued, 'the turn did not auto-continue').toBeDefined();
+    expect(continued.message).toMatch(/^Continue/);
+    for (const field of ['deckTheme', 'searchSettings', 'securitySettings', 'personalPreferences', 'displayName']) {
+      expect(continued[field], `${field} missing from the continuation`).toEqual(typed[field]);
+    }
+    expect((continued.deckTheme as { id: string }).id).toBe('magazine-bold');
+    // The continuation is shown as one, and is not what Up-arrow recalls.
+    const msgs = useCoworkStore.getState().messages[CHAT] ?? [];
+    expect(msgs.filter((m) => m.isAutoContinue)).toHaveLength(1);
   });
 });

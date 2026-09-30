@@ -1,38 +1,30 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { InputArea } from "@/components/shared/input-area";
 import { MessageList } from "@/components/shared/message-list";
+import { Composer } from "@/components/shared/composer/composer";
+import type { AttachmentFile } from "@/components/shared/attachment-menu";
 import { useBrowserStore } from "@/stores/browser-store";
-import { useProviderStore } from "@/stores/provider-store";
-import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useConversationStore } from "@/stores/conversation-store";
-import { useSettingsStore } from "@/stores/settings-store";
 import { useBrowserAgent } from "@/hooks/use-browser-agent";
 import { useMemoryStore } from "@/stores/memory-store";
 import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
+import { useConversationStore } from "@/stores/conversation-store";
 import { useProjectContext } from "@/hooks/use-project-context";
-import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { useHydrated } from "@/components/store-hydration";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { Message } from "@/stores/chat-store";
 import { ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
 import { useScratchDir } from "@/hooks/use-scratch-dir";
-import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
-import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
-import { handleCoreChunk } from "@/lib/sse/core-chunks";
-import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
+import { StreamTurnError } from "@/hooks/use-sse-stream";
 import { handleBrowserToolChunk } from "@/lib/sse/browser-tool-chunk";
 import { classifyBrowserRequest } from "@/lib/browser/request-shape";
-import { useDocumentPrint } from "@/hooks/use-document-print";
-import { useElectron } from "@/hooks/use-electron";
 import { useSurfaceKeydown } from "@/hooks/use-surface-active";
+import { useSurfaceTurn } from "@/hooks/use-surface-turn";
+import { useTurnSettings } from "@/hooks/use-turn-settings";
 import { APP_NAME } from "@/config/branding";
 import { useWebviewLoadState, LoadProgressBar, LoadErrorOverlay } from "./page-status";
 import { AgentControlBanner } from "./agent-control-banner";
@@ -51,15 +43,6 @@ import {
   type InspectorResult,
   type PendingContextItem,
 } from "@/lib/browser-interactions";
-import { VoiceButton } from "@/components/shared/voice-button";
-import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
-import {
-  parseSlashCommand,
-  applySlashCommand,
-  getSlashSuggestions,
-  DEFAULT_SESSION_CONTROLS,
-  type SessionControls,
-} from "@/lib/slash-commands";
 import {
   Globe,
   Plus,
@@ -79,8 +62,40 @@ import {
   MessageSquare,
 } from "lucide-react";
 
-const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_TABS: import("@/stores/browser-store").BrowserTab[] = [];
+
+/** Which of the two loops is running a conversation's turn — see `dispatch`. */
+type BrowserLoop = "quick-ask" | "agent";
+
+/**
+ * An attachment as page context. The agent takes history rather than a
+ * context array, so everything becomes a `PendingContextItem`.
+ */
+function attachmentAsContext(att: AttachmentFile): PendingContextItem | null {
+  const item = (type: PendingContextItem["type"], content: string): PendingContextItem => ({
+    id: crypto.randomUUID(),
+    type,
+    label: att.name,
+    content,
+    timestamp: Date.now(),
+  });
+  if (!att.content) return null;
+  if (att.category === "image") return item("screenshot", att.content);
+  if (att.category === "text") return item("document", `<document name="${att.name}">\n${att.content}\n</document>`);
+  // Binary files (PDF, DOCX): try decoding as text, otherwise say it is binary.
+  try {
+    const decoded = atob(att.content);
+    if (decoded.length > 0 && /^[\x20-\x7E\t\n\r]*$/.test(decoded.substring(0, 200))) {
+      return item("document", `<document name="${att.name}">\n${decoded}\n</document>`);
+    }
+    return item(
+      "document",
+      `[Attached file: ${att.name} (${att.category}). This is a binary file — for full document analysis, use the Cowork or Chat surface which can extract text from PDFs and documents.]`,
+    );
+  } catch {
+    return item("document", `[Attached file: ${att.name}]`);
+  }
+}
 
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
@@ -100,14 +115,9 @@ const PHASE_LABELS = {
 } as const;
 
 export function BrowserSurface() {
-  const [inputValue, setInputValue] = useState("");
   const [urlInput, setUrlInput] = useState("");
   const [agentVisible, setAgentVisible] = useState(true);
   const [panelWidth, setPanelWidth] = useState(350);
-  const [attachments, setAttachments] = useState<import("@/components/shared/attachment-menu").AttachmentFile[]>([]);
-  const [slashSuggestions, setSlashSuggestions] = useState<CommandSuggestion[]>([]);
-  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
-  const [sessionControls, setSessionControls] = useState<SessionControls>(DEFAULT_SESSION_CONTROLS);
   const webviewNodeRef = useRef<(HTMLElement & WebviewRef) | null>(null);
   const resizingRef = useRef(false);
   const inspectorPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -127,35 +137,15 @@ export function BrowserSurface() {
   const chatId = currentChatId ?? "";
   const tabs = useBrowserStore((s) => (chatId ? s.tabSessions[chatId] : undefined) ?? EMPTY_TABS);
   const activeTabId = useBrowserStore((s) => chatId ? (s.activeTabIds[chatId] ?? null) : null);
-  const messages = useBrowserStore(
-    (s) => (s.currentChatId ? s.messages[s.currentChatId] : undefined) ?? EMPTY_MESSAGES
-  );
-  // This surface has NO model selection of its own. It resolves through the same
-// `resolveSendRoute` chokepoint as chat/cowork/code/project-detail, so whatever
-// the user set in Settings (tier grid + BYOK providers) governs it too. It was
-// the only surface not calling that function — which is exactly the gap that
-// function's own comment warns about ("all four call this... one forgetting is
-// how the gap appeared"). On an OpenRouter-only setup this surface used to
-// resolve against the built-in Anthropic registry and then demand a key the
-// user does not have.
-const providers = useProviderStore((s) => s.providers);
-const tierModels = useSettingsStore((s) => s.tierModels);
-const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
   /*
    * Somewhere for the agent to write. Browser has no folder picker, so this is
-   * the only writable location it has — see the `cwd` note at the send site.
+   * the only writable location it has — see the `cwd` note in `request`.
    */
   const scratchDir = useScratchDir(chatId);
-  const isStreaming = useBrowserStore((s) => s.isStreaming);
   const loopPhase = useBrowserStore((s) => s.loopPhase);
-  const addMessage = useBrowserStore((s) => s.addMessage);
   const appendToLastAssistant = useBrowserStore((s) => s.appendToLastAssistant);
   const addToolCall = useBrowserStore((s) => s.addToolCall);
   const updateToolResult = useBrowserStore((s) => s.updateToolResult);
-  const completeRunningTools = useBrowserStore((s) => s.completeRunningTools);
-  const startStreaming = useBrowserStore((s) => s.startStreaming);
-  const stopStreaming = useBrowserStore((s) => s.stopStreaming);
-  const setCurrentChat = useBrowserStore((s) => s.setCurrentChat);
   const setLoopPhase = useBrowserStore((s) => s.setLoopPhase);
   const inspectorMode = useBrowserStore((s) => s.inspectorMode);
   const setInspectorMode = useBrowserStore((s) => s.setInspectorMode);
@@ -164,13 +154,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
   const removePendingContext = useBrowserStore((s) => s.removePendingContext);
   const clearPendingContext = useBrowserStore((s) => s.clearPendingContext);
 
-  const updateConversation = useConversationStore((s) => s.updateConversation);
-  const addConversation = useConversationStore((s) => s.addConversation);
-  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
-  const activeConvId = useConversationStore((s) => s.activeId);
-  const allConversations = useConversationStore((s) => s.conversations);
-
-  const { projectId: currentProjectId } = useProjectContext(chatId, "browser");
+  const { projectId: currentProjectId, projectInstructions, projectKnowledge, crossSurfaceContext } = useProjectContext(chatId, "browser");
+  const settings = useTurnSettings(chatId, { projectInstructions, projectKnowledge, crossSurfaceContext });
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
@@ -263,13 +248,6 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
       addTab({ id: crypto.randomUUID(), url: "", title: "New Tab", isActive: true });
     }
   }, [hydrated, chatId, tabs.length, addTab]);
-
-  // Sync conversation
-  useEffect(() => {
-    if (!activeConvId) return;
-    const conv = allConversations.find((c) => c.id === activeConvId);
-    if (conv?.surface === "browser") setCurrentChat(activeConvId);
-  }, [activeConvId, allConversations, setCurrentChat]);
 
   // Sync webviewSrc when switching tabs (not on every URL update from did-navigate)
   useEffect(() => {
@@ -412,13 +390,18 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
   }, []);
 
   /*
-   * Which loop is currently running, so Stop stops the right one.
+   * Which loop is running each conversation's turn, so Stop stops the right one.
    *
    * The two paths have separate abort mechanisms — the local loop owns an
    * AbortController, the SSE stream is keyed in a registry — and calling the
    * wrong one leaves a turn running with the composer unlocked.
    */
-  const activeLoopRef = useRef<'quick-ask' | 'agent' | null>(null);
+  const loopsRef = useRef<Map<string, BrowserLoop>>(new Map());
+  /**
+   * Quick-ask runs already settled — failed, or stopped by the user — so the
+   * loop's `onDone`, which runs however it ended, does not also record a success.
+   */
+  const settledRef = useRef<Set<string>>(new Set());
 
   /*
    * Whether the agent is DRIVING THE PAGE right now, which is narrower than
@@ -426,7 +409,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
    * never touch this page. Quick-ask always drives it; the agent path counts
    * from its first browser tool. Drives the "controlling this page" banner.
    */
-  const [agentControl, setAgentControl] = useState<'quick-ask' | 'agent' | null>(null);
+  const [agentControl, setAgentControl] = useState<BrowserLoop | null>(null);
   /** Steps taken when the quick-ask loop hit its limit and is waiting on the user. */
   const [stepLimit, setStepLimit] = useState<number | null>(null);
   const stepLimitResolveRef = useRef<((more: boolean) => void) | null>(null);
@@ -436,51 +419,156 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     setStepLimit(null);
   }, []);
 
+  /** A turn on either loop is over: nothing drives the page any more. */
+  const loopEnded = useCallback((cid: string) => {
+    loopsRef.current.delete(cid);
+    setLoopPhase('idle');
+    setAgentControl(null);
+  }, [setLoopPhase]);
+
   /*
-   * The three relay handlers. Each one PAUSES THE TURN server-side, which is why
-   * `CoreChunkContext` declares them required rather than optional — Code
-   * shipped without them and a connector request stalled for 300s and a document
-   * print for 60s, with nothing on screen to explain either.
+   * The full agent, on the same path as every other surface — and the same
+   * turn: route, run record, typed errors, Retry, per-chat streaming.
    *
-   * Browser gets them for the same reason it is being routed through the main
-   * agent at all: it now has the same tools, so it can hit the same pauses.
+   * WHY IT EXISTS. This surface used to have exactly one loop: a hand-rolled
+   * ReAct loop against the raw Messages API with browser tools and nothing
+   * else. So the surface whose entire purpose is agentic browsing ran the LEAST
+   * capable agent in the app — no MCP, no connectors, no canvas, no memory, no
+   * subagents, no skills (DR-22).
    */
-  const printDocument = useDocumentPrint();
-  const { showNotification } = useElectron();
+  const turn = useSurfaceTurn({
+    surface: "browser",
+    label: "Browser",
+    store: useBrowserStore,
+    capability: CAPABILITY,
+    // No picker and no stored model: Settings (tier grid + providers) decides,
+    // through the same `resolveSendRoute` every surface uses.
+    modelRoute: null,
+    /*
+     * Browser cannot DISPLAY a canvas. The canvas store, its overlay and its
+     * dispatch are keyed to chat/cowork/code, and widening them is a separate
+     * decision. So the absence is stated rather than silent — a dropped canvas
+     * is this codebase's signature bug: wired, produces nothing, and no way to
+     * tell whether the agent tried. "Continue in Cowork" is right here.
+     */
+    onCanvas: (event, cid) => {
+      const title = (event.doc as { title?: string } | undefined)?.title;
+      appendToLastAssistant(
+        cid,
+        `\n\n_Built a canvas${title ? ` — “${title}”` : ''}, which the Browser surface cannot display. Continue this conversation in Cowork to see it._\n`,
+      );
+    },
+    request: () => ({
+      ...settings,
+      /*
+       * A PLACE TO WRITE. Browser has Write and Edit auto-approved and a prompt
+       * telling it to accumulate findings in a file — with no `cwd`, those land
+       * in the SERVER PROCESS's working directory. The scratch dir is the honest
+       * home for it: per-conversation, and the same fallback Cowork uses.
+       */
+      cwd: scratchDir || undefined,
+      /*
+       * Only when a webview can actually serve them. Offering `navigate` with
+       * nothing to navigate is DR-21's loop one layer down: the agent cannot
+       * discover that a step is impossible, so it repeats it until the turn dies.
+       */
+      browserToolsAvailable: !!webviewNodeRef.current,
+      memories: memoriesStr || undefined,
+    }),
+    /*
+     * TWO LOOPS, SPLIT BY THE SHAPE OF THE REQUEST — not by a toggle the user
+     * has to find (DR-22 D-1). A question about what is on screen stays local:
+     * browser tools only, sub-second. Anything goal-shaped goes to the full
+     * agent. The default is the full agent, because a page question routed
+     * there costs a few seconds while a goal routed to the quick loop fails the
+     * whole task silently.
+     */
+    dispatch: async (prepared, send) => {
+      const { chatId: cid, text, attachments, route, sessionControls } = prepared;
+      // Selections, screenshots, inspected elements and attachments are all
+      // context — the thing the user pointed at is most of why they asked.
+      const context: PendingContextItem[] = [...useBrowserStore.getState().pendingContext];
+      clearPendingContext();
+      for (const att of attachments) {
+        const item = attachmentAsContext(att);
+        if (item) context.push(item);
+      }
+      // `/model` pins a model for the session on top of Settings.
+      const model = sessionControls.modelOverride ?? route?.model ?? null;
+
+      if (classifyBrowserRequest(text) === 'quick-ask') {
+        const wv = webviewNodeRef.current;
+        if (!wv) {
+          turn.failTurn(cid, new StreamTurnError('unknown', 'No page is open to ask about. Navigate to a page first.'));
+          return;
+        }
+        loopsRef.current.set(cid, 'quick-ask');
+        setAgentControl('quick-ask');
+        await runAgentLoop(text, { model, providerConfig: route?.providerConfig }, wv, context.length > 0 ? context : undefined, cid);
+        return;
+      }
+
+      loopsRef.current.set(cid, 'agent');
+      setLoopPhase('thinking');
+      // The full agent takes history rather than a context array, so the
+      // context travels as text ahead of the question.
+      const contextPrefix = context.length > 0
+        ? context.map((c) => `<context type="${c.type}" label="${c.label}">\n${c.content}\n</context>`).join('\n') + '\n\n'
+        : '';
+      await send({ message: contextPrefix + text, model, extra: { attachments: undefined } });
+    },
+    chunks: {
+      /*
+       * The browser-tool relay: the server pauses the turn, we execute against
+       * the live webview and POST the result back. This surface HAS tabs, and
+       * they are not webview operations, so the agent needs the same three tab
+       * callbacks the quick loop has — or `new_tab` is an unknown tool and the
+       * agent loops on it (DR-21: twenty-two calls in one run).
+       */
+      before: (event, cid) => {
+        const handled = handleBrowserToolChunk(event, {
+          chatId: cid,
+          webview: webviewNodeRef.current,
+          consoleBuffer: consoleBufferRef.current,
+          addToolCall,
+          updateToolResult,
+          noWebviewMessage:
+            'No browser view is available. Navigate to a page first, or use WebFetch to read a URL you are not looking at.',
+          surface: 'BrowserSurface',
+          tabs: {
+            open: handleNewTab,
+            switch: handleSwitchTab,
+            close: handleCloseTab,
+            // The SAME order the model was shown, read fresh on each call so a
+            // tab opened mid-turn is reachable.
+            list: () => useBrowserStore.getState().getTabsForChat(cid).map((t) => ({ id: t.id })),
+          },
+        });
+        // The agent has started driving the page: say so on the page.
+        if (handled) setAgentControl('agent');
+        return handled;
+      },
+    },
+    onDone: (cid) => loopEnded(cid),
+    onError: (_error, cid) => loopEnded(cid),
+  });
+  const { messages, isStreaming } = turn;
 
   const { runAgentLoop, abort: abortQuickAsk } = useBrowserAgent({
-    onText(text) {
-      const id = useBrowserStore.getState().currentChatId ?? "";
-      appendToLastAssistant(id, text);
+    // Every callback is handed the chat the run was started for.
+    onText: (text, cid) => appendToLastAssistant(cid, text),
+    onToolUse: (id, name, input, cid) =>
+      addToolCall(cid, { id, name, input, status: "running", startTime: Date.now() }),
+    onToolResult: (id, result, isError, cid) => updateToolResult(cid, id, result, isError),
+    onError: (error, cid) => {
+      settledRef.current.add(cid);
+      turn.failTurn(cid, error);
     },
-    onToolUse(id, name, input) {
-      const cid = useBrowserStore.getState().currentChatId ?? "";
-      addToolCall(cid, {
-        id,
-        name,
-        input,
-        status: "running",
-        startTime: Date.now(),
-      });
+    onDone: (cid) => {
+      if (settledRef.current.delete(cid)) return;
+      turn.completeTurn(cid);
     },
-    onToolResult(id, result, isError) {
-      const cid = useBrowserStore.getState().currentChatId ?? "";
-      updateToolResult(cid, id, result, isError);
-    },
-    onDone() {
-      const cid = useBrowserStore.getState().currentChatId ?? "";
-      stopStreaming(cid);
-      setAgentControl(null);
-    },
-    onError(error) {
-      const cid = useBrowserStore.getState().currentChatId ?? "";
-      stopStreaming(cid);
-      setAgentControl(null);
-      appendToLastAssistant(cid, `\n\n**Error:** ${error.message}`);
-    },
-    onPhaseChange(phase) {
-      setLoopPhase(phase);
-    },
+    onPhaseChange: setLoopPhase,
     // At the step limit, ask on the banner rather than stopping silently.
     onStepLimit(steps) {
       return new Promise<boolean>((resolve) => {
@@ -506,131 +594,29 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     onCloseTab: handleCloseTab,
   });
 
-  /*
-   * The full agent, on the same path as every other surface.
-   *
-   * WHY THIS EXISTS. This surface used to have exactly one loop: a hand-rolled
-   * ReAct loop against the raw Messages API with `tools: BROWSER_TOOL_SCHEMAS`
-   * and nothing else. So the surface whose entire purpose is agentic browsing
-   * ran the LEAST capable agent in the app — no MCP, no connectors, no canvas,
-   * no memory, no subagents, no skills (DR-22).
-   *
-   * The reported failure was not a loop-quality problem. Asked to compare camera
-   * listings across pages and report the best ROI, that agent had nowhere to
-   * accumulate findings, no table to build, nothing that survived the
-   * conversation, and no plan. DR-21 improved the loop — a missing verb, change
-   * observation, a shared detector — and all of it was worth doing, but it was
-   * tuning the executor while the agent was missing its hands.
-   */
-  const { sendMessage, abort: abortAgent } = useSSEStream({
-    chatId,
-    setIsStreaming: (v) => {
-      if (v) startStreaming(chatId);
-      else stopStreaming(chatId);
-    },
-    onChunk(event) {
-      if (handleAgnosticChunk(event, { chatId, surface: 'Browser' })) return;
-
-      // The browser-tool relay: the server pauses the turn, we execute against
-      // the live webview and POST the result back. Shared with Code rather than
-      // copied — see the note in lib/sse/browser-tool-chunk.
-      if (
-        handleBrowserToolChunk(event, {
-          chatId,
-          webview: webviewNodeRef.current,
-          consoleBuffer: consoleBufferRef.current,
-          addToolCall,
-          updateToolResult,
-          noWebviewMessage:
-            'No browser view is available. Navigate to a page first, or use WebFetch to read a URL you are not looking at.',
-          surface: 'BrowserSurface',
-          /*
-           * This surface HAS tabs, and they are not webview operations — they
-           * act on the collection of webviews the surface owns. The hand-rolled
-           * loop reached them through its own callbacks; the agent path needs
-           * the same three, or `new_tab` is an unknown tool and the agent loops
-           * on it (DR-21, reproduced exactly: twenty-two calls in one run).
-           */
-          tabs: {
-            open: handleNewTab,
-            switch: handleSwitchTab,
-            close: handleCloseTab,
-            /*
-             * The SAME order the model was shown in the page state, so the
-             * index it picks maps to the tab it meant. Read fresh on each call
-             * rather than captured: a tab opened mid-turn has to be reachable.
-             */
-            list: () => useBrowserStore.getState().getTabsForChat(chatId).map((t) => ({ id: t.id })),
-          },
-        })
-      ) {
-        // The agent has started driving the page: say so on the page.
-        setAgentControl('agent');
-        return;
-      }
-
-      handleCoreChunk(event, {
-        chatId,
-        store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
-        printDocument,
-        /*
-         * Browser cannot DISPLAY a canvas. The canvas store, its overlay and its
-         * dispatch are all keyed to chat/cowork/code, and widening them is a
-         * separate decision from routing this surface through the main agent —
-         * DR-22 wants the canvas here eventually, but not smuggled in under a
-         * swap whose layout nobody has looked at yet.
-         *
-         * So the absence is stated rather than silent. A dropped canvas event is
-         * this codebase's signature bug: a capability that is wired, produces
-         * nothing, and gives the user no way to tell whether the agent tried.
-         * Canvas does not block the turn, so a line in the transcript is the
-         * whole cost — and "Continue in Cowork" is already on this surface.
-         */
-        onCanvas: (event) => {
-          const title = (event.doc as { title?: string } | undefined)?.title;
-          console.warn('[BrowserSurface] canvas event — this surface cannot display one', { title });
-          appendToLastAssistant(
-            chatId,
-            `\n\n_Built a canvas${title ? ` — \u201c${title}\u201d` : ''}, which the Browser surface cannot display. Continue this conversation in Cowork to see it._\n`,
-          );
-        },
-        notify: (title, body) => {
-          if (!document.hasFocus()) showNotification(title, body);
-        },
-      });
-    },
-    onDone() {
-      activeLoopRef.current = null;
-      completeRunningTools(chatId);
-      stopStreaming(chatId);
-      setLoopPhase('idle');
-      setAgentControl(null);
-    },
-    onError(error) {
-      activeLoopRef.current = null;
-      completeRunningTools(chatId);
-      stopStreaming(chatId);
-      setLoopPhase('idle');
-      setAgentControl(null);
-      appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
-    },
-  });
-
   /**
-   * Stop whichever loop is running.
+   * Stop the conversation on screen, on whichever loop it is running.
    *
    * Two paths, two abort mechanisms. Calling the wrong one leaves the turn
    * running while the composer unlocks, which reads as Stop having done nothing.
    */
   const abort = useCallback(() => {
-    if (activeLoopRef.current === 'agent') abortAgent();
-    else abortQuickAsk();
-    activeLoopRef.current = null;
-    setLoopPhase('idle');
-    setAgentControl(null);
+    const cid = useBrowserStore.getState().currentChatId ?? '';
+    if (loopsRef.current.get(cid) === 'quick-ask') {
+      // A Stop is a cancel, not the success the loop's `onDone` would record.
+      settledRef.current.add(cid);
+      turn.runRecorder.cancel(cid);
+      abortQuickAsk();
+      const store = useBrowserStore.getState();
+      store.completeRunningTools(cid);
+      store.stopStreaming(cid);
+    } else {
+      turn.abort();
+    }
+    loopEnded(cid);
     // A pending "continue?" is answered no, so the loop can finish unwinding.
     answerStepLimit(false);
-  }, [abortAgent, abortQuickAsk, setLoopPhase, answerStepLimit]);
+  }, [turn, abortQuickAsk, loopEnded, answerStepLimit]);
 
   /** Stop the agent and hand the page back: focus lands in it, ready to use. */
   const takeOver = useCallback(() => {
@@ -640,25 +626,8 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
     (webviewNodeRef.current as HTMLElement | null)?.focus?.();
   }, [abort, appendToLastAssistant]);
 
-  // Ensure a browser conversation exists for tab management.
-  // Returns the chatId (creating one if needed).
-  const ensureBrowserConversation = useCallback((): string => {
-    let cid = useBrowserStore.getState().currentChatId;
-    if (!cid) {
-      cid = crypto.randomUUID();
-      addConversation({
-        id: cid,
-        title: "Browser",
-        surface: "browser",
-        lastMessage: "",
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-      setActiveConversation(cid);
-      setCurrentChat(cid);
-    }
-    return cid;
-  }, [addConversation, setActiveConversation, setCurrentChat]);
+  // Tabs need a conversation to belong to; navigating creates one if needed.
+  const ensureBrowserConversation = turn.ensureConversation;
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -765,210 +734,6 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
       wv.executeJavaScript("window.getSelection().removeAllRanges()").catch(() => {});
     }
   }, [selectionInfo, addPendingContext]);
-
-  // ── Agent submit (with conversation creation fix) ─────────────────────
-  const handleAgentSubmit = useCallback(
-    async (text: string) => {
-      // ── Slash command interception ─────────────────────────────────────
-      const parsed = parseSlashCommand(text);
-      if (parsed) {
-        const result = applySlashCommand(parsed, sessionControls);
-        if (result) {
-          setSessionControls(result.controls);
-          const id = ensureBrowserConversation();
-          addMessage(id, { id: crypto.randomUUID(), role: 'user', content: text, timestamp: Date.now() });
-          addMessage(id, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now() });
-          setInputValue('');
-          return;
-        }
-      }
-
-      // Ensure conversation exists (reuse shared helper)
-      const id = ensureBrowserConversation();
-
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: text,
-        timestamp: Date.now(),
-        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
-      });
-      updateConversation(id, {
-        title: text.substring(0, 50),
-        lastMessage: text,
-        updatedAt: Date.now(),
-      });
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        isLoading: true,
-        isStreaming: true,
-      });
-      startStreaming(id);
-      setInputValue("");
-
-      // Capture and clear pending context + attachments
-      const context: PendingContextItem[] = [...useBrowserStore.getState().pendingContext];
-      clearPendingContext();
-
-      // Convert attachments to pending context items
-      const currentAttachments = [...attachments];
-      setAttachments([]);
-      const pushAtt = (
-        type: PendingContextItem['type'],
-        name: string,
-        content: string,
-      ) => {
-        context.push({
-          id: crypto.randomUUID(),
-          type,
-          label: name,
-          content,
-          timestamp: Date.now(),
-        });
-      };
-      for (const att of currentAttachments) {
-        if (att.category === 'image' && att.content) {
-          pushAtt('screenshot', att.name, att.content);
-        } else if (att.category === 'text' && att.content) {
-          pushAtt('document', att.name, `<document name="${att.name}">\n${att.content}\n</document>`);
-        } else if (att.content) {
-          // Binary files (PDF, DOCX): try decoding as text, otherwise note it's binary
-          try {
-            const decoded = atob(att.content);
-            const isText = decoded.length > 0 && /^[\x20-\x7E\t\n\r]*$/.test(decoded.substring(0, 200));
-            if (isText) {
-              pushAtt('document', att.name, `<document name="${att.name}">\n${decoded}\n</document>`);
-            } else {
-              pushAtt('document', att.name, `[Attached file: ${att.name} (${att.category}). This is a binary file — for full document analysis, use the Cowork or Chat surface which can extract text from PDFs and documents.]`);
-            }
-          } catch {
-            pushAtt('document', att.name, `[Attached file: ${att.name}]`);
-          }
-        }
-      }
-
-      // No client-side key gate. It used to refuse the turn unless
-      // `settings.anthropicApiKey` was set — and pointed at a corporate gateway
-      // that was deleted in P0.4 — so the surface was unusable for
-      // anyone whose credentials live server-side (env, the encrypted credential
-      // store, a user-added provider). The server resolves credentials now and
-      // returns a specific, actionable message when there genuinely are none.
-
-      const wv = webviewNodeRef.current;
-
-      // The one chokepoint: whatever the user configured in Settings (tier grid
-      // + BYOK providers) decides where this turn runs, exactly as on every
-      // other surface. `/model` still pins a model for the session on top of it.
-      const route = resolveSendRoute(null, providers, {
-        capability: CAPABILITY,
-        tierModels,
-        hasAnthropicKey,
-        hasBedrock,
-        known: builtinAccessKnown,
-      });
-      const model = sessionControls?.modelOverride ?? route?.model ?? null;
-
-      /*
-       * TWO LOOPS, SPLIT BY THE SHAPE OF THE REQUEST — not by a toggle the user
-       * has to find (DR-22 D-1).
-       *
-       * A question about what is on screen stays local: no round trip, browser
-       * tools only, sub-second. Anything goal-shaped routes through the main
-       * chat path and inherits everything the other surfaces have.
-       *
-       * The default is the full agent, because the two mistakes cost different
-       * amounts: a page question routed to the agent costs a few seconds, while
-       * a goal routed to the quick loop fails the whole task silently.
-       */
-      const shape = classifyBrowserRequest(text);
-
-      if (shape === 'quick-ask') {
-        if (!wv) {
-          appendToLastAssistant(id, "No webview available. Navigate to a page first.");
-          stopStreaming(id);
-          return;
-        }
-        activeLoopRef.current = 'quick-ask';
-        setAgentControl('quick-ask');
-        await runAgentLoop(
-          text,
-          { model, providerConfig: route?.providerConfig },
-          wv,
-          context.length > 0 ? context : undefined,
-        );
-        activeLoopRef.current = null;
-        return;
-      }
-
-      activeLoopRef.current = 'agent';
-      setLoopPhase('thinking');
-
-      /*
-       * Pending context — a selection, a screenshot, an inspected element, an
-       * attachment — is prepended as text. The full agent takes history rather
-       * than a context array, and dropping these would silently lose the thing
-       * the user pointed at, which is most of why they used the inspector.
-       */
-      const contextPrefix = context.length > 0
-        ? context.map((c) => `<context type="${c.type}" label="${c.label}">\n${c.content}\n</context>`).join('\n') + '\n\n'
-        : '';
-
-      await sendMessage(contextPrefix + text, id, 'browser', model, {
-        /*
-         * Only when a webview can actually serve them. Offering `navigate` with
-         * nothing to navigate is DR-21's loop one layer down: the agent cannot
-         * discover that a step is impossible, so it repeats it until the turn
-         * dies.
-         */
-        browserToolsAvailable: !!wv,
-        /*
-         * A PLACE TO WRITE. Browser has Write and Edit auto-approved and a
-         * prompt telling it to accumulate findings in a file — with no `cwd`,
-         * those land in the SERVER PROCESS's working directory, which is the
-         * repo root in dev and anybody's guess in a packaged app.
-         *
-         * The scratch dir is the honest home for it: per-conversation, created
-         * on demand, and the same fallback Cowork uses when it has no folder.
-         */
-        cwd: scratchDir || undefined,
-        providerConfig: route?.providerConfig,
-        /*
-         * `.slice(0, -2)` — the same as every other surface, and it was missing.
-         *
-         * The user turn and the empty assistant placeholder are pushed to the
-         * store BEFORE this call, so an unsliced history sends the current
-         * message twice: once as history, once as the prompt. The history copy
-         * also lacks the `<context>` prefix, so the model sees two subtly
-         * different versions of the same request and has to guess which is
-         * current.
-         */
-        history: stripMessagesForHistory(
-          ((useBrowserStore.getState().messages[id] ?? []) as Message[]).slice(0, -2),
-        ),
-        memories: memoriesStr || undefined,
-        sessionControls: sessionControls ?? undefined,
-      });
-    },
-    // sessionControls is read for slash-command handling and was previously
-    // missing, so chained slash commands applied against a stale value.
-    [providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, addMessage, startStreaming, runAgentLoop, updateConversation, appendToLastAssistant, stopStreaming, ensureBrowserConversation, clearPendingContext, attachments, sessionControls]
-  );
-
-  /*
-   * A due cron job runs HERE, through this surface's own submit — not through a
-   * scheduler with a send path of its own, which would be a fourth place that
-   * starts a turn. Before this, a job published to the bus, switched surface,
-   * and nothing ran it.
-   */
-  useScheduledPrompt('browser', handleAgentSubmit, () => useBrowserStore.getState().isStreaming);
-
-  const handleVoiceTranscript = useCallback(
-    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
-    []
-  );
 
   // Resize handle
   const handleMouseDown = useCallback(() => {
@@ -1308,7 +1073,7 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
                   />
                 </div>
               )}
-              <MessageList messages={messages} className="text-xs" conversationId={chatId} />
+              <MessageList {...turn.transcript} onCancel={chatId ? abort : undefined} className="text-xs" />
 
               {/* Pending context display */}
               {pendingContext.length > 0 && (
@@ -1353,57 +1118,18 @@ const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAcc
                 </div>
               )}
 
-              <div>
-                <div className="px-4 pt-3">
-                  <div className="max-w-3xl mx-auto">
-                    <CommandPicker
-                      suggestions={slashSuggestions}
-                      selectedIndex={selectedSuggestionIdx}
-                      onSelect={(s) => {
-                        setInputValue(s.value + ' ');
-                        setSlashSuggestions([]);
-                        setSelectedSuggestionIdx(0);
-                      }}
-                      onSelectedIndexChange={setSelectedSuggestionIdx}
-                    />
-                  </div>
-                </div>
-                <InputArea
-                  value={inputValue}
-                  onChange={(val) => {
-                    setInputValue(val);
-                    setSlashSuggestions(
-                      getSlashSuggestions(val).map((cmd) => ({
-                        type: 'slash' as const,
-                        value: cmd.name,
-                        label: cmd.name,
-                        description: cmd.args,
-                        meta: cmd.description,
-                      }))
-                    );
-                    setSelectedSuggestionIdx(0);
-                  }}
-                  onSubmit={handleAgentSubmit}
-                  onAbort={abort}
-                  isStreaming={isStreaming}
+              <div className="px-3 pb-3 pt-2">
+                <Composer
+                  {...turn.composer}
+                  onStop={abort}
                   placeholder="Ask about this page..."
-                  attachments={attachments}
-                  onRemoveAttachment={(i) => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                  extraControls={
-                    <>
-                      <AttachmentMenu
-                        onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                        onWebSearchToggle={() => {}}
-                        webSearchEnabled={false}
-                        hideWebSearch
-                        currentProjectId={currentProjectId}
-                        onAddToProject={(pid) => assignToProject(chatId, pid)}
-                        onNewProject={() => setSidebarMode("projects")}
-                        projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                      />
-                      <VoiceButton onTranscript={handleVoiceTranscript} />
-                    </>
-                  }
+                  attachmentMenu={{
+                    hideWebSearch: true,
+                    currentProjectId,
+                    onAddToProject: (pid) => assignToProject(chatId, pid),
+                    onNewProject: () => setSidebarMode("projects"),
+                    projects: allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon })),
+                  }}
                 />
               </div>
             </div>

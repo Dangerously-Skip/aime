@@ -15,28 +15,33 @@ import type { A2UIDocument } from '@/lib/a2ui/types';
  * explicit instead of the canvas being silently dropped, which is what happened
  * before. Adding persistence is a code-store change, tracked as follow-up.
  */
-type SurfaceId = 'chat' | 'cowork' | 'code';
+export type CanvasSurfaceId = 'chat' | 'cowork' | 'code';
 
 /**
- * One canvas SSE handler shared by both surfaces. Each surface used to inline
+ * One canvas SSE handler shared by the surfaces. Each surface used to inline
  * the same five state mutations (push, open, addArtifact, attachToMessage,
  * telemetry). Drift between them caused most of the canvas-related layout bugs.
  *
- * Usage in a surface's SSE switch:
+ * THE CHAT IS AN ARGUMENT, and it must be the stream's own. This hook used to
+ * take the conversation on screen when the surface rendered, which is not the
+ * conversation the canvas belongs to: a first turn starts before the surface
+ * has re-rendered into its new conversation (so the canvas was filed under ''
+ * and its chip never attached), and a canvas arriving after the user had moved
+ * to another chat was filed under that one. `useSSEStream` hands every callback
+ * the chat it was started for; pass that.
  *
- *     const onCanvasEvent = useCanvasSseHandler('chat', chatId);
- *     // ...
- *     case 'canvas': onCanvasEvent(event); break;
+ *     const onCanvas = useCanvasSseHandler('chat');
+ *     // in onChunk(event, chatId):
+ *     case 'canvas': onCanvas(event, chatId); break;
  */
-export function useCanvasSseHandler(surfaceId: SurfaceId, chatId: string) {
+export function useCanvasSseHandler(surfaceId: CanvasSurfaceId) {
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const setCanvasOpen = useCanvasStore((s) => s.setOpen);
 
   return useCallback(
-    (event: { doc?: unknown }) => {
+    (event: { doc?: unknown }, chatId: string) => {
       try {
         const doc = event.doc as A2UIDocument | undefined;
-        console.log(`[${surfaceId}] canvas event received`, { hasDoc: !!doc, hasComponents: !!doc?.components, chatId });
         if (!doc || !doc.components) {
           console.warn(`[${surfaceId}] canvas event dropped — doc malformed`, doc);
           return;
@@ -50,18 +55,10 @@ export function useCanvasSseHandler(surfaceId: SurfaceId, chatId: string) {
           const canvasId = crypto.randomUUID();
           const title = doc.title || 'Canvas';
           const payload = { id: canvasId, title, doc };
-
-          if (surfaceId === 'cowork') {
-            const c = useCoworkStore.getState();
-            c.addCanvasArtifact(chatId, { ...payload, createdAt: Date.now() });
-            c.attachCanvasToLastAssistant(chatId, payload);
-          } else {
-            const c = useChatStore.getState();
-            c.addCanvasArtifact(chatId, { ...payload, createdAt: Date.now() });
-            c.attachCanvasToLastAssistant(chatId, payload);
-          }
-          console.log(`[${surfaceId}] canvas chip attached + artifact saved`, { canvasId, title });
-        } else {
+          const store = surfaceId === 'cowork' ? useCoworkStore.getState() : useChatStore.getState();
+          store.addCanvasArtifact(chatId, { ...payload, createdAt: Date.now() });
+          store.attachCanvasToLastAssistant(chatId, payload);
+        } else if (!chatId) {
           console.warn(`[${surfaceId}] canvas event fired but chatId is empty — chip won't attach`);
         }
 
@@ -70,6 +67,6 @@ export function useCanvasSseHandler(surfaceId: SurfaceId, chatId: string) {
         console.error(`[${surfaceId}] Canvas event error:`, e);
       }
     },
-    [surfaceId, chatId, pushCanvas, setCanvasOpen],
+    [surfaceId, pushCanvas, setCanvasOpen],
   );
 }

@@ -109,7 +109,7 @@ interface AssistantMessageProps {
   /** Inline canvas chips — A2UI docs the agent emitted during this turn. */
   inlineCanvases?: Array<{ id: string; title: string; doc: A2UIDocument }>;
   /** Surface this message is rendered in — drives where canvas chips reopen. */
-  surfaceId?: 'chat' | 'cowork';
+  surfaceId?: 'chat' | 'cowork' | 'code';
   /** The turn failed — rendered as a banner, never as reply text. */
   error?: { code: TurnErrorCode; message: string };
   /** The provider is backing off; the turn is waiting, not stuck. */

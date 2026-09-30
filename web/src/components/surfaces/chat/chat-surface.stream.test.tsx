@@ -1,6 +1,4 @@
 // @vitest-environment jsdom
-import * as fs from 'fs';
-import * as path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
 import { ChatSurface } from './chat-surface';
@@ -11,6 +9,7 @@ import { useComposerDrafts } from '@/components/shared/composer/draft-store';
 import { streamRegistry } from '@/lib/stream-registry';
 import { resetServerCredentials } from '@/hooks/use-builtin-access';
 import { useAppStore } from '@/stores/app-store';
+import { useSettingsStore } from '@/stores/settings-store';
 
 /** What /api/models reports about server-side credentials, per test. */
 let serverCreds = { anthropic: true, bedrock: false };
@@ -488,24 +487,44 @@ describe('ChatSurface — Stop closes the Run (DEFECT 5a)', () => {
  * A registry keyed by chatId exists precisely so several can be in flight.
  */
 describe('a running turn survives switching conversations', () => {
-  const src = () =>
-    fs.readFileSync(
-      path.resolve(process.cwd(), 'src/components/surfaces/chat/chat-surface.tsx'),
-      'utf-8',
-    );
+  it('does not abort the previous conversation on switch', async () => {
+    render(<ChatSurface />);
+    await send('a long research task');
+    expect(streamRegistry.has(CHAT)).toBe(true);
 
-  it('does not abort the previous conversation on switch', () => {
-    // Comments stripped: the note explaining WHY necessarily names the call it
-    // replaced, and matching that would pass while the call was back.
-    const code = src().replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*/gm, '$1');
-    const switchEffect = /const prevId = prevChatIdRef\.current;[\s\S]{0,900}/.exec(code)?.[0] ?? '';
-    expect(switchEffect, 'switching conversations still kills the running turn').not.toMatch(
-      /streamRegistry\.abort\(prevId\)/,
-    );
+    // Switched while the surface is mounted — the path that used to abort.
+    await act(async () => {
+      useConversationStore.getState().setActiveConversation(OTHER);
+    });
+    expect(useChatStore.getState().currentChatId).toBe(OTHER);
+    expect(streamRegistry.has(CHAT), 'switching conversations killed the running turn').toBe(true);
   });
 
   /** Stop must still work — this removes an automatic abort, not the manual one. */
-  it('still lets the user stop a turn deliberately', () => {
-    expect(src()).toMatch(/onCancel=\{chatId \? \(\) => streamRegistry\.abort\(chatId\)/);
+  it('still lets the user stop a turn deliberately', async () => {
+    render(<ChatSurface />);
+    await send('a long research task');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    });
+    expect(streamRegistry.has(CHAT)).toBe(false);
+  });
+});
+
+/*
+ * Chat once sent none of the settings half of a turn: a chosen deck theme never
+ * reached the model (every deck came back an unstyled pptx) and search resolved
+ * to `none`. See surface-settings-parity.test.ts for the structure that keeps it.
+ */
+describe('ChatSurface — a turn carries the user’s settings', () => {
+  it('sends the deck theme, search and security settings', async () => {
+    useSettingsStore.setState({ deckTheme: 'magazine-bold', blockNetworkCommands: true } as never);
+    render(<ChatSurface />);
+    await send('make me a deck');
+    const [body] = chatBodies();
+    expect(body.deckTheme).toMatchObject({ id: 'magazine-bold' });
+    expect(body.searchSettings).toBeDefined();
+    expect(body.securitySettings).toMatchObject({ blockNetworkCommands: true });
+    useSettingsStore.setState({ deckTheme: null, blockNetworkCommands: false } as never);
   });
 });

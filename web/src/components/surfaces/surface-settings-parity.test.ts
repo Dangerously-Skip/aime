@@ -5,7 +5,7 @@ import * as path from 'path';
 /**
  * Every surface must send the settings half of a turn.
  *
- * This has now gone wrong twice, in two different ways, and both were invisible
+ * This has gone wrong twice, in two different ways, and both were invisible
  * because the missing field degrades to a plausible default rather than an
  * error:
  *
@@ -20,71 +20,59 @@ import * as path from 'path';
  *        [Claude] No deck theme on this request — pptx stays available…
  *        [Claude] aime tools: icloud=yes search=none
  *
- * Only `securitySettings` had a server-side fallback, which is exactly why the
- * other two went unnoticed for days.
+ * The fix is structural: ONE builder (`useTurnSettings`) makes the settings
+ * half, every surface spreads it into its request, and the ONE turn path sends
+ * every request it is given. The behavioural halves are in the surfaces'
+ * stream tests; this pins the structure so a surface cannot quietly build its
+ * own again.
  */
 
-const SURFACES = ['chat', 'code', 'cowork'] as const;
+const SURFACES = ['chat', 'code', 'cowork', 'browser'] as const;
 
 /** Settings that are LOST outright if the request omits them. */
 const REQUIRED = ['deckTheme', 'searchSettings', 'securitySettings'] as const;
 
-const surfaceSrc = (name: string) =>
-  fs.readFileSync(
-    path.resolve(process.cwd(), `src/components/surfaces/${name}/${name}-surface.tsx`),
-    'utf-8',
-  );
+const read = (rel: string) =>
+  fs.readFileSync(path.resolve(process.cwd(), 'src', rel), 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '');
+const surfaceSrc = (name: string) => read(`components/surfaces/${name}/${name}-surface.tsx`);
 
 describe('surfaces send the same settings', () => {
-  const cases = SURFACES.flatMap((s) => REQUIRED.map((f) => [s, f] as const));
+  const builder = read('hooks/use-turn-settings.ts');
 
-  /**
-   * Scoped to the `sendMessage` payloads, not the whole file. Searching the file
-   * matched the useCallback DEPENDENCY ARRAY, where every one of these names
-   * also appears — so removing a field from the request while leaving it in the
-   * deps passed, which sabotage caught.
-   */
-  const payloads = (surface: string): string => {
-    const src = surfaceSrc(surface).replace(/\/\*[\s\S]*?\*\//g, '');
-    const bodies = [...src.matchAll(/sendMessage\([^)]*?,\s*\{([\s\S]*?)\n\s{6,14}\}\)/g)]
-      .map((m) => m[1])
-      .join('\n');
-    /*
-     * Follow the one legitimate indirection. Cowork spreads `...turnContext()`,
-     * a single builder shared by its three send sites — the fix for the drift
-     * described above — so the fields are genuinely sent, just not inline. A
-     * test that could not see that would push someone to un-share the builder
-     * to satisfy it, which is the opposite of the point.
-     */
-    if (!bodies.includes('...turnContext()')) return bodies;
-    const builder = /const turnContext = useCallback\(\s*\(\) => \(\{([\s\S]*?)\}\),/.exec(src)?.[1] ?? '';
-    return `${bodies}\n${builder}`;
-  };
-
-  it.each(cases)('%s sends %s', (surface, field) => {
-    const body = payloads(surface);
-    expect(body, `no sendMessage payload found in ${surface}`).not.toBe('');
-    expect(
-      body,
-      `${surface} never sends ${field} — the model runs without it and the default looks deliberate`,
-    ).toMatch(new RegExp(`\\b${field}\\b\\s*[,:]`));
+  it.each(REQUIRED)('the shared builder carries %s', (field) => {
+    const returned = /return useMemo\(\s*\(\) => \(\{([\s\S]*?)\}\),/.exec(builder)?.[1] ?? '';
+    expect(returned, 'useTurnSettings no longer returns its object literal').not.toBe('');
+    expect(returned).toMatch(new RegExp(`\\b${field}\\b\\s*[,:]`));
   });
 
   /**
-   * A theme only reaches the model if the surface resolves one. Reading the
-   * store directly would miss the project-level override, which is why there is
-   * a hook.
-   *
-   * Matched on the CALL, not on `useDeckTheme()` exactly: the hook now takes the
-   * conversation id, because the project override was keyed on an
-   * `activeProjectId` that nothing ever set. Pinning the empty argument list
-   * pinned the shape of a signature rather than the rule being enforced.
+   * A theme only reaches the model if one is resolved — reading the store
+   * directly would miss the project-level override, which is why there is a
+   * hook — and search the same.
    */
-  it.each(SURFACES)('%s resolves the theme through the shared hook', (surface) => {
-    expect(surfaceSrc(surface)).toMatch(/useDeckTheme\(/);
+  it('the builder resolves the theme and search through the shared hooks', () => {
+    expect(builder).toMatch(/useDeckTheme\(chatId\)/);
+    expect(builder).toMatch(/useSearchSettings\(\)/);
   });
 
-  it.each(SURFACES)('%s resolves search through the shared hook', (surface) => {
-    expect(surfaceSrc(surface)).toMatch(/useSearchSettings\(\)/);
+  it.each(SURFACES)('%s builds its request on the shared settings', (surface) => {
+    const src = surfaceSrc(surface);
+    expect(src).toMatch(/const settings = useTurnSettings\(chatId/);
+    // Spread in the request builder, not re-listed field by field.
+    const request = /\brequest:\s*(async\s*)?\([^)]*\)\s*=>[\s\S]*?\n {4}\},?\n|\brequest:\s*(async\s*)?\([^)]*\)\s*=>\s*\(\{[\s\S]*?\}\),/.exec(src)?.[0] ?? '';
+    expect(request, `${surface} has no request builder`).not.toBe('');
+    expect(request).toContain('...settings');
+    for (const field of REQUIRED) {
+      expect(request, `${surface} re-lists ${field}, which is how one site forgets it`).not.toMatch(
+        new RegExp(`^\\s*${field}[,:]`, 'm'),
+      );
+    }
+  });
+
+  it('the shared turn sends the whole request it was given', () => {
+    const hook = read('hooks/use-surface-turn.tsx');
+    expect(hook).toMatch(/const base = cfg\.request \? await cfg\.request\(input\) : \{\};/);
+    expect(hook).toMatch(/extra: \{ \.\.\.base, \.\.\.extra \}/);
+    expect(hook).toMatch(/\{\s*\.\.\.turn\.extra,/);
   });
 });

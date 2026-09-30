@@ -5,6 +5,7 @@ import { BrowserSurface } from './browser-surface';
 import { useBrowserStore } from '@/stores/browser-store';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useSettingsStore } from '@/stores/settings-store';
+import { resetServerCredentials } from '@/hooks/use-builtin-access';
 
 /**
  * WHICH LOOP ANSWERED, asserted through the real surface and its real composer.
@@ -82,8 +83,13 @@ beforeEach(() => {
   fetchMock.mockImplementation((url: string, init: RequestInit) =>
     String(url).includes('/api/chat/')
       ? stalledStream(init)
-      : Promise.resolve(new Response('{}', { status: 200 })),
+      // A model is set up (the server has a key): otherwise the surface shows
+      // "Connect a model" instead of sending anything.
+      : String(url).includes('/api/models')
+        ? Promise.resolve(new Response(JSON.stringify({ anthropic: true, bedrock: false }), { status: 200 }))
+        : Promise.resolve(new Response('{}', { status: 200 })),
   );
+  resetServerCredentials();
   vi.stubGlobal('fetch', fetchMock);
 
   /*
@@ -93,7 +99,7 @@ beforeEach(() => {
    * webview was present, and passed for the wrong reason.
    */
   useBrowserStore.setState({
-    messages: {}, currentChatId: CHAT, isStreaming: false,
+    messages: {}, currentChatId: CHAT, isStreaming: false, streamingChats: {},
     tabSessions: {}, activeTabIds: {}, pendingContext: [],
   } as never);
   useConversationStore.setState({ conversations: [], activeId: null } as never);
@@ -230,5 +236,27 @@ describe('a page question stays on the local loop', () => {
 
     await waitFor(() => expect(chatCalls().length).toBeGreaterThan(0));
     expect(chatCalls()[0]).toContain('/api/chat/browser-turn');
+  });
+
+  it('a failed page question is a banner on its own reply, with Try again', async () => {
+    fetchMock.mockImplementation((url: string, init: RequestInit) =>
+      String(url).includes('/api/chat/browser-turn')
+        ? Promise.resolve(new Response(`data: ${JSON.stringify({ type: 'error', message: 'Overloaded', code: 'overloaded' })}\n\n`))
+        : String(url).includes('/api/chat/')
+          ? stalledStream(init)
+          : String(url).includes('/api/models')
+            ? Promise.resolve(new Response(JSON.stringify({ anthropic: true, bedrock: false })))
+            : Promise.resolve(new Response('{}', { status: 200 })),
+    );
+    render(<BrowserSurface />);
+    await submit('what is on this page?');
+
+    await waitFor(() => expect(useBrowserStore.getState().messages[CHAT]?.at(-1)?.error?.code).toBe('overloaded'));
+    const reply = useBrowserStore.getState().messages[CHAT].at(-1)!;
+    // Not written into the reply, where it would go back to the model as history.
+    expect(reply.content).not.toMatch(/Error/);
+    expect(reply.isStreaming).toBeFalsy();
+    expect(screen.getByRole('alert').textContent).toMatch(/overloaded/i);
+    expect(screen.getByRole('button', { name: /Try again/ })).toBeTruthy();
   });
 });
