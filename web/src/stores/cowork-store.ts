@@ -10,14 +10,12 @@ import {
   markTurnStart,
   turnStartedAt,
 } from '@/lib/artifact-reconcile';
-import type { Message, ToolCall, TurnError } from '@/stores/chat-store';
 import {
   cleanStaleStreamingFlags,
   dedupeMessageIds,
   dedupeLegacyTranscriptRows,
-  withTurnError,
-  withRetryStatus,
 } from '@/stores/chat-store';
+import { createTranscriptSlice, type TranscriptSlice } from '@/stores/slices/transcript-slice';
 import { type SessionControls } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
@@ -32,25 +30,13 @@ export interface CanvasArtifact {
 }
 
 
+/** Cowork's own state; the transcript half comes from `createTranscriptSlice`. */
 interface CoworkState {
-  messages: Record<string, Message[]>;
-  currentChatId: string | null;
   /**
    * Selected route — a tier or a pinned model (in-memory); null ⇒ use the
    * built-in `model` enum.
    */
   modelRoute: ModelOption | null;
-  /**
-   * Any of this store's conversations mid-turn. Kept for callers that ask the
-   * surface-wide question; the composer asks `streamingChats` instead.
-   */
-  isStreaming: boolean;
-  /**
-   * Which conversations have a turn in flight. Per chat, because one surface
-   * boolean meant chat B showed a Stop that aborted nothing while A streamed,
-   * and B could not send at all. Not persisted — no stream survives a reload.
-   */
-  streamingChats: Record<string, true>;
   folderByChat: Record<string, string | null>;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
@@ -63,26 +49,7 @@ interface CoworkState {
 }
 
 interface CoworkActions {
-  addMessage: (chatId: string, message: Message) => void;
-  updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
-  appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
-  setTurnError: (chatId: string, error: TurnError) => void;
-  setRetryStatus: (chatId: string, retrying: Message['retrying'] | null) => void;
-  attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: A2UIDocument }) => void;
   setModelRoute: (opt: ModelOption | null) => void;
-  startStreaming: (chatId: string) => void;
-  stopStreaming: (chatId: string) => void;
-  setCurrentChat: (chatId: string | null) => void;
-  clearMessages: (chatId: string) => void;
-  /**
-   * Drop everything after `messageId` — or from it, with `inclusive`. How Retry
-   * replaces a failed reply and Edit replaces a question, instead of stacking a
-   * duplicate question and a second answer under the first.
-   */
-  truncateMessages: (chatId: string, messageId: string, opts?: { inclusive?: boolean }) => void;
-  addToolCall: (chatId: string, toolCall: ToolCall) => void;
-  updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
-  completeRunningTools: (chatId: string) => void;
   setFolder: (chatId: string, folder: string | null) => void;
   addContextFile: (chatId: string, path: string) => void;
   addArtifactFile: (chatId: string, path: string) => void;
@@ -95,22 +62,27 @@ interface CoworkActions {
   setPlanOpen: (open: boolean) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   touchActivity: (chatId: string) => void;
-  setIsStreaming: (v: boolean) => void;
-  setChatStreaming: (chatId: string, streaming: boolean) => void;
   addSearchGroup: (chatId: string, group: { query: string; results: { title: string; url: string; snippet: string }[] }) => void;
   clearSearchGroups: (chatId: string) => void;
 }
 
-export type CoworkStore = CoworkState & CoworkActions;
+export type CoworkStore = TranscriptSlice & CoworkState & CoworkActions;
 
 export const useCoworkStore = create<CoworkStore>()(
   persist(
     (set) => ({
-      messages: {},
-      currentChatId: null,
+      ...createTranscriptSlice(set, {
+        // Stamped here so an aborted turn can tell its own files from every
+        // previous turn's when it reconciles the scratch directory.
+        onStart: markTurnStart,
+        /*
+         * No selectOnStart. It used to switch the screen to whichever chat
+         * started a turn — so an auto-continue firing in chat A yanked a user
+         * who had moved on to B back to A. The composer selects a new
+         * conversation itself before it sends.
+         */
+      }),
       modelRoute: null,
-      isStreaming: false,
-      streamingChats: {},
       folderByChat: {},
       contextFiles: {},
       artifactFiles: {},
@@ -121,178 +93,7 @@ export const useCoworkStore = create<CoworkStore>()(
       lastActivityAt: {},
       searchGroups: {},
 
-      // Idempotent by id, inside `set` — see chat-store's addMessage for why.
-      // Every message store carries this: the goal transcript posts through
-      // whichever store owns the surface, and the guard was on only one of them.
-      addMessage: (chatId, message) =>
-        set((state) => {
-          const existing = state.messages[chatId] ?? [];
-          if (existing.some((m) => m.id === message.id)) return state;
-          return {
-            messages: { ...state.messages, [chatId]: [...existing, message] },
-          };
-        }),
-
-      updateMessage: (chatId, messageId, updates) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs) return state;
-          return {
-            messages: {
-              ...state.messages,
-              [chatId]: msgs.map((m) => (m.id === messageId ? { ...m, ...updates } : m)),
-            },
-          };
-        }),
-
-      appendToLastAssistant: (chatId, content, thinking) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            content: last.content + content,
-            isLoading: false,
-            ...(last.retrying ? { retrying: undefined } : {}),
-            ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      setTurnError: (chatId, error) =>
-        set((state) => {
-          const updated = withTurnError(state.messages[chatId] ?? [], error);
-          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
-        }),
-
-      setRetryStatus: (chatId, retrying) =>
-        set((state) => {
-          const updated = withRetryStatus(state.messages[chatId] ?? [], retrying);
-          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
-        }),
-
-      attachCanvasToLastAssistant: (chatId, canvas) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            inlineCanvases: [...(last.inlineCanvases ?? []), canvas],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
       setModelRoute: (opt) => set({ modelRoute: opt }),
-
-      startStreaming: (chatId) => {
-        // Stamped here so an aborted turn can tell its own files from every
-        // previous turn's when it reconciles the scratch directory.
-        if (chatId) markTurnStart(chatId);
-        /*
-         * No `currentChatId` here. It used to switch the screen to whichever
-         * chat started a turn — so an auto-continue firing in chat A yanked a
-         * user who had moved on to B back to A. The composer selects a new
-         * conversation itself before it sends.
-         */
-        set((state) => ({
-          isStreaming: true,
-          streamingChats: chatId ? { ...state.streamingChats, [chatId]: true } : state.streamingChats,
-        }));
-      },
-
-      stopStreaming: (chatId) =>
-        set((state) => {
-          const { [chatId]: _done, ...streamingChats } = state.streamingChats;
-          const isStreaming = Object.keys(streamingChats).length > 0;
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return { isStreaming, streamingChats };
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          const updated = [...msgs];
-          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false, retrying: undefined };
-          return { isStreaming, streamingChats, messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      setCurrentChat: (chatId) => set({ currentChatId: chatId }),
-
-      clearMessages: (chatId) =>
-        set((state) => {
-          const { [chatId]: _, ...rest } = state.messages;
-          return { messages: rest };
-        }),
-
-      truncateMessages: (chatId, messageId, opts) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          const idx = msgs?.findIndex((m) => m.id === messageId) ?? -1;
-          if (!msgs || idx < 0) return state;
-          return {
-            messages: { ...state.messages, [chatId]: msgs.slice(0, opts?.inclusive ? idx : idx + 1) },
-          };
-        }),
-
-      addToolCall: (chatId, toolCall) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: [...(last.toolCalls ?? []), toolCall],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      updateToolResult: (chatId, toolCallId, output, isError) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.id === toolCallId
-                ? { ...tc, output, status: (isError ? 'error' : 'complete') as ToolCall['status'], endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      completeRunningTools: (chatId) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const hasRunning = last.toolCalls.some((tc) => tc.status === 'running');
-          if (!hasRunning) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.status === 'running'
-                ? { ...tc, status: 'complete' as const, endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
 
       setFolder: (chatId, folder) => set((state) => ({
         folderByChat: { ...state.folderByChat, [chatId]: folder },
@@ -361,16 +162,6 @@ export const useCoworkStore = create<CoworkStore>()(
           lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
         })),
 
-      setIsStreaming: (v) => set({ isStreaming: v }),
-
-      setChatStreaming: (chatId, streaming) =>
-        set((state) => {
-          if (!chatId || !!state.streamingChats[chatId] === streaming) return state;
-          const next = { ...state.streamingChats };
-          if (streaming) next[chatId] = true;
-          else delete next[chatId];
-          return { streamingChats: next };
-        }),
       addSearchGroup: (chatId, group) =>
         set((state) => ({
           searchGroups: {
