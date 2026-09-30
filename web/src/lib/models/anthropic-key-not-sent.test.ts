@@ -21,11 +21,7 @@ const SRC = path.resolve(__dirname, '../..');
 /** `apiKey: anthropicApiKey`, with or without `|| undefined`, or passed through a helper. */
 const SENDS_KEY = /\bapiKey:\s*anthropicApiKey\b/;
 
-const PENDING = [
-  'components/surfaces/chat/chat-surface.tsx',
-  'components/surfaces/cowork/cowork-surface.tsx',
-  'components/shared/canvas-overlay.tsx',
-];
+const PENDING: string[] = [];
 
 function sourceFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -41,8 +37,11 @@ const senders = sourceFiles(SRC)
   .map((f) => path.relative(SRC, f).split(path.sep).join('/'));
 
 describe('the Anthropic key is not sent from the browser', () => {
-  it('finds the pending senders (so this cannot pass by matching nothing)', () => {
-    expect(senders.length).toBeGreaterThan(0);
+  it('the pattern recognises a sender (so this cannot pass by matching nothing)', () => {
+    // Every real sender is gone, so prove the detector against the shapes it replaced.
+    expect(SENDS_KEY.test('apiKey: anthropicApiKey || undefined,')).toBe(true);
+    expect(SENDS_KEY.test('{ surfaceId, apiKey: anthropicApiKey }')).toBe(true);
+    expect(SENDS_KEY.test('apiKey: providerKey,')).toBe(false);
   });
 
   it('no file outside the pending list sends it', () => {
@@ -55,6 +54,9 @@ describe('the Anthropic key is not sent from the browser', () => {
 
   it('the migrated callers do not even read it', () => {
     for (const rel of [
+      'components/surfaces/chat/chat-surface.tsx',
+      'components/surfaces/cowork/cowork-surface.tsx',
+      'components/shared/canvas-overlay.tsx',
       'components/surfaces/code/code-surface.tsx',
       'components/surfaces/code/workspace/branch-header.tsx',
       'components/surfaces/browser/browser-surface.tsx',
