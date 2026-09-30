@@ -225,6 +225,35 @@ describe('useSSEStream.sendMessage', () => {
     expect(calls).toEqual(['text:Hello', 'tool_use:t1', 'thinking:hm', 'text:world', 'done']);
   });
 
+  it('coalesceText merges real provider chunks, but never across a segment boundary', async () => {
+    // Every chunk from the server carries `provider`; the old check refused to
+    // merge anything with a field besides content, so live streams never merged.
+    vi.stubGlobal('requestAnimationFrame', () => 0);
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'data: {"type":"text","content":"Hel","provider":"claude","segment":"s1"}\n\n',
+        'data: {"type":"text","content":"lo","provider":"claude","segment":"s1"}\n\n',
+        'data: {"type":"text","content":"Re","provider":"claude","segment":"s2"}\n\n',
+        'data: {"type":"text","content":"try","provider":"claude","segment":"s2"}\n\n',
+      ]),
+    );
+    const calls: string[] = [];
+    const { result } = renderHook(() =>
+      useSSEStream({
+        onChunk: (e) => calls.push(`${e.segment}:${e.content}`),
+        onDone: () => calls.push('done'),
+        onError: vi.fn(),
+        setIsStreaming: vi.fn(),
+        chatId: 'c',
+        coalesceText: true,
+      }),
+    );
+
+    await result.current.sendMessage('hi', 'c', 'chat', null);
+
+    expect(calls).toEqual(['s1:Hello', 's2:Retry', 'done']);
+  });
+
   it('coalesceText keeps text that arrived before a Stop', async () => {
     vi.stubGlobal('requestAnimationFrame', () => 0);
     let push!: (s: string) => void;

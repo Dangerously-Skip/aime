@@ -173,10 +173,21 @@ interface UseSSEStreamOptions {
   coalesceText?: boolean;
 }
 
-/** A chunk that is nothing but text, so merging two loses nothing. */
+/** A text or thinking chunk — the only kinds whose content can be joined. */
 function isMergeable(event: SSEEvent): boolean {
-  if ((event.type !== 'text' && event.type !== 'thinking') || typeof event.content !== 'string') return false;
-  for (const k in event) if (k !== 'type' && k !== 'content') return false;
+  return (event.type === 'text' || event.type === 'thinking') && typeof event.content === 'string';
+}
+
+/**
+ * Two chunks merge only when everything but `content` matches, so merging
+ * loses nothing. It used to require that nothing BUT `content` exist — and
+ * every real chunk carries `provider` (and now `segment`, which a refusal
+ * retraction cuts by), so on a live stream nothing ever merged and the
+ * per-frame batching was dead code outside its own test.
+ */
+function sameEnvelope(a: SSEEvent, b: SSEEvent): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) if (k !== 'content' && a[k] !== b[k]) return false;
   return true;
 }
 
@@ -355,7 +366,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           deliverChunk(event);
           return;
         }
-        if (pendingText && pendingText.type === event.type) {
+        if (pendingText && sameEnvelope(pendingText, event)) {
           pendingText = { ...pendingText, content: (pendingText.content as string) + (event.content as string) };
         } else {
           flushText();

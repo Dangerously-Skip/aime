@@ -190,9 +190,21 @@ mechanisms are, and both fail the build rather than asking you to remember:
 1. **`enforcement: 'enforced' | 'guidance'`** on every entry in
    `SECURITY_TOGGLES` (`settings/sections/security-section.tsx`). Declaring
    `'enforced'` is a claim `security-section.enforcement.test.ts` checks by
-   driving the real `canUseTool` — the one hook that runs whatever
-   `permissionMode` says. A new enforced toggle with no probe fails. The badge is
-   rendered in Settings, so the claim is visible to the user too.
+   driving the real `canUseTool`. A new enforced toggle with no probe fails. The
+   badge is rendered in Settings, so the claim is visible to the user too.
+
+   **`canUseTool` does NOT run on its own in every mode.** The SDK CLI skips it
+   under `bypassPermissions` and `acceptEdits` and for anything on
+   `allowedTools` (it logs `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`). For months that
+   meant "Block dangerous commands" and "Restrict to project folder" — on by
+   default, badged Enforced — did nothing in Chat and Cowork, while every test
+   passed, because the tests called `canUseTool` directly. What makes it run is
+   a `PreToolUse` hook in `claude-provider.ts` answering `ask` for every call,
+   and `claude-provider.real-sdk.test.ts` proves it against the REAL CLI
+   binary. That hook is on for interactive turns only: background runs
+   (subagents, standing orders, widgets) still go through an approval policy
+   that has never actually been exercised, so do not assume the toggles reach
+   them.
 2. **`npm run test:mutation`** (Stryker, scoped to `lib/security/**`,
    `path-containment.ts`, `tool-policy.ts`; weekly in CI, never per-push). A green
    suite says the code ran; only this says the assertions would notice if it
