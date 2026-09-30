@@ -96,6 +96,21 @@ describe('ClaudeProvider — the stored Anthropic key', () => {
     expect(viaEnv.ANTHROPIC_API_KEY ?? '').not.toBe('sk-ant-stored');
   });
 
+  it('does not let a keyless user-added provider inherit the HOST’s ANTHROPIC_API_KEY', async () => {
+    // Regression: the subprocess env is a copy of process.env, so with a base
+    // URL and no key it presented the host's Anthropic key to that URL.
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-host');
+    const env = await sdkEnv({ baseUrl: 'https://openrouter.ai/api' });
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://openrouter.ai/api');
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+
+    // The provider's own key still goes through.
+    const withKey = await sdkEnv({ baseUrl: 'https://openrouter.ai/api', apiKey: 'sk-or' });
+    expect(withKey.ANTHROPIC_API_KEY).toBe('sk-or');
+    // And the built-in path keeps the host key.
+    expect((await sdkEnv({})).ANTHROPIC_API_KEY).toBe('sk-ant-host');
+  });
+
   it('leaves the env alone when nothing is stored', async () => {
     const env = await sdkEnv({});
     expect(env.ANTHROPIC_API_KEY ?? '').toBe('');

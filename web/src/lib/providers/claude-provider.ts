@@ -2300,6 +2300,18 @@ export class ClaudeProvider extends BaseProvider {
     // gateway, or the local openai-compat shim) supplies an Anthropic-compat
     // base URL. Point the SDK at it. Applies on top of whichever key branch ran.
     if (baseUrl) {
+      /*
+       * A keyless provider (a local server, or one whose key is not stored)
+       * must not inherit the HOST's ANTHROPIC_API_KEY: the subprocess would
+       * present it to this base URL — the Anthropic key, handed to a third
+       * party. Without it the request goes out keyless, exactly as on a
+       * machine that never had the variable set.
+       */
+      if (!effectiveApiKey) {
+        const { ANTHROPIC_API_KEY: _hostKey, ...withoutHostKey } =
+          (queryOptions.env as Record<string, string>) || {};
+        queryOptions.env = withoutHostKey;
+      }
       queryOptions.env = {
         ...(queryOptions.env as Record<string, string> || {}),
         ANTHROPIC_BASE_URL: baseUrl,
