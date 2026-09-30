@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { DataSection, exportFileName } from './data-section'
 import { useSettingsStore } from '@/stores/settings-store'
+import * as transcripts from '@/lib/transcripts/transcript-storage'
 
 /**
  * Export wrote `useSettingsStore.getState()` verbatim — API key included — to
@@ -53,5 +54,15 @@ describe('Export', () => {
     fireEvent.click(screen.getByRole('button', { name: /Export conversations/ }))
     expect(downloadName).toMatch(/^aime-settings-\d{4}-\d{2}-\d{2}\.json$/)
     expect(exportFileName(new Date(2026, 8, 29))).toBe('aime-settings-2026-09-29.json')
+  })
+})
+
+describe('Clear all data', () => {
+  it('also clears the transcript database, which localStorage.clear() never reaches', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const clear = vi.spyOn(transcripts, 'clearAllTranscripts').mockReturnValue(new Promise(() => {}))
+    render(<DataSection />)
+    fireEvent.click(screen.getByRole('button', { name: /Clear everything/ }))
+    expect(clear).toHaveBeenCalledTimes(1)
   })
 })

@@ -8,6 +8,7 @@ import { useBrowserStore } from '@/stores/browser-store'
 import { useConversationStore } from '@/stores/conversation-store'
 import { useSettingsStore, exportableSettings } from '@/stores/settings-store'
 import { APP_NAME } from '@/config/branding'
+import { clearAllTranscripts } from '@/lib/transcripts/transcript-storage'
 import { Download, Trash2, AlertTriangle } from 'lucide-react'
 
 /** `aime-settings-2026-09-29.json` — named for the product and the day. */
@@ -64,7 +65,8 @@ export function DataSection() {
     if (!confirmed) return
 
     localStorage.clear()
-    window.location.reload()
+    // Transcripts live in IndexedDB, which localStorage.clear() does not touch.
+    void clearAllTranscripts().finally(() => window.location.reload())
   }
 
   const handleExport = () => {

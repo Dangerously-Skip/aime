@@ -2,13 +2,13 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { getGatedStorage } from '@/lib/gated-storage';
-import { createThrottledJSONStorage } from '@/lib/throttled-storage';
+import { surfaceTranscriptStorage } from '@/lib/transcripts/transcript-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
 import type { TurnErrorCode } from '@/lib/sse/turn-error';
+import { createTranscriptSlice, type TranscriptSlice } from '@/stores/slices/transcript-slice';
 
 export type ModelId = 'sonnet' | 'opus' | 'haiku';
 export type { SessionControls };
@@ -75,35 +75,8 @@ export interface TurnError {
   message: string;
 }
 
-/**
- * Where a turn's error / retry status lands: the last assistant message, which
- * is the reply the turn was writing. A question or connect card can sit after
- * it, which is why this is not simply "the last message".
- */
-function lastAssistantIndex(msgs: Message[]): number {
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === 'assistant' && !msgs[i].questionData && !msgs[i].connectorRequest) return i;
-    if (msgs[i].role === 'user') return -1;
-  }
-  return -1;
-}
-
-/** Record a failed turn on its reply. Shared by every store with this Message shape. */
-export function withTurnError(msgs: Message[], error: TurnError): Message[] | null {
-  const idx = lastAssistantIndex(msgs);
-  if (idx < 0) return null;
-  const updated = [...msgs];
-  updated[idx] = { ...updated[idx], error, retrying: undefined, isLoading: false, isStreaming: false };
-  return updated;
-}
-
-export function withRetryStatus(msgs: Message[], retrying: Message['retrying'] | null): Message[] | null {
-  const idx = lastAssistantIndex(msgs);
-  if (idx < 0) return null;
-  const updated = [...msgs];
-  updated[idx] = { ...updated[idx], retrying: retrying ?? undefined };
-  return updated;
-}
+// Shared by every store with this Message shape; they live with the slice now.
+export { withTurnError, withRetryStatus } from '@/stores/slices/transcript-slice';
 
 /** Clean stale streaming/loading flags from persisted messages (no active stream on rehydration). */
 export function cleanStaleStreamingFlags(messages: Record<string, Message[]>): Record<string, Message[]> {
@@ -211,9 +184,8 @@ export function dedupeLegacyTranscriptRows(
   return changed ? cleaned : messages;
 }
 
+/** Chat's own state; the transcript half comes from `createTranscriptSlice`. */
 interface ChatState {
-  messages: Record<string, Message[]>;
-  currentChatId: string | null;
   /**
    * The route selected in the model picker: either a tier (resolved through the
    * effective registry at send time) or a pinned model (built-in or on a
@@ -221,17 +193,6 @@ interface ChatState {
    * (the provider list itself persists in provider-store).
    */
   modelRoute: ModelOption | null;
-  /**
-   * Any of this store's conversations mid-turn. Kept for callers that ask the
-   * surface-wide question; the composer asks `streamingChats` instead.
-   */
-  isStreaming: boolean;
-  /**
-   * Which conversations have a turn in flight. Per chat, because one surface
-   * boolean meant chat B showed a Stop that aborted nothing while A streamed,
-   * and B could not send at all. Not persisted — no stream survives a reload.
-   */
-  streamingChats: Record<string, true>;
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
   suggestions: Record<string, string[]>;
@@ -239,243 +200,31 @@ interface ChatState {
 }
 
 interface ChatActions {
-  addMessage: (chatId: string, message: Message) => void;
-  updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
-  appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
-  setTurnError: (chatId: string, error: TurnError) => void;
-  setRetryStatus: (chatId: string, retrying: Message['retrying'] | null) => void;
-  attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }) => void;
   setModelRoute: (opt: ModelOption | null) => void;
-  startStreaming: (chatId: string) => void;
-  stopStreaming: (chatId: string) => void;
-  setCurrentChat: (chatId: string) => void;
-  clearMessages: (chatId: string) => void;
-  /**
-   * Drop everything after `messageId` — or from it, with `inclusive`. How Retry
-   * replaces a failed reply and Edit replaces a question, instead of stacking a
-   * duplicate question and a second answer under the first.
-   */
-  truncateMessages: (chatId: string, messageId: string, opts?: { inclusive?: boolean }) => void;
-  addToolCall: (chatId: string, toolCall: ToolCall) => void;
-  updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
-  updateMessageContent: (chatId: string, messageId: string, content: string) => void;
-  completeRunningTools: (chatId: string) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   getSessionControls: (chatId: string) => SessionControls;
   touchActivity: (chatId: string) => void;
-  setIsStreaming: (v: boolean) => void;
-  setChatStreaming: (chatId: string, streaming: boolean) => void;
   addSuggestion: (chatId: string, suggestion: string) => void;
   clearSuggestions: (chatId: string) => void;
   addCanvasArtifact: (chatId: string, artifact: CanvasArtifact) => void;
   removeCanvasArtifact: (chatId: string, artifactId: string) => void;
 }
 
-export type ChatStore = ChatState & ChatActions;
+export type ChatStore = TranscriptSlice & ChatState & ChatActions;
 
 export const useChatStore = create<ChatStore>()(
   persist(
     (set) => ({
-      messages: {},
-      currentChatId: null,
+      // Project detail starts a turn from outside the surface and relies on
+      // startStreaming to land the surface on it.
+      ...createTranscriptSlice(set, { selectOnStart: true, finishingToolsEndsReply: true }),
       modelRoute: null,
-      isStreaming: false,
-      streamingChats: {},
       sessionControls: {},
       lastActivityAt: {},
       suggestions: {},
       canvasArtifacts: {},
 
-      /*
-       * IDEMPOTENT BY ID, and the check has to happen INSIDE `set`.
-       *
-       * `updateMessage` exists for changing a message, so adding one whose id
-       * is already present is always a bug — and it produced a real one: React
-       * "Encountered two children with the same key, goal:r1:question:…".
-       *
-       * The goal transcript posts lines with ids derived from their content so
-       * a restart cannot re-narrate a run. It checked the store first, but a
-       * read-then-write from a caller is not atomic: two polls in flight at
-       * once — or the Cowork and Code surfaces both mounted, which this app
-       * does deliberately — can each read "not present" and both append.
-       *
-       * Doing it here closes that for every caller rather than asking each one
-       * to remember, which is the same trade the local-API cookie makes.
-       */
-      addMessage: (chatId, message) =>
-        set((state) => {
-          const existing = state.messages[chatId] ?? [];
-          if (existing.some((m) => m.id === message.id)) return state;
-          return {
-            messages: { ...state.messages, [chatId]: [...existing, message] },
-          };
-        }),
-
-      updateMessage: (chatId, messageId, updates) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs) return state;
-          return {
-            messages: {
-              ...state.messages,
-              [chatId]: msgs.map((m) => (m.id === messageId ? { ...m, ...updates } : m)),
-            },
-          };
-        }),
-
-      appendToLastAssistant: (chatId, content, thinking) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            content: last.content + content,
-            isLoading: false,
-            // Output arriving means the retry it was waiting on succeeded.
-            ...(last.retrying ? { retrying: undefined } : {}),
-            ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      setTurnError: (chatId, error) =>
-        set((state) => {
-          const updated = withTurnError(state.messages[chatId] ?? [], error);
-          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
-        }),
-
-      setRetryStatus: (chatId, retrying) =>
-        set((state) => {
-          const updated = withRetryStatus(state.messages[chatId] ?? [], retrying);
-          return updated ? { messages: { ...state.messages, [chatId]: updated } } : state;
-        }),
-
-      attachCanvasToLastAssistant: (chatId, canvas) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            inlineCanvases: [...(last.inlineCanvases ?? []), canvas],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
       setModelRoute: (opt) => set({ modelRoute: opt }),
-
-      startStreaming: (chatId) => set((state) => ({
-        isStreaming: true,
-        streamingChats: chatId ? { ...state.streamingChats, [chatId]: true } : state.streamingChats,
-        // Project detail starts a turn from outside the surface and relies on
-        // this to land the surface on it.
-        currentChatId: chatId || state.currentChatId,
-      })),
-
-      stopStreaming: (chatId) =>
-        set((state) => {
-          const { [chatId]: _done, ...streamingChats } = state.streamingChats;
-          // Only this chat's turn ended; another conversation may still be
-          // running, and the surface-wide flag must say so.
-          const isStreaming = Object.keys(streamingChats).length > 0;
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return { isStreaming, streamingChats };
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          const updated = [...msgs];
-          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false, retrying: undefined };
-          return { isStreaming, streamingChats, messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      setCurrentChat: (chatId) => set({ currentChatId: chatId }),
-
-      clearMessages: (chatId) =>
-        set((state) => {
-          const { [chatId]: _, ...rest } = state.messages;
-          return { messages: rest };
-        }),
-
-      truncateMessages: (chatId, messageId, opts) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          const idx = msgs?.findIndex((m) => m.id === messageId) ?? -1;
-          if (!msgs || idx < 0) return state;
-          return {
-            messages: { ...state.messages, [chatId]: msgs.slice(0, opts?.inclusive ? idx : idx + 1) },
-          };
-        }),
-
-      addToolCall: (chatId, toolCall) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: [...(last.toolCalls ?? []), toolCall],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      updateToolResult: (chatId, toolCallId, output, isError) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.id === toolCallId
-                ? { ...tc, output, status: (isError ? 'error' : 'complete') as ToolCall['status'], endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      updateMessageContent: (chatId, messageId, content) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const updated = msgs.map((m) => m.id === messageId ? { ...m, content } : m);
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      completeRunningTools: (chatId) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const hasRunning = last.toolCalls.some((tc) => tc.status === 'running');
-          if (!hasRunning) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            isLoading: false,
-            isStreaming: false,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.status === 'running'
-                ? { ...tc, status: 'complete' as const, endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
 
       setSessionControls: (chatId, controls) =>
         set((state) => ({
@@ -490,17 +239,6 @@ export const useChatStore = create<ChatStore>()(
         set((state) => ({
           lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
         })),
-
-      setIsStreaming: (v) => set({ isStreaming: v }),
-
-      setChatStreaming: (chatId, streaming) =>
-        set((state) => {
-          if (!chatId || !!state.streamingChats[chatId] === streaming) return state;
-          const next = { ...state.streamingChats };
-          if (streaming) next[chatId] = true;
-          else delete next[chatId];
-          return { streamingChats: next };
-        }),
 
       addSuggestion: (chatId, suggestion) =>
         set((state) => ({
@@ -533,10 +271,9 @@ export const useChatStore = create<ChatStore>()(
     }),
     {
       name: 'aime:chat',
-      // Not per token: see lib/throttled-storage. Busy = any chat mid-turn.
-      storage: createThrottledJSONStorage(() => getGatedStorage(), {
-        isBusy: (): boolean => Object.keys(useChatStore.getState().streamingChats).length > 0,
-      }),
+      // Transcripts to IndexedDB per conversation, the rest to localStorage;
+      // see lib/transcripts/transcript-storage.
+      storage: surfaceTranscriptStorage('chat', (): Record<string, true> => useChatStore.getState().streamingChats),
       partialize: (state) => ({
         messages: state.messages,
         currentChatId: state.currentChatId,
