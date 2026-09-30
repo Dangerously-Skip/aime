@@ -108,4 +108,18 @@ describe('useCloseRunOnAbort', () => {
     act(() => notifyStreamAborted({ chatId: 'c1', reason: 'user' }));
     expect(runOf(id)?.status).toBe('running');
   });
+
+  it('Stop in one conversation closes that conversation’s Run, not a concurrent one', () => {
+    const { result } = setup(() => true);
+    let a = '';
+    let b = '';
+    act(() => {
+      a = result.current.begin({ trigger: 'chat', chatId: 'A' });
+      b = result.current.begin({ trigger: 'chat', chatId: 'B' });
+    });
+
+    act(() => notifyStreamAborted({ chatId: 'B', reason: 'user' }));
+    expect(runOf(b)?.status).toBe('cancelled');
+    expect(runOf(a)?.status).toBe('running');
+  });
 });

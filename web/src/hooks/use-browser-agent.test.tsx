@@ -107,3 +107,46 @@ describe('Stop / Take over', () => {
     expect(turns).toBe(BROWSER_AGENT_STEP_LIMIT);
   });
 });
+
+/*
+ * The callbacks used to read the conversation on screen when each event
+ * arrived, so switching mid-run moved the rest of the answer — and its error —
+ * into the chat just opened. They are handed the run's own chat now.
+ */
+describe('a run reports to the conversation it was started for', () => {
+  it('every transcript callback carries the run’s chat id', async () => {
+    const onStepLimit = vi.fn(async () => false);
+    const { opts, result } = setup({ onStepLimit });
+    await act(() => result.current.runAgentLoop('go', { model: null }, webview, undefined, 'chat-7'));
+    expect(vi.mocked(opts.onToolUse).mock.calls.every((c) => c[3] === 'chat-7')).toBe(true);
+    expect(vi.mocked(opts.onToolResult).mock.calls.every((c) => c[3] === 'chat-7')).toBe(true);
+    expect(vi.mocked(opts.onText).mock.calls.every((c) => c[1] === 'chat-7')).toBe(true);
+    expect(opts.onDone).toHaveBeenCalledWith('chat-7');
+  });
+});
+
+describe('a failed run is a typed error, never the raw response', () => {
+  it('an HTTP failure is classified and does not echo the body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response('<html><body>Traceback: secret internals</body></html>', { status: 500 }),
+    ));
+    const { opts, result } = setup();
+    await act(() => result.current.runAgentLoop('go', { model: null }, webview, undefined, 'c1'));
+    const [error, chatId] = vi.mocked(opts.onError).mock.calls[0];
+    expect(chatId).toBe('c1');
+    expect(error.message).not.toMatch(/Traceback|secret/);
+    expect((error as { code?: string }).code).toBeTruthy();
+  });
+
+  it('an SSE error keeps the server’s code', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      `data: ${JSON.stringify({ type: 'error', message: 'No API key', code: 'auth' })}\n\n`,
+      { status: 200 },
+    )));
+    const { opts, result } = setup();
+    await act(() => result.current.runAgentLoop('go', { model: null }, webview, undefined, 'c1'));
+    const [error] = vi.mocked(opts.onError).mock.calls[0];
+    expect(error).toMatchObject({ code: 'auth', message: 'No API key' });
+    expect(opts.onDone).toHaveBeenCalledWith('c1');
+  });
+});

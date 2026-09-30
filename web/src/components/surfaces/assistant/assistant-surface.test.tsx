@@ -52,6 +52,8 @@ function stubFetch(respond: (url: string, body: Record<string, unknown>) => Resp
     const custom = respond(url, parsed);
     if (custom) return custom;
     if (url.includes('/api/runs')) return json({ runs: [] });
+    // A model is set up, so the composer sends rather than showing "Connect a model".
+    if (url.includes('/api/models')) return json({ anthropic: true, bedrock: false });
     return json({});
   });
 }
@@ -124,8 +126,12 @@ describe('a scheduled prompt runs even when the composer is empty', () => {
   });
 });
 
+/*
+ * A failure is the same typed banner a chat reply gets — beside the card's
+ * text, never written into it — with Try again when retrying could help.
+ */
 describe('server errors are visible on the card', () => {
-  it('an SSE error event replaces "Thinking..." with the message', async () => {
+  it('an SSE error event replaces "Thinking..." with a banner', async () => {
     vi.stubGlobal('fetch', stubFetch((url) =>
       url === '/api/chat/assistant'
         ? sseResponse([{ type: 'error', message: 'Tool "Bash" was stopped after 570s.' }])
@@ -134,12 +140,13 @@ describe('server errors are visible on the card', () => {
     renderSurface();
     publishScheduledPrompt('long build');
     await waitFor(() =>
-      expect(useAssistantStore.getState().cards[0]?.summary).toContain('stopped after 570s'),
+      expect(useAssistantStore.getState().cards[0]?.error?.message).toContain('stopped after 570s'),
     );
-    expect(screen.queryByText('Thinking...')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Thinking...')).toBeNull());
+    expect(screen.getByRole('alert').textContent).toMatch(/stopped/i);
   });
 
-  it('composes partial text with a late error instead of losing either', async () => {
+  it('keeps partial text AND the late error, instead of losing either', async () => {
     vi.stubGlobal('fetch', stubFetch((url) =>
       url === '/api/chat/assistant'
         ? sseResponse([
@@ -150,22 +157,55 @@ describe('server errors are visible on the card', () => {
     ));
     renderSurface();
     publishScheduledPrompt('research');
-    await waitFor(() =>
-      expect(useAssistantStore.getState().cards[0]?.summary).toContain('partial findings'),
-    );
-    const summary = useAssistantStore.getState().cards[0]!.summary;
-    expect(summary).toContain('run cancelled');
+    await waitFor(() => expect(useAssistantStore.getState().cards[0]?.error?.message).toBe('run cancelled'));
+    const card = useAssistantStore.getState().cards[0]!;
+    expect(card.summary).toBe('partial findings');
+    expect(card.summary).not.toMatch(/Error/);
   });
 
-  it('a non-OK response shows the body\'s error field, not empty statusText', async () => {
+  it('a non-OK response says what our route said, and never echoes a raw page', async () => {
     vi.stubGlobal('fetch', stubFetch((url) =>
-      url === '/api/chat/assistant' ? json({ error: 'No credentials configured.' }, 503) : undefined,
+      url === '/api/chat/assistant' ? json({ error: 'Message exceeds max length' }, 400) : undefined,
     ));
     renderSurface();
     publishScheduledPrompt('x');
     await waitFor(() =>
-      expect(useAssistantStore.getState().cards[0]?.summary).toContain('No credentials configured.'),
+      expect(useAssistantStore.getState().cards[0]?.error?.message).toBe('Message exceeds max length'),
     );
+
+    cleanup();
+    useAssistantStore.setState({ cards: [] });
+    vi.stubGlobal('fetch', stubFetch((url) =>
+      url === '/api/chat/assistant' ? new Response('<html>Traceback: internals</html>', { status: 500 }) : undefined,
+    ));
+    renderSurface();
+    publishScheduledPrompt('y');
+    await waitFor(() => expect(useAssistantStore.getState().cards[0]?.error).toBeDefined());
+    expect(useAssistantStore.getState().cards[0]!.error!.message).not.toMatch(/Traceback/);
+  });
+
+  it('Try again runs the same prompt into the same card', async () => {
+    let attempt = 0;
+    vi.stubGlobal('fetch', stubFetch((url) => {
+      if (url !== '/api/chat/assistant') return undefined;
+      attempt += 1;
+      return attempt === 1
+        ? sseResponse([{ type: 'error', message: 'Overloaded', code: 'overloaded' }])
+        : sseResponse([{ type: 'text', content: 'All good.' }]);
+    }));
+    renderSurface();
+    publishScheduledPrompt('check the build');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Try again/ })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    await waitFor(() => expect(useAssistantStore.getState().cards[0]?.summary).toBe('All good.'));
+    const cards = useAssistantStore.getState().cards;
+    expect(cards).toHaveLength(1);
+    expect(cards[0].error).toBeUndefined();
+    const posts = calls.filter((c) => c.url === '/api/chat/assistant');
+    expect(posts.map((p) => p.body.message)).toEqual(['check the build', 'check the build']);
+    // A new turn, not a resumption of the one that failed.
+    expect(posts[1].body.chatId).not.toBe(posts[0].body.chatId);
   });
 });
 
@@ -194,17 +234,19 @@ describe('the streaming card is addressed by id, not position', () => {
 });
 
 describe('the model comes from the route chokepoint, not a hardcoded name', () => {
-  it('omits model when nothing resolves, letting the server fall back to its registry', async () => {
+  it('pins no model when nothing resolves, letting the server fall back to its registry', async () => {
     vi.stubGlobal('fetch', stubFetch((url) =>
-      url === '/api/chat/assistant' ? sseResponse([]) : undefined,
+      url === '/api/chat/assistant'
+        ? sseResponse([])
+        // Nothing configured here, so nothing can resolve.
+        : url.includes('/api/models') ? json({}) : undefined,
     ));
     renderSurface();
     publishScheduledPrompt('hello');
     await waitFor(() => expect(chatPost()).toBeDefined());
-    const body = JSON.stringify(chatPost()!.body);
     // The regression shipped `model: 'sonnet'` unconditionally, which skipped
-    // server-side registry resolution entirely.
-    expect(body).not.toContain('"model"');
+    // server-side registry resolution entirely. null means "resolve it there".
+    expect(chatPost()!.body.model ?? null).toBeNull();
   });
 
   it('sends the resolved provider config for a BYOK-only user', async () => {
@@ -290,6 +332,7 @@ function stubHangingTurn() {
     let body: Record<string, unknown> = {};
     try { body = JSON.parse(String(init?.body ?? '{}')); } catch { /* not JSON */ }
     calls.push({ url, body });
+    if (url.includes('/api/models')) return json({ anthropic: true, bedrock: false });
     if (url !== '/api/chat/assistant') return url.includes('/api/runs') ? json({ runs: [] }) : json({});
     const signal = init?.signal;
     return new Response(new ReadableStream<Uint8Array>({
@@ -351,6 +394,42 @@ describe('the composer: Enter sends, Esc stops, IME is left alone', () => {
     fireEvent.keyDown(composer(container), { key: 'Enter', isComposing: true, keyCode: 229 });
     expect(chatPost()).toBeUndefined();
     expect(composer(container).value).toBe('にほん');
+  });
+
+  /*
+   * One surface-wide `isStreaming` meant a scheduled run locked the composer
+   * and Stop stopped whichever turn happened to be running.
+   */
+  it('each card is its own turn: a running scheduled card neither locks the composer nor is stopped by it', async () => {
+    stubHangingTurn();
+    const { container } = renderSurface();
+    publishScheduledPrompt('Morning briefing');
+    await waitFor(() => expect(useAssistantStore.getState().cards[0]?.summary).toBe('partial'));
+    // The composer is free: Send, not a Stop for somebody else's turn.
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+
+    fireEvent.change(composer(container), { target: { value: 'my own question' } });
+    fireEvent.keyDown(composer(container), { key: 'Enter' });
+    await waitFor(() => expect(useAssistantStore.getState().cards).toHaveLength(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    const byTitle = (t: string) => useAssistantStore.getState().cards.find((c) => c.title === t)!;
+    await waitFor(() => expect(byTitle('my own question').summary).toMatch(/Stopped/));
+    expect(byTitle('Morning briefing').summary).toBe('partial');
+    // The scheduled card has a Stop of its own.
+    expect(screen.getAllByRole('button', { name: 'Stop this reply' })).toHaveLength(1);
+  });
+
+  it('with nothing to answer, says "Connect a model" instead of starting a card', async () => {
+    vi.stubGlobal('fetch', stubFetch((url) => (url.includes('/api/models') ? json({}) : undefined)));
+    const { container } = renderSurface();
+    await waitFor(() => expect(screen.getByText('No model is set up yet')).toBeTruthy());
+    fireEvent.change(composer(container), { target: { value: 'remind me at 5' } });
+    fireEvent.keyDown(composer(container), { key: 'Enter' });
+    expect(chatPost()).toBeUndefined();
+    expect(useAssistantStore.getState().cards).toHaveLength(0);
+    expect(composer(container).value).toBe('remind me at 5');
   });
 });
 

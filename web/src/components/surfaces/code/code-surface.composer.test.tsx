@@ -6,11 +6,12 @@ import type { ReactNode } from 'react';
 /*
  * Code's composer, as the surface wires it.
  *
- * The active composer (every message after the first) was a second, hand-written
- * <CodeInput> that was never given `cwd` or `onSlashCommand`, so @-mentions and
- * slash commands died after the first message. Enter while streaming aborted
- * the turn, every send renamed the conversation, and the file tree / editor /
- * terminal stayed hidden behind a mascot until the first message.
+ * The active composer (every message after the first) was once a second,
+ * hand-written composer that was never given `cwd` or `onSlashCommand`, so
+ * @-mentions and slash commands died after the first message. Enter while
+ * streaming aborted the turn, every send renamed the conversation, and the file
+ * tree / editor / terminal stayed hidden behind a mascot until the first
+ * message. Code now uses the shared Composer; these pin that it is wired.
  *
  * The workspace itself (dockview) is replaced by a stub that renders the chat
  * slot: what is under test is what the SURFACE puts in it.
@@ -38,9 +39,9 @@ vi.mock('@/components/harness/use-goal-transcript', () => ({ useGoalTranscript: 
 vi.mock('@/components/harness/use-start-goal', () => ({
   useStartGoal: () => ({ start: vi.fn(), phase: 'idle', error: null, setError: vi.fn() }),
 }));
-vi.mock('@/hooks/use-sse-stream', () => ({
+vi.mock('@/hooks/use-sse-stream', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/use-sse-stream')>()),
   useSSEStream: () => sse,
-  stripMessagesForHistory: (m: unknown[]) => m,
 }));
 vi.mock('@/hooks/use-turn-wiring', () => ({
   useTurnWiring: () => ({
@@ -78,6 +79,7 @@ function seed({ folder = WS as string | null, messages = 0, title = 'New Chat', 
     currentChatId: CHAT,
     folderByChat: folder ? { [CHAT]: folder } : {},
     isStreaming: streaming,
+    streamingChats: streaming ? { [CHAT]: true } : {},
     messages: {
       [CHAT]: Array.from({ length: messages }, (_, i) => ({
         id: `m${i}`, role: i % 2 ? 'assistant' : 'user', content: `msg ${i}`, timestamp: i,
@@ -169,6 +171,22 @@ describe('the composer after the first message', () => {
     const conv = useConversationStore.getState().conversations.find((c) => c.id === CHAT)!;
     expect(conv.title).toBe('Fix the login test');
     expect(conv.lastMessage).toBe('also update the README');
+  });
+
+  it('a turn carries the folder and the user’s settings, which Code once did not send', async () => {
+    seed({ messages: 0 });
+    render(<CodeSurface />);
+    fireEvent.change(composer(), { target: { value: 'add dark mode' } });
+    await act(async () => { fireEvent.keyDown(composer(), { key: 'Enter' }); });
+    await vi.waitFor(() => expect(sse.sendMessage).toHaveBeenCalled());
+    const [message, chatId, surface, , extra] = sse.sendMessage.mock.calls[0] as unknown as [
+      string, string, string, unknown, Record<string, unknown>,
+    ];
+    expect([message, chatId, surface]).toEqual(['add dark mode', CHAT, 'code']);
+    expect(extra.cwd).toBe(WS);
+    expect(extra).toHaveProperty('securitySettings');
+    expect(extra).toHaveProperty('searchSettings');
+    expect(extra).toHaveProperty('deckTheme');
   });
 
   it('the first send titles an untitled conversation', async () => {

@@ -6,6 +6,7 @@ import { useBrowserStore } from '@/stores/browser-store';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useSettingsStore } from '@/stores/settings-store';
 import { APP_NAME } from '@/config/branding';
+import { resetServerCredentials } from '@/hooks/use-builtin-access';
 
 /**
  * The Browser surface, driven through its real <webview> element's events and
@@ -58,11 +59,17 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = () => {};
   fetchMock.mockImplementation((url: string, init: RequestInit) =>
-    String(url).includes('/api/chat/') ? stalledStream(init) : Promise.resolve(new Response('{}', { status: 200 })),
+    String(url).includes('/api/chat/')
+      ? stalledStream(init)
+      // A model is set up, so a question is sent rather than refused.
+      : String(url).includes('/api/models')
+        ? Promise.resolve(new Response(JSON.stringify({ anthropic: true, bedrock: false }), { status: 200 }))
+        : Promise.resolve(new Response('{}', { status: 200 })),
   );
+  resetServerCredentials();
   vi.stubGlobal('fetch', fetchMock);
   useBrowserStore.setState({
-    messages: {}, currentChatId: CHAT, isStreaming: false, loopPhase: 'idle',
+    messages: {}, currentChatId: CHAT, isStreaming: false, streamingChats: {}, loopPhase: 'idle',
     tabSessions: {}, activeTabIds: {}, pendingContext: [],
   } as never);
   useConversationStore.setState({ conversations: [], activeId: null } as never);

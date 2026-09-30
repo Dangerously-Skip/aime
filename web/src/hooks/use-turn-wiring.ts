@@ -74,7 +74,7 @@ export function useTurnWiring({
   useEffect(
     () =>
       onTurnFailed(({ chatId: failedChatId, message }) => {
-        if (ownsChat(failedChatId)) noteFailure(message);
+        if (ownsChat(failedChatId)) noteFailure(message, failedChatId);
       }),
     [noteFailure, ownsChat],
   );

@@ -16,6 +16,8 @@ import {
   type WebviewRef,
 } from '@/lib/browser-tools';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
+import { classifyTurnError, isTurnErrorCode } from '@/lib/sse/turn-error';
+import { httpTurnError, StreamTurnError } from '@/hooks/use-sse-stream';
 import type { ProviderExecConfig } from '@/lib/models/execution';
 
 /**
@@ -61,12 +63,21 @@ interface SSEEvent {
   [key: string]: unknown;
 }
 
+/*
+ * Every transcript callback is handed the chat THE RUN WAS STARTED FOR — the
+ * `chatId` passed to `runAgentLoop`. They used to read the conversation on
+ * screen when each event arrived, so switching conversation mid-run moved the
+ * rest of the answer, its tool calls and its error into the chat just opened.
+ * Same contract as `useSSEStream`.
+ */
 interface UseBrowserAgentOptions {
-  onText: (text: string) => void;
-  onToolUse: (id: string, name: string, input: Record<string, unknown>) => void;
-  onToolResult: (id: string, result: string, isError: boolean) => void;
-  onDone: () => void;
-  onError: (error: Error) => void;
+  onText: (text: string, chatId: string) => void;
+  onToolUse: (id: string, name: string, input: Record<string, unknown>, chatId: string) => void;
+  onToolResult: (id: string, result: string, isError: boolean, chatId: string) => void;
+  /** The run ended, however it ended — called after `onError` too. */
+  onDone: (chatId: string) => void;
+  /** Already classified: a `StreamTurnError` the surface can show as a banner. */
+  onError: (error: Error, chatId: string) => void;
   onPhaseChange: (phase: 'idle' | 'observing' | 'thinking' | 'acting') => void;
   memories?: string;
   consoleBuffer?: ConsoleLogBuffer;
@@ -108,8 +119,21 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
   }, []);
 
   const runAgentLoop = useCallback(
-    async (userMessage: string, route: BrowserTurnRoute, initialWebview: WebviewRef, pendingContext?: PendingContextItem[]) => {
+    async (
+      userMessage: string,
+      route: BrowserTurnRoute,
+      initialWebview: WebviewRef,
+      pendingContext?: PendingContextItem[],
+      /** The conversation this run writes to — see the note on the options. */
+      chatId = '',
+    ) => {
       let webview = initialWebview;
+      const say = (text: string) => optionsRef.current.onText(text, chatId);
+      const turnCallbacks = {
+        onText: say,
+        onToolUse: (id: string, name: string, input: Record<string, unknown>) =>
+          optionsRef.current.onToolUse(id, name, input, chatId),
+      };
       // Abort any previous run
       if (abortRef.current) abortRef.current.abort();
       const controller = new AbortController();
@@ -198,9 +222,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
             const more = (await optionsRef.current.onStepLimit?.(iteration)) ?? false;
             if (controller.signal.aborted) break;
             if (!more) {
-              optionsRef.current.onText(
-                `\n\n_Stopped after ${iteration} steps — the step limit. Ask again to pick up from here._`,
-              );
+              say(`\n\n_Stopped after ${iteration} steps — the step limit. Ask again to pick up from here._`);
               break;
             }
             budget += MAX_ITERATIONS;
@@ -214,7 +236,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
             route,
             systemPrompt,
             controller.signal,
-            optionsRef.current,
+            turnCallbacks,
           );
 
           if (controller.signal.aborted) break;
@@ -266,7 +288,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
                 content: loop.message,
                 is_error: true,
               });
-              optionsRef.current.onToolResult(toolBlock.id, loop.message, true);
+              optionsRef.current.onToolResult(toolBlock.id, loop.message, true, chatId);
               continue;
             }
             if (loop.action === 'warn') {
@@ -284,11 +306,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
               result = await executeToolInWebview(webview, toolBlock.name, toolBlock.input, optionsRef.current.consoleBuffer);
             }
 
-            optionsRef.current.onToolResult(
-              toolBlock.id,
-              result.message,
-              !result.success,
-            );
+            optionsRef.current.onToolResult(toolBlock.id, result.message, !result.success, chatId);
 
             toolResults.push({
               type: 'tool_result',
@@ -346,15 +364,17 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
           messages.push({ role: 'user', content: userBlocks });
         }
       } catch (error: unknown) {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
+        // A Stop is not a failure. Checked on our own signal: an AbortError
+        // from another realm is not `instanceof DOMException` here.
+        if (controller.signal.aborted) return;
         const err = error instanceof Error ? error : new Error(String(error));
-        optionsRef.current.onError(err);
+        optionsRef.current.onError(err, chatId);
       } finally {
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
         optionsRef.current.onPhaseChange('idle');
-        optionsRef.current.onDone();
+        optionsRef.current.onDone(chatId);
       }
     },
     [],
@@ -404,7 +424,10 @@ async function sendTurn(
   route: BrowserTurnRoute,
   system: string,
   signal: AbortSignal,
-  callbacks: Pick<UseBrowserAgentOptions, 'onText' | 'onToolUse'>,
+  callbacks: {
+    onText: (text: string) => void;
+    onToolUse: (id: string, name: string, input: Record<string, unknown>) => void;
+  },
 ): Promise<{
   assistantBlocks: Array<{ type: string; [key: string]: unknown }>;
   stopReason: string;
@@ -429,8 +452,10 @@ async function sendTurn(
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => 'Unknown error');
-    throw new Error(`HTTP ${response.status}: ${text}`);
+    // Classified, and never the raw body — it can be a stack trace or an HTML
+    // error page, and it used to be shown verbatim in the reply.
+    const text = await response.text().catch(() => '');
+    throw httpTurnError(response.status, text);
   }
 
   if (!response.body) throw new Error('Response body is null');
@@ -443,6 +468,7 @@ async function sendTurn(
   // Collect content blocks for conversation history
   const assistantBlocks: Array<{ type: string; [key: string]: unknown }> = [];
   let currentText = '';
+  let streamError: StreamTurnError | null = null;
 
   const processEvent = (event: SSEEvent) => {
     switch (event.type) {
@@ -471,8 +497,17 @@ async function sendTurn(
       case 'turn_complete':
         stopReason = (event.stop_reason as string) || 'end_turn';
         break;
-      case 'error':
-        throw new Error(event.message as string);
+      case 'error': {
+        /*
+         * Kept, then thrown once the frame is parsed. Thrown from here it was
+         * swallowed: the parser deliberately survives a callback that throws (a
+         * malformed line must not kill the stream), so a failed turn ended as
+         * an empty "success".
+         */
+        const message = (event.message as string) || 'An error occurred';
+        streamError ??= new StreamTurnError(isTurnErrorCode(event.code) ? event.code : classifyTurnError(message), message);
+        break;
+      }
     }
   };
 
@@ -488,6 +523,11 @@ async function sendTurn(
 
     buffer += decoder.decode(value, { stream: true });
     buffer = parseSSELines<SSEEvent>(buffer, processEvent);
+    if (streamError) break;
+  }
+  if (streamError) {
+    void reader.cancel().catch(() => {});
+    throw streamError;
   }
 
   // Flush any remaining text

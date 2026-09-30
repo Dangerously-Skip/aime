@@ -18,7 +18,7 @@ interface CanvasOverlayProps {
 /**
  * Single overlay that owns all canvas presentation + lifecycle for a surface.
  * Surfaces just render `<CanvasOverlay surfaceId={...} conversationId={chatId} />`
- * and call `useCanvasSseHandler` from their SSE switch.
+ * and hand `useCanvasSseHandler` to the shared turn as its `onCanvas`.
  */
 export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps) {
   // Per-surface state. The store also stamps each canvas with the conversation

@@ -32,7 +32,10 @@ function surfacesHandlingChunks(): Array<{ file: string; code: string }> {
       if (entry.isDirectory()) walk(full);
       else if (entry.name.endsWith('.tsx') && !entry.name.includes('.test.')) {
         const code = fs.readFileSync(full, 'utf8');
-        if (code.includes('onChunk')) out.push({ file: path.relative(SRC, full), code });
+        // Directly, or through the shared turn's chunk hooks.
+        if (code.includes('onChunk') || code.includes('useSurfaceTurn(')) {
+          out.push({ file: path.relative(SRC, full), code });
+        }
       }
     }
   };

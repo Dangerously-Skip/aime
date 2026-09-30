@@ -68,7 +68,7 @@ interface MessageListProps {
   onCancel?: () => void;
   conversationId?: string;
   /** Surface this list is rendered in — passed to inline canvas chips. */
-  surfaceId?: 'chat' | 'cowork';
+  surfaceId?: 'chat' | 'cowork' | 'code';
   /** Session display controls: `/reasoning` and `/verbose`. */
   showReasoning?: boolean;
   expandToolCalls?: boolean;

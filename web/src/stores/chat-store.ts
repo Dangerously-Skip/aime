@@ -29,6 +29,12 @@ export interface ToolCall {
   status: 'running' | 'complete' | 'error';
   startTime: number;
   endTime?: number;
+  /**
+   * How much of the reply's text had arrived when this call was made — where it
+   * sits in the reply. Absent on transcripts recorded before it existed, which
+   * render their tool calls in one group above the text, as they always did.
+   */
+  textOffset?: number;
 }
 
 export interface Message {

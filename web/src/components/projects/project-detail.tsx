@@ -1,26 +1,22 @@
 "use client";
 
-import { useState, useRef, useMemo, useCallback } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useProjectStore, type KnowledgeFile } from "@/stores/project-store";
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
 import { useChatStore } from "@/stores/chat-store";
-import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream } from "@/hooks/use-sse-stream";
-import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
-import { handleCoreChunk } from "@/lib/sse/core-chunks";
-import { useDocumentPrint } from "@/hooks/use-document-print";
-import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
-import { buildProjectContext } from "@/lib/project/context-builder";
 import { ModelSelector } from "@/components/shared/model-selector";
-import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
+import { Composer } from "@/components/shared/composer/composer";
+import { NoModelCard } from "@/components/shared/no-model-card";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import type { Surface } from "@/stores/app-store";
+import { useAppStore, type Surface } from "@/stores/app-store";
+import { useModelReady } from "@/hooks/use-model-ready";
+import { handOffTurn } from "@/hooks/use-handoff-turn";
+import { isSessionCommand } from "@/lib/slash-commands";
 import {
   ArrowLeft,
-  ArrowUp,
   Star,
   Ellipsis,
   Plus,
@@ -48,11 +44,7 @@ import {
 import { ProjectEditDialog } from "./project-edit-dialog";
 import { ProjectIcon } from "@/components/shared/project-icon";
 import { ProjectCanvases } from "./project-canvases";
-import { useProviderStore } from "@/stores/provider-store";
-import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useTurnWiring } from "@/hooks/use-turn-wiring";
-import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 import { useAttendedJobs } from '@/hooks/use-attended-jobs';
 import { SchedulePicker, type ScheduleChange } from "@/components/schedule/schedule-picker";
 import { describeTrigger, type Trigger } from "@/lib/schedule/schedule";
@@ -147,26 +139,13 @@ export function ProjectDetail({
   const addConversation = useConversationStore((s) => s.addConversation);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
 
+  // The project page starts Chat conversations, so it uses Chat's model picker.
   const modelRoute = useChatStore((s) => s.modelRoute);
   const setModelRoute = useChatStore((s) => s.setModelRoute);
-  const addMessage = useChatStore((s) => s.addMessage);
-  const startStreaming = useChatStore((s) => s.startStreaming);
-  const appendToLastAssistant = useChatStore((s) => s.appendToLastAssistant);
-  const addToolCall = useChatStore((s) => s.addToolCall);
-  // Needed by the shared stream handler; this screen never bound it, which is
-  // why a tool left running was never marked complete here.
-  const completeRunningTools = useChatStore((s) => s.completeRunningTools);
-  const updateToolResult = useChatStore((s) => s.updateToolResult);
-  const stopStreaming = useChatStore((s) => s.stopStreaming);
-  const setIsStreaming = useChatStore((s) => s.setIsStreaming);
-  const displayName = useSettingsStore((s) => s.displayName);
-  const personalPreferences = useSettingsStore((s) => s.personalPreferences);
-  // Built-in (Claude) reachability, which is the user's key OR the server's env
-  // key OR Bedrock. The key itself is never sent: the server reads the one
-  // saved in Settings from its credential store.
-  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
-  const tierModels = useSettingsStore((s) => s.tierModels);
-  const providers = useProviderStore((s) => s.providers);
+  const setActiveSurface = useAppStore((s) => s.setActiveSurface);
+  // "Connect a model" rather than opening a chat whose first turn can only fail.
+  const modelReady = useModelReady(modelRoute, CAPABILITY);
+  const [noModelAttempted, setNoModelAttempted] = useState(false);
 
   // Both stores (DR-24 step 5) — see `useAttendedJobs`.
   const {
@@ -177,8 +156,6 @@ export function ProjectDetail({
   } = useAttendedJobs();
   const cronJobs = useMemo(() => allAttendedJobs.filter((j) => j.projectId === projectId), [allAttendedJobs, projectId]);
 
-  const [inputValue, setInputValue] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [editingInstructions, setEditingInstructions] = useState(false);
   const [instructionsDraft, setInstructionsDraft] = useState("");
   const [addingCron, setAddingCron] = useState(false);
@@ -189,83 +166,6 @@ export function ProjectDetail({
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [surfaceFilter, setSurfaceFilter] = useState<Surface | "all">("all");
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
-  // Track the conversation id launched from this page so SSE handlers can target it
-  const launchedConvIdRef = useRef<string>("");
-  const [activeChatId, setActiveChatId] = useState("");
-  // Required relay deps. This screen streams as the CHAT surface (see
-  // sendMessage below), so it can receive AskUserQuestion, RequestConnector
-  // and DocumentCreate — all three of which park the turn server-side. It
-  // handled none of them, so an approval card here hung for 300s.
-  const printDocument = useDocumentPrint();
-  // `activeChatId`, not the ref: reading a ref during render is a React
-  // violation (eslint caught it), and this value only needs to be the
-  // conversation the canvas belongs to.
-  const onCanvasEvent = useCanvasSseHandler("chat", activeChatId);
-
-
-  // Scoped to the conversation this page launched, so an abort here cannot close
-  // the Chat surface's Run — both record against the 'chat' surface.
-  const ownsChat = useCallback(
-    (id: string) => !!id && id === launchedConvIdRef.current,
-    [],
-  );
-  // Shared with the three surfaces (see use-turn-wiring). No `updateMessage`: this
-  // page renders no question or connect cards, so the answer persisters are
-  // deliberately inert rather than wired to a list that would never show one.
-  const { runRecorder } = useTurnWiring({
-    surfaceId: "chat",
-    chatId: activeChatId,
-    ownsChat,
-  });
-
-  const { sendMessage } = useSSEStream({
-    chatId: activeChatId,
-    setIsStreaming,
-    onUsage: runRecorder.onUsage,
-    onChunk(event) {
-      // Chunks whose handling is the same on every surface — cron jobs,
-      // standing orders, widgets, memory. Handled in ONE place
-      // (lib/sse/agnostic-chunks) because each surface having its own case
-      // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: launchedConvIdRef.current ?? "", surface: 'Project' })) return;
-
-      const cid = launchedConvIdRef.current;
-      if (!cid) return;
-
-      // This screen streams as the CHAT surface, so every chunk chat can receive
-      // it can receive too — including the three that PARK THE TURN until the
-      // client answers. It handled none of them, so an approval card here hung
-      // for 300s with nothing on screen. Delegating gets all of them at once.
-      if (
-        handleCoreChunk(event, {
-          chatId: cid,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
-          printDocument,
-          onCanvas: onCanvasEvent,
-        })
-      ) {
-        return;
-      }
-
-      // No switch left: every chunk this screen handles is now handled centrally.
-      // `tool_use` was the last case and the shared core does it identically.
-    },
-    onDone() {
-      runRecorder.succeed();
-      const cid = launchedConvIdRef.current;
-      if (cid) {
-        stopStreaming(cid);
-      }
-    },
-    onError(error) {
-      runRecorder.fail(error.message);
-      const cid = launchedConvIdRef.current;
-      if (cid) {
-        stopStreaming(cid);
-        appendToLastAssistant(cid, `\n\n**Error:** ${error.message}`);
-      }
-    },
-  });
 
   const projectConversations = conversations
     .filter((c) => c.projectId === projectId)
@@ -290,82 +190,30 @@ export function ProjectDetail({
     );
   }
 
-  function handleStartChat() {
-    if (!inputValue.trim()) return;
-    const trimmed = inputValue.trim();
-
-    const conv: Conversation = {
-      id: crypto.randomUUID(),
-      title: trimmed.substring(0, 50),
-      surface: "chat",
-      lastMessage: trimmed,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      projectId,
-    };
+  /*
+   * Start a project chat by HANDING the message to the Chat surface.
+   *
+   * This page used to run the turn itself — its own stream, run record and
+   * request, the sixth copy of the send path. It sent less than Chat does (no
+   * memories, deck theme, search or security settings), wrote failures into
+   * the reply as text, and could not retry: the component that owned the
+   * stream unmounted the moment it opened the chat. Now it files the
+   * conversation under the project and Chat sends the message through its own
+   * turn, the same as anything typed there — project instructions included,
+   * because they come from the conversation's project.
+   */
+  function handleStartChat(text: string, attachments: AttachmentFile[]): boolean {
+    if (!modelReady && !isSessionCommand(text)) {
+      setNoModelAttempted(true);
+      return false;
+    }
+    const conv = newSurfaceConversation("chat", projectId);
     addConversation(conv);
+    handOffTurn("chat", conv.id, { text, attachments });
     setActiveConversation(conv.id);
-    launchedConvIdRef.current = conv.id;
-    setActiveChatId(conv.id);
-
-    addMessage(conv.id, {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: trimmed,
-      timestamp: Date.now(),
-    });
-    addMessage(conv.id, {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-      timestamp: Date.now(),
-      isLoading: true,
-      isStreaming: true,
-    });
-    startStreaming(conv.id);
-
-    let projectInstructions: string | undefined;
-    let projectKnowledge: string | undefined;
-    if (project!.customInstructions) {
-      projectInstructions = project!.customInstructions;
-    }
-    if (project!.knowledgeFiles.length > 0) {
-      projectKnowledge = project!.knowledgeFiles
-        .map((f) => `[File: ${f.name}]\n${f.content}`)
-        .join("\n\n---\n\n");
-    }
-
-    const currentAttachments = [...attachments];
-    setInputValue("");
-    setAttachments([]);
-
+    setActiveSurface("chat");
     onOpenConversation(conv.id);
-
-    const crossSurfaceContext = buildProjectContext(project!, "chat", conv.id);
-
-    // A tier route resolves here (it can land on a user provider's model); a
-    // pinned model passes through. Null ⇒ nothing resolved, so fall back to the
-    // built-in model rather than send an empty one.
-    const route = resolveSendRoute(modelRoute, providers, {
-      capability: CAPABILITY,
-      tierModels,
-      hasAnthropicKey,
-      hasBedrock,
-      known: builtinAccessKnown,
-    });
-
-    // Open the run record before the turn starts so an immediate failure is
-    // still attributed rather than lost.
-    runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
-    sendMessage(trimmed, conv.id, "chat", route?.model ?? null, {
-      personalPreferences: personalPreferences || undefined,
-      displayName: displayName || undefined,
-      attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-      projectInstructions,
-      projectKnowledge,
-      crossSurfaceContext: crossSurfaceContext || undefined,
-      providerConfig: route?.providerConfig,
-    });
+    return true;
   }
 
   function handleStartInSurface(surface: Surface) {
@@ -373,20 +221,6 @@ export function ProjectDetail({
     addConversation(conv);
     setActiveConversation(conv.id);
     onOpenConversation(conv.id);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleStartChat();
-    }
-  }
-
-  function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setInputValue(e.target.value);
-    const textarea = e.target;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
   }
 
   function handleDelete() {
@@ -505,58 +339,23 @@ export function ProjectDetail({
         )}
         {!project.description && <div className="mb-6" />}
 
-        {/* Chat input card */}
-        <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden mb-4">
-          <Textarea
-            value={inputValue}
-            onChange={handleTextareaChange}
-            onKeyDown={handleKeyDown}
+        {/* Chat input card — the shared Composer; its draft is kept per project. */}
+        <div className="mb-4">
+          <Composer
+            surface="project"
+            conversationId={projectId}
             placeholder="How can I help you today?"
-            rows={2}
-            className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-          />
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-              {attachments.map((att, i) => (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                >
-                  {att.name}
-                  <button
-                    type="button"
-                    onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                    className="hover:text-foreground"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center justify-between px-4 py-2.5">
-            <AttachmentMenu
-              onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-              onWebSearchToggle={() => {}}
-              webSearchEnabled={false}
-            />
-            <div className="flex items-center gap-2">
+            onSubmit={handleStartChat}
+            header={modelReady ? undefined : <NoModelCard attempted={noModelAttempted} />}
+            toolbarEnd={
               <ModelSelector
                 value={modelRoute?.id ?? ''}
-                      onSelectModel={setModelRoute}
+                onSelectModel={setModelRoute}
                 capability={CAPABILITY}
                 className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
               />
-              <Button
-                size="icon"
-                className="h-8 w-8 rounded-full bg-primary hover:bg-primary/80"
-                onClick={handleStartChat}
-                disabled={!inputValue.trim()}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
+            }
+          />
         </div>
 
         {/* Surface launcher buttons */}

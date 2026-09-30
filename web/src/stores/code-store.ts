@@ -10,7 +10,6 @@ import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-comm
 import { createTranscriptSlice, type TranscriptSlice } from '@/stores/slices/transcript-slice';
 
 export type PermissionMode = 'acceptEdits' | 'default' | 'plan' | 'bypass';
-export type SessionStatus = 'idle' | 'active' | 'streaming';
 export type ConnectionType = 'local' | 'github';
 
 /** Code's own state; the transcript half comes from `createTranscriptSlice`. */
@@ -22,7 +21,6 @@ interface CodeState {
   modelRoute: ModelOption | null;
   folderByChat: Record<string, string | null>;
   permissionMode: PermissionMode;
-  sessionStatus: SessionStatus;
   connectionType: ConnectionType;
   planContent: Record<string, string>;
   planOpen: boolean;
@@ -33,7 +31,6 @@ interface CodeActions {
   setModelRoute: (opt: ModelOption | null) => void;
   setFolder: (chatId: string, folder: string | null) => void;
   setPermissionMode: (mode: PermissionMode) => void;
-  setSessionStatus: (status: SessionStatus) => void;
   setConnectionType: (type: ConnectionType) => void;
   setPlanContent: (chatId: string, content: string) => void;
   setPlanOpen: (open: boolean) => void;
@@ -51,7 +48,6 @@ export const useCodeStore = create<CodeStore>()(
       modelRoute: null,
       folderByChat: {},
       permissionMode: 'default',
-      sessionStatus: 'idle',
       connectionType: 'local',
       planContent: {},
       planOpen: false,
@@ -63,7 +59,6 @@ export const useCodeStore = create<CodeStore>()(
         folderByChat: { ...state.folderByChat, [chatId]: folder },
       })),
       setPermissionMode: (mode) => set({ permissionMode: mode }),
-      setSessionStatus: (status) => set({ sessionStatus: status }),
       setConnectionType: (connectionType) => set({ connectionType }),
 
       setPlanContent: (chatId, content) =>

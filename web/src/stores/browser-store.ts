@@ -6,6 +6,7 @@ import { surfaceTranscriptStorage } from '@/lib/transcripts/transcript-storage';
 import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 import { createTranscriptSlice, type TranscriptSlice } from '@/stores/slices/transcript-slice';
+import { onStreamAborted } from '@/lib/stream-registry';
 
 export interface BrowserTab {
   id: string;
@@ -183,3 +184,15 @@ export const useBrowserStore = create<BrowserStore>()(
     }
   )
 );
+
+/**
+ * Finalise a turn whose stream was aborted — see the matching subscription in
+ * chat-store. A Stop reaches neither onDone nor onError, so without this the
+ * reply kept its spinner after the agent path was stopped.
+ */
+onStreamAborted(({ chatId }) => {
+  const state = useBrowserStore.getState();
+  if (!state.messages[chatId]?.length) return;
+  state.completeRunningTools(chatId);
+  state.stopStreaming(chatId);
+});

@@ -27,8 +27,18 @@ import * as path from 'path';
 const SRC = path.resolve(__dirname, '../..');
 
 /** Anything that kicks off a model turn from the UI. */
-const STARTS_A_TURN = /\b(sendMessage|runAgentLoop)\(/;
+const STARTS_A_TURN = /\b(sendMessage|runAgentLoop|useSurfaceTurn)\(/;
 const USES_CHOKEPOINT = /\bresolveSendRoute\(/;
+
+/**
+ * The shared turn Chat, Cowork, Code and Browser all use. It resolves the route
+ * itself and a surface cannot hand it a model — only its picker's selection —
+ * so a surface that sends ONLY through it is covered by it. What would not be
+ * covered: a surface that also sends directly, or runs a local loop on a route
+ * it did not get from the turn. Both are checked below.
+ */
+const SHARED_TURN = path.join('hooks', 'use-surface-turn.tsx');
+const VIA_SHARED_TURN = /\buseSurfaceTurn\(/;
 
 /**
  * A hand-rolled POST to the main chat route is ALSO starting a turn — and the
@@ -111,6 +121,18 @@ describe('every turn-starting surface goes through the model-route chokepoint', 
   it.each(
     files.filter((f) => STARTS_A_TURN.test(f.text)).map((f) => [f.rel, f.text] as const),
   )('%s resolves its route through resolveSendRoute', (rel, text) => {
+    if (rel !== SHARED_TURN && VIA_SHARED_TURN.test(text) && !USES_CHOKEPOINT.test(text)) {
+      expect(text, `${rel} uses the shared turn but also sends directly, bypassing its route`).not.toMatch(
+        /\bsendMessage\(/,
+      );
+      // A local loop (Browser's page questions) runs on the route the turn resolved.
+      for (const call of text.match(/\brunAgentLoop\([^;]*/g) ?? []) {
+        expect(call, `${rel} runs a local loop on a route it did not get from the turn`).toMatch(
+          /\broute\?\.providerConfig\b/,
+        );
+      }
+      return;
+    }
     expect(
       USES_CHOKEPOINT.test(text),
       `${rel} starts a turn but never calls resolveSendRoute, so the user's ` +
@@ -119,13 +141,28 @@ describe('every turn-starting surface goes through the model-route chokepoint', 
     ).toBe(true);
   });
 
-  it('still finds the assistant surface by its raw chat POST', () => {
-    // The regression this half exists for. If the assistant moves to
-    // useSSEStream one day, update this to whatever its new turn-start shape is
-    // rather than deleting the assertion.
-    expect(
-      files.find((f) => f.rel.endsWith('surfaces/assistant/assistant-surface.tsx'))?.text,
-    ).toMatch(/fetch\(\s*['"`]\/api\/chat\/assistant/);
+  it('the shared turn sends the route it resolved, and takes no model from a surface', () => {
+    const hook = files.find((f) => f.rel === SHARED_TURN)?.text ?? '';
+    expect(hook, `${SHARED_TURN} not found`).not.toBe('');
+    expect(hook).toMatch(USES_CHOKEPOINT);
+    // The model it sends is the route's (or a dispatch's explicit override of it)…
+    expect(hook).toMatch(/:\s*\(route\?\.model \?\? null\)/);
+    expect(hook).toMatch(/providerConfig:\s*route\?\.providerConfig/);
+    // …and its config accepts a picker SELECTION, never a model name.
+    const config = /export interface SurfaceTurnConfig \{[\s\S]*?\n\}/.exec(hook)?.[0] ?? '';
+    expect(config).toMatch(/\bmodelRoute: ModelOption \| null;/);
+    expect(config).not.toMatch(/^\s*model\??:/m);
+  });
+
+  it('still finds the assistant surface as a turn starter', () => {
+    // The regression this half exists for: the assistant once hand-rolled
+    // `fetch('/api/chat/assistant')` with a hardcoded model. It streams through
+    // useSSEStream now, so it is a `sendMessage(` starter — and is therefore
+    // held to the chokepoint by the check above rather than slipping past both.
+    const assistant = files.find((f) => f.rel.endsWith('surfaces/assistant/assistant-surface.tsx'))?.text ?? '';
+    expect(assistant).toMatch(/\bsendMessage\([^)]*['"`]assistant['"`]/);
+    expect(STARTS_A_TURN.test(assistant)).toBe(true);
+    expect(USES_CHOKEPOINT.test(assistant)).toBe(true);
   });
 
   it.each(
