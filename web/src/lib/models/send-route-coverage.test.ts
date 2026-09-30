@@ -154,13 +154,15 @@ describe('every turn-starting surface goes through the model-route chokepoint', 
     expect(config).not.toMatch(/^\s*model\??:/m);
   });
 
-  it('still finds the assistant surface by its raw chat POST', () => {
-    // The regression this half exists for. If the assistant moves to
-    // useSSEStream one day, update this to whatever its new turn-start shape is
-    // rather than deleting the assertion.
-    expect(
-      files.find((f) => f.rel.endsWith('surfaces/assistant/assistant-surface.tsx'))?.text,
-    ).toMatch(/fetch\(\s*['"`]\/api\/chat\/assistant/);
+  it('still finds the assistant surface as a turn starter', () => {
+    // The regression this half exists for: the assistant once hand-rolled
+    // `fetch('/api/chat/assistant')` with a hardcoded model. It streams through
+    // useSSEStream now, so it is a `sendMessage(` starter — and is therefore
+    // held to the chokepoint by the check above rather than slipping past both.
+    const assistant = files.find((f) => f.rel.endsWith('surfaces/assistant/assistant-surface.tsx'))?.text ?? '';
+    expect(assistant).toMatch(/\bsendMessage\([^)]*['"`]assistant['"`]/);
+    expect(STARTS_A_TURN.test(assistant)).toBe(true);
+    expect(USES_CHOKEPOINT.test(assistant)).toBe(true);
   });
 
   it.each(

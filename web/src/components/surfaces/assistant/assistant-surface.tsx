@@ -5,14 +5,18 @@ import { useAssistantStore, type StandingOrder, type AssistantCard } from "@/sto
 import { useSettingsStore } from "@/stores/settings-store";
 import { useHydrated } from "@/components/store-hydration";
 import { useStandingOrders } from "@/hooks/use-standing-orders";
-import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
 import type { A2UIAction } from "@/lib/a2ui/types";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
+import { Composer } from "@/components/shared/composer/composer";
+import { setComposerText } from "@/components/shared/composer/draft-store";
+import type { AttachmentFile } from "@/components/shared/attachment-menu";
+import { NoModelCard } from "@/components/shared/no-model-card";
+import { TurnErrorBanner } from "@/components/shared/turn-error-banner";
 import {
-  ArrowUp,
+  RefreshCw,
   Square,
   Play,
   Pause,
@@ -54,16 +58,18 @@ import { RunLog } from "@/components/runs/run-log";
 import { useRunLog } from "@/components/runs/use-run-log";
 import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
-import { readTurnEvents } from "@/lib/sse/turn-events";
+import { classifyTurnError, isTurnErrorCode } from "@/lib/sse/turn-error";
+import { streamRegistry } from "@/lib/stream-registry";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
+import { useSSEStream, turnErrorOf } from "@/hooks/use-sse-stream";
+import { useTurnWiring } from "@/hooks/use-turn-wiring";
+import { useModelReady } from "@/hooks/use-model-ready";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useProviderStore } from "@/stores/provider-store";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { useRunRecorder } from "@/hooks/use-run-recorder";
 import { summarizeRuns } from "@/lib/runs/runs";
 import type { Run, RunTrigger } from "@/lib/runs/types";
-import type { StreamUsage } from "@/hooks/use-sse-stream";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -314,12 +320,20 @@ function CardWidget({
   onReply,
   expanded,
   onToggleExpand,
+  streaming = false,
+  onStop,
+  onRetry,
 }: {
   card: AssistantCard;
   onAction?: (action: A2UIAction) => void;
   onReply: (cardId: string, text: string) => void;
   expanded: boolean;
   onToggleExpand: () => void;
+  /** This card's turn is running — it gets its own Stop. */
+  streaming?: boolean;
+  onStop?: (cardId: string) => void;
+  /** Run the card's prompt again, into this card. */
+  onRetry?: (cardId: string) => void;
 }) {
   const dismissCard = useAssistantStore((s) => s.dismissCard);
   const pinCard = useAssistantStore((s) => s.pinCard);
@@ -369,6 +383,33 @@ function CardWidget({
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-card to-transparent" />
         )}
       </div>
+
+      {card.retrying && streaming && (
+        <div className="flex items-center gap-1.5 px-5 pb-2 text-xs text-muted-foreground" role="status">
+          <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
+          Retrying (attempt {card.retrying.attempt})…
+        </div>
+      )}
+
+      {/* A failed turn, as on every other surface — not text in the card. */}
+      {card.error && (
+        <div className="px-5 pb-3">
+          <TurnErrorBanner
+            code={card.error.code}
+            message={card.error.message}
+            onRetry={card.prompt && onRetry && !streaming ? () => onRetry(card.id) : undefined}
+          />
+        </div>
+      )}
+
+      {streaming && onStop && (
+        <div className="px-5 pb-2">
+          <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={() => onStop(card.id)} aria-label="Stop this reply">
+            <Square className="h-3 w-3" aria-hidden="true" />
+            Stop
+          </Button>
+        </div>
+      )}
 
       {/* Footer actions */}
       <div className="flex items-center justify-between px-5 pb-3 pt-1">
@@ -455,10 +496,17 @@ function CardFeed({
   cards,
   onAction,
   onReply,
+  streaming,
+  onStop,
+  onRetry,
 }: {
   cards: AssistantCard[];
   onAction?: (action: A2UIAction) => void;
   onReply: (cardId: string, text: string) => void;
+  /** Cards whose turn is running. */
+  streaming?: ReadonlySet<string>;
+  onStop?: (cardId: string) => void;
+  onRetry?: (cardId: string) => void;
 }) {
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
 
@@ -499,6 +547,9 @@ function CardFeed({
       onReply={onReply}
       expanded={expandedCards.has(card.id)}
       onToggleExpand={() => toggleExpand(card.id)}
+      streaming={streaming?.has(card.id)}
+      onStop={onStop}
+      onRetry={onRetry}
     />
   );
 
@@ -541,28 +592,13 @@ export function StatusBar({ orders, runs }: { orders: StandingOrder[]; runs: Run
 
 const CAPABILITY = getSurfaceRoute("assistant").capability;
 
-/**
- * Same budget, same reasoning as use-sse-stream: the server heartbeats every
- * ~15s, so 120s without a byte means the connection is dead.
- */
-const STREAM_INACTIVITY_TIMEOUT_MS = 120_000;
-
 export function AssistantSurface() {
   const hydrated = useHydrated();
-  const [inputValue, setInputValue] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   /** Assistant feed vs. Cockpit (scheduled work + run outcomes). */
   const [view, setView] = useState<"feed" | "cockpit">("feed");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [activeTemplate, setActiveTemplate] = useState<StandingOrderTemplate | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  /**
-   * Mirrored for callbacks that must read it without re-subscribing — the
-   * scheduled-prompt hook holds its guard in a ref, so a stale closure here
-   * would let a job fire mid-turn.
-   */
-  const isStreamingRef = useRef(false);
 
   const orders = useAssistantStore((s) => s.orders);
   const cards = useAssistantStore((s) => s.cards);
@@ -570,16 +606,10 @@ export function AssistantSurface() {
   const updateCard = useAssistantStore((s) => s.updateCard);
 
   // The route comes from the SAME `resolveSendRoute` chokepoint every other
-  // surface uses — see the comment at the fetch below.
+  // surface uses — see `runCard`.
   const providers = useProviderStore((s) => s.providers);
   const tierModels = useSettingsStore((s) => s.tierModels);
   const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
-  /*
-   * This surface's own turns are Runs too. It streamed through its own reader
-   * and recorded nothing, so a failed Assistant turn left no trace in the run
-   * log the Activity tab and the Cockpit both read.
-   */
-  const runRecorder = useRunRecorder("assistant");
 
   // Hydrate store on mount
   useEffect(() => {
@@ -634,14 +664,8 @@ export function AssistantSurface() {
     [orders, attendedJobs, activityLog, runs, runsNow],
   );
 
-  // Auto-refresh dashboard widgets on the heartbeat
-
-  // Clear selection when the selected order is deleted
-  useEffect(() => {
-    if (selectedOrderId && !orders.find((o) => o.id === selectedOrderId)) {
-      setSelectedOrderId(null);
-    }
-  }, [orders, selectedOrderId]);
+  // A selection whose order was deleted is no selection.
+  const openOrderId = selectedOrderId && orders.some((o) => o.id === selectedOrderId) ? selectedOrderId : null;
 
   // One-time migration of existing cron jobs to standing orders
   useEffect(() => {
@@ -671,219 +695,219 @@ export function AssistantSurface() {
     }
   }, [hydrated]);
 
-  /**
-   * The prompt arrives as the ARGUMENT when a scheduled job fires —
-   * `useScheduledPrompt` dispatches it that way, and discarding the argument to
-   * read the composer instead meant a job firing with an empty composer was
-   * consumed from the bus and silently did nothing (or ran whatever stale text
-   * happened to be sitting in it). A typed submit passes nothing and reads the
-   * composer.
+  /*
+   * EVERY CARD IS ITS OWN TURN.
+   *
+   * This surface streamed through a reader of its own with one surface-wide
+   * `isStreaming`: a scheduled run locked the composer, Stop stopped whichever
+   * turn was running, and a failure was written into the card's text. It now
+   * rides the same stream hook as every other surface, one chat id per card
+   * turn, so cards stream side by side, each has its own Stop, and a failure is
+   * the same typed banner — with Try again — that a chat reply gets.
    */
-  const handleSubmit = useCallback(async (scheduledPrompt?: string, opts?: { trigger?: RunTrigger }) => {
-    const prompt = (scheduledPrompt ?? inputValue).trim();
-    if (!prompt || isStreaming) return;
-    setInputValue("");
-    setIsStreaming(true);
-    isStreamingRef.current = true;
+  const cardByChat = useRef(new Map<string, string>());
+  const chatByCard = useRef(new Map<string, string>());
+  /** A card turn's text so far, so a Stop can keep it. */
+  const textByChat = useRef(new Map<string, string>());
+  /** Cards whose turn is running, by card id. */
+  const [streaming, setStreaming] = useState<Record<string, true>>({});
+  /** The card the composer started last — the one its Stop and Esc stop. */
+  const [composerCard, setComposerCard] = useState("");
+  const isStreaming = !!composerCard && !!streaming[composerCard];
+  const streamingCards = useMemo(() => new Set(Object.keys(streaming)), [streaming]);
 
-    // THE chokepoint: whatever the user configured in Settings (tier grid +
-    // BYOK providers) decides where this turn runs, exactly as on every other
-    // surface. It used to post a hardcoded `model: 'sonnet'`, which skipped
-    // registry resolution server-side entirely — so the tier grid never
-    // governed this surface, and a BYOK/OpenRouter-only user had a dead
-    // surface while every other one worked. Omitted when it resolves to
-    // nothing, leaving the server's own fallback in charge.
-    const route = resolveSendRoute(null, providers, {
-      capability: CAPABILITY,
-      tierModels,
-      hasAnthropicKey,
-      hasBedrock,
-      known: builtinAccessKnown,
+  const ownsChat = useCallback((id: string) => cardByChat.current.has(id), []);
+  // Run records, the abort listener and reported failures — as every surface has.
+  const { runRecorder } = useTurnWiring({ surfaceId: "assistant", chatId: "", ownsChat });
+
+  const setChatStreaming = useCallback((chatId: string, on: boolean) => {
+    const cardId = cardByChat.current.get(chatId);
+    if (!cardId) return;
+    setStreaming((s) => {
+      if (!!s[cardId] === on) return s;
+      const next = { ...s };
+      if (on) next[cardId] = true;
+      else delete next[cardId];
+      return next;
     });
-
-    // Capture the card ID. `addCard` PREPENDS, so an index-0 update races any
-    // standing-order card landing mid-stream (`useStandingOrders` runs on this
-    // same surface): the streamed text would land on whichever card was newest.
-    const cardId = addCard({ title: prompt, summary: 'Thinking...' });
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    /** Hoisted so an abort can keep what already arrived. */
-    let fullText = '';
-    runRecorder.begin({
-      trigger: opts?.trigger ?? (scheduledPrompt !== undefined ? "cron" : "manual"),
-      model: route?.model ?? undefined,
-    });
-
-    try {
-      const chatId = `assistant-${Date.now()}`;
-      // No question/connector card UI on this surface, so the turn must never
-      // be parked waiting for one. `canRelayToClient` defaults to TRUE, which
-      // meant the provider was handed onInputRequest/onConnectorRequest and
-      // would block for 300s on an approval nobody could answer. Declaring
-      // false takes the documented "cannot ask" path: canUseTool refuses and
-      // tells the agent to say what it would have done.
-      const response = await fetch('/api/chat/assistant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          canRelayToClient: false,
-          message: prompt,
-          chatId,
-          ...(route?.model ? { model: route.model } : {}),
-          ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}),
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok || !response.body) {
-        // The body carries the server's own words (auth failures, unknown
-        // surfaces); statusText is frequently empty in fetch.
-        const body = (await response.json().catch(() => ({}))) as { error?: string };
-        const failure = body.error ?? `Request failed (${response.status}).`;
-        updateCard(cardId, { summary: failure, unread: true });
-        runRecorder.fail(failure);
-        return;
-      }
-
-      /** Set by an SSE `error` event; reported once the stream ends. */
-      let streamError: string | null = null;
-
-      /*
-       * The client-side backstop every other surface gets from use-sse-stream:
-       * without it a wedged stream (sleep, black-holed TCP) left this surface
-       * streaming forever, and — because scheduled prompts defer while busy —
-       * every later standing-order run queued behind a dead connection. Safe
-       * against long tool runs: the server sends heartbeat comments ~15s, so
-       * only genuine silence trips it.
-       */
-      await readTurnEvents(
-        response.body,
-        (event) => {
-          if (event.type === 'done' && event.usage) {
-            runRecorder.onUsage(event.usage as StreamUsage);
-          } else if (event.type === 'text' && typeof event.content === 'string') {
-            fullText += event.content;
-            updateCard(cardId, { summary: fullText });
-          } else if (
-            event.type === 'error' &&
-            typeof event.message === 'string' &&
-            event.message
-          ) {
-            /*
-             * Every server-side failure arrives here — watchdog kills,
-             * silence timeouts, model/auth errors. Dropped, they left the card
-             * saying "Thinking..." forever on exactly the surface whose work
-             * runs unattended. Kept aside rather than written straight into
-             * the summary so a late text chunk cannot overwrite the error
-             * away; the final update below composes both.
-             */
-            streamError = event.message;
-          } else if (handleAgnosticChunk(event as Record<string, unknown>, {
-            chatId,
-            surface: 'Assistant',
-            /*
-             * Card AND desktop notification by default. 'assistant' (card only)
-             * meant "remind me to stretch" never popped up — a reminder that
-             * lands silently in a feed you are not looking at is not a
-             * reminder. The card is added either way; the user can choose
-             * "card only" per schedule in the editor.
-             */
-            notifyVia: 'toast',
-          })) {
-            // handled centrally — see lib/sse/agnostic-chunks
-          }
-        },
-        { inactivityTimeoutMs: STREAM_INACTIVITY_TIMEOUT_MS },
-      );
-
-      // Final update — completed text, or the error, or both when a run failed
-      // after producing something worth keeping.
-      if (streamError) {
-        updateCard(cardId, {
-          summary: fullText ? `${fullText}\n\n_${streamError}_` : `Error: ${streamError}`,
-          unread: true,
-        });
-        runRecorder.fail(streamError);
-      } else {
-        if (fullText) updateCard(cardId, { summary: fullText, unread: true });
-        runRecorder.succeed();
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        /*
-         * A Stop is not an error, but it IS an ending. Returning here left the
-         * card on "Thinking..." for ever, which reads as still running.
-         */
-        updateCard(cardId, { summary: fullText ? `${fullText}\n\n_Stopped._` : 'Stopped.', unread: false });
-        runRecorder.cancel();
-        return;
-      }
-      const failure = err instanceof Error ? err.message : String(err);
-      updateCard(cardId, { summary: `Error: ${failure}`, unread: true });
-      runRecorder.fail(failure);
-    } finally {
-      setIsStreaming(false);
-      isStreamingRef.current = false;
-      abortRef.current = null;
-    }
-  }, [inputValue, isStreaming, addCard, updateCard, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, runRecorder]);
-
-  const handleAbort = useCallback(() => {
-    abortRef.current?.abort();
-    setIsStreaming(false);
-    isStreamingRef.current = false;
   }, []);
 
-  /*
-   * Enter sends; it never stops. It used to abort a live turn — so pressing
-   * Enter on a follow-up you had started typing killed the answer you were
-   * waiting for. Esc stops, which is what every other surface does. And Enter
-   * that COMMITS an IME composition (Japanese, Chinese, Korean input) is the
-   * input method's, not ours: sending there sent half a word.
-   */
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Escape" && isStreaming) {
-        e.preventDefault();
-        handleAbort();
-        return;
+  const { sendMessage } = useSSEStream({
+    // Stop goes through `stopCard`, per card, not this hook's `abort`.
+    chatId: "",
+    setIsStreaming: () => {},
+    setChatStreaming,
+    coalesceText: true,
+    onUsage: runRecorder.onUsage,
+    onChunk(event, cid) {
+      if (handleAgnosticChunk(event, {
+        chatId: cid,
+        surface: 'Assistant',
+        /*
+         * Card AND desktop notification by default. 'assistant' (card only)
+         * meant "remind me to stretch" never popped up — a reminder that lands
+         * silently in a feed you are not looking at is not a reminder.
+         */
+        notifyVia: 'toast',
+      })) return;
+      const cardId = cardByChat.current.get(cid);
+      if (!cardId) return;
+      if (event.type === 'text' && typeof event.content === 'string') {
+        const text = (textByChat.current.get(cid) ?? '') + event.content;
+        textByChat.current.set(cid, text);
+        // Output arriving means the retry it was waiting on succeeded.
+        updateCard(cardId, { summary: text, retrying: undefined });
+      } else if (event.type === 'error') {
+        /*
+         * Every server-side failure arrives here — watchdog kills, silence
+         * timeouts, model/auth errors. Dropped, they left the card saying
+         * "Thinking..." for ever on exactly the surface whose work runs
+         * unattended. Kept apart from the summary, so the text that did
+         * arrive stays and a late chunk cannot overwrite the error away.
+         */
+        const message = (event.message as string) || 'The turn failed.';
+        const code = isTurnErrorCode(event.code) ? event.code : classifyTurnError(message);
+        updateCard(cardId, { error: { code, message }, retrying: undefined });
+      } else if (event.type === 'retry') {
+        updateCard(cardId, {
+          retrying: {
+            attempt: typeof event.attempt === 'number' ? event.attempt : 1,
+            delayMs: typeof event.delayMs === 'number' ? event.delayMs : 0,
+          },
+        });
       }
-      if (e.key !== "Enter" || e.shiftKey) return;
-      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-      e.preventDefault();
-      if (!isStreaming) void handleSubmit();
     },
-    [handleSubmit, handleAbort, isStreaming]
+    onDone(cid) {
+      runRecorder.succeed(cid);
+      const cardId = cardByChat.current.get(cid);
+      if (!cardId) return;
+      updateCard(cardId, {
+        // What arrived — never a leftover "Thinking...", which reads as still running.
+        summary: textByChat.current.get(cid) ?? '',
+        retrying: undefined,
+        unread: true,
+      });
+    },
+    onError(error, cid) {
+      runRecorder.fail(error.message, cid);
+      const cardId = cardByChat.current.get(cid);
+      if (!cardId) return;
+      updateCard(cardId, {
+        summary: textByChat.current.get(cid) ?? '',
+        error: turnErrorOf(error),
+        retrying: undefined,
+        unread: true,
+      });
+    },
+  });
+
+  /*
+   * Run `prompt` into `cardId`, on a fresh chat id — a retry is a new turn, not
+   * a resumption of the one that failed.
+   *
+   * THE chokepoint: whatever the user configured in Settings (tier grid + BYOK
+   * providers) decides where this turn runs, exactly as on every other surface.
+   * It used to post a hardcoded `model: 'sonnet'`, so a BYOK-only user had a
+   * dead surface while every other one worked.
+   */
+  const runCard = useCallback(
+    async (prompt: string, cardId: string, trigger: RunTrigger, attachments: AttachmentFile[] = []) => {
+      const chatId = `assistant-${crypto.randomUUID()}`;
+      cardByChat.current.set(chatId, cardId);
+      chatByCard.current.set(cardId, chatId);
+      textByChat.current.set(chatId, '');
+      const route = resolveSendRoute(null, providers, {
+        capability: CAPABILITY,
+        tierModels,
+        hasAnthropicKey,
+        hasBedrock,
+        known: builtinAccessKnown,
+      });
+      runRecorder.begin({ trigger, model: route?.model ?? undefined, chatId });
+      const sending = sendMessage(prompt, chatId, 'assistant', route?.model ?? null, {
+        // No question or connect card UI on this surface, so the turn must never
+        // be parked waiting for one: false takes the documented "cannot ask"
+        // path — the agent says what it would have done instead.
+        canRelayToClient: false,
+        providerConfig: route?.providerConfig,
+        attachments: attachments.length > 0 ? attachments : undefined,
+      });
+      return { chatId, sending };
+    },
+    [providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, runRecorder, sendMessage],
+  );
+
+  /**
+   * A new card and its turn. The prompt arrives as the ARGUMENT when a scheduled
+   * job fires — reading the composer instead meant a job firing with an empty
+   * composer did nothing, or ran whatever stale text was sitting in it.
+   */
+  const startCard = useCallback(
+    async (prompt: string, opts: { trigger: RunTrigger; attachments?: AttachmentFile[]; fromComposer?: boolean }) => {
+      const text = prompt.trim();
+      if (!text) return;
+      // Addressed by id: `addCard` PREPENDS, so a standing-order card landing
+      // mid-stream would otherwise receive this turn's text.
+      const cardId = addCard({ title: text, prompt: text, summary: 'Thinking...' });
+      if (opts.fromComposer) setComposerCard(cardId);
+      const { sending } = await runCard(text, cardId, opts.trigger, opts.attachments);
+      await sending;
+    },
+    [addCard, runCard],
+  );
+
+  /** Stop one card's turn. What already arrived stays, marked as stopped. */
+  const stopCard = useCallback((cardId: string) => {
+    const chatId = chatByCard.current.get(cardId);
+    if (!chatId) return;
+    streamRegistry.abort(chatId, 'user');
+    const text = textByChat.current.get(chatId) ?? '';
+    // A Stop is not an error, but it IS an ending: "Thinking..." read as still running.
+    updateCard(cardId, { summary: text ? `${text}\n\n_Stopped._` : 'Stopped.', retrying: undefined, unread: false });
+  }, [updateCard]);
+
+  /** Try again: the same prompt, into the same card. */
+  const retryCard = useCallback((cardId: string) => {
+    const card = useAssistantStore.getState().cards.find((c) => c.id === cardId);
+    const prompt = card?.prompt;
+    if (!prompt) return;
+    updateCard(cardId, { summary: 'Thinking...', error: undefined, retrying: undefined });
+    void runCard(prompt, cardId, 'manual').then(({ sending }) => sending);
+  }, [runCard, updateCard]);
+
+  // "Connect a model" instead of a card that can only fail.
+  const modelReady = useModelReady(null, CAPABILITY);
+  const [noModelAttempted, setNoModelAttempted] = useState(false);
+  const submitFromComposer = useCallback(
+    (text: string, attachments: AttachmentFile[]) => {
+      if (!modelReady) {
+        setNoModelAttempted(true);
+        return false;
+      }
+      void startCard(text, { trigger: 'manual', attachments, fromComposer: true });
+    },
+    [modelReady, startCard],
   );
 
   /*
-   * A due cron job runs HERE, through this surface's own submit — not through a
-   * scheduler with a send path of its own, which would be a fourth place that
-   * starts a turn. Before this, a job published to the bus, switched surface,
-   * and nothing ran it. Busy (streaming) defers the job instead of dropping it.
+   * A due scheduled job runs HERE, through this surface's own turn — not
+   * through a scheduler with a send path of its own. Every card is its own
+   * conversation, so a job never waits behind (or supersedes) another card.
    */
-  useScheduledPrompt('assistant', handleSubmit, () => isStreamingRef.current);
+  const runScheduled = useCallback((prompt: string) => startCard(prompt, { trigger: 'cron' }), [startCard]);
+  useScheduledPrompt('assistant', runScheduled);
 
   const handleCardAction = useCallback((action: A2UIAction) => {
-    console.log('[Assistant] Card action:', action);
     if (action.type === 'button-click' && action.actionId !== 'reply' && action.actionId !== 'dismiss') {
-      setInputValue(`Perform action: ${action.actionId}`);
+      setComposerText('assistant', '', `Perform action: ${action.actionId}`);
     }
   }, []);
 
+  /** A reply is a new turn that carries the card it answers. */
   const handleCardReply = useCallback((cardId: string, text: string) => {
-    // Find the card to get context
     const card = useAssistantStore.getState().cards.find((c) => c.id === cardId);
-    /*
-     * Submit directly with the prompt as the argument. This used to set the
-     * composer and click `[data-assistant-submit]` after 50ms — which raced
-     * React's state flush (a disabled button swallows the reply) and, if a
-     * turn had started in between, clicked what is then the STOP button,
-     * aborting a live run.
-     */
-    void handleSubmit(buildCardReply(card, text), { trigger: "manual" });
-  }, [handleSubmit]);
+    void startCard(buildCardReply(card, text), { trigger: 'manual' });
+  }, [startCard]);
 
   return (
     <div className="flex h-full bg-background">
@@ -891,7 +915,7 @@ export function AssistantSurface() {
       <OrdersSidebar
         orders={orders}
         onSelectOrder={setSelectedOrderId}
-        selectedOrderId={selectedOrderId}
+        selectedOrderId={openOrderId}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)}
         // Always through the dialog: every template now opens on its schedule,
@@ -929,34 +953,18 @@ export function AssistantSurface() {
           <Cockpit />
         ) : (
         <>
-        {/* Input area */}
+        {/* Input area — the shared Composer: Enter sends, Esc stops, IME-safe. */}
         <div className="px-4 py-3 border-b border-border">
           <div className="max-w-3xl mx-auto">
-            <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-              <Textarea
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder='Try: "Remind me every morning to check my emails" or "Watch my build and let me know if it fails" (Esc stops a reply)'
-                rows={2}
-                className="min-h-[56px] max-h-[120px] resize-none border-0 bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-              />
-              <div className="flex items-center justify-end px-4 py-2">
-                <Button
-                  size="icon"
-                  data-assistant-submit
-                  className={`h-8 w-8 rounded-lg ${isStreaming ? 'bg-destructive hover:bg-destructive/80' : 'bg-primary hover:bg-primary/80'}`}
-                  // Wrapped: a bare handler reference would receive the click
-                  // event as `scheduledPrompt`.
-                  onClick={isStreaming ? handleAbort : () => handleSubmit()}
-                  disabled={!isStreaming && !inputValue.trim()}
-                  aria-label={isStreaming ? "Stop" : "Send"}
-                  title={isStreaming ? "Stop (Esc)" : "Send"}
-                >
-                  {isStreaming ? <Square className="h-3.5 w-3.5" /> : <ArrowUp className="h-4 w-4" />}
-                </Button>
-              </div>
-            </div>
+            <Composer
+              surface="assistant"
+              conversationId=""
+              placeholder='Try: "Remind me every morning to check my emails" or "Watch my build and let me know if it fails"'
+              onSubmit={submitFromComposer}
+              isStreaming={isStreaming}
+              onStop={() => stopCard(composerCard)}
+              header={modelReady ? undefined : <NoModelCard attempted={noModelAttempted} />}
+            />
           </div>
         </div>
 
@@ -979,7 +987,14 @@ export function AssistantSurface() {
               </div>
             ) : (
               <>
-                <CardFeed cards={cards} onAction={handleCardAction} onReply={handleCardReply} />
+                <CardFeed
+                  cards={cards}
+                  onAction={handleCardAction}
+                  onReply={handleCardReply}
+                  streaming={streamingCards}
+                  onStop={stopCard}
+                  onRetry={retryCard}
+                />
               </>
             )}
 
@@ -1010,9 +1025,9 @@ export function AssistantSurface() {
       )}
 
       {/* Order editor dialog */}
-      {selectedOrderId && (
+      {openOrderId && (
         <OrderEditor
-          orderId={selectedOrderId}
+          orderId={openOrderId}
           onClose={() => setSelectedOrderId(null)}
         />
       )}

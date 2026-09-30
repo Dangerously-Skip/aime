@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { A2UIDocument } from '@/lib/a2ui/types';
+import type { TurnErrorCode } from '@/lib/sse/turn-error';
 import { validateTrigger } from '@/lib/schedule/schedule';
 
 // ── Standing Order ───────────────────────────────────────────────────────────
@@ -47,6 +48,12 @@ export interface AssistantCard {
   pinned: boolean;
   /** `error` for a failed or error-paused run — rendered as a failure, not a result. */
   tone?: 'error';
+  /** What the Assistant surface asked for this card — what Try again re-runs. */
+  prompt?: string;
+  /** The card's turn failed: a banner beside the text, never written into it. */
+  error?: { code: TurnErrorCode; message: string };
+  /** The provider is backing off; the turn is waiting, not stuck. */
+  retrying?: { attempt: number; delayMs: number };
   /*
    * The `widget:` block is GONE. A card carried one so a stock ticker could
    * live in the event feed and refresh itself — state wearing an event's
