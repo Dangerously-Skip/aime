@@ -173,7 +173,7 @@ unauthenticated. A new route cannot land outside the gate.
 
 Unit tests use Vitest (`web/vitest.config.ts`, node environment by default, `@/` alias). Test files live next to the code they test (`*.test.ts`); React hook/component tests use jsdom via a `// @vitest-environment jsdom` pragma and Testing Library. E2E smoke tests use Playwright (`web/playwright.config.ts`, specs in `web/e2e/`, boots `next dev` on port 3100): `npm run test:e2e`.
 
-Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming (server + client hook), memory retriever/dedup, store actions (conversation, cowork, assistant, context-bus, memory), settings migrations (v1→v7 via real rehydrate), minute-tick hooks (cron, heartbeat), API routes (cron, webhooks CRUD + trigger), ClaudeProvider (SDK mocked: option assembly, session resumption, stream translation, canUseTool governance/loop-detection/interception), the chat SSE route (validation, streaming, tool profiles, agent routing, security injection, memory extraction), canvas templates (registry + expansion), gateway/bedrock env mapping, pending-questions bridge, xlsx extractor (real files), and browser-boot smoke E2E.
+Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming (server + client hook), memory retriever/dedup, store actions (conversation, cowork, assistant, context-bus, memory), settings migrations (v1→v7 via real rehydrate), minute-tick hooks (cron, scheduled prompts), API routes (cron, subagent), ClaudeProvider (SDK mocked: option assembly, session resumption, stream translation, canUseTool governance/loop-detection/interception), the chat SSE route (validation, streaming, tool profiles, agent routing, security injection, memory extraction), canvas templates (registry + expansion), gateway/bedrock env mapping, pending-questions bridge, xlsx extractor (real files), and browser-boot smoke E2E.
 
 ### Security controls: the bar is a failing test, not a careful reading
 
@@ -235,14 +235,13 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 - `browser-store.ts` — Browser DOM state, navigation, tool results
 - `assistant-store.ts` — Standing orders, automation templates
 - `conversation-store.ts` — Conversation list, metadata, tokenUsage, effortEstimate, ROI, ratings
-- `settings-store.ts` — User preferences (v12, persisted)
+- `settings-store.ts` — User preferences (v15, persisted)
 - `project-store.ts` — Projects, artifacts, per-project settings
 - `connector-store.ts` — Connected service status
 - `provider-store.ts` — BYOK providers and their scanned models
 - `canvas-store.ts` — A2UI canvas panel state
 - `memory-store.ts` — Memory extraction/retrieval
 - `context-bus-store.ts` — Inter-component event bus
-- `reminder-store.ts` — Task reminders
 - `run-store.ts` — Goals + an in-memory window of recent runs (durable log is `/api/runs`)
 - `widget-store.ts` — Cockpit widgets (stored recipe + last render)
 - `code-workspace-store.ts` — Per-workspace Code IDE layout (panels, sizes, open tabs)
@@ -260,7 +259,7 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 
 **Customization:** `/api/customize/connectors/*`, `/api/customize/plugins`, `/api/customize/skills/*`, `/api/marketplace`
 
-**Automation:** `GET|POST|DELETE /api/cron`, `POST /api/subagent`, `POST /api/subagent/batch`, `GET /api/agents`
+**Automation:** `GET|POST|DELETE /api/cron`, `POST /api/subagent`, `GET /api/agents`
 
 **Files:** `/api/files/read`, `/api/files/delete`, `/api/files/search`, `POST /api/upload`
 
@@ -272,7 +271,7 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 
 ### Providers (`web/src/lib/providers/`)
 
-- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` searxng + in-process `aime` server), handles tool interception (canvas, loop detection), session controls.
+- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` + in-process `aime` server), handles tool interception (canvas, loop detection), session controls.
 
 ### Models are configured in exactly one place, and two tests hold that line
 
@@ -339,7 +338,7 @@ config, hence the try/catch at the call site; that is not defensive habit.
 ## External Integrations
 
 - **OAuth connectors** provisioned to `~/.claude/.mcp.json` via `loadProvisionedMcpServers()` at request time
-- **Web search** via the `web-search` MCP — opt-in, only mounted when `SEARXNG_INSTANCES` is set
+- **Web search** via the `web-search` MCP — mounted only when `lib/search/resolve.ts` finds a configured provider: the choice in Settings → Web Search, else legacy `SEARXNG_INSTANCES`, else an OpenRouter key borrowed from the model providers. Off if none of those exist
 - **Telemetry** via SigV4-signed analytics API (`ANALYTICS_API_URL`)
 - **Auto-update** from generic provider URL in electron-builder config
 
@@ -362,7 +361,7 @@ the app reads — `env-example.test.ts` enforces that):
 - **Session controls**: Slash commands parsed into `SessionControls` (thinkLevel, verboseMode, modelOverride, agentName) passed to provider
 - **Agent routing**: `route.ts` loads AGENTS.md, matches on triggers or `/agent` command, injects agent system prompt
 - **Tool interception**: `canvas` tool → SSE event → canvas-store; loop detection via sliding window
-- **Cowork sidebar**: Tool calls categorized into Context (Read/Glob/Grep/Bash) and Artifacts (Write/Edit/NotebookEdit) by `categorizeToolCall()`. Search results from MCP searxng aggregated into `SearchResultsCard`. WebFetch URLs from search follow-ups are suppressed from Context.
+- **Cowork sidebar**: Tool calls categorized into Context (Read/Glob/Grep/Bash) and Artifacts (Write/Edit/NotebookEdit) by `categorizeToolCall()`. Search results from the `web-search` MCP aggregated into `SearchResultsCard`. WebFetch URLs from search follow-ups are suppressed from Context.
 - **Minute tick**: Electron main sends `minute:tick` IPC → preload exposes `onMinuteTick` → hooks subscribe for cron and scheduled work (mounted in `components/layout/schedulers.tsx`)
 - **Identity files**: `SOUL.md` (personality) + `USER.md` (user context) injected into system prompt
 - **ROI tracking**: `done` SSE event with token/cost/duration → effort estimation via Haiku → conversation metrics

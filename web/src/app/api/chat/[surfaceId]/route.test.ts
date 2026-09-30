@@ -564,21 +564,23 @@ describe('agent routing', () => {
     triggers: ['research'],
   };
 
-  it('routes trigger-matched agents: model override + role prompt', async () => {
+  it('routes trigger-matched agents: role prompt, and the model from Settings — not the agent’s pin', async () => {
     mocks.loadAgentsMock.mockReturnValue([researcher]);
     mocks.matchAgentMock.mockReturnValue(researcher);
     mocks.readAgentPromptMock.mockReturnValue('You are a careful researcher.');
 
-    await post('chat', { message: 'research the market', chatId: 'c1' });
+    await post('chat', { message: 'research the market', chatId: 'c1', model: 'vendor/model-x' });
 
-    expect(providerParams().model).toBe('claude-opus-4-6');
+    // The route the client resolved from the tier grid wins; `model:` in
+    // AGENTS.md used to override it — a second place to pick a model.
+    expect(providerParams().model).toBe('vendor/model-x');
     const prompt = promptText();
     expect(prompt).toContain('agent-role name=\\"researcher\\"');
     expect(prompt).toContain('You are a careful researcher.');
   });
 
   it('binds explicitly via sessionControls.agentName without trigger matching', async () => {
-    const coder = { name: 'coder', description: '', model: 'sonnet' };
+    const coder = { name: 'coder', description: '', model: 'haiku' };
     mocks.loadAgentsMock.mockReturnValue([coder]);
 
     await post('chat', {
@@ -588,7 +590,21 @@ describe('agent routing', () => {
     });
 
     expect(mocks.matchAgentMock).not.toHaveBeenCalled();
-    expect(providerParams().model).toBe('sonnet');
+    // Bound, but its pin is not a model choice: the surface default stands.
+    expect(providerParams().model).not.toBe('haiku');
+  });
+
+  it('never sends an agent’s Claude pin to a user-added provider', async () => {
+    mocks.loadAgentsMock.mockReturnValue([researcher]);
+    mocks.matchAgentMock.mockReturnValue(researcher);
+    await post('chat', {
+      message: 'research the market',
+      chatId: 'c1',
+      model: 'moonshotai/kimi-k2',
+      providerConfig: { providerId: 'or', transport: 'anthropic-native', baseUrl: 'https://openrouter.ai/api' },
+      apiKey: 'sk-or-test',
+    });
+    expect(providerParams().model).toBe('moonshotai/kimi-k2');
   });
 
   it('lets a session model override beat the agent model', async () => {
@@ -747,6 +763,38 @@ describe('document extraction', () => {
     } finally {
       setSpy.mockRestore();
       clearSpy.mockRestore();
+      mocks.homeRef.value = null;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('extracted documents get unique names', () => {
+  it('two same-named attachments no longer overwrite each other', async () => {
+    const { mkdtemp, rm, readFile } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    const home = await mkdtemp(path.join(os.tmpdir(), 'aime-route-docs-'));
+    mocks.homeRef.value = home;
+    try {
+      const { events } = await post('cowork', {
+        message: 'compare these',
+        chatId: 'docs-1',
+        attachments: [
+          { name: 'notes.md', content: Buffer.from('# first draft').toString('base64'), type: 'text/markdown', category: 'document' },
+          { name: 'notes.md', content: Buffer.from('# second draft').toString('base64'), type: 'text/markdown', category: 'document' },
+        ],
+      });
+      const paths = events
+        .filter((e) => e.type === 'document_extracted')
+        .map((e) => e.extractedPath as string);
+      expect(paths).toHaveLength(2);
+      expect(new Set(paths).size).toBe(2);
+      expect(paths.every((p) => p.includes(`${path.sep}documents${path.sep}`))).toBe(true);
+      const bodies = await Promise.all(paths.map((p) => readFile(p, 'utf-8')));
+      expect(bodies.join('\n')).toContain('first draft');
+      expect(bodies.join('\n')).toContain('second draft');
+    } finally {
       mocks.homeRef.value = null;
       await rm(home, { recursive: true, force: true });
     }

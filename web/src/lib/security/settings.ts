@@ -16,9 +16,9 @@ import 'server-only';
  *
  *   chat surface, project chats     — no
  *   /api/chat (legacy)              — no
- *   /api/subagent, /batch           — no   ← `spawn_agent` is one model-initiated
- *   standing orders, widget refresh — no      call away, so this alone defeated
- *   run verification                — no      every toggle
+ *   /api/subagent                   — no
+ *   standing orders, widget refresh — no
+ *   run verification                — no
  *   cowork, code                    — yes
  *
  * So a control the Settings screen badged ENFORCED did nothing on most paths,

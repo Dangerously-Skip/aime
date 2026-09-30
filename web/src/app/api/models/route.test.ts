@@ -1,7 +1,32 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { GET } from './route';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { randomBytes } from 'crypto';
 
-afterEach(() => vi.unstubAllEnvs());
+const homeRef = vi.hoisted(() => ({ value: '' }));
+vi.mock('os', async (orig) => {
+  const actual = await orig<typeof import('os')>();
+  const homedir = () => homeRef.value || actual.homedir();
+  return { ...actual, default: { ...actual, homedir }, homedir };
+});
+
+import { GET } from './route';
+import { getCredentialStore } from '@/lib/models/credentials';
+
+let home: string;
+beforeEach(() => {
+  // A temp home and NO master key by default, so the real ~/.aime store on the
+  // machine running this can never answer for a test.
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'aime-models-route-'));
+  homeRef.value = home;
+  vi.stubEnv('AIME_CRED_KEY', '');
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  homeRef.value = '';
+  fs.rmSync(home, { recursive: true, force: true });
+});
 
 describe('GET /api/models', () => {
   it('returns registry models including Fable, with metadata', async () => {
@@ -38,6 +63,18 @@ describe('GET /api/models', () => {
       const body = await (await GET()).json();
       expect(body.anthropic).toBe(true);
       expect(JSON.stringify(body)).not.toContain('sk-ant-secret');
+    });
+
+    it('reports the key saved in Settings (the credential store), never the key', async () => {
+      // The surfaces no longer hold the key, so this is how the client learns
+      // the built-in models are reachable. A real encrypted store, not a mock.
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('AIME_CRED_KEY', randomBytes(32).toString('hex'));
+      expect((await (await GET()).json()).anthropic).toBe(false);
+      await getCredentialStore().set('anthropic', { apiKey: 'sk-ant-stored-secret' });
+      const body = await (await GET()).json();
+      expect(body.anthropic).toBe(true);
+      expect(JSON.stringify(body)).not.toContain('sk-ant-stored-secret');
     });
 
     it('reports false with no env key', async () => {

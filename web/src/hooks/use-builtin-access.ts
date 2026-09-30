@@ -9,7 +9,7 @@ import { useSettingsStore } from '@/stores/settings-store';
  *
  * Three credentials get you there and only one of them lives in the browser:
  *
- *  - the user's key in Settings → API Access (`settings-store.anthropicApiKey`)
+ *  - the user's key in Settings → Models & API keys (`settings-store.anthropicApiKey`)
  *  - `ANTHROPIC_API_KEY` in the server's env / `.env`
  *  - a configured Bedrock region
  *
@@ -95,6 +95,33 @@ export interface BuiltinAccess {
   hasBuiltins: boolean;
 }
 
+/** The one derivation, shared by the hook and the non-React accessor below. */
+function deriveBuiltinAccess(server: ServerCredentials | null, userKey: string | null): BuiltinAccess {
+  const known = server !== null;
+  const hasAnthropicKey = !!userKey || !!server?.anthropic;
+  const hasBedrock = !!server?.bedrock;
+  return {
+    known,
+    hasAnthropicKey,
+    hasBedrock,
+    hasBuiltins: !known || hasAnthropicKey || hasBedrock,
+  };
+}
+
+/**
+ * `useBuiltinAccess` for code that is not a component — a canvas action, a
+ * one-shot subagent call — and runs once rather than re-rendering. Waits for
+ * the server's answer (deduped with every mounted hook) so the route it feeds
+ * is decided on facts, not on the optimistic "unknown".
+ */
+export async function getBuiltinAccess(): Promise<BuiltinAccess> {
+  await useServerCredentialsStore.getState().load();
+  return deriveBuiltinAccess(
+    useServerCredentialsStore.getState().server,
+    useSettingsStore.getState().anthropicApiKey,
+  );
+}
+
 export function useBuiltinAccess(): BuiltinAccess {
   const server = useServerCredentialsStore((s) => s.server);
   const load = useServerCredentialsStore((s) => s.load);
@@ -108,15 +135,5 @@ export function useBuiltinAccess(): BuiltinAccess {
   // fresh object every render would defeat them. A store rehydrated from an
   // effect keyed on an unstable value is exactly how the renderer once ended up
   // at 100% CPU (see the note in model-selector.tsx).
-  return useMemo(() => {
-    const known = server !== null;
-    const hasAnthropicKey = !!userKey || !!server?.anthropic;
-    const hasBedrock = !!server?.bedrock;
-    return {
-      known,
-      hasAnthropicKey,
-      hasBedrock,
-      hasBuiltins: !known || hasAnthropicKey || hasBedrock,
-    };
-  }, [userKey, server]);
+  return useMemo(() => deriveBuiltinAccess(server, userKey), [userKey, server]);
 }

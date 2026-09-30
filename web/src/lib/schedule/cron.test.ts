@@ -80,6 +80,16 @@ describe('validateCron — a reason, not a silent never-run', () => {
     }
   });
 
+  it('treats prototype names as text, not as table entries', () => {
+    // Found by the StandingOrderCreate property test: `__proto__` threw
+    // ("expanded.split is not a function") and a field named `constructor`
+    // resolved to a function.
+    for (const s of ['__proto__', 'constructor', 'toString', '0 9 * constructor *', '0 9 * * __proto__', 'hasOwnProperty 9 * * *']) {
+      expect(() => parseCron(s), s).not.toThrow();
+      expect(validateCron(s), s).not.toBeNull();
+    }
+  });
+
   it('never throws on any input (property)', () => {
     fc.assert(fc.property(fc.string(), (s) => {
       const r = parseCron(s);

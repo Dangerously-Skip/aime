@@ -98,3 +98,27 @@ describe('the tier grid is the only model chooser in Settings', () => {
     ).toBe(false);
   });
 });
+
+/**
+ * Customize is not a second Settings. Its Agents panel had a model dropdown of
+ * three hardcoded Claude ids (so the alias pattern above never saw it), and the
+ * chat route let an agent's pin beat the tier grid — for a BYOK user, sending
+ * `claude-opus-4-6` to their OpenRouter provider.
+ */
+describe('Customize offers no model chooser either', () => {
+  const CUSTOMIZE = path.join(SRC, 'components/customize');
+  /** A dropdown option whose value is a model id or alias. */
+  const MODEL_OPTION = /<option[^>]*value=\{?["'`](claude-[\w.-]+|sonnet|opus|haiku)/;
+  const MODEL_LIST = /\bMODEL_OPTIONS\b|value:\s*["']claude-[\w.-]+["']/;
+
+  it.each(sources(CUSTOMIZE).map((s) => [s.name, s.text] as const))('%s', (name, text) => {
+    expect(MODEL_OPTION.test(text) || MODEL_LIST.test(text), `${name} offers its own model choice`).toBe(false);
+  });
+
+  it('the chat and subagent routes do not let an agent pin the model', () => {
+    const chat = read(path.join(SRC, 'app/api/chat/[surfaceId]/route.ts'));
+    const sub = read(path.join(SRC, 'app/api/subagent/route.ts'));
+    expect(chat).not.toMatch(/agentModelOverride/);
+    expect(sub).not.toMatch(/\bagentModel\b/);
+  });
+});

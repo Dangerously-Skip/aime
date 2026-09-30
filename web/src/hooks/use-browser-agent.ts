@@ -68,7 +68,6 @@ interface UseBrowserAgentOptions {
   onDone: () => void;
   onError: (error: Error) => void;
   onPhaseChange: (phase: 'idle' | 'observing' | 'thinking' | 'acting') => void;
-  apiKey?: string | null;
   memories?: string;
   consoleBuffer?: ConsoleLogBuffer;
   /** Current tabs for multi-tab awareness */
@@ -216,7 +215,6 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
             systemPrompt,
             controller.signal,
             optionsRef.current,
-            optionsRef.current.apiKey,
           );
 
           if (controller.signal.aborted) break;
@@ -407,7 +405,6 @@ async function sendTurn(
   system: string,
   signal: AbortSignal,
   callbacks: Pick<UseBrowserAgentOptions, 'onText' | 'onToolUse'>,
-  apiKey?: string | null,
 ): Promise<{
   assistantBlocks: Array<{ type: string; [key: string]: unknown }>;
   stopReason: string;
@@ -425,9 +422,8 @@ async function sendTurn(
       ...(route.providerConfig ? { providerConfig: route.providerConfig } : {}),
       system,
       tools: BROWSER_TOOL_SCHEMAS,
-      // Still sent when the user has a BYOK key in settings, but no longer
-      // required — the server falls back to its own credential store and env.
-      ...(apiKey ? { apiKey } : {}),
+      // No API key: the server reads the one saved in Settings from its
+      // encrypted credential store (or env), so it never leaves the server.
     }),
     signal,
   });

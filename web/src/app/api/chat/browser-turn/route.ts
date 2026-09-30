@@ -99,9 +99,11 @@ export async function POST(req: NextRequest) {
   // which meant the surface was unusable for anyone whose credentials live
   // server-side — env, the encrypted credential store, or a user-added provider.
   const { resolveExecution } = await import('@/lib/models/execution');
+  const { providerSafeRequestKey } = await import('@/lib/models/server-turn');
   const exec = await resolveExecution({
     providerConfig,
-    requestApiKey: userApiKey,
+    // Never the Anthropic key to a user-added provider (see server-turn.ts).
+    requestApiKey: await providerSafeRequestKey(providerConfig, userApiKey),
     // openai-compat providers route through the shim on this same server.
     shimOrigin: new URL(req.url).origin,
     loadFields: async (id) => {
@@ -139,14 +141,17 @@ export async function POST(req: NextRequest) {
   // A user-added provider supplies its own base URL; Bedrock and Vertex carry
   // their own credentials; only the plain Anthropic path needs a key.
   const { getServerAnthropicKey } = await import('@/lib/models/credentials');
-  const resolvedApiKey =
-    exec.apiKey || (await getServerAnthropicKey()) || process.env.ANTHROPIC_API_KEY;
+  // The Anthropic fallbacks are for the Anthropic path only: with a user-added
+  // provider they sent the Anthropic key to that provider's base URL.
+  const resolvedApiKey = providerConfig
+    ? exec.apiKey
+    : exec.apiKey || (await getServerAnthropicKey()) || process.env.ANTHROPIC_API_KEY;
   const usesGatewayCreds = Boolean(gatewayEnv);
   if (!resolvedApiKey && !exec.baseUrl && !usesGatewayCreds) {
     return Response.json(
       {
         error:
-          'No API key is configured. Add one in Settings → API Access, or set ANTHROPIC_API_KEY.',
+          'No API key is configured. Add one in Settings → Models & API keys, or set ANTHROPIC_API_KEY.',
         code: 'no_model',
       },
       { status: 400 },

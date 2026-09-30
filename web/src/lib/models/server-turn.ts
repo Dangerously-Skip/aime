@@ -42,7 +42,7 @@ export async function resolveTurnExecution(opts: {
   const { providerConfig } = opts;
   const exec = await resolveExecution({
     providerConfig,
-    requestApiKey: opts.requestApiKey,
+    requestApiKey: await providerSafeRequestKey(providerConfig, opts.requestApiKey),
     shimOrigin: opts.shimOrigin,
     // Every stored field, not just the key: Bedrock and Vertex are driven by
     // environment built from region/project/credentials.
@@ -68,6 +68,26 @@ export async function resolveTurnExecution(opts: {
   if (storedAnthropicKey) exec.apiKey = storedAnthropicKey;
 
   return { exec, usable: hasModelCredentials({ exec, providerConfig, storedAnthropicKey }) };
+}
+
+/**
+ * A request key, unless it is the ANTHROPIC key on its way to someone else.
+ *
+ * Chat and Cowork send the Anthropic key from Settings with every turn, and
+ * `resolveExecution` prefers a request key over the provider's own stored key.
+ * So with an OpenRouter model selected, the turn authenticated to OpenRouter
+ * WITH THE ANTHROPIC KEY: it failed, and the key had been handed to a third
+ * party. The client should stop sending it, but a credential boundary cannot
+ * depend on every caller remembering that — so it is refused here, where every
+ * turn passes. A different request key (a transient provider key) is untouched.
+ */
+export async function providerSafeRequestKey(
+  providerConfig: ProviderExecConfig | null | undefined,
+  requestApiKey: string | null | undefined,
+): Promise<string | null | undefined> {
+  if (!providerConfig || !requestApiKey) return requestApiKey;
+  const anthropicKeys = [process.env.ANTHROPIC_API_KEY, await getServerAnthropicKey()];
+  return anthropicKeys.includes(requestApiKey) ? undefined : requestApiKey;
 }
 
 /**

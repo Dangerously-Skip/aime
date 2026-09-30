@@ -40,10 +40,13 @@ describe('a due attended job', () => {
     });
   });
 
-  it('does not notify when the job runs on the surface you are looking at', () => {
+  it('notifies even when the job runs on the surface you are looking at', () => {
+    // It runs in a conversation of its own and hands yours back, so you do not
+    // watch it start — the notification is how you learn it ran.
     useAppStore.setState({ activeSurface: 'chat' } as never);
     fireAttendedJob({ id: 'j1', prompt: 'x', surfaceId: 'chat' });
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith('Scheduled job started in Chat', 'x');
+    expect(useAppStore.getState().activeSurface).toBe('chat');
   });
 
   it('respects quiet hours', () => {

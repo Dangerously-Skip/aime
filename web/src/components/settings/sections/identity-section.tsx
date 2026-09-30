@@ -41,7 +41,12 @@ function IdentityFileEditor({
     setError(null)
     try {
       const res = await fetch(apiPath)
-      if (!res.ok) throw new Error(`Could not load ${label} (${res.status})`)
+      if (!res.ok) {
+        // The server's own words ("Could not read ~/.claude/SOUL.md (EACCES)")
+        // say which file and why; a bare status code does not.
+        const body = (await res.json().catch(() => ({}))) as { error?: unknown }
+        throw new Error(typeof body.error === 'string' && body.error ? body.error : `Could not load ${label} (${res.status})`)
+      }
       const d = (await res.json()) as { content?: unknown }
       if (typeof d.content !== 'string') throw new Error(`Could not load ${label}: unexpected response`)
       setContent(d.content)

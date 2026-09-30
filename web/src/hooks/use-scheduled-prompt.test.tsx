@@ -8,6 +8,8 @@ import { useChatStore } from '@/stores/chat-store';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useProjectStore } from '@/stores/project-store';
 import { useAppStore } from '@/stores/app-store';
+import { streamRegistry } from '@/lib/stream-registry';
+import { restoreView } from '@/lib/schedule/job-conversation';
 
 /**
  * A DUE CRON JOB HAS TO ACTUALLY RUN.
@@ -173,6 +175,29 @@ function useFakeChatSurface(sent: Array<{ prompt: string; chatId: string | null 
   useScheduledPrompt('chat', submit);
 }
 
+/** The same, but its send registers a stream the way `useSSEStream` does, and keeps it open. */
+function useFakeStreamingChatSurface(sent: Array<{ prompt: string; chatId: string | null }>) {
+  const chatId = useChatStore((s) => s.currentChatId);
+  const submit = useCallback(
+    async (prompt: string) => {
+      await Promise.resolve(); // a surface does some work before it sends
+      sent.push({ prompt, chatId });
+      if (chatId) {
+        streams.push(chatId);
+        streamRegistry.set(chatId, new AbortController());
+      }
+      await new Promise(() => {}); // the turn is still running
+    },
+    [chatId, sent],
+  );
+  useScheduledPrompt('chat', submit);
+}
+
+const streams: string[] = [];
+afterEach(() => {
+  for (const id of streams.splice(0)) streamRegistry.abort(id);
+});
+
 describe('a job runs in its own conversation, filed under its project', () => {
   beforeEach(() => {
     useChatStore.setState({ currentChatId: 'user-conv' } as never);
@@ -203,6 +228,46 @@ describe('a job runs in its own conversation, filed under its project', () => {
     expect(useProjectStore.getState().projects[0].conversationIds.chat).toEqual([conv.id]);
     // The user's SURFACE is left alone.
     expect(useAppStore.getState().activeSurface).toBe('code');
+  });
+
+  it('hands the user’s conversation back once the job’s turn is in flight', async () => {
+    /*
+     * The bug: a job firing on the surface you were LOOKING AT made its new
+     * conversation the active one, replacing yours mid-sentence. The switch is
+     * only needed until the surface's send has pinned its stream to the job's
+     * conversation — this fake registers the stream exactly as sendMessage does.
+     */
+    useAppStore.setState({ activeSurface: 'chat' } as never);
+    const sent: Array<{ prompt: string; chatId: string | null }> = [];
+    renderHook(() => useFakeStreamingChatSurface(sent));
+    act(() => { fireCron('chat', 'morning digest'); });
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    const jobConv = useConversationStore.getState().conversations[0].id;
+    expect(sent[0].chatId).toBe(jobConv);
+    await waitFor(() => expect(useChatStore.getState().currentChatId).toBe('user-conv'));
+    expect(useConversationStore.getState().activeId).toBe('user-conv');
+    expect(useAppStore.getState().activeSurface).toBe('chat');
+    // The job's turn is still running, in its own conversation.
+    expect(streamRegistry.has(jobConv)).toBe(true);
+  });
+
+  it('hands back even when the submit never streams (it settled)', async () => {
+    const sent: Array<{ prompt: string; chatId: string | null }> = [];
+    renderHook(() => useFakeChatSurface(sent));
+    act(() => { fireCron('chat', '/help'); });
+    await waitFor(() => expect(sent).toHaveLength(1));
+    await waitFor(() => expect(useChatStore.getState().currentChatId).toBe('user-conv'));
+    expect(useConversationStore.getState().activeId).toBe('user-conv');
+  });
+
+  it('does not undo a conversation the user picked in the meantime', () => {
+    const jobConv = 'job-conv';
+    useConversationStore.setState({ activeId: 'picked-by-user' } as never);
+    useChatStore.setState({ currentChatId: 'picked-by-user' } as never);
+    restoreView('chat', jobConv, { activeId: 'user-conv', currentChat: 'user-conv' });
+    expect(useConversationStore.getState().activeId).toBe('picked-by-user');
+    expect(useChatStore.getState().currentChatId).toBe('picked-by-user');
   });
 
   it('a surface without conversations still runs the job directly', async () => {

@@ -62,6 +62,39 @@ describe('resolveTurnExecution', () => {
     expect(usable).toBe(false);
   });
 
+  it('refuses the Anthropic key when the REQUEST carries it to a user-added provider', async () => {
+    // Regression: Chat and Cowork send the Settings key with every turn, and a
+    // request key beat the provider's own — so an OpenRouter turn went out
+    // authenticated with the Anthropic key.
+    store.fields.anthropic = { apiKey: 'sk-ant-stored' };
+    store.fields.or = { apiKey: 'sk-or' };
+    const providerConfig = { providerId: 'or', transport: 'openai-compat' as const, baseUrl: 'https://openrouter.ai/api/v1' };
+
+    const stored = await resolveTurnExecution({ providerConfig, requestApiKey: 'sk-ant-stored', shimOrigin: origin });
+    expect(stored.exec.apiKey).toBe('sk-or');
+
+    store.fields.anthropic = {};
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-env');
+    const env = await resolveTurnExecution({ providerConfig, requestApiKey: 'sk-ant-env', shimOrigin: origin });
+    expect(env.exec.apiKey).toBe('sk-or');
+
+    // With no key of its own the provider goes keyless (a local server needs
+    // none, so that still counts as usable) — never served the Anthropic one.
+    delete store.fields.or;
+    const none = await resolveTurnExecution({ providerConfig, requestApiKey: 'sk-ant-env', shimOrigin: origin });
+    expect(none.exec.apiKey).toBeUndefined();
+  });
+
+  it('still honours a transient key meant for the provider', async () => {
+    store.fields.anthropic = { apiKey: 'sk-ant-stored' };
+    const { exec } = await resolveTurnExecution({
+      providerConfig: { providerId: 'or', transport: 'anthropic-native', baseUrl: 'https://openrouter.ai/api' },
+      requestApiKey: 'sk-or-transient',
+      shimOrigin: origin,
+    });
+    expect(exec.apiKey).toBe('sk-or-transient');
+  });
+
   it('reads a user-added provider’s own key and routes openai-compat through the shim', async () => {
     store.fields.or = { apiKey: 'sk-or' };
     const { exec, usable } = await resolveTurnExecution({

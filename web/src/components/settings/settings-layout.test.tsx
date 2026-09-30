@@ -107,6 +107,37 @@ describe('one of each', () => {
 })
 
 describe('Usage & ROI', () => {
+  it('shows the run log’s spend per surface — not zeros, not the last turn', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      surfaces: {
+        chat: { inputTokens: 1500, outputTokens: 300, totalUsd: 0.015, runs: 2 },
+        cowork: { inputTokens: 40_000, outputTokens: 3_000, totalUsd: 0.4, runs: 1 },
+      },
+      total: { inputTokens: 41_500, outputTokens: 3_300, totalUsd: 0.415, runs: 3 },
+      runsConsidered: 4,
+    })))
+    render(<RoiSection />)
+    const table = await screen.findByRole('table')
+    const cowork = within(table).getByRole('row', { name: /cowork/i })
+    expect(within(cowork).getByText('$0.40')).toBeTruthy()
+    expect(within(cowork).getByText('40K')).toBeTruthy()
+    // The headline stat is the same total, not a sum of per-conversation last turns.
+    expect(screen.getAllByText('$0.42').length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('last 4 runs')).toBeTruthy()
+  })
+
+  it('says so when there is no spend yet, and reports a failed load', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      surfaces: {}, total: { inputTokens: 0, outputTokens: 0, totalUsd: 0, runs: 0 }, runsConsidered: 0,
+    })))
+    render(<RoiSection />)
+    expect(await screen.findByText(/No recorded spend yet/)).toBeTruthy()
+    cleanup()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })))
+    render(<RoiSection />)
+    expect(await screen.findByText('Could not load API costs')).toBeTruthy()
+  })
+
   it('clearing the hourly rate does not snap it back to 150', () => {
     useSettingsStore.setState({ devHourlyRate: 90 })
     render(<RoiSection />)

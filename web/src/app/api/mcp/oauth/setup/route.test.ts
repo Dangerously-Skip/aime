@@ -213,3 +213,62 @@ describe('POST /api/mcp/oauth/setup — a name cannot claim a built-in connector
     expect(fetchMock).toHaveBeenCalled();
   });
 });
+
+/**
+ * The clients file was written back from the snapshot read BEFORE discovery —
+ * two network round trips earlier — with a truncating writeFile. Anything that
+ * changed the file in between (another connector's setup, an uninstall) was
+ * silently undone. It now merges on a fresh read under the config store's lock.
+ */
+describe('POST /api/mcp/oauth/setup — recording the registration', () => {
+  const clientsPath = () => join(dir, '.clients.json');
+
+  /** A vendor with DCR; `duringRegistration` runs while the POST is in flight. */
+  function vendor(duringRegistration: () => Promise<void>) {
+    fetchMock.mockReset().mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/.well-known/oauth-authorization-server')) {
+        return Response.json({
+          issuer: 'https://auth.acme.com',
+          authorization_endpoint: 'https://auth.acme.com/authorize',
+          token_endpoint: 'https://auth.acme.com/token',
+          registration_endpoint: 'https://auth.acme.com/register',
+        });
+      }
+      if (u === 'https://auth.acme.com/register') {
+        await duringRegistration();
+        return Response.json({ client_id: 'acme-new' });
+      }
+      return new Response('{}', { status: 404 });
+    });
+  }
+
+  it('keeps a registration another request wrote meanwhile', async () => {
+    vendor(() =>
+      writeFile(clientsPath(), JSON.stringify({ other: { clientId: 'other-id', mcpUrl: 'https://mcp.other.com/mcp' } })),
+    );
+    const res = await post({ mcpName: 'acme', mcpUrl: 'https://mcp.acme.com/mcp' });
+    expect(res.status).toBe(200);
+    const stored = JSON.parse(await readFile(clientsPath(), 'utf-8'));
+    expect(Object.keys(stored).sort()).toEqual(['acme', 'other']);
+    expect(stored.acme.clientId).toBe('acme-new');
+    expect(stored.other.clientId).toBe('other-id');
+  });
+
+  it('refuses, rather than overwrites, a name another origin claimed meanwhile', async () => {
+    vendor(() =>
+      writeFile(clientsPath(), JSON.stringify({ acme: { clientId: 'io-id', mcpUrl: 'https://acme.io/mcp' } })),
+    );
+    const res = await post({ mcpName: 'acme', mcpUrl: 'https://mcp.acme.com/mcp' });
+    expect(res.status).toBe(409);
+    const stored = JSON.parse(await readFile(clientsPath(), 'utf-8'));
+    expect(stored.acme.clientId).toBe('io-id');
+  });
+
+  it('writes the file owner-only', async () => {
+    vendor(async () => {});
+    await post({ mcpName: 'acme', mcpUrl: 'https://mcp.acme.com/mcp' });
+    const { statSync } = await import('fs');
+    expect(statSync(clientsPath()).mode & 0o777).toBe(0o600);
+  });
+});

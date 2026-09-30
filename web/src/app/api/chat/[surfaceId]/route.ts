@@ -558,8 +558,7 @@ export async function POST(
       }
 
       // ── Agent routing ──────────────────────────────────────────────────
-      // Load AGENTS.md and apply routing overrides (model, tools, system prompt)
-      let agentModelOverride: string | null = null;
+      // Load AGENTS.md and apply routing overrides (tools, system prompt).
       {
         const agents = loadAgents(cwd as string | undefined);
         if (agents.length > 0) {
@@ -571,9 +570,15 @@ export async function POST(
 
           if (matched) {
             console.log('[AGENTS] Routing to agent:', matched.name, '| explicit:', !!explicitName);
-            // Override model if agent specifies one (handled later via effectiveModel fallback)
+            /*
+             * NOT the model. An agent's `model:` used to beat the route the
+             * client resolved from the tier grid — a second place to pick a
+             * model, and for a BYOK user it sent a Claude id (claude-opus-4-6)
+             * to their OpenRouter provider. Models are chosen in Settings;
+             * an agent shapes the role and the tools.
+             */
             if (matched.model) {
-              agentModelOverride = matched.model;
+              console.log('[AGENTS]', matched.name, 'pins model', matched.model, '— ignored; the model comes from Settings');
             }
             // Override allowedTools if agent specifies them
             if (matched.allowedTools && surfaceConfig.allowedTools) {
@@ -831,11 +836,10 @@ export async function POST(
       };
 
       // ── Model resolution ───────────────────────────────────────────────
-      // Priority: explicit model (sessionControls > agent > request) wins.
+      // Priority: explicit model (sessionControls > request) wins.
       // Otherwise, if the client asked by (capability, tier), resolve through
       // the model registry with tumbling. Falls back to the surface default.
       const explicitModel = sessionControls?.modelOverride
-        || agentModelOverride
         || (model as string | null)
         || null;
       let effectiveModel = explicitModel || surfaceConfig.model;
@@ -871,7 +875,6 @@ export async function POST(
         const { extractDocument } = await import('@/lib/extractors');
         const { getScratchDir, getScratchRoot, isSafeChatId } = await import('@/lib/app-paths');
         const { join: ej, dirname: eDirname } = await import('path');
-        const { mkdirSync: eMkdir, writeFileSync: eWrite } = await import('fs');
         const { writeUniqueFile, copyIntoUnique, isRealPathWithin } = await import('@/lib/uploads/store');
         const isToolSurface = surfaceId === 'cowork' || surfaceId === 'code';
         // Stored names are unique per conversation (`a.png`, `a-2.png`) so two
@@ -957,12 +960,13 @@ export async function POST(
               att.extractedPath = att.filePath;
               console.log('[EXTRACT] Empty result; falling back to Read tool path for', att.name);
             } else if (isToolSurface && result.text.length > 0) {
-              // Save to scratch dir for agent to Read/Grep
+              // Save to scratch dir for agent to Read/Grep — under a UNIQUE name,
+              // like the uploads beside it: two `report.pdf` attachments in one
+              // conversation both became documents/report.md, and the second
+              // overwrote the first while the model still held both paths.
               const scratchDir = ej(getScratchDir(chatId as string), 'documents');
-              eMkdir(scratchDir, { recursive: true });
-              const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.[^.]+$/, '.md');
-              const extractedPath = ej(scratchDir, safeName);
-              eWrite(extractedPath, result.text, 'utf-8');
+              const mdName = `${att.name.replace(/\.[^.]+$/, '')}.md`;
+              const extractedPath = await writeUniqueFile(scratchDir, mdName, Buffer.from(result.text, 'utf-8'));
               att.extractedPath = extractedPath;
               att.content = ''; // Free memory — agent will use Read tool
               console.log('[EXTRACT] Saved to scratch:', extractedPath, '(' + result.text.length + ' chars)');

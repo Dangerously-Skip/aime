@@ -22,19 +22,6 @@ interface AgentWithScope extends AgentConfig {
   scope: Scope;
 }
 
-const MODEL_OPTIONS = [
-  { value: "", label: "Default" },
-  { value: "claude-haiku-4-5-20251001", label: "Haiku" },
-  { value: "claude-sonnet-4-6", label: "Sonnet" },
-  { value: "claude-opus-4-6", label: "Opus" },
-];
-
-function modelLabel(model?: string): string {
-  if (!model) return "Default";
-  const opt = MODEL_OPTIONS.find((o) => o.value === model);
-  return opt ? opt.label : model;
-}
-
 function emptyDraft(scope: Scope): AgentWithScope {
   return {
     name: "",
@@ -118,7 +105,8 @@ export function AgentsPanel() {
       const agent: AgentConfig = {
         name: draft.name.trim(),
         description: draft.description,
-        model: draft.model || undefined,
+        // No `model`: agents follow the model settings. Saving drops a pin an
+        // older version (or a hand edit) wrote — the note in the editor says so.
         systemPrompt: draft.systemPrompt || undefined,
         allowedTools: draft.allowedTools?.length ? draft.allowedTools : undefined,
         triggers: draft.triggers?.length ? draft.triggers : undefined,
@@ -250,11 +238,6 @@ export function AgentsPanel() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-medium">{agent.name}</span>
-                      {agent.model && (
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">
-                          {modelLabel(agent.model)}
-                        </Badge>
-                      )}
                       <Badge
                         variant="outline"
                         className="text-[10px] px-1.5 py-0 h-4 capitalize"
@@ -319,21 +302,19 @@ export function AgentsPanel() {
             />
           </div>
 
-          {/* Model */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Model</label>
-            <select
-              value={draft.model ?? ""}
-              onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-            >
-              {MODEL_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/*
+            No model chooser. This was a second place to pick a model, listing
+            three hardcoded Anthropic model ids — and the chat route let it beat
+            the tier grid, so a BYOK user's agent sent an Anthropic id to their
+            provider.
+            Agents follow Settings → Models & API keys like everything else.
+          */}
+          {draft.model && (
+            <p className="text-xs text-muted-foreground" data-testid="agent-model-note">
+              This agent pins <code>{draft.model}</code>. Agents now use the model from
+              Settings, so the pin is ignored — saving removes it.
+            </p>
+          )}
 
           {/* System Prompt */}
           <div className="space-y-1.5">

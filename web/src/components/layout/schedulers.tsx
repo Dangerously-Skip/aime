@@ -3,7 +3,6 @@
 import { useCallback } from "react";
 import { useCron, type FiredJob } from "@/hooks/use-cron";
 import { useExecutionManifest } from "@/hooks/use-execution-manifest";
-import { useAppStore } from "@/stores/app-store";
 import { useContextBusStore } from "@/stores/context-bus-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { notifyDesktop } from "@/lib/schedule/notify";
@@ -22,8 +21,8 @@ import { notifyDesktop } from "@/lib/schedule/notify";
  * site, so the next one cannot be quietly born dead.
  *
  * WHAT BELONGS HERE. Only schedulers that must run whatever the user is looking
- * at. A hook scoped to one conversation — `useSessionReset` takes a `chatId` —
- * belongs to the surface that owns that conversation, not here.
+ * at. A hook scoped to one conversation belongs to the surface that owns that
+ * conversation, not here.
  *
  * WHY NOT IN A SURFACE. `useStandingOrders` lives in the Assistant surface and
  * works, because every surface is mounted the whole time. But that is a property
@@ -55,6 +54,11 @@ const SURFACE_NAMES: Record<string, string> = {
  * Every surface is mounted all the time, so the job runs in the background, and
  * visibility comes from a notification (quiet hours respected) plus a line in
  * the Assistant's activity log, which its health panel reads.
+ *
+ * The same holds for the CONVERSATION, not just the surface: the job gets its
+ * own, and the one you had open is handed back as soon as the job's turn is in
+ * flight (job-conversation → handBackView). So the notification is sent even
+ * when the job's surface is the one on screen — you are not watching it start.
  */
 export function fireAttendedJob(job: FiredJob): void {
   useContextBusStore.getState().publish({
@@ -73,10 +77,7 @@ export function fireAttendedJob(job: FiredJob): void {
     label: `Ran in ${surface}: ${short}`.slice(0, 120),
     orderId: job.id,
   });
-  // Only when it is running out of sight — on the visible surface you watch it start.
-  if (useAppStore.getState().activeSurface !== job.surfaceId) {
-    notifyDesktop(`Scheduled job started in ${surface}`, short);
-  }
+  notifyDesktop(`Scheduled job started in ${surface}`, short);
 }
 
 export function Schedulers() {

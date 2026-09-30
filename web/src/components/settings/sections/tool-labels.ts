@@ -2,7 +2,7 @@
  * What to call a tool in Settings.
  *
  * The surface configs list the names the Agent SDK sees — `mcp__aime__FetchUrl`,
- * `spawn_agent`, `NotebookEdit` — and Settings used to print them verbatim, so the
+ * `NotebookEdit` — and Settings used to print them verbatim, so the
  * one screen meant to explain what each surface can do read like a stack trace.
  * The internal name stays the source of truth; this is presentation only.
  */
@@ -10,7 +10,6 @@
 /** Names that do not read well once split, or that deserve plainer wording. */
 const KNOWN: Record<string, string> = {
   Agent: 'Sub-agents',
-  spawn_agent: 'Sub-agents',
   AskUserQuestion: 'Ask you a question',
   Bash: 'Terminal commands',
   Edit: 'Edit files',

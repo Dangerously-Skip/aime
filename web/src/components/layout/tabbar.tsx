@@ -13,6 +13,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SIDEBAR_ID } from "./responsive-sidebar";
 
 const SURFACES: { id: Surface; label: string; shortcut: string }[] = [
   { id: "chat", label: "Chat", shortcut: "1" },
@@ -94,6 +95,8 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
           className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
           onClick={toggleSidebar}
           aria-label={sidebarVisible ? "Hide sidebar" : "Show sidebar"}
+          aria-expanded={sidebarVisible}
+          aria-controls={SIDEBAR_ID}
           title={sidebarVisible ? "Hide sidebar" : "Show sidebar"}
         >
           {sidebarVisible ? (

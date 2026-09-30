@@ -21,7 +21,7 @@ import * as path from 'path'
 const SURFACES = {
   surfaces: {
     cowork: {
-      allowedTools: ['Read', 'mcp__aime__FetchUrl', 'mcp__web-search__web_search', 'spawn_agent'],
+      allowedTools: ['Read', 'mcp__aime__FetchUrl', 'mcp__web-search__web_search', 'Agent'],
       model: 'sonnet',
       maxTurns: 50,
       maxBudgetUsd: 5,
@@ -64,7 +64,7 @@ describe('Capabilities', () => {
     expect(screen.getByText('Web search')).toBeTruthy()
     expect(screen.getByText('Sub-agents')).toBeTruthy()
     expect(screen.queryByText(/mcp__/)).toBeNull()
-    expect(screen.queryByText('spawn_agent')).toBeNull()
+    expect(screen.queryByText('Agent')).toBeNull()
   })
 
   it('names the push-to-talk switch', async () => {

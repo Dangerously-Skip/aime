@@ -569,8 +569,6 @@ export function AssistantSurface() {
   const addCard = useAssistantStore((s) => s.addCard);
   const updateCard = useAssistantStore((s) => s.updateCard);
 
-
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   // The route comes from the SAME `resolveSendRoute` chokepoint every other
   // surface uses — see the comment at the fetch below.
   const providers = useProviderStore((s) => s.providers);
@@ -734,7 +732,6 @@ export function AssistantSurface() {
           chatId,
           ...(route?.model ? { model: route.model } : {}),
           ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}),
-          apiKey: anthropicApiKey || undefined,
         }),
         signal: controller.signal,
       });
@@ -830,7 +827,7 @@ export function AssistantSurface() {
       isStreamingRef.current = false;
       abortRef.current = null;
     }
-  }, [inputValue, isStreaming, anthropicApiKey, addCard, updateCard, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, runRecorder]);
+  }, [inputValue, isStreaming, addCard, updateCard, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, runRecorder]);
 
   const handleAbort = useCallback(() => {
     abortRef.current?.abort();

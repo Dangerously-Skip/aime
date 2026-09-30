@@ -176,7 +176,8 @@ describe('credentials are resolved server-side', () => {
     delete process.env.ANTHROPIC_API_KEY;
     const res = await post({ messages });
     expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toMatch(/Settings|ANTHROPIC_API_KEY/);
+    // Names the section as the Settings nav does ("API Access" was renamed).
+    expect(JSON.stringify(await res.json())).toMatch(/Settings → Models & API keys/);
     expect(streamMock).not.toHaveBeenCalled();
   });
 
@@ -187,6 +188,19 @@ describe('credentials are resolved server-side', () => {
       providerConfig: { providerId: 'openrouter', baseUrl: 'https://openrouter.ai/api' },
     });
     expect(anthropicCtor.mock.calls[0][0].baseURL).toContain('openrouter.ai');
+  });
+
+  it('never sends the Anthropic key to a user-added provider', async () => {
+    // Regression: a request key beat the provider's own, and callers send the
+    // Anthropic key — so it went to openrouter.ai as the credential.
+    await post({
+      messages,
+      apiKey: 'sk-env-key',
+      providerConfig: { providerId: 'openrouter', baseUrl: 'https://openrouter.ai/api' },
+    });
+    for (const [opts] of anthropicCtor.mock.calls) {
+      if (String(opts.baseURL ?? '').includes('openrouter.ai')) expect(opts.apiKey).not.toBe('sk-env-key');
+    }
   });
 });
 

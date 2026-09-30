@@ -18,7 +18,7 @@
 import type { Capability, Tier } from '@/lib/models/types';
 
 /** Why a run started. Mirrors OpenClaw's five input vectors. */
-export type RunTrigger = 'manual' | 'chat' | 'cron' | 'heartbeat' | 'webhook' | 'hook';
+export type RunTrigger = 'manual' | 'chat' | 'cron' | 'heartbeat' | 'hook';
 
 export type RunStatus =
   | 'running'

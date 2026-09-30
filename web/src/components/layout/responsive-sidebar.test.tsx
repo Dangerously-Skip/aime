@@ -103,6 +103,33 @@ describe('useResponsiveSidebar', () => {
   });
 });
 
+describe('sidebar toggle and frame semantics', () => {
+  it('the toggle names what it does, says whether the sidebar is open, and points at it', async () => {
+    const { Tabbar } = await import('./tabbar');
+    render(<><Tabbar /><Shell /></>);
+    const toggle = screen.getByRole('button', { name: 'Hide sidebar' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const controlled = document.getElementById(toggle.getAttribute('aria-controls')!);
+    expect(controlled).toBe(frame());
+    fireEvent.click(toggle);
+    const reopened = screen.getByRole('button', { name: 'Show sidebar' });
+    expect(reopened.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('a collapsed docked sidebar is out of the tab order and the accessibility tree', () => {
+    useAppStore.setState({ sidebarVisible: false });
+    render(<Shell />);
+    expect(frame().getAttribute('data-sidebar-mode')).toBe('docked');
+    expect(frame().hasAttribute('inert')).toBe(true);
+    expect(frame().getAttribute('aria-hidden')).toBe('true');
+    cleanup();
+    useAppStore.setState({ sidebarVisible: true });
+    render(<Shell />);
+    expect(frame().hasAttribute('inert')).toBe(false);
+    expect(frame().hasAttribute('aria-hidden')).toBe(false);
+  });
+});
+
 describe('SidebarFrame overlay', () => {
   it('opens over the content with the existing toggle, and closes on backdrop or Escape', () => {
     render(<Shell />);

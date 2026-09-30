@@ -17,6 +17,8 @@ const { pushArgs } = require("./electron/git-args");
 const { postInternal } = require("./electron/internal-api");
 const { createRotatingLog } = require("./electron/rotating-log");
 const { createServerSupervisor, loadingPageUrl } = require("./electron/server-supervisor");
+const { migrateMcpConfigFile } = require("./electron/mcp-config-migration");
+const { resolveOpenPath } = require("./electron/open-path-policy");
 
 // Product name, from package.json — this file is plain CJS and cannot import
 // src/config/branding.ts, and package.json is the other place it is defined.
@@ -605,41 +607,6 @@ function migrateMcpConfig() {
   }
 }
 
-function migrateMcpConfigFile(configPath) {
-  try {
-    if (!fs.existsSync(configPath)) return;
-
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const config = JSON.parse(raw);
-    if (!config.mcpServers) return;
-
-    let changed = false;
-    const servers = config.mcpServers;
-
-    // Fix Miro — the actual MCP JSON-RPC endpoint is at / not /mcp
-    if (servers["nib-mcp-miro"]?.url === "https://mcp.miro.com/mcp") {
-      servers["nib-mcp-miro"].url = "https://mcp.miro.com/";
-      changed = true;
-      console.log("[AIME] Migrated Miro MCP URL (/mcp -> /)");
-    }
-
-    // Fix AWS — switch from non-existent npm package to AWS Labs' Python MCP via uvx
-    const aws = servers["nib-connector-aws"];
-    if (aws && Array.isArray(aws.args) && aws.args.some((a) => typeof a === "string" && a.includes("@aws/mcp-server-aws"))) {
-      aws.command = "uvx";
-      aws.args = ["awslabs.core-mcp-server@latest"];
-      changed = true;
-      console.log("[AIME] Migrated AWS MCP to awslabs.core-mcp-server via uvx");
-    }
-
-    if (changed) {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
-    }
-  } catch (err) {
-    console.warn("[AIME] MCP config migration failed:", err.message);
-  }
-}
-
 /**
  * Copy the bundled AIME skills plugin to ~/.claude/plugins/aime-skills so the
  * Agent SDK picks them up. Runs on every app start so updates ship with releases.
@@ -776,8 +743,15 @@ async function ensureSetup() {
       minimizable: false,
       maximizable: false,
       fullscreenable: false,
-      title: "Setting up AIME",
-      webPreferences: { nodeIntegration: true, contextIsolation: false },
+      title: `Setting up ${APP_NAME}`,
+      // It used to run with Node in the page. It needs four calls, which the
+      // preload exposes; nothing else crosses. See electron/setup-preload.js.
+      webPreferences: {
+        preload: path.join(__dirname, "electron", "setup-preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
     });
     win.loadFile(path.join(__dirname, "setup-window.html"));
 
@@ -1495,8 +1469,33 @@ ipc.on("get-analytics-config", (event) => {
   event.returnValue = readAnalyticsConf();
 });
 
+/**
+ * Open a local file or folder with its default app. Returns "" on success or
+ * the reason it did not (shell.openPath's own contract). Validated first —
+ * absolute, existing, not something the OS would run — see
+ * electron/open-path-policy.js. Accepts a file:// URL, which is how the
+ * preview panel holds a local page.
+ */
 ipc.handle("open-path", async (_event, filePath) => {
-  return shell.openPath(expandHome(filePath));
+  const target = resolveOpenPath(filePath, {
+    homedir: os.homedir(),
+    platform: process.platform,
+    exists: (p) => fs.existsSync(p),
+    isExecutableFile: (p) => {
+      if (process.platform === "win32") return false;
+      try {
+        const st = fs.statSync(p);
+        return st.isFile() && (st.mode & 0o111) !== 0;
+      } catch {
+        return false;
+      }
+    },
+  });
+  if (!target.ok) {
+    console.warn("[AIME] open-path refused:", target.reason, String(filePath).slice(0, 200));
+    return target.reason;
+  }
+  return shell.openPath(target.path);
 });
 
 ipc.handle("read-file", async (_event, filePath) => {

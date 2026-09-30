@@ -11,7 +11,6 @@ import type { SearchProviderId } from '@/lib/search/providers';
 
 export type ChatFont = 'default' | 'sans' | 'mono' | 'system' | 'dyslexic';
 export type ToolProfile = 'minimal' | 'coding' | 'full';
-export type SessionResetMode = 'manual' | 'daily' | 'idle';
 
 export interface HeartbeatMode {
   enabled: boolean;
@@ -53,9 +52,6 @@ interface SettingsState {
   heartbeatIntervalMinutes: number;
   heartbeatModes: HeartbeatModes;
   loopDetectionThreshold: number;
-  sessionResetMode: SessionResetMode;
-  sessionResetTime: string;
-  sessionIdleMinutes: number;
 
 
   // Security
@@ -70,8 +66,9 @@ interface SettingsState {
 
   /**
    * API access. The ONE secret still persisted with settings, and not by choice:
-   * every surface sends it with each request, and the routes that receive it
-   * have no server-side fallback yet. It is always mirrored to the encrypted
+   * Chat and Cowork still send it with each request. Every server path falls
+   * back to the credential store without it, and every other surface has
+   * stopped sending it (anthropic-key-not-sent.test.ts). It is always mirrored to the encrypted
    * credential store (id `anthropic`) as well, and excluded from Export — see
    * `SECRET_SETTINGS_KEYS`. The search key and the unused GitHub token that
    * used to sit here moved out in v14.
@@ -176,9 +173,6 @@ interface SettingsActions {
   setHeartbeatIntervalMinutes: (minutes: number) => void;
   setHeartbeatMode: (mode: keyof HeartbeatModes, config: Partial<HeartbeatMode>) => void;
   setLoopDetectionThreshold: (threshold: number) => void;
-  setSessionResetMode: (mode: SessionResetMode) => void;
-  setSessionResetTime: (time: string) => void;
-  setSessionIdleMinutes: (minutes: number) => void;
   addRecentFolder: (path: string) => void;
   addTrustedFolder: (path: string) => void;
   setAnthropicApiKey: (key: string | null) => void;
@@ -213,9 +207,6 @@ export const INITIAL_SETTINGS: SettingsState = {
   heartbeatIntervalMinutes: 30,
   heartbeatModes: DEFAULT_HEARTBEAT_MODES,
   loopDetectionThreshold: 3,
-  sessionResetMode: 'manual',
-  sessionResetTime: '04:00',
-  sessionIdleMinutes: 60,
   recentFolders: [],
   trustedFolders: [],
   anthropicApiKey: null,
@@ -264,9 +255,6 @@ export const PERSISTED_SETTINGS_KEYS = [
   'heartbeatIntervalMinutes',
   'heartbeatModes',
   'loopDetectionThreshold',
-  'sessionResetMode',
-  'sessionResetTime',
-  'sessionIdleMinutes',
   'recentFolders',
   'trustedFolders',
   'anthropicApiKey',
@@ -301,8 +289,9 @@ type PersistedSettingsKey = (typeof PERSISTED_SETTINGS_KEYS)[number];
 /**
  * Persisted fields that are secrets. Never exported, never displayed back.
  *
- * `anthropicApiKey` is still persisted because every surface sends it per
- * request (see its note on `SettingsState`); this list is what keeps it out of
+ * `anthropicApiKey` is still persisted because the Chat and Cowork surfaces
+ * still send it per request (the server falls back to the credential store for
+ * everything else — see anthropic-key-not-sent.test.ts); this list keeps it out of
  * everything ELSE — the Export file wrote the whole store, key included, to a
  * JSON file in Downloads.
  */
@@ -351,9 +340,6 @@ export const useSettingsStore = create<SettingsStore>()(
           },
         })),
       setLoopDetectionThreshold: (loopDetectionThreshold) => set({ loopDetectionThreshold }),
-      setSessionResetMode: (sessionResetMode) => set({ sessionResetMode }),
-      setSessionResetTime: (sessionResetTime) => set({ sessionResetTime }),
-      setSessionIdleMinutes: (sessionIdleMinutes) => set({ sessionIdleMinutes }),
 
       addRecentFolder: (path) =>
         set((state) => {
@@ -411,9 +397,19 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 14,
+      version: 15,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
+        // v15: the session-reset settings (manual / daily / idle) are dropped.
+        // The hook that read them, `useSessionReset`, was never mounted and has
+        // been deleted, so they configured nothing. Up front and by deletion,
+        // like v11/v13: the default merge would splice orphans back into live
+        // state, and the v3 branch below used to ADD them.
+        if (version < 15) {
+          delete state.sessionResetMode;
+          delete state.sessionResetTime;
+          delete state.sessionIdleMinutes;
+        }
         // v14: secrets out of the plaintext payload. The search key is parked
         // for the credential store (moved after hydration, deleted only once
         // that write succeeds); the unused GitHub token/user are dropped. Up
@@ -489,16 +485,14 @@ export const useSettingsStore = create<SettingsStore>()(
           } as unknown as SettingsState & SettingsActions;
         }
         if (version === 3) {
-          // v3 -> v4: add tool profile, automation, session reset settings
+          // v3 -> v4: add tool profile and automation settings (the session
+          // reset settings it also added were dropped in v15)
           return {
             ...state,
             toolProfile: 'full',
             heartbeatEnabled: false,
             heartbeatIntervalMinutes: 30,
             loopDetectionThreshold: 3,
-            sessionResetMode: 'manual',
-            sessionResetTime: '04:00',
-            sessionIdleMinutes: 60,
           } as unknown as SettingsState & SettingsActions;
         }
         if (version === 4) {

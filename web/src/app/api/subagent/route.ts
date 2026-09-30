@@ -76,14 +76,13 @@ export async function POST(req: NextRequest) {
     const surfaceConfig = getSurfaceConfig(surfaceId as string);
 
     // Resolve named agent config if provided
-    let agentModel: string | undefined;
     let agentAllowedTools: string[] | undefined;
     let agentSystemPrompt: string | undefined;
     if (agentName) {
       const agents = loadAgents((cwd as string) || undefined);
       const agentConfig = agents.find((a) => a.name === agentName);
       if (agentConfig) {
-        agentModel = agentConfig.model;
+        // Not its `model:` — models come from Settings (see the chat route).
         // Intersect agent allowedTools with surface defaults if both defined
         if (agentConfig.allowedTools && surfaceConfig.allowedTools) {
           agentAllowedTools = agentConfig.allowedTools.filter((t) =>
@@ -94,7 +93,7 @@ export async function POST(req: NextRequest) {
         }
         const sp = readAgentSystemPrompt(agentConfig);
         if (sp) agentSystemPrompt = sp;
-        console.log('[SUBAGENT] Resolved agent config:', agentName, '| model:', agentModel);
+        console.log('[SUBAGENT] Resolved agent config:', agentName);
       } else {
         console.warn('[SUBAGENT] Agent not found:', agentName, '— using surface defaults');
       }
@@ -109,7 +108,7 @@ export async function POST(req: NextRequest) {
     if (!usable) {
       return Response.json({ error: NO_MODEL_MESSAGE, code: 'no_model' }, { status: 400 });
     }
-    const pinned = (model as string) || agentModel || null;
+    const pinned = (model as string) || null;
     const runModel =
       pinned ||
       (providerConfig

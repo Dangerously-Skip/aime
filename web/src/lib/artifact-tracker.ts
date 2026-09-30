@@ -13,7 +13,7 @@
  * a sidebar wants to show. That is now `CategorizeOptions.richContext` — one
  * flag, at the call site, instead of a second function.
  */
-import { AGENT_PREFIX, SEARCH_PREFIX, COMMAND_PREFIX } from './cowork/context-entry';
+import { SEARCH_PREFIX, COMMAND_PREFIX } from './cowork/context-entry';
 
 // Bash patterns that indicate file creation/modification (capture group 1 = output path)
 export const BASH_WRITE_PATTERNS = [
@@ -147,16 +147,7 @@ export function categorizeToolCall(
   toolInput: Record<string, unknown>,
   opts: CategorizeOptions = {},
 ): CategorizedToolCall | null {
-  // A spawned subagent is activity, not a file — shown only where activity is.
-  if (toolName === "spawn_agent") {
-    if (!opts.richContext) return null;
-    const agentName = typeof toolInput.agentName === "string" ? toolInput.agentName : null;
-    const task = typeof toolInput.task === "string" ? toolInput.task : "";
-    const label = `${task.slice(0, 40)}${task.length > 40 ? "…" : ""}`;
-    return { category: "context", path: `${AGENT_PREFIX}${agentName ?? "subagent"}: ${label}` };
-  }
-
-  // Search queries, likewise.
+  // Search queries are activity, not files — shown only where activity is.
   if (toolName.includes("web_search") || toolName.includes("searxng") || toolName === "WebSearch") {
     if (!opts.richContext) return null;
     const raw = toolInput.query || toolInput.q;

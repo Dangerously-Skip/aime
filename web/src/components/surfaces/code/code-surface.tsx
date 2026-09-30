@@ -261,12 +261,12 @@ export function CodeSurface() {
       EMPTY_MESSAGES
   );
   const modelRoute = useCodeStore((s) => s.modelRoute);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   /** Sent with every turn; without it the server never learns search exists. */
   const searchSettings = useSearchSettings();
   const deckTheme = useDeckTheme(chatId);
   // Built-in (Claude) reachability, which is the user's key OR the server's env
-  // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
+  // key OR Bedrock. The key itself is never sent: the server reads the one
+  // saved in Settings from its credential store.
   const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
@@ -857,7 +857,6 @@ export function CodeSurface() {
          * it repeats it until the turn dies.
          */
         browserToolsAvailable: !!previewWebviewRef.current,
-        apiKey: anthropicApiKey || undefined,
         providerConfig: route?.providerConfig,
         cwd: folder || undefined,
         history: history.length > 0 ? history : undefined,
@@ -881,7 +880,6 @@ export function CodeSurface() {
       modelRoute,
       providers,
       tierModels,
-      anthropicApiKey,
       hasAnthropicKey,
       hasBedrock,
       builtinAccessKnown,

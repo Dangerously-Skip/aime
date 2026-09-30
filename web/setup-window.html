@@ -86,14 +86,16 @@
     </div>
   </div>
   <script>
-    const { ipcRenderer } = require("electron");
+    // No Node here: the window is sandboxed and context-isolated, and talks to
+    // main only through the four calls electron/setup-preload.js exposes.
+    const setup = window.setupAPI;
     const bar = document.getElementById("bar");
     const status = document.getElementById("status");
     const errorBox = document.getElementById("error");
     const retryBtn = document.getElementById("retry");
     const skipBtn = document.getElementById("skip");
 
-    ipcRenderer.on("setup:progress", (_e, msg) => {
+    setup.onProgress((msg) => {
       if (msg.detail) status.textContent = msg.detail;
       if (typeof msg.percent === "number") {
         bar.classList.remove("indeterminate");
@@ -103,7 +105,7 @@
       }
     });
 
-    ipcRenderer.on("setup:error", (_e, message) => {
+    setup.onError((message) => {
       errorBox.textContent = message;
       errorBox.classList.add("visible");
       retryBtn.classList.remove("hidden");
@@ -117,11 +119,11 @@
       retryBtn.classList.add("hidden");
       bar.classList.add("indeterminate");
       status.textContent = "Retrying…";
-      ipcRenderer.send("setup:retry");
+      setup.retry();
     });
 
     skipBtn.addEventListener("click", () => {
-      ipcRenderer.send("setup:skip");
+      setup.skip();
     });
   </script>
 </body>

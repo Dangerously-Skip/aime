@@ -29,7 +29,7 @@ describe('classifyToolCall — built-ins', () => {
   });
 
   it('in-app orchestration is app, not consequential', () => {
-    for (const t of ['TodoWrite', 'AskUserQuestion', 'canvas', 'spawn_agent', 'CronCreate', 'StandingOrderCreate']) {
+    for (const t of ['TodoWrite', 'AskUserQuestion', 'canvas', 'CronCreate', 'StandingOrderCreate']) {
       expect(classifyToolCall(t), t).toBe('app');
     }
     expect(classifyToolCall('browser_click')).toBe('app');
