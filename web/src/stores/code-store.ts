@@ -1,8 +1,8 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import { getGatedStorage } from '@/lib/gated-storage';
+import { persist } from 'zustand/middleware';
+import { surfaceTranscriptStorage } from '@/lib/transcripts/transcript-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import type { ModelOption } from '@/lib/models/client-options';
 import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
@@ -80,7 +80,9 @@ export const useCodeStore = create<CodeStore>()(
     }),
     {
       name: 'aime:code',
-      storage: createJSONStorage(() => getGatedStorage()),
+      // Transcripts to IndexedDB per conversation, the rest to localStorage;
+      // see lib/transcripts/transcript-storage.
+      storage: surfaceTranscriptStorage('code', (): Record<string, true> => useCodeStore.getState().streamingChats),
       partialize: (state) => ({
         messages: state.messages,
         currentChatId: state.currentChatId,

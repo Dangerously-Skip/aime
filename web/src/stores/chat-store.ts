@@ -2,8 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { getGatedStorage } from '@/lib/gated-storage';
-import { createThrottledJSONStorage } from '@/lib/throttled-storage';
+import { surfaceTranscriptStorage } from '@/lib/transcripts/transcript-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
@@ -272,10 +271,9 @@ export const useChatStore = create<ChatStore>()(
     }),
     {
       name: 'aime:chat',
-      // Not per token: see lib/throttled-storage. Busy = any chat mid-turn.
-      storage: createThrottledJSONStorage(() => getGatedStorage(), {
-        isBusy: (): boolean => Object.keys(useChatStore.getState().streamingChats).length > 0,
-      }),
+      // Transcripts to IndexedDB per conversation, the rest to localStorage;
+      // see lib/transcripts/transcript-storage.
+      storage: surfaceTranscriptStorage('chat', (): Record<string, true> => useChatStore.getState().streamingChats),
       partialize: (state) => ({
         messages: state.messages,
         currentChatId: state.currentChatId,

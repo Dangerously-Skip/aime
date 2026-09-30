@@ -1,8 +1,8 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import { getGatedStorage } from '@/lib/gated-storage';
+import { persist } from 'zustand/middleware';
+import { surfaceTranscriptStorage } from '@/lib/transcripts/transcript-storage';
 import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 import { createTranscriptSlice, type TranscriptSlice } from '@/stores/slices/transcript-slice';
@@ -165,7 +165,9 @@ export const useBrowserStore = create<BrowserStore>()(
     }),
     {
       name: 'aime:browser',
-      storage: createJSONStorage(() => getGatedStorage()),
+      // Transcripts to IndexedDB per conversation, the rest to localStorage;
+      // see lib/transcripts/transcript-storage.
+      storage: surfaceTranscriptStorage('browser', (): Record<string, true> => useBrowserStore.getState().streamingChats),
       partialize: (state) => ({
         messages: state.messages,
         currentChatId: state.currentChatId,
