@@ -22,12 +22,15 @@ const SDK_RESULT_PREFIX = /^Claude Code returned an error result:\s*/i;
  * Remove CLI-only advice from an SDK error string.
  *
  * "Not logged in · Please run /login" names a command this app does not have;
- * the typed code is what tells the client where the user fixes it.
+ * the typed code is what tells the client where the user fixes it. Current
+ * CLIs say "Invalid API key · Fix external API key" for a rejected key, which
+ * is terminal advice about the CLI's own env, not this app's Settings.
  */
 export function cleanSdkErrorText(text: string): string {
   return text
     .replace(SDK_RESULT_PREFIX, '')
     .replace(/\s*[·•-]?\s*Please run \/login\.?/gi, '')
+    .replace(/\s*[·•-]?\s*Fix external API key\.?/gi, '')
     .trim();
 }
 
