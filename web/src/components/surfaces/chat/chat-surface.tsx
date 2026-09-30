@@ -156,7 +156,6 @@ export function ChatSurface() {
   const displayName = useSettingsStore((s) => s.displayName);
   const printDocument = useDocumentPrint();
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   /**
    * The settings half of a turn, which Chat alone was not sending.
    *
@@ -416,7 +415,6 @@ export function ChatSurface() {
         webSearch: currentWebSearch || undefined,
         projectInstructions: projectInstructions || undefined,
         projectKnowledge: projectKnowledge || undefined,
-        apiKey: anthropicApiKey || undefined,
         history: history.length > 0 ? history : undefined,
         memories: memoriesStr || undefined,
         crossSurfaceContext: crossSurfaceContext || undefined,
@@ -438,7 +436,6 @@ export function ChatSurface() {
       modelRoute,
       providers,
       tierModels,
-      anthropicApiKey,
       hasAnthropicKey,
       hasBedrock,
       builtinAccessKnown,

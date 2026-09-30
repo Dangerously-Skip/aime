@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
-import { parseCronMarker, scheduleFromCronMarker, scheduleFromQuarryCron } from './quarry-cron';
+import { parseCronMarker, scheduleFromCronMarker } from './aime-cron';
 import { useAssistantStore } from '@/stores/assistant-store';
 
 /**
@@ -79,10 +79,6 @@ describe('legacy QUARRY_CRON marker', () => {
     expect(scheduleFromCronMarker('QUARRY_CRON:0 9 * * *:stand-up', 'Cowork', 'command')).toBe(true);
     expect(scheduleFromCronMarker('AIME_CRON:0 9 * * *:stand-up', 'Cowork', 'output')).toBe(false);
     expect(useAssistantStore.getState().orders).toHaveLength(1);
-  });
-
-  it('keeps the old export name working for existing importers', () => {
-    expect(scheduleFromQuarryCron).toBe(scheduleFromCronMarker);
   });
 });
 

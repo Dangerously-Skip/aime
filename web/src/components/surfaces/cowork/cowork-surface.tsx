@@ -14,7 +14,7 @@ import { useSSEStream, stripMessagesForHistory, turnErrorOf } from "@/hooks/use-
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
 import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { parseSearchWebResults, isParsableSearchTool } from "@/lib/search/parse-results";
-import { scheduleFromQuarryCron } from "@/lib/sse/quarry-cron";
+import { scheduleFromCronMarker } from "@/lib/sse/aime-cron";
 import { streamRegistry } from "@/lib/stream-registry";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useMemoryStore } from "@/stores/memory-store";
@@ -794,7 +794,6 @@ export function CoworkSurface() {
   const personalPreferences = useSettingsStore((s) => s.personalPreferences);
   const printDocument = useDocumentPrint();
   const displayName = useSettingsStore((s) => s.displayName);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   /** Sent with every turn; without it the server never learns search exists. */
   const searchSettings = useSearchSettings();
   const deckTheme = useDeckTheme(chatId);
@@ -856,7 +855,6 @@ export function CoworkSurface() {
       displayName: displayName || undefined,
       projectInstructions: projectInstructions || undefined,
       projectKnowledge: projectKnowledge || undefined,
-      apiKey: anthropicApiKey || undefined,
       cwd: folder || projectFolder || scratchDir || undefined,
       crossSurfaceContext: crossSurfaceContext || undefined,
       securitySettings: {
@@ -873,7 +871,6 @@ export function CoworkSurface() {
       displayName,
       projectInstructions,
       projectKnowledge,
-      anthropicApiKey,
       folder,
       projectFolder,
       scratchDir,
@@ -992,7 +989,6 @@ export function CoworkSurface() {
           messageCount: allMsgs.length,
           durationMs: usage.durationMs,
           model: usage.model,
-          apiKey: anthropicApiKey || undefined,
         }),
       }).then((r) => r.json()).then(({ estimate }) => {
         if (!estimate) return;
@@ -1095,9 +1091,9 @@ export function CoworkSurface() {
           });
           // The marker can arrive in the command OR in the output — the model
           // either writes the expression or computes it with a script. Same parse
-          // both times; it lived here twice, verbatim. See lib/sse/quarry-cron.
+          // both times; it lived here twice, verbatim. See lib/sse/aime-cron.
           if (toolName === "Bash") {
-            scheduleFromQuarryCron(toolInput.command, "Cowork", "command");
+            scheduleFromCronMarker(toolInput.command, "Cowork", "command");
           }
           // Parallel search result fetch — the SDK doesn't expose tool results in the stream,
           // so we call searxng directly when we see a web_search tool_use event.
@@ -1230,7 +1226,7 @@ export function CoworkSurface() {
             const matchingTc = lastMsg?.toolCalls?.find((tc) => tc.id === id);
             // Same marker, the other arrival path — see the note at the command site.
             if (matchingTc?.name === "Bash") {
-              scheduleFromQuarryCron(result, "Cowork", "output");
+              scheduleFromCronMarker(result, "Cowork", "output");
             }
             if (matchingTc?.name === "Bash") {
               // Skip scanning curl/wget HTML output — too many false positives from embedded asset URLs

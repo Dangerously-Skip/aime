@@ -96,9 +96,3 @@ export function scheduleFromCronMarker(text: unknown, surface: string, source: s
   console.log(`[${surface}] Cron job scheduled from Bash ${source}:`, parsed.expression, parsed.prompt);
   return true;
 }
-
-/**
- * @deprecated The pre-rename name, kept only because `cowork-surface.tsx` still
- * imports it. Switch that import to `scheduleFromCronMarker` and delete this.
- */
-export const scheduleFromQuarryCron = scheduleFromCronMarker;

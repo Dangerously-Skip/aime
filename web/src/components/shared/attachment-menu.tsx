@@ -66,7 +66,7 @@ const SIZE_LIMITS: Record<string, number> = {
   spreadsheet: 50 * 1024 * 1024,   // 50MB
   presentation: 50 * 1024 * 1024,  // 50MB
   audio: 100 * 1024 * 1024,        // 100MB
-  video: 500 * 1024 * 1024,        // 500MB
+  video: 200 * 1024 * 1024,        // 200MB — the server upload cap (lib/uploads/store MAX_UPLOAD_BYTES)
 }
 
 /** Threshold above which files are uploaded via /api/upload instead of base64 in JSON body */

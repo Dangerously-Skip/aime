@@ -10,12 +10,6 @@ import { useSettingsStore } from '@/stores/settings-store';
 
 export interface CanvasDispatchOptions {
   surfaceId?: string;
-  /**
-   * @deprecated Ignored. The server reads the Anthropic key saved in Settings
-   * from its credential store; the browser no longer sends it. Kept only so the
-   * existing caller type-checks until it stops passing one.
-   */
-  apiKey?: string | null;
   cwd?: string | null;
 }
 

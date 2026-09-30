@@ -82,10 +82,13 @@ describe('canvas subagent calls follow the user’s route', () => {
     expect(body.providerConfig).toBeNull();
   });
 
-  it('never sends the Anthropic key, even when a caller still passes one', async () => {
+  it('never sends the Anthropic key, even when a stale caller still passes one', async () => {
     serverAnswers({ anthropic: true, bedrock: false });
-    await dispatchCanvasToolCall(action, { surfaceId: 'chat', apiKey: 'sk-ant-secret' });
-    await refreshCanvasDoc('again', { surfaceId: 'chat', apiKey: 'sk-ant-secret' });
+    // Not a literal, so the (removed) `apiKey` option still reaches the call —
+    // the shape an old caller would produce at runtime.
+    const stale = { surfaceId: 'chat', apiKey: 'sk-ant-secret' };
+    await dispatchCanvasToolCall(action, stale);
+    await refreshCanvasDoc('again', stale);
     for (const body of subagentBodies()) expect(body).not.toHaveProperty('apiKey');
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('sk-ant-secret');
   });

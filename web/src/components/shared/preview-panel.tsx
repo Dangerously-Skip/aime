@@ -185,7 +185,13 @@ export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, o
   }
 
   function handleOpenExternal() {
-    window.open(currentUrl, "_blank");
+    // Electron refuses window.open for non-web URLs (main-web.js nav policy),
+    // so a local page opens through the validated openPath bridge instead.
+    if (currentUrl.startsWith("file:") && window.electronAPI?.openPath) {
+      void window.electronAPI.openPath(currentUrl);
+    } else {
+      window.open(currentUrl, "_blank");
+    }
   }
 
   function handleToggleConsole() {
