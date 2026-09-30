@@ -248,9 +248,9 @@ test.describe('runs are on the Activity tab, not the Cockpit', () => {
     await openCockpit(page);
   });
 
-  test('the Cockpit has widgets and scheduled work, and no Recent activity', async ({ page }) => {
+  test('the Cockpit has widgets and schedules, and no Recent activity', async ({ page }) => {
     await expect(page.getByRole('heading', { name: 'Widgets' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Scheduled work' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Schedules', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Recent activity' })).toHaveCount(0);
   });
 

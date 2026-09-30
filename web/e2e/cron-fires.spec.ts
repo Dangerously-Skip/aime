@@ -139,7 +139,10 @@ test.describe('a due job reaches its surface', () => {
       });
     });
 
-    await fireTick(page);
+    // A minute the previous test did not fire in. That test ran this same job,
+    // and a cron job deliberately never fires twice in one minute (due.ts), so
+    // ticking at "now" again tested the double-fire guard, not the job.
+    await fireTick(page, Date.now() + 5 * 60_000);
     await expect.poll(() => posts.length, { timeout: 15_000 }).toBeGreaterThan(0);
     expect(posts.join(' ')).toContain('/api/chat/browser');
   });
