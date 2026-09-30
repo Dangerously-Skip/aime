@@ -1204,3 +1204,34 @@ describe('a disconnected client stops the resume loop', () => {
     expect(call).toBe(2);
   });
 });
+
+/*
+ * Code's permission mode is a security choice the CLIENT makes, so the route
+ * decides where it may be made: only on Code, only from the menu's allowlist.
+ * The provider checks again (claude-provider.permission-mode.test.ts); this is
+ * the first of the two locks.
+ */
+describe('permission mode', () => {
+  it.each(['default', 'acceptEdits', 'plan', 'bypass'])('forwards "%s" for the Code surface', async (mode) => {
+    await post('code', { message: 'hi', chatId: 'c1', permissionMode: mode });
+    expect(providerParams().permissionMode).toBe(mode);
+  });
+
+  it('refuses a mode the menu does not offer, rather than falling back to a looser one', async () => {
+    for (const mode of ['bypassPermissions', 'dontAsk', 'auto', 42, { mode: 'plan' }]) {
+      const res = await post('code', { message: 'hi', chatId: 'c1', permissionMode: mode });
+      expect(res.status).toBe(400);
+    }
+    expect(mocks.queryMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['chat', 'cowork', 'browser', 'assistant'])('never passes one on for %s', async (surfaceId) => {
+    await post(surfaceId, { message: 'hi', chatId: 'c1', permissionMode: 'bypass' });
+    expect(providerParams().permissionMode).toBeUndefined();
+  });
+
+  it('leaves Code on its surface default when none is sent', async () => {
+    await post('code', { message: 'hi', chatId: 'c1' });
+    expect(providerParams().permissionMode).toBeUndefined();
+  });
+});

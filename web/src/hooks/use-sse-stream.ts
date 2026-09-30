@@ -9,6 +9,7 @@ import {
   notifyStreamAborted,
 } from '@/lib/stream-registry';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
+import type { CodePermissionMode } from '@/lib/surfaces/code-permission-mode';
 import { resetTextBoundary } from '@/lib/sse/core-chunks';
 import { reportTurnEvent } from '@/lib/runs/turn-outcome';
 import { classifyTurnError, isTurnErrorCode, type TurnErrorCode } from '@/lib/sse/turn-error';
@@ -234,6 +235,8 @@ export interface SendExtra {
    */
   canRelayToClient?: boolean;
   contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
+  /** Code's permission mode. The server accepts it for the Code surface only. */
+  permissionMode?: CodePermissionMode
   capability?: string
   tier?: string
   providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
@@ -415,6 +418,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.capability ? { capability: extra.capability } : {}),
             ...(extra?.tier ? { tier: extra.tier } : {}),
             ...(extra?.providerConfig ? { providerConfig: extra.providerConfig } : {}),
+            ...(extra?.permissionMode ? { permissionMode: extra.permissionMode } : {}),
             // A switched-off connector is NOT denied from here. The server stashes
             // it in `disabledMcpServers`, which `loadProvisionedMcpServers` never
             // reads — so it costs no decrypt, no token refresh and no config

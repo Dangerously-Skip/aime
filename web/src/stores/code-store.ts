@@ -8,8 +8,14 @@ import type { ModelOption } from '@/lib/models/client-options';
 import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import { createTranscriptSlice, type TranscriptSlice } from '@/stores/slices/transcript-slice';
+import {
+  type CodePermissionMode,
+  DEFAULT_CODE_PERMISSION_MODE,
+  isCodePermissionMode,
+} from '@/lib/surfaces/code-permission-mode';
 
-export type PermissionMode = 'acceptEdits' | 'default' | 'plan' | 'bypass';
+/** See lib/surfaces/code-permission-mode — one list shared with the menu and the route. */
+export type PermissionMode = CodePermissionMode;
 export type ConnectionType = 'local' | 'github';
 
 /** Code's own state; the transcript half comes from `createTranscriptSlice`. */
@@ -47,7 +53,7 @@ export const useCodeStore = create<CodeStore>()(
       ...createTranscriptSlice(set),
       modelRoute: null,
       folderByChat: {},
-      permissionMode: 'default',
+      permissionMode: DEFAULT_CODE_PERMISSION_MODE,
       connectionType: 'local',
       planContent: {},
       planOpen: false,
@@ -88,7 +94,12 @@ export const useCodeStore = create<CodeStore>()(
       }),
       skipHydration: true,
       onRehydrateStorage: () => (state) => {
-        if (state) state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));
+        if (!state) return;
+        state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));
+        // A persisted mode the menu no longer offers (or a corrupted one) would
+        // be sent, refused by the server with a 400, and fail every Code turn.
+        // It becomes the default — asking — rather than anything looser.
+        if (!isCodePermissionMode(state.permissionMode)) state.permissionMode = DEFAULT_CODE_PERMISSION_MODE;
       },
     }
   )

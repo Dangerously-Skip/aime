@@ -289,6 +289,17 @@ describe('useSSEStream.sendMessage', () => {
     expect(body.memories).toBeUndefined(); // empty string omitted
   });
 
+  it('forwards the permission mode, and sends none when there is none', async () => {
+    fetchMock.mockResolvedValue(sseResponse([]));
+    const { stream } = setup();
+    await stream.sendMessage('go', 'chat1', 'code', null, { permissionMode: 'plan' });
+    expect(JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string).permissionMode).toBe('plan');
+
+    fetchMock.mockResolvedValue(sseResponse([]));
+    await stream.sendMessage('go', 'chat1', 'code', null, {});
+    expect('permissionMode' in JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string)).toBe(false);
+  });
+
   it('reports HTTP errors via onError', async () => {
     fetchMock.mockResolvedValue({
       ok: false,
