@@ -108,13 +108,23 @@ describe('the resolved theme actually reaches the agent', () => {
    */
   const read = (p: string) => readFileSync(resolvePath(process.cwd(), p), 'utf-8');
 
+  it('the shared turn settings resolve it and carry it', () => {
+    // Every surface's request is built on useTurnSettings (see
+    // surface-settings-parity.test.ts), so the theme is resolved there once.
+    const src = read('src/hooks/use-turn-settings.ts');
+    expect(src, 'the settings builder does not resolve the theme').toContain('useDeckTheme');
+    expect(src, 'it resolves it but never sends it').toMatch(/deckTheme,/);
+  });
+
   it.each([
+    'src/components/surfaces/chat/chat-surface.tsx',
     'src/components/surfaces/cowork/cowork-surface.tsx',
     'src/components/surfaces/code/code-surface.tsx',
-  ])('%s sends deckTheme with the turn', (file) => {
+    'src/components/surfaces/browser/browser-surface.tsx',
+  ])('%s sends the shared settings with the turn', (file) => {
     const src = read(file);
-    expect(src, 'surface does not resolve the theme').toContain('useDeckTheme');
-    expect(src, 'surface resolves it but never sends it').toMatch(/deckTheme,/);
+    expect(src).toMatch(/useTurnSettings\(/);
+    expect(src, 'surface builds the settings but never sends them').toContain('...settings');
   });
 
   it('the stream hook forwards it to the route', () => {
