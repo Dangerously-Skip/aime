@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import path from 'node:path';
-import os from 'node:os';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
 import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';
 import { resolveHarnessExecution } from '@/lib/harness/execution';

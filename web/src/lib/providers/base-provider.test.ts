@@ -3,7 +3,6 @@ import { BaseProvider, type QueryParams, type StreamChunk } from './base-provide
 
 class TestProvider extends BaseProvider {
   get name() { return 'test'; }
-  // eslint-disable-next-line require-yield
   async *query(_params: QueryParams): AsyncGenerator<StreamChunk, void, unknown> {
     return;
   }

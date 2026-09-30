@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { serverForRoot } from '@/lib/preview/manager';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
 import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';

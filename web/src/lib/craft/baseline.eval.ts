@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { NextRequest } from 'next/server';
 import { EVAL_BRIEFS } from './eval-briefs';
-import { findSlopTells, summariseTells, type Finding } from './slop-tells';
+import { findSlopTells, type Finding } from './slop-tells';
 
 /**
  * P7.0 — capture the BEFORE.

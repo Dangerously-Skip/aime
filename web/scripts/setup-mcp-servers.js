@@ -11,7 +11,6 @@
  */
 
 const { execSync } = require('child_process');
-const { existsSync } = require('fs');
 
 const MCP_PACKAGES = [
   // CONFIRMED — Anthropic official

@@ -58,6 +58,15 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/no-require-imports": "off",
     },
   },
+  {
+    // next/image optimises remote images through the Next server. Every <img>
+    // here renders a local blob:, data: or file-backed URL (attachments,
+    // screenshots, favicons in the Electron browser), which the optimiser
+    // cannot fetch — so the rule's advice does not apply to a desktop app.
+    rules: {
+      "@next/next/no-img-element": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

@@ -134,7 +134,7 @@ export function WidgetTile({
     } finally {
       setBusy(false);
     }
-  }, [busy, widget, setRender]);
+  }, [busy, widget, presetConfig, setRender]);
 
   /*
    * A BRAND-NEW WIDGET RENDERS ITSELF, ONCE.

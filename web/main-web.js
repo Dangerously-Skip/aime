@@ -207,8 +207,6 @@ if (!isDev) {
 // Update menu state — mirrors Claude Desktop UX
 let updateMenuState = "idle"; // idle | checking | available | downloading | ready | error
 let updateStatusLabel = null; // e.g. "Last checked: 2 minutes ago" or error message
-let updateCheckMenuItem = null;
-let updateStatusMenuItem = null;
 
 function buildAppMenu() {
   const isMac = process.platform === "darwin";
@@ -1604,7 +1602,7 @@ ipc.handle("open-auth-window", async (_event, url) => {
 // extracts the code/state/error from the URL, and returns them directly
 // to the renderer without needing a running localhost server.
 ipc.handle("open-connector-auth-window", async (_event, url, callbackPath) => {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     // Use a unique partition per auth attempt so each connect starts with a clean
     // session (no cached cookies from previous logins). This ensures the user can
     // pick a different account or site when reconnecting.

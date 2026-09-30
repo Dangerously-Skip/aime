@@ -163,7 +163,6 @@ export function useFileTree(workspace: string | null): UseFileTreeResult {
   // Warn once when the user opens content search.
   useEffect(() => {
     if (contentSearchPlaceholder) {
-      // eslint-disable-next-line no-console
       console.warn(
         '[file-tree] content search (?prefix) is not implemented in Phase 1 — falling back to filename filter on the remaining text',
       );

@@ -33,7 +33,6 @@ export function AttachmentChips({
       {attachments.map((att, i) =>
         att.category === "image" && att.content?.startsWith("data:image/") ? (
           <li key={`${att.name}-${i}`} className="relative group/thumb">
-            {/* eslint-disable-next-line @next/next/no-img-element -- a local data: URL; nothing for next/image to optimise */}
             <img
               src={att.content}
               alt={att.name}

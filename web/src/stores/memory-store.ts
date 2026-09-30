@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { Memory, MemoryCategory } from '@/lib/memory/types';
-import { getMemoriesForContext, searchMemories, findSimilar } from '@/lib/memory/retriever';
+import { searchMemories, findSimilar } from '@/lib/memory/retriever';
 import { getMemoriesForContextWithGraph } from '@/lib/memory/graph/retrieve';
 
 const PRUNE_TRIGGER = 600;

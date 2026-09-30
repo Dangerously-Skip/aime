@@ -68,7 +68,6 @@ function loadPty() {
   if (nodePty || loadError) return nodePty;
   try {
     ensureSpawnHelperExecutable();
-    // eslint-disable-next-line global-require
     nodePty = require('node-pty');
   } catch (err) {
     loadError = err;

@@ -69,7 +69,7 @@ function ConsoleLogLine({ entry }: { entry: ConsoleEntry }) {
   );
 }
 
-export function PreviewPanel({ url, open, onClose, refreshKey, onWebviewReady, onConsoleMessage }: PreviewPanelProps) {
+export function PreviewPanel({ url, onClose, refreshKey, onWebviewReady, onConsoleMessage }: PreviewPanelProps) {
   const [currentUrl, setCurrentUrl] = useState(url);
   /*
    * What the user is typing, separate from where the page actually is. Bound

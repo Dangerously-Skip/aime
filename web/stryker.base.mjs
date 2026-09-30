@@ -31,8 +31,9 @@ export const base = {
 /**
  * `break` is a RATCHET, not a target: it sits just below the current score so a
  * regression in test strength fails the run, and it should be raised as the
- * score improves. Same stance the repo takes with lint (errors gated at 0,
- * warnings allowed with `lint:strict` as the local ratchet).
+ * score improves. Lint went the other way once it could: errors and warnings
+ * are both gated at 0, because lint findings, unlike surviving mutants, have
+ * no equivalent-mutant floor.
  *
  * Do not chase 100. A large share of survivors on a REGEX TABLE are equivalent
  * mutants — overlapping rules mean a neutered rule is still matched by another,
