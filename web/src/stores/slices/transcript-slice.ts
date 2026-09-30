@@ -61,6 +61,23 @@ export interface TranscriptActions {
   addToolCall: (chatId: string, toolCall: ToolCall) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   completeRunningTools: (chatId: string) => void;
+  /**
+   * Note where a segment (one API response) starts in the reply, `lead`
+   * characters past its current end — the separator about to be appended
+   * belongs to what came before. First mark wins.
+   */
+  markSegment: (chatId: string, segment: string, lead?: number) => void;
+  /**
+   * Take retracted segments and tool calls back out of the turn in progress.
+   * Reports whether the reply now ends on a tool call, so the stream knows
+   * whether the next text starts a new paragraph.
+   */
+  retractSegments: (chatId: string, retraction: SegmentRetraction) => { endsAfterTool: boolean };
+}
+
+export interface SegmentRetraction {
+  segments: string[];
+  toolUseIds: string[];
 }
 
 export type TranscriptSlice = TranscriptState & TranscriptActions;
@@ -136,6 +153,53 @@ function withLastAssistant(
   const updated = [...msgs];
   updated[lastIdx] = next;
   return { ...messages, [chatId]: updated };
+}
+
+/**
+ * Remove retracted segments and tool calls from the turn in progress — the
+ * messages after the last user message. A segment's region runs from its mark
+ * to the next mark in the same message (ties broken by which was marked first,
+ * since an earlier segment at the same offset produced no text), or to the end.
+ * Later regions go first so earlier offsets stay valid; every surviving tool
+ * call's `textOffset` and every surviving mark is shifted to match, so
+ * interleaved tool calls stay where they were in the text.
+ */
+export function withSegmentsRetracted(msgs: Message[], retraction: SegmentRetraction): Message[] | null {
+  const segments = new Set(retraction.segments);
+  const toolIds = new Set(retraction.toolUseIds);
+  let from = msgs.length;
+  while (from > 0 && msgs[from - 1].role !== 'user') from--;
+
+  let changed = false;
+  const next = msgs.map((m, i) => {
+    if (i < from || m.role !== 'assistant') return m;
+    let toolCalls = m.toolCalls;
+    if (toolCalls?.some((tc) => toolIds.has(tc.id))) toolCalls = toolCalls.filter((tc) => !toolIds.has(tc.id));
+    let content = m.content;
+    let marks = m.segmentMarks;
+    if (marks && Object.keys(marks).some((k) => segments.has(k))) {
+      // Stable sort: insertion order breaks ties.
+      const ordered = Object.entries(marks).sort((a, b) => a[1] - b[1]);
+      const regions = ordered
+        .map(([seg, start], idx) => ({ seg, start, end: idx + 1 < ordered.length ? ordered[idx + 1][1] : content.length }))
+        .filter((r) => segments.has(r.seg))
+        .sort((a, b) => b.start - a.start);
+      const kept = { ...marks };
+      for (const r of regions) {
+        const len = r.end - r.start;
+        const shift = (o: number) => (o <= r.start ? o : o >= r.end ? o - len : r.start);
+        content = content.slice(0, r.start) + content.slice(r.end);
+        toolCalls = toolCalls?.map((tc) => (tc.textOffset === undefined ? tc : { ...tc, textOffset: shift(tc.textOffset) }));
+        delete kept[r.seg];
+        for (const k of Object.keys(kept)) kept[k] = shift(kept[k]);
+      }
+      marks = kept;
+    }
+    if (toolCalls === m.toolCalls && content === m.content && marks === m.segmentMarks) return m;
+    changed = true;
+    return { ...m, content, toolCalls, segmentMarks: marks };
+  });
+  return changed ? next : null;
 }
 
 export function createTranscriptSlice(set: SetTranscript, opts: TranscriptSliceOptions = {}): TranscriptSlice {
@@ -251,8 +315,9 @@ export function createTranscriptSlice(set: SetTranscript, opts: TranscriptSliceO
         const msgs = state.messages[chatId];
         if (!msgs?.length) return { isStreaming, streamingChats };
         const lastIdx = msgs.length - 1;
-        const updated = [...msgs];
-        updated[lastIdx] = { ...msgs[lastIdx], isStreaming: false, isLoading: false, retrying: undefined };
+        // Segment marks only mean something mid-turn; none is persisted.
+        const updated = msgs.map((m) => (m.segmentMarks ? { ...m, segmentMarks: undefined } : m));
+        updated[lastIdx] = { ...updated[lastIdx], isStreaming: false, isLoading: false, retrying: undefined };
         return { isStreaming, streamingChats, messages: { ...state.messages, [chatId]: updated } };
       }),
 
@@ -303,6 +368,30 @@ export function createTranscriptSlice(set: SetTranscript, opts: TranscriptSliceO
 
     updateToolResult: (chatId, toolCallId, output, isError) =>
       set((state) => apply(state, withToolResult(state.messages, chatId, toolCallId, output, isError, Date.now()))),
+
+    markSegment: (chatId, segment, lead = 0) =>
+      set((state) =>
+        apply(
+          state,
+          withLastAssistant(state.messages, chatId, (last) =>
+            last.segmentMarks && segment in last.segmentMarks
+              ? null
+              : { ...last, segmentMarks: { ...last.segmentMarks, [segment]: last.content.length + lead } },
+          ),
+        ),
+      ),
+
+    retractSegments: (chatId, retraction) => {
+      let endsAfterTool = false;
+      set((state) => {
+        const msgs = state.messages[chatId];
+        const next = msgs ? withSegmentsRetracted(msgs, retraction) : null;
+        const last = (next ?? msgs)?.at(-1);
+        endsAfterTool = !!last?.toolCalls?.some((tc) => tc.textOffset === last.content.length);
+        return next ? { messages: { ...state.messages, [chatId]: next } } : state;
+      });
+      return { endsAfterTool };
+    },
 
     completeRunningTools: (chatId) =>
       set((state) =>

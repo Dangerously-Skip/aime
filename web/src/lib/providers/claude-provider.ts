@@ -14,6 +14,7 @@ import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { toolDeadlineMs, isNetworkTool } from './tool-deadlines';
+import { ResponseLedger } from './response-ledger';
 import {
   classifyThrownTurnError,
   cleanSdkErrorText,
@@ -2676,6 +2677,12 @@ export class ClaudeProvider extends BaseProvider {
       };
     }
 
+    /**
+     * Which API response each streamed chunk came from, so a refusal the SDK
+     * retracts can be taken back off the screen — see response-ledger.
+     */
+    const ledger = new ResponseLedger(randomUUID().slice(0, 8));
+
     let abortReported = false;
     try {
       // Stream responses from Claude Agent SDK - matches server.js exactly
@@ -2799,6 +2806,26 @@ export class ClaudeProvider extends BaseProvider {
         }
 
         /*
+         * The SDK re-ran a refused reply on a fallback model and threw the
+         * refused partial away. Its text (and any tool call it made) already
+         * reached the client, so it has to be taken back — otherwise it sits
+         * above the fallback's answer and goes back to the model as history.
+         * The same uuids may already have arrived as `supersedes` on the
+         * replacement's first frame; the ledger makes the second one a no-op.
+         */
+        if (c.type === 'system' && c.subtype === 'model_refusal_fallback') {
+          console.warn(
+            `[Claude] Reply refused by ${String(c.original_model)}; re-run on ${String(c.fallback_model)}`,
+          );
+          const retraction = ledger.retract(c.retracted_message_uuids);
+          if (retraction) {
+            for (const id of retraction.toolUseIds) activeTools.delete(id);
+            yield { type: 'retract', ...retraction, provider: this.name };
+          }
+          continue;
+        }
+
+        /*
          * One line per system message. This used to pretty-print the whole
          * object on every turn — the init message alone lists every tool, MCP
          * server, skill and slash command, which buried everything else in the
@@ -2910,12 +2937,15 @@ export class ClaudeProvider extends BaseProvider {
           if (evType === 'message_start') {
             streamedBlocks.clear();
             reconciledTextBlocks = 0;
+            ledger.begin((ev!.message as { id?: unknown } | undefined)?.id);
           } else if (evType === 'content_block_delta') {
             const delta = ev!.delta as { type?: string; text?: string } | undefined;
             if (delta?.type === 'text_delta' && delta.text) {
               const idx = (ev!.index as number) ?? 0;
               streamedBlocks.set(idx, (streamedBlocks.get(idx) ?? '') + delta.text);
-              yield { type: 'text', content: delta.text, provider: this.name };
+              const segment = ledger.segment;
+              ledger.noteText(segment, delta.text);
+              yield { type: 'text', content: delta.text, segment, provider: this.name };
             }
           }
           continue;
@@ -2928,6 +2958,16 @@ export class ClaudeProvider extends BaseProvider {
 
           const message = c.message as Record<string, unknown>;
           const content = message.content;
+          const segment = ledger.open(message.id);
+          ledger.noteFrame(c.uuid, segment);
+
+          // The first frame of a fallback reply names the refused messages it
+          // replaces. Evicted before this frame's own content is shown.
+          const superseded = ledger.retract(c.supersedes, segment);
+          if (superseded) {
+            for (const id of superseded.toolUseIds) activeTools.delete(id);
+            yield { type: 'retract', ...superseded, provider: this.name };
+          }
 
           /*
            * The CLI reporting a failure in the shape of an assistant message.
@@ -2972,7 +3012,8 @@ export class ClaudeProvider extends BaseProvider {
                 const full = block.text as string;
                 const remainder = full.startsWith(already) ? full.slice(already.length) : full;
                 if (remainder) {
-                  yield { type: 'text', content: remainder, provider: this.name };
+                  ledger.noteText(segment, remainder);
+                  yield { type: 'text', content: remainder, segment, provider: this.name };
                 }
               } else if (block.type === 'tool_use') {
                 const toolName = block.name as string;
@@ -3067,11 +3108,13 @@ export class ClaudeProvider extends BaseProvider {
                     };
                   }
                 } else {
+                  ledger.noteTool(segment, block.id as string);
                   yield {
                     type: 'tool_use',
                     name: toolName,
                     input: toolInput,
                     id: block.id as string,
+                    segment,
                     provider: this.name,
                   };
                   console.log('[Claude] Tool use:', toolName);
@@ -3104,6 +3147,14 @@ export class ClaudeProvider extends BaseProvider {
           const content = (c.message as { content?: unknown } | undefined)?.content;
           const blocks = Array.isArray(content) ? content : [];
           let sawToolResult = false;
+          // A refused leg's tool calls get tombstoned results; a retraction can
+          // name those by uuid.
+          ledger.noteToolResults(
+            c.uuid,
+            (blocks as Array<Record<string, unknown>>)
+              .filter((b) => b?.type === 'tool_result' && typeof b.tool_use_id === 'string')
+              .map((b) => b.tool_use_id as string),
+          );
           for (const block of blocks as Array<Record<string, unknown>>) {
             if (block?.type !== 'tool_result') continue;
             sawToolResult = true;

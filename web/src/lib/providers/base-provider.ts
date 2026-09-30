@@ -15,6 +15,12 @@ export type ChunkType =
   | 'error'
   /** The provider is retrying an API call: `{ attempt, delayMs, code }`. */
   | 'retry'
+  /**
+   * Take back output the SDK retracted — a refused reply re-run on a fallback
+   * model: `{ segments, toolUseIds, texts }`. `text` and `tool_use` chunks carry
+   * the `segment` (one per API response) these refer to. See response-ledger.
+   */
+  | 'retract'
   | 'connected'
   | 'status'
   | 'assistant'

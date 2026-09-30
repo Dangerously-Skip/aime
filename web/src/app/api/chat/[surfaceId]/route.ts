@@ -1381,6 +1381,23 @@ export async function POST(
             // Out of resumes or out of the resources that matter — fall through
             // and let the provider's note stand, since now it IS the advice.
           }
+          /*
+           * A refused reply the SDK re-ran on a fallback model. The client
+           * removes it from the transcript; this removes it from our own copy,
+           * which memory extraction reads — a refused partial is not something
+           * the assistant said. The texts are not relayed: the client removes by
+           * position and has no use for a second copy of the refused output.
+           */
+          if (chunk.type === 'retract') {
+            const { texts, ...toClient } = chunk;
+            for (const text of Array.isArray(texts) ? texts : []) {
+              if (typeof text !== 'string' || !text) continue;
+              const at = collectedResponse.lastIndexOf(text);
+              if (at >= 0) collectedResponse = collectedResponse.slice(0, at) + collectedResponse.slice(at + text.length);
+            }
+            await sse.writeEvent(toClient);
+            continue;
+          }
           await sse.writeEvent(chunk);
         }
 

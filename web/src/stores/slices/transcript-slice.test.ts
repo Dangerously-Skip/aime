@@ -106,3 +106,99 @@ describe('the reply-level reducers', () => {
     expect(store.getState().messages).toBe(before);
   });
 });
+
+/*
+ * Retracting a refused reply's output by segment — the store half of the
+ * Agent SDK 0.3 refusal fallback. The pipeline test
+ * (claude-provider.refusal.test.ts) drives it from real provider output; these
+ * pin the position arithmetic on its own.
+ */
+describe('segment retraction', () => {
+  const tool = (id: string, textOffset: number) =>
+    ({ id, name: 'Read', input: {}, status: 'complete' as const, startTime: 0, textOffset });
+
+  function replyWith(content: string, marks: Record<string, number>, toolCalls = [] as ReturnType<typeof tool>[]) {
+    const store = makeStore();
+    store.setState({
+      messages: {
+        c: [
+          { id: 'u', role: 'user', content: 'go', timestamp: 1 },
+          { id: 'a', role: 'assistant', content, timestamp: 2, segmentMarks: marks, toolCalls },
+        ],
+      },
+    });
+    return store;
+  }
+  const reply = (store: ReturnType<typeof makeStore>) => store.getState().messages.c.at(-1)!;
+
+  it('cuts a segment out of the middle and shifts what follows', () => {
+    const store = replyWith('keepREFUSEDafter', { s1: 0, s2: 4, s3: 11 }, [tool('t1', 4), tool('t3', 16)]);
+    store.getState().retractSegments('c', { segments: ['s2'], toolUseIds: [] });
+    expect(reply(store).content).toBe('keepafter');
+    expect(reply(store).toolCalls!.map((t) => [t.id, t.textOffset])).toEqual([['t1', 4], ['t3', 9]]);
+    expect(reply(store).segmentMarks).toEqual({ s1: 0, s3: 4 });
+  });
+
+  it('removes several segments at once without the first cut corrupting the second', () => {
+    const store = replyWith('aaBBccDDee', { s1: 0, s2: 2, s3: 4, s4: 6, s5: 8 }, [tool('t', 10)]);
+    store.getState().retractSegments('c', { segments: ['s4', 's2'], toolUseIds: [] });
+    expect(reply(store).content).toBe('aaccee');
+    expect(reply(store).toolCalls![0].textOffset).toBe(6);
+  });
+
+  it('gives the text at a shared offset to the segment marked last — the earlier one had none', () => {
+    // s1 opened with a tool call and no text; s2 started at the same offset.
+    const keepEarlier = replyWith('xxREFUSED', { s0: 0, s1: 2, s2: 2 });
+    keepEarlier.getState().retractSegments('c', { segments: ['s2'], toolUseIds: [] });
+    expect(reply(keepEarlier).content).toBe('xx');
+
+    const keepLater = replyWith('xxFALLBACK', { s0: 0, s1: 2, s2: 2 });
+    keepLater.getState().retractSegments('c', { segments: ['s1'], toolUseIds: [] });
+    expect(reply(keepLater).content).toBe('xxFALLBACK');
+  });
+
+  it('removes named tool calls and reports whether the reply now ends on one', () => {
+    const store = replyWith('text', { s1: 0, s2: 4 }, [tool('kept', 4), tool('refused', 4)]);
+    const { endsAfterTool } = store.getState().retractSegments('c', { segments: ['s2'], toolUseIds: ['refused'] });
+    expect(reply(store).toolCalls!.map((t) => t.id)).toEqual(['kept']);
+    expect(endsAfterTool).toBe(true);
+  });
+
+  it('never touches an earlier turn', () => {
+    const store = makeStore();
+    const earlier = { id: 'a0', role: 'assistant' as const, content: 'old', timestamp: 0, segmentMarks: { s1: 0 } };
+    store.setState({
+      messages: {
+        c: [
+          earlier,
+          { id: 'u', role: 'user', content: 'go', timestamp: 1 },
+          { id: 'a', role: 'assistant', content: 'new', timestamp: 2, segmentMarks: { s1: 0 } },
+        ],
+      },
+    });
+    store.getState().retractSegments('c', { segments: ['s1'], toolUseIds: [] });
+    expect(store.getState().messages.c[0]).toBe(earlier);
+    expect(reply(store).content).toBe('');
+  });
+
+  it('is a no-op (same state object) when nothing matches', () => {
+    const store = replyWith('text', { s1: 0 });
+    const before = store.getState().messages;
+    store.getState().retractSegments('c', { segments: ['nope'], toolUseIds: ['nope'] });
+    expect(store.getState().messages).toBe(before);
+  });
+
+  it('marks a segment once, past the separator it is about to receive', () => {
+    const store = replyWith('ab', {});
+    store.getState().markSegment('c', 's9', 2);
+    store.getState().appendToLastAssistant('c', '\n\nnext');
+    store.getState().markSegment('c', 's9', 0);
+    expect(reply(store).segmentMarks).toEqual({ s9: 4 });
+  });
+
+  it('forgets every mark when the turn stops — none is persisted', () => {
+    const store = replyWith('ab', { s1: 0 });
+    store.getState().stopStreaming('c');
+    expect(reply(store).segmentMarks).toBeUndefined();
+  });
+});

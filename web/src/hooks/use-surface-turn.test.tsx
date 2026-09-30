@@ -170,6 +170,32 @@ describe.each(STORES)('useSurfaceTurn — $surface', ({ surface, store }) => {
     expect(bodies[1].history).toBeUndefined();
   });
 
+  /*
+   * Agent SDK 0.3 re-runs a refused reply on a fallback model; the provider
+   * turns the SDK's retraction into a `retract` event. Every surface must take
+   * the refused partial off the reply — which needs the store's segment
+   * actions wired into the shared turn, not just to exist.
+   */
+  it('takes a retracted refusal off the reply, tool call and all', async () => {
+    render(<Harness surface={surface} store={store} />);
+    await send('explain it');
+    await act(async () => {
+      streams[0].push({ type: 'text', content: 'Looking. ', segment: 'q:1' });
+      streams[0].push({ type: 'tool_use', id: 'tu_ok', name: 'Read', input: {}, segment: 'q:1' });
+      streams[0].push({ type: 'text', content: 'REFUSED partial', segment: 'q:2' });
+      streams[0].push({ type: 'tool_use', id: 'tu_ref', name: 'Bash', input: {}, segment: 'q:2' });
+      streams[0].push({ type: 'retract', segments: ['q:2'], toolUseIds: ['tu_ref'] });
+      streams[0].push({ type: 'text', content: 'FALLBACK answer', segment: 'q:3' });
+      streams[0].end();
+      await flush();
+      await new Promise((r) => setTimeout(r, 40));
+    });
+    const reply = msgs().at(-1)!;
+    expect(reply.content).toBe('Looking. \n\nFALLBACK answer');
+    expect(reply.toolCalls?.map((t) => t.id)).toEqual(['tu_ok']);
+    expect(reply.segmentMarks).toBeUndefined();
+  });
+
   it('shows the provider backing off, and clears it when output arrives', async () => {
     render(<Harness surface={surface} store={store} />);
     await send('hello');

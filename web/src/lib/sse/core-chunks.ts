@@ -29,6 +29,13 @@ export interface ConversationStreamStore {
   setTurnError?: (chatId: string, error: { code: TurnErrorCode; message: string }) => void;
   /** Show / clear "Retrying (attempt n)…" on the reply. */
   setRetryStatus?: (chatId: string, retrying: { attempt: number; delayMs: number } | null) => void;
+  /** Note where an API response's output starts — see the `retract` case. */
+  markSegment?: (chatId: string, segment: string, lead?: number) => void;
+  /** Take a retracted response back out of the reply. */
+  retractSegments?: (
+    chatId: string,
+    retraction: { segments: string[]; toolUseIds: string[] },
+  ) => { endsAfterTool: boolean };
 }
 
 /** The message shape all three stores accept, narrowed to what the stream sets. */
@@ -84,7 +91,9 @@ export type CoreChunkType =
   | 'canvas'
   // The provider is backing off and will try again. Emitted by the chat route
   // rather than a provider, hence not in ChunkType.
-  | 'retry';
+  | 'retry'
+  // The SDK threw a refused reply away and re-ran it on a fallback model.
+  | 'retract';
 
 const CORE: readonly (ChunkType | 'retry')[] = [
   'turn_start',
@@ -98,6 +107,7 @@ const CORE: readonly (ChunkType | 'retry')[] = [
   'document_print',
   'canvas',
   'retry',
+  'retract',
 ] satisfies readonly CoreChunkType[];
 
 export interface CoreChunkContext {
@@ -227,8 +237,11 @@ export function handleCoreChunk(
        * corruption rather than a missing separator, which is why it kept being
        * mistaken for something worse.
        */
-      const resumed = textResumedAfterTool(chatId);
-      store.appendToLastAssistant(chatId, (resumed ? '\n\n' : '') + ((event.content as string) || ''));
+      const lead = textResumedAfterTool(chatId) ? '\n\n' : '';
+      // The segment starts AFTER the separator: the break belongs to the tool
+      // call before it, and must survive if this response is retracted.
+      if (typeof event.segment === 'string') store.markSegment?.(chatId, event.segment, lead.length);
+      store.appendToLastAssistant(chatId, lead + ((event.content as string) || ''));
       return true;
     }
 
@@ -252,6 +265,8 @@ export function handleCoreChunk(
       const name = (event.name as string) || 'Unknown';
       const raw = (event.input as Record<string, unknown>) || {};
       const input = ctx.normaliseToolInput ? ctx.normaliseToolInput(name, raw) : raw;
+      // A response can open with a tool call; its segment starts here.
+      if (typeof event.segment === 'string') store.markSegment?.(chatId, event.segment);
       store.addToolCall(chatId, { id: toolId, name, input, status: 'running', startTime: Date.now() });
       ctx.onToolStarted?.(toolId, name, input);
       return true;
@@ -283,6 +298,27 @@ export function handleCoreChunk(
       const attempt = typeof event.attempt === 'number' ? event.attempt : 1;
       const delayMs = typeof event.delayMs === 'number' ? event.delayMs : 0;
       store.setRetryStatus?.(chatId, { attempt, delayMs });
+      return true;
+    }
+
+    case 'retract': {
+      /*
+       * Agent SDK 0.3 re-runs a refused reply on a fallback model and names
+       * what it threw away. The provider translates that into the segments
+       * (one per API response) and tool calls this client was sent; they come
+       * off the reply here, before the fallback's answer is read as following
+       * on from them. Whether the next text needs a paragraph break is
+       * re-derived, since the call that set it may be the one just removed.
+       */
+      const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+      const result = store.retractSegments?.(chatId, {
+        segments: strings(event.segments),
+        toolUseIds: strings(event.toolUseIds),
+      });
+      if (result) {
+        if (result.endsAfterTool) toolSinceText.add(chatId);
+        else toolSinceText.delete(chatId);
+      }
       return true;
     }
 
