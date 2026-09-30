@@ -52,6 +52,25 @@ describe('removed dependencies stay removed', () => {
   });
 });
 
+describe('the Agent SDK version is one number', () => {
+  // release.yml force-installs the platform binaries by exact version (npm ci
+  // on one OS skips the other OSes' optional packages). A pin left behind by an
+  // upgrade ships a CLI binary from a different SDK than the JS that drives it.
+  it('is pinned exactly, and every release.yml binary install names it', () => {
+    const want = pkg.dependencies['@anthropic-ai/claude-agent-sdk'];
+    expect(want).toMatch(/^\d+\.\d+\.\d+$/);
+    const release = readFileSync(path.join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf-8');
+    const pins = [...release.matchAll(/@anthropic-ai\/claude-agent-sdk-[\w-]+@([^\s'"]+)/g)].map((m) => m[1]);
+    expect(pins.length).toBeGreaterThan(0);
+    expect(new Set(pins)).toEqual(new Set([want]));
+  });
+
+  // 0.3 moved these to peerDependencies; the app imports zod itself.
+  it.each(['@anthropic-ai/sdk', '@modelcontextprotocol/sdk', 'zod'])('%s is a direct dependency', (name) => {
+    expect(pkg.dependencies[name]).toBeDefined();
+  });
+});
+
 describe('one Node version, everywhere', () => {
   it('engines, .nvmrc and every CI setup-node agree on 22', () => {
     expect(pkg.engines?.node).toBe('>=22');
