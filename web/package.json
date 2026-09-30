@@ -222,6 +222,11 @@
   "optionalDependencies": {
     "node-pty": "^1.1.0"
   },
+  "overrides": {
+    "express": {
+      "qs": "^6.16.0"
+    }
+  },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@stryker-mutator/core": "^9.6.1",
