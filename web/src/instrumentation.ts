@@ -7,15 +7,15 @@ export async function register() {
   const isNodeRuntime = process.env['NEXT_RUNTIME'] === 'nodejs';
 
   // AIME_SDK_CLI_PATH is set by the Electron main process with the path
-  // to the CLI binary (copied outside the app bundle for execution).
+  // to the Agent SDK's native `claude` binary (electron/agent-sdk-binary.js).
   const sdkPath = process.env['AIME_SDK_CLI_PATH'];
   if (sdkPath) {
     (globalThis as Record<string, unknown>).__aimeClaudeSDKPath = sdkPath;
     if (isNodeRuntime) {
       const { logger } = await import('./lib/logger');
-      logger.info({ event: 'aime.sdk_path_set', sdkPath }, 'Claude SDK cli.js path set from env');
+      logger.info({ event: 'aime.sdk_path_set', sdkPath }, 'Agent SDK binary path set from env');
     } else {
-      console.log('[AIME] Claude SDK cli.js path set from env:', sdkPath);
+      console.log('[AIME] Agent SDK binary path set from env:', sdkPath);
     }
   }
 
