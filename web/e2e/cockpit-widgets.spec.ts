@@ -255,7 +255,7 @@ test.describe('runs are on the Activity tab, not the Cockpit', () => {
   });
 
   test('the Activity tab has Recent activity, and no widget grid', async ({ page }) => {
-    await page.getByRole('button', { name: 'Activity', exact: true }).click();
+    await page.getByRole('button', { name: /^Activity\b/ }).click();
     await expect(page.getByRole('heading', { name: 'Recent activity' })).toBeVisible();
     // The other half of the split — the two tabs must not be the same screen.
     await expect(page.getByRole('heading', { name: 'Widgets' })).toHaveCount(0);

@@ -66,7 +66,11 @@ describe('ViewerPane — find in file', () => {
     fireEvent.change(input, { target: { value: 'total' } });
 
     await waitFor(() => expect(screen.getByTestId('find-count').textContent).toBe('1 of 3'));
-    expect(painted(FIND_HIGHLIGHT).map((s) => s.toLowerCase())).toEqual(['total', 'total', 'total']);
+    // The count and the paint come from separate effects; under load the paint
+    // can land a tick after the count, so wait for it rather than assume order.
+    await waitFor(() =>
+      expect(painted(FIND_HIGHLIGHT).map((s) => s.toLowerCase())).toEqual(['total', 'total', 'total']),
+    );
     expect(painted(FIND_HIGHLIGHT_CURRENT)).toEqual(['total']);
   });
 

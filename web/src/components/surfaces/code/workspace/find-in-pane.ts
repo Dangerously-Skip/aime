@@ -133,8 +133,31 @@ function supported(): boolean {
   return typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined";
 }
 
+/*
+ * The ::highlight() rules are injected at runtime rather than living in
+ * globals.css: the build's CSS parser (lightningcss) rejects the pseudo-element
+ * and printed a warning on every compile, although Chromium supports it.
+ * CSS Custom Highlights, not <mark> elements: the body is React-owned HTML and
+ * must not be rewritten. In edit mode these paint on the overlay, which shows
+ * through the transparent textarea.
+ */
+export const FIND_HIGHLIGHT_CSS = `
+::highlight(${FIND_HIGHLIGHT}) { background-color: color-mix(in oklab, #facc15 40%, transparent); }
+::highlight(${FIND_HIGHLIGHT_CURRENT}) { background-color: color-mix(in oklab, #f97316 65%, transparent); color: var(--foreground); }
+`;
+const STYLE_ID = "aime-find-highlight-styles";
+
+function ensureStyles() {
+  if (typeof document === "undefined" || document.getElementById(STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = FIND_HIGHLIGHT_CSS;
+  document.head.appendChild(style);
+}
+
 function publish() {
   if (!supported()) return;
+  ensureStyles();
   const all: Range[] = [];
   const current: Range[] = [];
   for (const p of panes.values()) {

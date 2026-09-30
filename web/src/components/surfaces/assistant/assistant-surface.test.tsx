@@ -517,7 +517,7 @@ describe('failures are visible on the Activity tab', () => {
     renderSurface();
     expect(screen.getByRole('region', { name: 'Schedules needing attention' })).toBeTruthy();
     expect(screen.getByText('Error: upstream 502')).toBeTruthy();
-    expect(screen.getByLabelText('1 schedule need attention')).toBeTruthy();
+    expect(screen.getByLabelText('1 schedule needs attention')).toBeTruthy();
     // Clicking it opens that schedule.
     fireEvent.click(screen.getByRole('button', { name: /Nightly digest.*upstream 502/ }));
     expect(screen.getByRole('dialog', { name: 'Edit schedule' })).toBeTruthy();

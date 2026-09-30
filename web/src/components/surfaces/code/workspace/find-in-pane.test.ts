@@ -4,6 +4,7 @@ import fc from 'fast-check';
 import {
   FIND_HIGHLIGHT,
   FIND_HIGHLIGHT_CURRENT,
+  FIND_HIGHLIGHT_CSS,
   clearPaneHighlights,
   findMatches,
   rangesFor,
@@ -133,6 +134,31 @@ describe('highlight registry', () => {
 
       clearPaneHighlights(b);
       expect(registry.size).toBe(0);
+    } finally {
+      g.CSS = prevCSS;
+      g.Highlight = prevHighlight;
+    }
+  });
+
+  it('injects the ::highlight() styles once, on first use', () => {
+    // They are runtime-injected because the build's CSS parser rejects the
+    // pseudo-element; without them a match is registered but paints nothing.
+    const g = globalThis as unknown as Record<string, unknown>;
+    const prevCSS = g.CSS;
+    const prevHighlight = g.Highlight;
+    g.CSS = { highlights: new Map() };
+    g.Highlight = class {};
+    try {
+      document.getElementById('aime-find-highlight-styles')?.remove();
+      const p = Symbol('p');
+      setPaneHighlights(p, [document.createRange()], null);
+      setPaneHighlights(p, [document.createRange()], null);
+      const styles = document.querySelectorAll('#aime-find-highlight-styles');
+      expect(styles).toHaveLength(1);
+      expect(styles[0].textContent).toBe(FIND_HIGHLIGHT_CSS);
+      expect(FIND_HIGHLIGHT_CSS).toContain(`::highlight(${FIND_HIGHLIGHT})`);
+      expect(FIND_HIGHLIGHT_CSS).toContain(`::highlight(${FIND_HIGHLIGHT_CURRENT})`);
+      clearPaneHighlights(p);
     } finally {
       g.CSS = prevCSS;
       g.Highlight = prevHighlight;

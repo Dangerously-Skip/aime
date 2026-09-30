@@ -54,8 +54,18 @@ const ORDER = {
   updatedAt: 1,
 };
 
-/** Stand in for the preload bridge, and seed a completed onboarding. */
+/**
+ * Stand in for the preload bridge, seed a completed onboarding, and report a
+ * usable built-in model. Without one, every surface now shows "Connect a
+ * model" instead of sending, which is correct and is not what this spec is
+ * about — the chat request itself is intercepted below.
+ */
 async function prepare(page: import('@playwright/test').Page) {
+  await page.route('**/api/models', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, anthropic: true } });
+  });
   await page.addInitScript(
     ([key, value]) => window.localStorage.setItem(key, value),
     ['aime:settings', JSON.stringify({ state: { onboardingComplete: true }, version: 6 })],

@@ -941,7 +941,7 @@ export function AssistantSurface() {
               {v === "feed" && health.length > 0 && (
                 <span
                   className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white"
-                  aria-label={`${health.length} schedule${health.length === 1 ? "" : "s"} need attention`}
+                  aria-label={`${health.length} ${health.length === 1 ? "schedule needs" : "schedules need"} attention`}
                 >
                   {health.length}
                 </span>
