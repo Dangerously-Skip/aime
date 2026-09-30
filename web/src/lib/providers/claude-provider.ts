@@ -664,6 +664,8 @@ export class ClaudeProvider extends BaseProvider {
      * assistant message. Cleared on `message_start`.
      */
     const streamedBlocks = new Map<number, string>();
+    /** How many of the current message's text blocks the assistant branch has matched to those. */
+    let reconciledTextBlocks = 0;
 
     const abortController = new AbortController();
     /** Every rendezvous this query opens dies with it. */
@@ -2541,12 +2543,27 @@ export class ClaudeProvider extends BaseProvider {
       };
     }
 
+    let abortReported = false;
     try {
       // Stream responses from Claude Agent SDK - matches server.js exactly
       for await (const chunk of query({
         prompt: queryPrompt,
         options: queryOptions,
       } as Parameters<typeof query>[0])) {
+        /*
+         * Nothing after a stop. Since 0.3 the SDK gives the subprocess a 2s
+         * grace to flush its transcript before killing it, and the stream
+         * kept delivering what was in flight meanwhile — measured at ~1.5s of
+         * further text after Stop, and after the watchdog's abort too.
+         *
+         * Reported BEFORE leaving the loop, because leaving it closes the
+         * query and that waits out the same grace.
+         */
+        if (abortController.signal.aborted) {
+          yield* abortedTail();
+          abortReported = true;
+          break;
+        }
         const c = chunk as Record<string, unknown>;
 
         /**
@@ -2744,8 +2761,9 @@ export class ClaudeProvider extends BaseProvider {
          * The complete `assistant` message still arrives afterwards with the
          * same text in it, so the two have to be reconciled or every sentence
          * appears twice. `streamedBlocks` records how much of each content
-         * block index we have already sent; the assistant branch below emits
-         * only the remainder, which is normally nothing.
+         * block index we have already sent; the assistant branch below matches
+         * its text blocks to those in order and emits only the remainder,
+         * which is normally nothing.
          *
          * Reconciling on LENGTH rather than by suppressing the final block
          * outright, because a delta stream can be cut off mid-block (an abort,
@@ -2758,6 +2776,7 @@ export class ClaudeProvider extends BaseProvider {
 
           if (evType === 'message_start') {
             streamedBlocks.clear();
+            reconciledTextBlocks = 0;
           } else if (evType === 'content_block_delta') {
             const delta = ev!.delta as { type?: string; text?: string } | undefined;
             if (delta?.type === 'text_delta' && delta.text) {
@@ -2800,12 +2819,23 @@ export class ClaudeProvider extends BaseProvider {
           }
 
           if (Array.isArray(content)) {
-            for (const [blockIndex, block] of content.entries()) {
+            for (const block of content) {
               if (block.type === 'text' && block.text) {
                 if (sdkErrorKind) continue;
-                // Whatever the deltas did not already carry — usually nothing
-                // when streaming is on, and the whole block when it is off.
-                const already = streamedBlocks.get(blockIndex) ?? '';
+                /*
+                 * Whatever the deltas did not already carry — usually nothing
+                 * when streaming is on, and the whole block when it is off.
+                 *
+                 * Matched by ORDER among the message's text blocks, not by
+                 * position in `content`. The CLI sends one assistant message
+                 * per finished block, so `content` is `[thisBlock]` and its
+                 * position is always 0 — while the deltas carry the API's own
+                 * block index, which is 1 whenever a thinking block came first.
+                 * Adaptive thinking is the SDK default, so keyed by position
+                 * every such reply was sent twice.
+                 */
+                const streamedIndex = [...streamedBlocks.keys()].sort((a, b) => a - b)[reconciledTextBlocks++];
+                const already = streamedIndex === undefined ? '' : streamedBlocks.get(streamedIndex) ?? '';
                 const full = block.text as string;
                 const remainder = full.startsWith(already) ? full.slice(already.length) : full;
                 if (remainder) {
@@ -2995,7 +3025,7 @@ export class ClaudeProvider extends BaseProvider {
       }
 
       if (abortController.signal.aborted) {
-        yield* abortedTail();
+        if (!abortReported) yield* abortedTail();
       } else {
         yield* drainPending();
 
@@ -3014,7 +3044,7 @@ export class ClaudeProvider extends BaseProvider {
       // The SDK's own abort error is a plain `Error` subclass whose name is
       // "Error", so the name alone does not identify one — the signal does.
       if (abortController.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
-        yield* abortedTail();
+        if (!abortReported) yield* abortedTail();
       } else if (turnError) {
         /*
          * The SDK throws "Claude Code returned an error result: …" after an

@@ -12,6 +12,8 @@
  * advice like "Please run /login" for a command this app does not have.
  */
 import type { SettingsSectionId } from '@/stores/app-store';
+// Type-only: this module is shared with the client, which must not load the SDK.
+import type { SDKAssistantMessageError } from '@anthropic-ai/claude-agent-sdk';
 
 export type TurnErrorCode =
   | 'no_model'          // nothing configured that can serve this turn
@@ -57,17 +59,34 @@ export function classifyTurnError(message: string, status?: number): TurnErrorCo
   return 'unknown';
 }
 
-/** The SDK's typed assistant-message `error` kinds (sdk.d.ts `SDKAssistantMessageError`). */
+/**
+ * The SDK's typed assistant-message `error` kinds, each decided once.
+ *
+ * Keyed by the SDK's own union so that a kind added by an upgrade fails the
+ * typecheck here instead of quietly falling through to text-guessing — 0.3
+ * added six. `null` means "too broad or no good fit; classify the text".
+ */
+const SDK_ERROR_KINDS: Record<SDKAssistantMessageError, TurnErrorCode | null> = {
+  authentication_failed: 'auth',
+  oauth_org_not_allowed: 'auth',
+  cloud_credential_error: 'auth', // Bedrock / Vertex credentials
+  billing_error: 'billing',
+  account_on_hold: 'billing',     // "your provider account needs attention"
+  rate_limit: 'rate_limit',
+  overloaded: 'overloaded',
+  server_error: 'overloaded',
+  max_output_tokens: 'max_output_tokens',
+  // A wrong model id, not a missing setup — `no_model` would tell the user to
+  // connect one. The CLI's text names the model, which is the useful part.
+  model_not_found: null,
+  verification_required: null,
+  invalid_request: null,
+  unknown: null,
+};
+
 export function mapSdkErrorKind(kind: string | undefined | null): TurnErrorCode | null {
-  switch (kind) {
-    case 'authentication_failed': return 'auth';
-    case 'billing_error': return 'billing';
-    case 'rate_limit': return 'rate_limit';
-    case 'server_error': return 'overloaded';
-    case 'max_output_tokens': return 'max_output_tokens';
-    case 'invalid_request': return null; // too broad; classify the text instead
-    default: return null;
-  }
+  if (!kind || !Object.prototype.hasOwnProperty.call(SDK_ERROR_KINDS, kind)) return null;
+  return SDK_ERROR_KINDS[kind as SDKAssistantMessageError];
 }
 
 export interface TurnErrorDescription {

@@ -27,6 +27,27 @@ describe('mapSdkErrorKind', () => {
     expect(mapSdkErrorKind('server_error')).toBe('overloaded');
     expect(mapSdkErrorKind(undefined)).toBeNull();
   });
+
+  // Added by Agent SDK 0.3.
+  it.each([
+    ['oauth_org_not_allowed', 'auth'],
+    ['cloud_credential_error', 'auth'],
+    ['account_on_hold', 'billing'],
+    ['overloaded', 'overloaded'],
+  ] as const)('maps %s to %s', (kind, code) => {
+    expect(mapSdkErrorKind(kind)).toBe(code);
+  });
+
+  it('leaves the kinds with no honest code to the text classifier', () => {
+    for (const kind of ['model_not_found', 'verification_required', 'invalid_request', 'unknown']) {
+      expect(mapSdkErrorKind(kind)).toBeNull();
+    }
+  });
+
+  it('does not match inherited object keys or unknown kinds', () => {
+    expect(mapSdkErrorKind('toString')).toBeNull();
+    expect(mapSdkErrorKind('some_future_kind')).toBeNull();
+  });
 });
 
 describe('describeTurnError', () => {

@@ -15,6 +15,7 @@ const { createIpcGuard } = require("./electron/ipc-guard");
 const { createPermissionGate } = require("./electron/permission-policy");
 const { pushArgs } = require("./electron/git-args");
 const { postInternal } = require("./electron/internal-api");
+const { agentSdkBinaryPath } = require("./electron/agent-sdk-binary");
 const { createRotatingLog } = require("./electron/rotating-log");
 const { createServerSupervisor, loadingPageUrl } = require("./electron/server-supervisor");
 const { migrateMcpConfigFile } = require("./electron/mcp-config-migration");
@@ -1042,21 +1043,20 @@ function packagedServerLaunchSpec(port) {
     return null;
   }
 
-  // Point the Claude Agent SDK at the in-bundle cli.js. Earlier versions
-  // copied cli.js to userData/claude-sdk/cli.js to dodge a hypothetical
-  // Gatekeeper/SIP issue on macOS, but that broke native-binary resolution:
-  // cli.js does Node's normal `node_modules` walk-up to load its platform-
-  // specific sibling (e.g. @anthropic-ai/claude-agent-sdk-darwin-arm64).
-  // When run from userData the sibling isn't on any walk-up path, hence
-  // "Native CLI binary for darwin-arm64 not found". Keeping cli.js inside
-  // its own npm package directory fixes both macOS and Windows in one go.
-  const sdkSrcPath = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js');
-  const sdkMarkerPath = path.join(app.getPath('userData'), '.aime-sdk-path');
-  const sdkCliPath = fs.existsSync(sdkSrcPath) ? sdkSrcPath : '';
+  // Point the Claude Agent SDK at its native CLI binary where the standalone
+  // bundle has it (next.config.ts traces the platform packages in). Left in
+  // place: copying the CLI out to userData once broke its resolution on macOS
+  // and Windows. See electron/agent-sdk-binary.js.
+  const sdkNodeModules = path.join(standaloneDir, 'node_modules');
+  const sdkCliPath = agentSdkBinaryPath({
+    nodeModulesDir: sdkNodeModules,
+    platform: process.platform,
+    arch: process.arch,
+    exists: fs.existsSync,
+  }) || '';
   if (!sdkCliPath) {
-    console.warn('[AIME] Claude SDK cli.js not found at:', sdkSrcPath);
+    console.warn(`[AIME] Agent SDK binary for ${process.platform}-${process.arch} not found under:`, sdkNodeModules);
   }
-  fs.writeFileSync(sdkMarkerPath, sdkCliPath || sdkSrcPath, 'utf-8');
 
   // The Claude Agent SDK on Windows shells out to bash for tool execution
   // and refuses to start without it. We bundle PortableGit in extraResources

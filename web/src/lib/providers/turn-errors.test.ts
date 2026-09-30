@@ -15,6 +15,11 @@ describe('cleanSdkErrorText', () => {
     ).toBe('Invalid API key');
   });
 
+  // The exact text the 0.3 CLI produced for a 401 in the provider smoke.
+  it('drops the CLI’s "Fix external API key" advice', () => {
+    expect(cleanSdkErrorText('Invalid API key · Fix external API key')).toBe('Invalid API key');
+  });
+
   it('leaves other text alone', () => {
     expect(cleanSdkErrorText('Overloaded')).toBe('Overloaded');
   });

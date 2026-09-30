@@ -549,6 +549,37 @@ describe('stream translation', () => {
       expect(said(await run(new ClaudeProvider(), {}))).toBe('turn oneturn two');
     });
 
+    /*
+     * The shape the CLI actually sends: one assistant message per finished
+     * block, each carrying only that block — so the text arrives at position 0
+     * of its message while its deltas said index 1, behind a thinking block.
+     * Adaptive thinking is the SDK default; keyed by position, every such reply
+     * was delivered twice (reproduced against the real CLI).
+     */
+    it('does not repeat text that followed a thinking block', async () => {
+      scriptChunks([
+        { type: 'stream_event', event: { type: 'message_start' } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hm' } } },
+        { type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hm' }] } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Hello ' } } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'there' } } },
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'Hello there' }] } },
+      ]);
+      expect(said(await run(new ClaudeProvider(), {})), 'the reply was delivered twice').toBe('Hello there');
+    });
+
+    it('matches per-block messages to their deltas in order', async () => {
+      scriptChunks([
+        { type: 'stream_event', event: { type: 'message_start' } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'first' } } },
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'first' }] } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 3, delta: { type: 'text_delta', text: 'sec' } } },
+        // The deltas for the second block were cut short; the message has the rest.
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'second' }] } },
+      ]);
+      expect(said(await run(new ClaudeProvider(), {}))).toBe('firstsecond');
+    });
+
     it('ignores non-text deltas', async () => {
       scriptChunks([
         { type: 'stream_event', event: { type: 'message_start' } },
@@ -3039,6 +3070,34 @@ describe('abort reaches the SDK, and only the run it belongs to', () => {
     expect(signal?.aborted).toBe(true);
     // A clean exit after an abort is still an abort, not a finished turn.
     expect(chunks.at(-1)?.type).toBe('aborted');
+  });
+
+  /*
+   * Since Agent SDK 0.3 an abort does not cut the stream: the subprocess gets a
+   * 2s grace to flush its transcript and the messages in flight keep arriving.
+   * Against the real CLI that was ~1.5s of further text after Stop.
+   */
+  it('emits nothing from the SDK after the stop, and reports the stop once', async () => {
+    const provider = new ClaudeProvider();
+    let closed = false;
+    queryMock.mockImplementation(async function* () {
+      try {
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'before' }] } };
+        provider.abort('in-flight');
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'after' }] } };
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'still after' }] } };
+      } finally {
+        closed = true;
+      }
+    });
+    const chunks = await run(provider, { chatId: 'in-flight' });
+
+    const said = chunks.filter((c) => c.type === 'text').map((c) => c.content).join('');
+    expect(said).toBe('before');
+    expect(chunks.filter((c) => c.type === 'aborted')).toHaveLength(1);
+    expect(chunks.at(-1)?.type).toBe('aborted');
+    // Leaving the loop closed the query — that is what ends the subprocess.
+    expect(closed).toBe(true);
   });
 
   it('treats the SDK’s own abort error (named "Error") as an abort', async () => {
