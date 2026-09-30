@@ -2,6 +2,7 @@
 
 import type { ChunkType } from '@/lib/providers/base-provider';
 import { classifyTurnError, isTurnErrorCode, type TurnErrorCode } from '@/lib/sse/turn-error';
+import { APP_NAME } from '@/config/branding';
 
 /**
  * The conversation-stream contract every surface store already satisfied.
@@ -48,6 +49,12 @@ export interface ToolCallInit {
   input: Record<string, unknown>;
   status: 'running' | 'complete' | 'error';
   startTime: number;
+  /**
+   * Where in the reply's text the call was made. Left to the store, which
+   * stamps the reply's length when the call is recorded — see the `tool_use`
+   * case for why that is the right moment.
+   */
+  textOffset?: number;
 }
 
 /**
@@ -230,6 +237,14 @@ export function handleCoreChunk(
       return true;
 
     case 'tool_use': {
+      /*
+       * The call is recorded with the reply's length at this moment as its
+       * `textOffset` (the store stamps it), so the reply renders as text, the
+       * tools it introduced, then the text that followed — instead of every
+       * call in one bar above the whole reply, where "Let me search…" appeared
+       * after the searches it announced. Exact because every event is in
+       * order: coalesced text is flushed before any other event is delivered.
+       */
       // The next text block belongs to a new paragraph — see the `text` case.
       toolSinceText.add(chatId);
       store.completeRunningTools(chatId);
@@ -295,7 +310,7 @@ export function handleCoreChunk(
           toolUseId: event.toolUseId as string,
         },
       });
-      ctx.notify?.('A connection is needed', 'AIME is waiting to connect a service.');
+      ctx.notify?.('A connection is needed', `${APP_NAME} is waiting to connect a service.`);
       return true;
 
     case 'document_print':

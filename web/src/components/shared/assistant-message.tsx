@@ -13,8 +13,9 @@ import type { A2UIDocument } from "@/lib/a2ui/types";
 import { MemoryButton } from "./memory-button";
 import { useConversationStore } from "@/stores/conversation-store";
 import { sendUserFeedbackEvent } from "@/lib/telemetry/events";
-import { parseArtifacts, hasArtifactMarkers } from "@/lib/artifacts/parser";
+import { parseArtifacts } from "@/lib/artifacts/parser";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
+import { segmentReply } from "./reply-segments";
 import { BASH_ARTIFACT_EXT, isValidSidebarEntry } from "@/lib/artifact-tracker";
 import { TurnErrorBanner } from "./turn-error-banner";
 import type { TurnErrorCode } from "@/lib/sse/turn-error";
@@ -91,7 +92,49 @@ interface ToolCall {
   status: "running" | "complete" | "error";
   startTime: number;
   endTime?: number;
+  /** Where in the reply's text the call was made — see reply-segments. */
+  textOffset?: number;
 }
+
+/**
+ * A run of the reply's text, with any `:::artifact` blocks in it as cards.
+ * Artifacts are parsed only once the reply has finished, so a half-streamed
+ * block is never mistaken for a whole one.
+ */
+const ReplyText = memo(function ReplyText({
+  text,
+  isStreaming,
+  showCursor,
+  onArtifactClick,
+}: {
+  text: string;
+  isStreaming: boolean;
+  showCursor: boolean;
+  onArtifactClick?: (path: string | ParsedArtifact) => void;
+}) {
+  const parsed = useMemo(() => (text && !isStreaming ? parseArtifacts(text) : null), [text, isStreaming]);
+  const hasArtifacts = parsed?.segments.some((s) => s.type === "artifact") ?? false;
+  return (
+    <div className="text-sm leading-relaxed">
+      {hasArtifacts && parsed ? (
+        parsed.segments.map((segment, i) =>
+          segment.type === "text" ? (
+            <MarkdownRenderer key={i} content={segment.content} />
+          ) : (
+            <ArtifactCard
+              key={segment.artifact.id}
+              artifact={segment.artifact}
+              onClick={(artifact) => onArtifactClick?.(artifact)}
+            />
+          ),
+        )
+      ) : (
+        <MarkdownRenderer content={text} />
+      )}
+      {showCursor && <StreamingCursor />}
+    </div>
+  );
+});
 
 interface AssistantMessageProps {
   content: string;
@@ -180,17 +223,9 @@ export const AssistantMessage = memo(function AssistantMessage({
     return () => clearInterval(interval);
   }, [isLoading, content]);
 
-  // Parse artifacts from content (skip during streaming to avoid partial matches)
-  const parsed = useMemo(() => {
-    if (!content || isStreaming) return null;
-    if (!hasArtifactMarkers(content)) {
-      // Try fallback heuristic only when not streaming
-      return parseArtifacts(content);
-    }
-    return parseArtifacts(content);
-  }, [content, isStreaming]);
-
-  const hasArtifacts = parsed?.segments.some((s) => s.type === "artifact") ?? false;
+  // Text and tool calls in the order they happened; null for a transcript
+  // recorded before calls carried their place, which renders as it always did.
+  const segments = useMemo(() => segmentReply(content, toolCalls), [content, toolCalls]);
 
   // Extract file paths from completed Write/Edit tool calls + binary artifacts
   // produced by Bash (e.g. the ppt plugin's generate_presentation.sh writing a .pptx).
@@ -273,19 +308,43 @@ export const AssistantMessage = memo(function AssistantMessage({
           <ThinkingSection content={thinking} isComplete={!isStreaming} />
         )}
 
-        {/* Tool calls summary bar */}
-        {toolCalls.length > 0 && (
-          <ToolCallsSummaryBar
-            // Remounted when /verbose flips, so the new default applies to
-            // replies already on screen, not only the next one.
-            key={expandToolCalls ? "expanded" : "collapsed"}
-            defaultOpen={expandToolCalls}
-            toolCalls={toolCalls}
-            onArtifactClick={onArtifactClick}
-            onPreviewUrl={onPreviewUrl}
-            onCancel={isStreaming ? onCancel : undefined}
-          />
-        )}
+        {/*
+          The reply as it happened — "Let me search…", the searches, what they
+          found — or, for a transcript from before calls carried their place,
+          every call in one bar above the text. The bars remount when /verbose
+          flips, so the new default applies to replies already on screen.
+        */}
+        {segments
+          ? segments.map((segment, i) =>
+              segment.kind === "tools" ? (
+                <ToolCallsSummaryBar
+                  key={`${segment.key}-${expandToolCalls ? "expanded" : "collapsed"}`}
+                  defaultOpen={expandToolCalls}
+                  toolCalls={segment.tools}
+                  onArtifactClick={onArtifactClick}
+                  onPreviewUrl={onPreviewUrl}
+                  onCancel={isStreaming && segment.tools.some((t) => t.status === "running") ? onCancel : undefined}
+                />
+              ) : (
+                <ReplyText
+                  key={segment.key}
+                  text={segment.text}
+                  isStreaming={isStreaming}
+                  showCursor={isStreaming && i === segments.length - 1}
+                  onArtifactClick={onArtifactClick}
+                />
+              ),
+            )
+          : toolCalls.length > 0 && (
+              <ToolCallsSummaryBar
+                key={expandToolCalls ? "expanded" : "collapsed"}
+                defaultOpen={expandToolCalls}
+                toolCalls={toolCalls}
+                onArtifactClick={onArtifactClick}
+                onPreviewUrl={onPreviewUrl}
+                onCancel={isStreaming ? onCancel : undefined}
+              />
+            )}
 
         {/* Inline canvas chips — A2UI docs the agent rendered this turn */}
         {inlineCanvases && inlineCanvases.length > 0 && (
@@ -330,28 +389,9 @@ export const AssistantMessage = memo(function AssistantMessage({
           </div>
         )}
 
-        {/* Content — render as segments if artifacts detected, else plain markdown */}
-        {content && !hasArtifacts && (
-          <div className="text-sm leading-relaxed">
-            <MarkdownRenderer content={content} />
-            {isStreaming && <StreamingCursor />}
-          </div>
-        )}
-
-        {content && hasArtifacts && parsed && (
-          <div className="text-sm leading-relaxed">
-            {parsed.segments.map((segment, i) =>
-              segment.type === "text" ? (
-                <MarkdownRenderer key={i} content={segment.content} />
-              ) : (
-                <ArtifactCard
-                  key={segment.artifact.id}
-                  artifact={segment.artifact}
-                  onClick={(artifact) => onArtifactClick?.(artifact)}
-                />
-              )
-            )}
-          </div>
+        {/* The whole reply's text, when it was not already rendered in segments. */}
+        {!segments && content && (
+          <ReplyText text={content} isStreaming={isStreaming} showCursor={isStreaming} onArtifactClick={onArtifactClick} />
         )}
 
         {retrying && isStreaming && (

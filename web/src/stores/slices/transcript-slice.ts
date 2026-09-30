@@ -285,7 +285,21 @@ export function createTranscriptSlice(set: SetTranscript, opts: TranscriptSliceO
         };
       }),
 
-    addToolCall: (chatId, toolCall) => set((state) => apply(state, withToolCall(state.messages, chatId, toolCall))),
+    /*
+     * Stamps where in the reply the call was made (`textOffset`: the reply's
+     * length so far) unless the caller already knows. Here rather than in each
+     * stream handler so every path that records a tool call — the shared
+     * chunks, the browser relay, the quick-ask loop — places it in the text.
+     */
+    addToolCall: (chatId, toolCall) =>
+      set((state) => {
+        const last = state.messages[chatId]?.at(-1);
+        const placed =
+          toolCall.textOffset === undefined && last?.role === 'assistant'
+            ? { ...toolCall, textOffset: last.content.length }
+            : toolCall;
+        return apply(state, withToolCall(state.messages, chatId, placed));
+      }),
 
     updateToolResult: (chatId, toolCallId, output, isError) =>
       set((state) => apply(state, withToolResult(state.messages, chatId, toolCallId, output, isError, Date.now()))),
