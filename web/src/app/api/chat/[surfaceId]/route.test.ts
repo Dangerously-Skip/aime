@@ -1204,3 +1204,58 @@ describe('a disconnected client stops the resume loop', () => {
     expect(call).toBe(2);
   });
 });
+
+/*
+ * A refused reply the SDK re-ran on a fallback model. The client takes it off
+ * the transcript by segment; the route has its own copy of the reply — the one
+ * memory extraction reads — and must drop it there too.
+ */
+describe('a retracted refusal', () => {
+  it('is dropped from the reply memory extraction reads, and its text is not relayed again', async () => {
+    const kept = 'Here is the answer you asked for, in full. '.repeat(2);
+    scriptProvider([
+      { type: 'text', content: 'I will explain how to REFUSED', segment: 'x:1', provider: 'claude' },
+      { type: 'retract', segments: ['x:1'], toolUseIds: [], texts: ['I will explain how to REFUSED'], provider: 'claude' },
+      { type: 'text', content: kept, segment: 'x:2', provider: 'claude' },
+    ]);
+    const { events } = await post('chat', { message: 'hi', chatId: 'refused-1' });
+
+    const retract = events.find((e) => e.type === 'retract');
+    expect(retract).toMatchObject({ segments: ['x:1'], toolUseIds: [] });
+    expect(retract).not.toHaveProperty('texts');
+
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalled());
+    expect(mocks.extractMemoriesMock.mock.calls[0][1]).toBe(kept);
+  });
+});
+
+/*
+ * Code's permission mode is a security choice the CLIENT makes, so the route
+ * decides where it may be made: only on Code, only from the menu's allowlist.
+ * The provider checks again (claude-provider.permission-mode.test.ts); this is
+ * the first of the two locks.
+ */
+describe('permission mode', () => {
+  it.each(['default', 'acceptEdits', 'plan', 'bypass'])('forwards "%s" for the Code surface', async (mode) => {
+    await post('code', { message: 'hi', chatId: 'c1', permissionMode: mode });
+    expect(providerParams().permissionMode).toBe(mode);
+  });
+
+  it('refuses a mode the menu does not offer, rather than falling back to a looser one', async () => {
+    for (const mode of ['bypassPermissions', 'dontAsk', 'auto', 42, { mode: 'plan' }]) {
+      const res = await post('code', { message: 'hi', chatId: 'c1', permissionMode: mode });
+      expect(res.status).toBe(400);
+    }
+    expect(mocks.queryMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['chat', 'cowork', 'browser', 'assistant'])('never passes one on for %s', async (surfaceId) => {
+    await post(surfaceId, { message: 'hi', chatId: 'c1', permissionMode: 'bypass' });
+    expect(providerParams().permissionMode).toBeUndefined();
+  });
+
+  it('leaves Code on its surface default when none is sent', async () => {
+    await post('code', { message: 'hi', chatId: 'c1' });
+    expect(providerParams().permissionMode).toBeUndefined();
+  });
+});

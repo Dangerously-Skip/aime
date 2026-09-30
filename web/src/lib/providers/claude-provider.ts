@@ -14,6 +14,7 @@ import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { toolDeadlineMs, isNetworkTool } from './tool-deadlines';
+import { ResponseLedger } from './response-ledger';
 import {
   classifyThrownTurnError,
   cleanSdkErrorText,
@@ -27,6 +28,7 @@ import { internalAuthEnv } from '../auth/internal-credential';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { waitForAnswer } from '../pending-questions';
 import { randomUUID } from 'node:crypto';
+import { join as joinPath } from 'node:path';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { buildIfServable, browserMcpToolNames } from '../mcp/browser-tool-bridge';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
@@ -48,7 +50,9 @@ import {
 } from '../security/destructive-commands';
 import { isFileWriteTool, writeTargetAllowed, writeTargetOf } from '../security/write-scope';
 import { toolMatches } from '../security/tool-names';
-import { getScratchDir } from '../app-paths';
+import { getDataDir, getScratchDir } from '../app-paths';
+import { evaluatePermissionMode, type ModeVerdict } from '../security/permission-mode';
+import { isCodePermissionMode, SDK_PERMISSION_MODE } from '../surfaces/code-permission-mode';
 import { loadSecuritySettings } from '../security/settings';
 import { describeThemes as describeThemesForPrompt } from '../documents/themes';
 import {
@@ -64,6 +68,34 @@ import {
 
 /** Canvas tool name — intercepted to push A2UI documents to client. */
 const CANVAS_TOOL_NAME = 'canvas';
+
+/**
+ * The PreToolUse hook that makes `canUseTool` run for every tool call.
+ *
+ * `canUseTool` is where every refusal in this file lives — the security
+ * toggles, the write scope, the connector policy, URL provenance, loop
+ * detection, Code's permission modes — and the SDK does NOT consult it on its
+ * own. Measured against the real CLI (Agent SDK 0.3.285, a local stand-in for
+ * the Messages API): under `bypassPermissions` and `acceptEdits` a Bash or
+ * Write call ran without `canUseTool` being called once, and under `default`
+ * the same happened for any tool on `allowedTools`. Chat and Cowork run
+ * `bypassPermissions`, so every one of those gates was inert there.
+ *
+ * Hooks run before the permission mode and before the allow rules, and a hook
+ * answering `ask` sends the call to `canUseTool` in every mode, `bypass`
+ * included — also measured, including for a subagent's own tool calls. So the
+ * hook decides nothing; it only guarantees the gate is asked.
+ * `claude-provider.real-sdk.test.ts` proves it end to end.
+ */
+export async function routeToolCallToCanUseTool() {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse' as const,
+      permissionDecision: 'ask' as const,
+      permissionDecisionReason: 'Every tool call is decided by the host permission gate.',
+    },
+  };
+}
 
 /**
  * Cached system:init data from the most recent session.
@@ -249,6 +281,17 @@ export class ClaudeProvider extends BaseProvider {
       onConnectorRequest,
       onDocumentPrint,
     } = params;
+
+    /**
+     * Code's permission mode, as the user picked it in the composer. Only ever
+     * honoured for the Code surface and only from the allowlist — the route
+     * checks both, and so does this, because a client choosing its own mode on
+     * Chat would be choosing its own security.
+     */
+    const codeMode = surfaceId === 'code' && isCodePermissionMode(params.permissionMode) ? params.permissionMode : null;
+    if (params.permissionMode !== undefined && !codeMode) {
+      console.warn('[SECURITY] Ignoring a permission mode requested for surface', surfaceId);
+    }
 
     // Load surface config if surfaceId is provided, otherwise use defaults
     let surfaceConfig: ReturnType<typeof getSurfaceConfig> | null = null;
@@ -579,7 +622,9 @@ export class ClaudeProvider extends BaseProvider {
     const model = explicitModel
       || surfaceConfig?.model
       || undefined;
-    const permissionMode = surfaceConfig?.permissionMode
+    // The user's choice when there is one; otherwise the surface's default.
+    const permissionMode = (codeMode && SDK_PERMISSION_MODE[codeMode])
+      || surfaceConfig?.permissionMode
       || this.permissionMode;
 
     // Scan for installed plugins to pass to SDK
@@ -1771,6 +1816,24 @@ export class ClaudeProvider extends BaseProvider {
      */
     const approvalPolicy = params.approvalPolicy ?? (isBackgroundRun ? 'consequential' : 'never');
 
+    /**
+     * Route every tool call through `canUseTool` — see
+     * `routeToolCallToCanUseTool` for why the SDK does not do it by itself.
+     *
+     * Interactive runs only, for now, and deliberately. Background runs
+     * (subagents, standing orders, heartbeat, widget refresh) default to the
+     * `consequential` approval policy above, which has never actually fired for
+     * an auto-approved tool — so switching the hook on there would start
+     * refusing every Write, Edit and non-read Bash in every subagent at once.
+     * That is a product decision, not a side effect to ship inside this one.
+     */
+    if (!isBackgroundRun) {
+      queryOptions.hooks = { PreToolUse: [{ hooks: [routeToolCallToCanUseTool] }] };
+    }
+
+    /** Where the SDK writes plan files: `<CLAUDE_CONFIG_DIR>/plans` (measured). */
+    const plansDir = codeMode === 'plan' ? joinPath(getDataDir(), 'plans') : '';
+
     // Intercept AskUserQuestion, browser tools, canvas tool, and loop detection via canUseTool.
     queryOptions.canUseTool = async (
       toolName: string,
@@ -1800,6 +1863,22 @@ export class ClaudeProvider extends BaseProvider {
           return { behavior: 'deny' as const, message: verdict.message! };
         }
       }
+
+      /*
+       * Code's permission mode. A refusal (plan mode) lands here, before any
+       * other gate can put a card in front of the user for a call that was
+       * never going to run; a question waits until the security gates below
+       * have had their say, for the same reason.
+       */
+      const modeVerdict: ModeVerdict | null = codeMode
+        ? evaluatePermissionMode(codeMode, toolName, input, { cwd: effectiveCwd, plansDir })
+        : null;
+      if (modeVerdict?.kind === 'deny') {
+        console.warn(`[SECURITY] ${codeMode} mode refused:`, toolName);
+        return { behavior: 'deny' as const, message: modeVerdict.message };
+      }
+      /** A gate below already put THIS call to the user and got a yes. */
+      let approvedByUser = false;
 
       if (toolMatches(toolName, denied)) {
         console.warn('[SECURITY] Blocked a tool withheld from this run:', toolName);
@@ -1969,6 +2048,7 @@ export class ClaudeProvider extends BaseProvider {
                   `you could not do, and carry on with the rest.`,
             };
           }
+          approvedByUser = true;
         }
       }
 
@@ -2084,6 +2164,61 @@ export class ClaudeProvider extends BaseProvider {
           };
         }
         // allow-once / always-allow fall through, so loop detection still applies.
+        approvedByUser = true;
+      }
+
+      // ── Code's permission mode: the question ────────────────────────────
+      // Asked here, after every gate that could refuse the call outright, and
+      // skipped when one of them has just asked about this very call — one
+      // card per call, not two.
+      if (modeVerdict?.kind === 'ask' && !approvedByUser) {
+        if (deniedThisTurn.has(modeVerdict.key)) {
+          return {
+            behavior: 'deny' as const,
+            message:
+              `The user already declined that in this turn and will not be asked again. ` +
+              `Stop retrying it and finish what you can without it.`,
+          };
+        }
+        if (!onInputRequest) {
+          // Nothing can show the card, and this mode's promise is that the user
+          // is asked — so the call does not run.
+          console.warn(`[SECURITY] ${codeMode} mode cannot ask here; denying`, toolName);
+          return {
+            behavior: 'deny' as const,
+            message:
+              `${toolName} needs the user's approval in this permission mode, and this session ` +
+              `cannot ask them (no interactive client attached). It was not run.`,
+          };
+        }
+        const question = modeVerdict.question;
+        awaitingHuman.add(toolUseID);
+        // A nonce, not the SDK's id — see issueHandle and the gates above.
+        const approvalHandle = issueHandle(toolUseID);
+        let decision: ApprovalDecision;
+        let unanswered = false;
+        try {
+          await onInputRequest(approvalHandle, [question]);
+          decision = readApprovalAnswer(await waitForAnswer(approvalHandle, waitOptions), question.question);
+        } catch {
+          decision = 'deny';
+          unanswered = true;
+        } finally {
+          awaitingHuman.delete(toolUseID);
+        }
+        console.log(`[SECURITY] ${codeMode} mode approval for`, toolName, '→', decision);
+        if (decision !== 'allow-once' && decision !== 'always-allow') {
+          deniedThisTurn.add(modeVerdict.key);
+          return {
+            behavior: 'deny' as const,
+            message: unanswered
+              ? `${toolName} was not run: the approval prompt timed out because the user did not ` +
+                `respond. Do not retry it. Tell them it is still waiting on them and carry on.`
+              : `${toolName} was not run — the user did not approve it. Do not retry it or look ` +
+                `for another way to do the same thing. Tell them which part of the task you ` +
+                `could not do, and carry on with the rest.`,
+          };
+        }
       }
       // ── Loop detection ─────────────────────────────────────────────────
       const inputHash = JSON.stringify(input);
@@ -2264,7 +2399,6 @@ export class ClaudeProvider extends BaseProvider {
 
     // IMPORTANT: Always strip CLAUDECODE from subprocess env to prevent
     // "nested session" detection when the app is launched from a Claude Code terminal.
-    const { getDataDir } = await import('../app-paths');
     const { CLAUDECODE: _cc, ...safeEnv } = process.env;
     queryOptions.env = {
       ...safeEnv,
@@ -2543,6 +2677,12 @@ export class ClaudeProvider extends BaseProvider {
       };
     }
 
+    /**
+     * Which API response each streamed chunk came from, so a refusal the SDK
+     * retracts can be taken back off the screen — see response-ledger.
+     */
+    const ledger = new ResponseLedger(randomUUID().slice(0, 8));
+
     let abortReported = false;
     try {
       // Stream responses from Claude Agent SDK - matches server.js exactly
@@ -2666,6 +2806,26 @@ export class ClaudeProvider extends BaseProvider {
         }
 
         /*
+         * The SDK re-ran a refused reply on a fallback model and threw the
+         * refused partial away. Its text (and any tool call it made) already
+         * reached the client, so it has to be taken back — otherwise it sits
+         * above the fallback's answer and goes back to the model as history.
+         * The same uuids may already have arrived as `supersedes` on the
+         * replacement's first frame; the ledger makes the second one a no-op.
+         */
+        if (c.type === 'system' && c.subtype === 'model_refusal_fallback') {
+          console.warn(
+            `[Claude] Reply refused by ${String(c.original_model)}; re-run on ${String(c.fallback_model)}`,
+          );
+          const retraction = ledger.retract(c.retracted_message_uuids);
+          if (retraction) {
+            for (const id of retraction.toolUseIds) activeTools.delete(id);
+            yield { type: 'retract', ...retraction, provider: this.name };
+          }
+          continue;
+        }
+
+        /*
          * One line per system message. This used to pretty-print the whole
          * object on every turn — the init message alone lists every tool, MCP
          * server, skill and slash command, which buried everything else in the
@@ -2777,12 +2937,15 @@ export class ClaudeProvider extends BaseProvider {
           if (evType === 'message_start') {
             streamedBlocks.clear();
             reconciledTextBlocks = 0;
+            ledger.begin((ev!.message as { id?: unknown } | undefined)?.id);
           } else if (evType === 'content_block_delta') {
             const delta = ev!.delta as { type?: string; text?: string } | undefined;
             if (delta?.type === 'text_delta' && delta.text) {
               const idx = (ev!.index as number) ?? 0;
               streamedBlocks.set(idx, (streamedBlocks.get(idx) ?? '') + delta.text);
-              yield { type: 'text', content: delta.text, provider: this.name };
+              const segment = ledger.segment;
+              ledger.noteText(segment, delta.text);
+              yield { type: 'text', content: delta.text, segment, provider: this.name };
             }
           }
           continue;
@@ -2795,6 +2958,16 @@ export class ClaudeProvider extends BaseProvider {
 
           const message = c.message as Record<string, unknown>;
           const content = message.content;
+          const segment = ledger.open(message.id);
+          ledger.noteFrame(c.uuid, segment);
+
+          // The first frame of a fallback reply names the refused messages it
+          // replaces. Evicted before this frame's own content is shown.
+          const superseded = ledger.retract(c.supersedes, segment);
+          if (superseded) {
+            for (const id of superseded.toolUseIds) activeTools.delete(id);
+            yield { type: 'retract', ...superseded, provider: this.name };
+          }
 
           /*
            * The CLI reporting a failure in the shape of an assistant message.
@@ -2839,7 +3012,8 @@ export class ClaudeProvider extends BaseProvider {
                 const full = block.text as string;
                 const remainder = full.startsWith(already) ? full.slice(already.length) : full;
                 if (remainder) {
-                  yield { type: 'text', content: remainder, provider: this.name };
+                  ledger.noteText(segment, remainder);
+                  yield { type: 'text', content: remainder, segment, provider: this.name };
                 }
               } else if (block.type === 'tool_use') {
                 const toolName = block.name as string;
@@ -2934,11 +3108,13 @@ export class ClaudeProvider extends BaseProvider {
                     };
                   }
                 } else {
+                  ledger.noteTool(segment, block.id as string);
                   yield {
                     type: 'tool_use',
                     name: toolName,
                     input: toolInput,
                     id: block.id as string,
+                    segment,
                     provider: this.name,
                   };
                   console.log('[Claude] Tool use:', toolName);
@@ -2971,6 +3147,14 @@ export class ClaudeProvider extends BaseProvider {
           const content = (c.message as { content?: unknown } | undefined)?.content;
           const blocks = Array.isArray(content) ? content : [];
           let sawToolResult = false;
+          // A refused leg's tool calls get tombstoned results; a retraction can
+          // name those by uuid.
+          ledger.noteToolResults(
+            c.uuid,
+            (blocks as Array<Record<string, unknown>>)
+              .filter((b) => b?.type === 'tool_result' && typeof b.tool_use_id === 'string')
+              .map((b) => b.tool_use_id as string),
+          );
           for (const block of blocks as Array<Record<string, unknown>>) {
             if (block?.type !== 'tool_result') continue;
             sawToolResult = true;

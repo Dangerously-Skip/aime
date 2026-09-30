@@ -181,6 +181,22 @@ describe('every toggle that claims enforcement is enforced', () => {
     expect(enforced.length).toBeGreaterThan(0);
   });
 
+  /*
+   * Everything below drives `canUseTool` directly, which is only half the
+   * claim: the real CLI does not call it under `bypassPermissions` (Chat,
+   * Cowork) or for anything on `allowedTools`. The PreToolUse hook is what
+   * makes it run; without it every probe below passes and nothing is enforced.
+   * Proved against the real binary in claude-provider.real-sdk.test.ts.
+   */
+  it.each(['chat', 'cowork', 'code', 'browser'])('%s routes every tool call to canUseTool', async (surfaceId) => {
+    await canUseToolWithToggle('blockDangerousCommands', true, { surfaceId });
+    const hooks = queryMock.mock.calls.at(-1)![0].options.hooks as {
+      PreToolUse?: Array<{ matcher?: string; hooks: Array<() => Promise<{ hookSpecificOutput: { permissionDecision: string } }>> }>;
+    };
+    expect(hooks?.PreToolUse?.[0]?.matcher).toBeUndefined();
+    expect((await hooks!.PreToolUse![0].hooks[0]()).hookSpecificOutput.permissionDecision).toBe('ask');
+  });
+
   it.each(enforced.map((t) => [t.key, t.label] as const))(
     '%s (%s) is refused by the real canUseTool when the setting is ON',
     async (key) => {

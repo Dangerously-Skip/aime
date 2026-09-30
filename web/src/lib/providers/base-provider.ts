@@ -15,6 +15,12 @@ export type ChunkType =
   | 'error'
   /** The provider is retrying an API call: `{ attempt, delayMs, code }`. */
   | 'retry'
+  /**
+   * Take back output the SDK retracted — a refused reply re-run on a fallback
+   * model: `{ segments, toolUseIds, texts }`. `text` and `tool_use` chunks carry
+   * the `segment` (one per API response) these refer to. See response-ledger.
+   */
+  | 'retract'
   | 'connected'
   | 'status'
   | 'assistant'
@@ -216,6 +222,13 @@ export interface QueryParams {
    * unattended runs gate consequential actions, interactive sessions don't.
    */
   approvalPolicy?: import('../runs/types').ApprovalPolicy;
+  /**
+   * The permission mode the user picked in Code's composer. Honoured for the
+   * Code surface only — ignored anywhere else, so no caller can choose its own
+   * mode on Chat — and enforced in `canUseTool` by `lib/security/permission-mode`.
+   * Absent ⇒ the surface config's default.
+   */
+  permissionMode?: import('../surfaces/code-permission-mode').CodePermissionMode;
 }
 
 /**

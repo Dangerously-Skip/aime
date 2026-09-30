@@ -74,6 +74,13 @@ export interface Message {
    * to the model: "/verbose" and "Verbose mode on" are not conversation.
    */
   isCommandEcho?: boolean;
+  /**
+   * Where each API response's output starts in `content`, while the turn is
+   * streaming: segment id → offset. What lets a response the SDK retracts (a
+   * refused reply re-run on a fallback model) be cut back out by position. Only
+   * meaningful mid-turn; cleared when the turn stops.
+   */
+  segmentMarks?: Record<string, number>;
 }
 
 export interface TurnError {

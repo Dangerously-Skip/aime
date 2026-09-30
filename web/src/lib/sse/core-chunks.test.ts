@@ -52,6 +52,10 @@ describe('all three stores satisfy the contract', () => {
       'addToolCall',
       'updateToolResult',
       'completeRunningTools',
+      // Optional in the contract, but every store has them: a store without
+      // them would leave a retracted refusal on screen.
+      'markSegment',
+      'retractSegments',
     ]) {
       expect(typeof s[action], action).toBe('function');
     }
@@ -65,7 +69,7 @@ describe('handleCoreChunk', () => {
   it('claims exactly the core types', () => {
     for (const t of [
       'turn_start', 'text', 'thinking', 'tool_use', 'tool_result', 'error',
-      'input_request', 'connector_request', 'document_print', 'canvas',
+      'input_request', 'connector_request', 'document_print', 'canvas', 'retry', 'retract',
     ]) {
       expect(isCoreChunk(t)).toBe(true);
     }

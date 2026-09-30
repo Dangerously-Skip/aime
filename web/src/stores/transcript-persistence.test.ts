@@ -94,6 +94,25 @@ describe('a returning user', () => {
   });
 });
 
+describe('Code’s persisted permission mode', () => {
+  it.each(['default', 'acceptEdits', 'plan', 'bypass'])('keeps "%s", which the menu still offers', async (mode) => {
+    local.set('aime:code', JSON.stringify({ version: 0, state: { permissionMode: mode } }));
+    await useCodeStore.persist.rehydrate();
+    expect(useCodeStore.getState().permissionMode).toBe(mode);
+  });
+
+  it.each(['bypassPermissions', 'acceptAll', 7, null])(
+    'turns a mode the menu does not offer (%s) into the default — asking — not something looser',
+    async (mode) => {
+      useCodeStore.setState({ permissionMode: 'bypass' });
+      local.set('aime:code', JSON.stringify({ version: 0, state: { permissionMode: mode } }));
+      await useCodeStore.persist.rehydrate();
+      // Sent as-is, the server would refuse it with a 400 and every Code turn would fail.
+      expect(useCodeStore.getState().permissionMode).toBe('default');
+    },
+  );
+});
+
 describe('after hydration', () => {
   beforeEach(() => openStorageGate());
 

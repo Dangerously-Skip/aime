@@ -323,6 +323,8 @@ export function useSurfaceTurn(config: SurfaceTurnConfig) {
             completeRunningTools: s.completeRunningTools,
             setTurnError: s.setTurnError,
             setRetryStatus: s.setRetryStatus,
+            markSegment: s.markSegment,
+            retractSegments: s.retractSegments,
           },
           printDocument,
           onCanvas: (e) => config.onCanvas(e, cid),

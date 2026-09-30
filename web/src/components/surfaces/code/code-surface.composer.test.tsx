@@ -189,6 +189,24 @@ describe('the composer after the first message', () => {
     expect(extra).toHaveProperty('deckTheme');
   });
 
+  /*
+   * The mode in the composer's menu used to stay in the browser while the
+   * server hard-coded auto-accept, so "Ask permissions" asked nothing.
+   */
+  it.each(['default', 'acceptEdits', 'plan', 'bypass'] as const)(
+    'a turn carries the permission mode picked in the menu (%s)',
+    async (mode) => {
+      seed({ messages: 0 });
+      useCodeStore.setState({ permissionMode: mode });
+      render(<CodeSurface />);
+      fireEvent.change(composer(), { target: { value: 'add dark mode' } });
+      await act(async () => { fireEvent.keyDown(composer(), { key: 'Enter' }); });
+      await vi.waitFor(() => expect(sse.sendMessage).toHaveBeenCalled());
+      const extra = (sse.sendMessage.mock.calls.at(-1) as unknown as unknown[])[4] as Record<string, unknown>;
+      expect(extra.permissionMode).toBe(mode);
+    },
+  );
+
   it('the first send titles an untitled conversation', async () => {
     seed({ messages: 0, title: 'New Chat' });
     render(<CodeSurface />);

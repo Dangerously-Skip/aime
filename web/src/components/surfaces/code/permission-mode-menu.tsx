@@ -10,16 +10,46 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { PermissionMode } from "@/stores/code-store";
 
-const PERMISSION_MODES: {
+/**
+ * Every description is a claim the server enforces — `lib/security/permission-mode`,
+ * proved by `claude-provider.permission-mode.test.ts` against the real
+ * `canUseTool` and by `claude-provider.real-sdk.test.ts` against the real CLI.
+ * Change a description and you are changing a security promise: change the
+ * enforcement and its test with it.
+ *
+ * This list used to say "Always ask before making changes" for a mode the
+ * server never received — it hard-coded auto-accept — so nobody was asked.
+ */
+export const PERMISSION_MODES: {
   value: PermissionMode;
   label: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
 }[] = [
-  { value: "default", icon: Shield, label: "Ask permissions", description: "Always ask before making changes" },
-  { value: "acceptEdits", icon: Code2, label: "Auto accept edits", description: "Automatically accept all file edits" },
-  { value: "plan", icon: FileText, label: "Plan mode", description: "Create a plan before making changes" },
-  { value: "bypass", icon: AlertTriangle, label: "Bypass permissions", description: "Accepts all permissions" },
+  {
+    value: "default",
+    icon: Shield,
+    label: "Ask permissions",
+    description: "Asks before every file edit and every command that could change something",
+  },
+  {
+    value: "acceptEdits",
+    icon: Code2,
+    label: "Auto accept edits",
+    description: "Edits the project folder and runs commands without asking; asks before editing outside it",
+  },
+  {
+    value: "plan",
+    icon: FileText,
+    label: "Plan mode",
+    description: "Reads and plans only: no file edits, no commands that change anything",
+  },
+  {
+    value: "bypass",
+    icon: AlertTriangle,
+    label: "Bypass permissions",
+    description: "Runs everything without asking. Your Security settings still apply",
+  },
 ];
 
 /** Code's permission-mode picker, in the composer toolbar. */

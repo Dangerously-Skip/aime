@@ -9,6 +9,7 @@ import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/a
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
 import { baseToolName, toolMatches } from '@/lib/security/tool-names';
 import { classifyThrownTurnError } from '@/lib/providers/turn-errors';
+import { isCodePermissionMode, type CodePermissionMode } from '@/lib/surfaces/code-permission-mode';
 
 /** Tool profile → allowed tool sets (intersected with surface defaults) */
 const TOOL_PROFILES: Record<string, string[]> = {
@@ -218,6 +219,7 @@ export async function POST(
     tier = null,
     providerConfig = null,
     canRelayToClient = true,
+    permissionMode: requestedPermissionMode = undefined,
   } = body as {
     message?: string;
     chatId?: string;
@@ -303,6 +305,11 @@ export async function POST(
      * Code whenever its preview panel is closed. Browser tools need both.
      */
     browserToolsAvailable?: boolean;
+    /**
+     * Code's permission mode, from the composer. Accepted for the Code surface
+     * only and only from the allowlist; see the check below.
+     */
+    permissionMode?: unknown;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -319,6 +326,25 @@ export async function POST(
       { error: `Invalid surface: ${surfaceId}. Available: ${availableSurfaces.join(', ')}` },
       { status: 400 },
     );
+  }
+
+  /*
+   * A permission mode is a security choice, so it is taken only where the user
+   * can make it — Code's composer — and only as one of the modes that menu
+   * offers. Refused rather than ignored when it is not one of them: quietly
+   * falling back to the surface default would run a turn the user asked to be
+   * asked about with edits auto-accepted. Any other surface never passes it on,
+   * whatever the body says.
+   */
+  let permissionMode: CodePermissionMode | undefined;
+  if (requestedPermissionMode !== undefined && requestedPermissionMode !== null) {
+    if (surfaceId.toLowerCase() !== 'code') {
+      console.warn('[CHAT] Ignoring a permission mode sent for surface', surfaceId);
+    } else if (!isCodePermissionMode(requestedPermissionMode)) {
+      return Response.json({ error: 'Invalid permission mode' }, { status: 400 });
+    } else {
+      permissionMode = requestedPermissionMode;
+    }
   }
 
   if (!message || typeof message !== 'string') {
@@ -1203,6 +1229,7 @@ export async function POST(
           browserToolsAvailable: browserToolsAvailable === true && canRelayToClient !== false,
           onConnectorRequest,
           onDocumentPrint,
+          permissionMode,
         };
 
         let resumes = 0;
@@ -1353,6 +1380,23 @@ export async function POST(
             }
             // Out of resumes or out of the resources that matter — fall through
             // and let the provider's note stand, since now it IS the advice.
+          }
+          /*
+           * A refused reply the SDK re-ran on a fallback model. The client
+           * removes it from the transcript; this removes it from our own copy,
+           * which memory extraction reads — a refused partial is not something
+           * the assistant said. The texts are not relayed: the client removes by
+           * position and has no use for a second copy of the refused output.
+           */
+          if (chunk.type === 'retract') {
+            const { texts, ...toClient } = chunk;
+            for (const text of Array.isArray(texts) ? texts : []) {
+              if (typeof text !== 'string' || !text) continue;
+              const at = collectedResponse.lastIndexOf(text);
+              if (at >= 0) collectedResponse = collectedResponse.slice(0, at) + collectedResponse.slice(at + text.length);
+            }
+            await sse.writeEvent(toClient);
+            continue;
           }
           await sse.writeEvent(chunk);
         }

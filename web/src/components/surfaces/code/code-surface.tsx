@@ -267,6 +267,13 @@ export function CodeSurface() {
       ...settings,
       cwd: folder || undefined,
       /*
+       * The mode in the composer's menu. It used to stay in the browser while
+       * the server hard-coded "auto accept edits", so "Ask permissions" asked
+       * nothing. Read at send time so a change made mid-conversation applies
+       * to the very next turn.
+       */
+      permissionMode: useCodeStore.getState().permissionMode,
+      /*
        * Only when the preview panel is actually open. The webview ref is null
        * when it is closed, and offering `navigate` with nothing to navigate is
        * DR-21's loop: the agent cannot discover that a step is impossible, so
@@ -325,11 +332,19 @@ export function CodeSurface() {
               }
             }
           }
+          // Plan mode ends with the plan handed to ExitPlanMode — which the
+          // server refuses, since only the user leaves plan mode. The plan
+          // itself is still the deliverable, so it goes to the plan sheet.
+          if (toolName === "ExitPlanMode" && typeof toolInput.plan === "string" && toolInput.plan) {
+            setPlanContent(cid, toolInput.plan);
+          }
           // Detect plan file writes
           if (toolName === "Write") {
             const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
             const content = typeof toolInput.content === "string" ? toolInput.content : "";
-            if (filePath.includes(".claude/plans/") && content) setPlanContent(cid, content);
+            // `<CLAUDE_CONFIG_DIR>/plans/<slug>.md` — the app's data dir, not
+            // `~/.claude`, since the provider points CLAUDE_CONFIG_DIR there.
+            if (/\/\.[^/]+\/plans\/[^/]+\.md$/.test(filePath) && content) setPlanContent(cid, content);
           }
         },
         onToolResult: (_toolId, output, isError) => {
