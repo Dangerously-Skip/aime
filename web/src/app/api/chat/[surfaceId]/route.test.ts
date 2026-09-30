@@ -564,21 +564,23 @@ describe('agent routing', () => {
     triggers: ['research'],
   };
 
-  it('routes trigger-matched agents: model override + role prompt', async () => {
+  it('routes trigger-matched agents: role prompt, and the model from Settings — not the agent’s pin', async () => {
     mocks.loadAgentsMock.mockReturnValue([researcher]);
     mocks.matchAgentMock.mockReturnValue(researcher);
     mocks.readAgentPromptMock.mockReturnValue('You are a careful researcher.');
 
-    await post('chat', { message: 'research the market', chatId: 'c1' });
+    await post('chat', { message: 'research the market', chatId: 'c1', model: 'vendor/model-x' });
 
-    expect(providerParams().model).toBe('claude-opus-4-6');
+    // The route the client resolved from the tier grid wins; `model:` in
+    // AGENTS.md used to override it — a second place to pick a model.
+    expect(providerParams().model).toBe('vendor/model-x');
     const prompt = promptText();
     expect(prompt).toContain('agent-role name=\\"researcher\\"');
     expect(prompt).toContain('You are a careful researcher.');
   });
 
   it('binds explicitly via sessionControls.agentName without trigger matching', async () => {
-    const coder = { name: 'coder', description: '', model: 'sonnet' };
+    const coder = { name: 'coder', description: '', model: 'haiku' };
     mocks.loadAgentsMock.mockReturnValue([coder]);
 
     await post('chat', {
@@ -588,7 +590,21 @@ describe('agent routing', () => {
     });
 
     expect(mocks.matchAgentMock).not.toHaveBeenCalled();
-    expect(providerParams().model).toBe('sonnet');
+    // Bound, but its pin is not a model choice: the surface default stands.
+    expect(providerParams().model).not.toBe('haiku');
+  });
+
+  it('never sends an agent’s Claude pin to a user-added provider', async () => {
+    mocks.loadAgentsMock.mockReturnValue([researcher]);
+    mocks.matchAgentMock.mockReturnValue(researcher);
+    await post('chat', {
+      message: 'research the market',
+      chatId: 'c1',
+      model: 'moonshotai/kimi-k2',
+      providerConfig: { providerId: 'or', transport: 'anthropic-native', baseUrl: 'https://openrouter.ai/api' },
+      apiKey: 'sk-or-test',
+    });
+    expect(providerParams().model).toBe('moonshotai/kimi-k2');
   });
 
   it('lets a session model override beat the agent model', async () => {

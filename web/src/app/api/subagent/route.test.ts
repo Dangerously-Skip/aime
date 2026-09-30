@@ -5,13 +5,14 @@ import type { QueryParams, StreamChunk } from '@/lib/providers/base-provider';
 const mocks = vi.hoisted(() => ({
   queryMock: vi.fn(),
   abortMock: vi.fn(),
+  agents: [] as Array<{ name: string; description: string; model?: string }>,
 }));
 
 vi.mock('@/lib/providers', () => ({
   getProvider: () => ({ name: 'claude', query: mocks.queryMock, abort: mocks.abortMock }),
 }));
 vi.mock('@/lib/agents-parser', () => ({
-  loadAgents: () => [],
+  loadAgents: () => mocks.agents,
   readAgentSystemPrompt: () => '',
 }));
 vi.mock('@/lib/mcp/provisioned', () => ({ loadProvisionedMcpServers: async () => ({}) }));
@@ -48,6 +49,7 @@ const params = () => mocks.queryMock.mock.calls.at(-1)![0] as QueryParams;
 beforeEach(() => {
   mocks.queryMock.mockReset();
   mocks.abortMock.mockReset();
+  mocks.agents = [];
   script([{ type: 'text', content: 'sub says hi' }]);
   for (const k of ENV_KEYS) vi.stubEnv(k, '');
 });
@@ -73,6 +75,24 @@ describe('POST /api/subagent — the model route', () => {
   it('resolves the surface’s built-in default through the registry when nothing is pinned', async () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-env');
     await post({ task: 't', surfaceId: 'chat', tier: 'cheap' });
+    expect(params().model).toBe('haiku');
+  });
+
+  it('a named agent’s `model:` pin does not beat the route from Settings', async () => {
+    // Regression: the pin won, so a BYOK user's agent sent a Claude id to
+    // their OpenRouter provider.
+    mocks.agents = [{ name: 'researcher', description: '', model: 'claude-opus-4-6' }];
+    await post({
+      task: 't',
+      agentName: 'researcher',
+      apiKey: 'sk-or',
+      providerConfig: { providerId: 'or', transport: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1'},
+      model: 'moonshotai/kimi-k2',
+    });
+    expect(params().model).toBe('moonshotai/kimi-k2');
+
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-env');
+    await post({ task: 't', agentName: 'researcher', surfaceId: 'chat', tier: 'cheap' });
     expect(params().model).toBe('haiku');
   });
 

@@ -558,8 +558,7 @@ export async function POST(
       }
 
       // ── Agent routing ──────────────────────────────────────────────────
-      // Load AGENTS.md and apply routing overrides (model, tools, system prompt)
-      let agentModelOverride: string | null = null;
+      // Load AGENTS.md and apply routing overrides (tools, system prompt).
       {
         const agents = loadAgents(cwd as string | undefined);
         if (agents.length > 0) {
@@ -571,9 +570,15 @@ export async function POST(
 
           if (matched) {
             console.log('[AGENTS] Routing to agent:', matched.name, '| explicit:', !!explicitName);
-            // Override model if agent specifies one (handled later via effectiveModel fallback)
+            /*
+             * NOT the model. An agent's `model:` used to beat the route the
+             * client resolved from the tier grid — a second place to pick a
+             * model, and for a BYOK user it sent a Claude id (claude-opus-4-6)
+             * to their OpenRouter provider. Models are chosen in Settings;
+             * an agent shapes the role and the tools.
+             */
             if (matched.model) {
-              agentModelOverride = matched.model;
+              console.log('[AGENTS]', matched.name, 'pins model', matched.model, '— ignored; the model comes from Settings');
             }
             // Override allowedTools if agent specifies them
             if (matched.allowedTools && surfaceConfig.allowedTools) {
@@ -831,11 +836,10 @@ export async function POST(
       };
 
       // ── Model resolution ───────────────────────────────────────────────
-      // Priority: explicit model (sessionControls > agent > request) wins.
+      // Priority: explicit model (sessionControls > request) wins.
       // Otherwise, if the client asked by (capability, tier), resolve through
       // the model registry with tumbling. Falls back to the surface default.
       const explicitModel = sessionControls?.modelOverride
-        || agentModelOverride
         || (model as string | null)
         || null;
       let effectiveModel = explicitModel || surfaceConfig.model;
