@@ -304,8 +304,9 @@ export function AgentsPanel() {
 
           {/*
             No model chooser. This was a second place to pick a model, listing
-            three hardcoded Claude ids — and the chat route let it beat the tier
-            grid, so a BYOK user's agent sent a Claude id to their provider.
+            three hardcoded Anthropic model ids — and the chat route let it beat
+            the tier grid, so a BYOK user's agent sent an Anthropic id to their
+            provider.
             Agents follow Settings → Models & API keys like everything else.
           */}
           {draft.model && (
