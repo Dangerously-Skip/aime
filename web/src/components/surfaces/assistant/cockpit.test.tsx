@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, fireEvent, within } from '@testing-library/react';
 import { Cockpit } from './cockpit';
 import { APP_NAME } from '@/config/branding';
 import { useRunStore } from '@/stores/run-store';
 import { useAssistantStore } from '@/stores/assistant-store';
 import type { Goal, Run } from '@/lib/runs/types';
+import { approvalPolicyLabel } from '@/lib/runs/format';
 
 const NOW = Date.now();
 
@@ -163,6 +164,58 @@ describe('Cockpit', () => {
     expect(screen.queryByText(/No schedules yet/i)).toBeNull();
   });
 
+  /*
+   * What a background order may do, as ENFORCED. The code and this screen once
+   * said standing orders "pause before side effects"; nothing paused anything,
+   * and nothing was refused either. The label is now the policy the executor
+   * passes to the provider, and it says "refused".
+   */
+  it('says what a standing order may do — refused, not paused', async () => {
+    useAssistantStore.setState({
+      orders: [
+        {
+          id: 'o1',
+          instruction: 'Watch main for build failures',
+          trigger: { type: 'cron', expression: '0 9 * * *' },
+          state: {},
+          status: 'active',
+          notifyVia: 'assistant',
+          runCount: 0,
+          errorCount: 0,
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ],
+    });
+    render(<Cockpit />);
+    const label = await screen.findByText(approvalPolicyLabel('consequential'));
+    expect(label.textContent).toMatch(/refused/);
+    expect(document.body.textContent).not.toMatch(/paus(e|es) before/i);
+  });
+
+  it("lists a run's refused steps — the tool and the reason", async () => {
+    useRunStore.setState({ goals: [goal({ id: 'so:o9', approvalPolicy: 'consequential' })] });
+    serveRuns([
+      run({
+        id: 'refused',
+        goalId: 'so:o9',
+        refusals: [
+          { tool: 'Write', reason: 'Unattended run: has effects outside the app', at: NOW - 59_000 },
+          { tool: 'Bash', reason: 'Block dangerous commands: a recursive delete, and nobody was there to ask', at: NOW - 59_000 },
+        ],
+      }),
+    ]);
+    render(<Cockpit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'View runs' }));
+    const row = (await screen.findByText('2 steps refused')).closest('button')!;
+    fireEvent.click(row);
+    const list = await screen.findByRole('list', { name: 'Refused steps' });
+    expect(within(list).getByText('Write')).toBeTruthy();
+    expect(within(list).getByText(/has effects outside the app/)).toBeTruthy();
+    expect(within(list).getByText(/^Bash$/)).toBeTruthy();
+    expect(screen.getByText(/will not run later/)).toBeTruthy();
+  });
+
   it('shows pre-tracking history as context without inventing a success rate', async () => {
     useAssistantStore.setState({
       orders: [
@@ -241,6 +294,9 @@ describe('Cockpit — attended jobs', () => {
     render(<Cockpit />);
     expect(await screen.findByText('Open Browser and check my watchlist')).toBeTruthy();
     expect(screen.getByText(`Needs ${APP_NAME} open`)).toBeTruthy();
+    // It runs as a chat turn, so that is what it says — not 'consequential',
+    // which it carried while nothing enforced it.
+    expect(screen.getByText(approvalPolicyLabel('never'))).toBeTruthy();
     expect(screen.getByText('Weekdays at 9:00 AM')).toBeTruthy();
     expect(screen.getByText('Last ran 1h ago')).toBeTruthy();
     expect(screen.queryByText('server one')).toBeNull();

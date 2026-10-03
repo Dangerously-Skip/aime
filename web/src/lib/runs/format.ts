@@ -2,7 +2,7 @@
  * Presentation helpers for runs. Pure and unit-testable, so the Cockpit
  * component stays about layout rather than arithmetic.
  */
-import type { GoalSchedule, Run, RunStatus, RunSummary } from './types';
+import type { ApprovalPolicy, GoalSchedule, Run, RunStatus, RunSummary } from './types';
 import { describeTrigger, nextRunForTrigger, type Trigger } from '@/lib/schedule/schedule';
 import { canonicalInterval } from '@/lib/schedule/interval';
 
@@ -157,4 +157,39 @@ export function healthLine(summary: RunSummary, now: number): string {
 /** Newest-first ordering by start time. */
 export function byNewest(a: Run, b: Run): number {
   return b.startedAt - a.startedAt;
+}
+
+/**
+ * What a run under this policy may do, in the words the UI shows — one source,
+ * so the Cockpit, the order editor and Customize cannot describe the same
+ * enforcement three ways. Every claim here is enforced in the provider's
+ * `canUseTool` and proved by `claude-provider.background-runs.test.ts`.
+ *
+ * Says REFUSED, never "asks" or "pauses": an unattended run has nobody to ask
+ * and nothing that resumes it.
+ */
+export function approvalPolicyLabel(policy: ApprovalPolicy): string {
+  switch (policy) {
+    case 'never':
+      return 'Runs like a chat you are watching. Your Security settings apply.';
+    case 'consequential':
+      return (
+        'Reads and in-app actions only. Steps with effects outside the app, like writing ' +
+        'files, sending or running commands, are refused and listed on the run.'
+      );
+    case 'always':
+      return 'Reads only. Every other step is refused and listed on the run.';
+  }
+}
+
+/** Steps this run's gate refused — 0 for a record from before they were kept. */
+export function refusalCount(run: Pick<Run, 'refusals'>): number {
+  return run.refusals?.length ?? 0;
+}
+
+/** "1 step refused" / "3 steps refused", or null when none were. */
+export function refusalLabel(run: Pick<Run, 'refusals'>): string | null {
+  const n = refusalCount(run);
+  if (n === 0) return null;
+  return `${n} step${n === 1 ? '' : 's'} refused`;
 }

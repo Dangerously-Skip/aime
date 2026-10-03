@@ -10,6 +10,8 @@ import {
   statusTone,
   healthLine,
   byNewest,
+  approvalPolicyLabel,
+  refusalLabel,
 } from './format';
 import type { Run, RunSummary } from './types';
 
@@ -165,5 +167,31 @@ describe('describeGoalSchedule', () => {
     expect(describeGoalSchedule({ schedule: { cron: '0 9 * * 1-5' } })).toBe('Weekdays at 9:00 AM');
     expect(describeGoalSchedule({ schedule: { everySeconds: 5_400 } })).toBe('Every 90 minutes');
     expect(describeGoalSchedule({})).toBe('Manual');
+  });
+});
+
+describe('approvalPolicyLabel', () => {
+  // Said as enforced: an unattended run has nobody to ask and nothing resumes it.
+  it('says refused, never asks or pauses', () => {
+    for (const policy of ['always', 'consequential', 'never'] as const) {
+      expect(approvalPolicyLabel(policy)).not.toMatch(/paus|ask you|approval card/i);
+    }
+    expect(approvalPolicyLabel('consequential')).toMatch(/refused/);
+    expect(approvalPolicyLabel('always')).toMatch(/Reads only/);
+  });
+
+  it('tells the user the Security settings apply to a run that acts freely', () => {
+    expect(approvalPolicyLabel('never')).toMatch(/Security settings apply/);
+  });
+});
+
+describe('refusalLabel', () => {
+  it('counts refused steps, and is null for none — including old records', () => {
+    expect(refusalLabel({})).toBeNull();
+    expect(refusalLabel({ refusals: [] })).toBeNull();
+    expect(refusalLabel({ refusals: [{ tool: 'Write', reason: 'r', at: 1 }] })).toBe('1 step refused');
+    expect(
+      refusalLabel({ refusals: [{ tool: 'Write', reason: 'r', at: 1 }, { tool: 'Bash', reason: 'r', at: 2 }] }),
+    ).toBe('2 steps refused');
   });
 });

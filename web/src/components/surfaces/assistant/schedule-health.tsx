@@ -1,11 +1,11 @@
 "use client";
 
-import { AlertCircle, AlertTriangle, PauseCircle } from "lucide-react";
+import { AlertCircle, AlertTriangle, PauseCircle, ShieldAlert } from "lucide-react";
 import type { HealthItem } from "@/lib/schedule/health";
 
 /**
  * "Needs attention" — the top of the Activity tab when a schedule is failing,
- * paused by errors, unreadable, or has missed a run. Renders nothing when all
+ * paused by errors, unreadable, has missed a run, or had steps refused. Renders nothing when all
  * is well, so it costs a healthy workspace no space at all.
  */
 export function ScheduleHealth({
@@ -28,8 +28,15 @@ export function ScheduleHealth({
       </h3>
       <ul className="space-y-1.5">
         {items.map((item) => {
-          const Icon = item.kind === "paused" ? PauseCircle : item.kind === "overdue" ? AlertTriangle : AlertCircle;
-          const tone = item.kind === "overdue" ? "text-amber-600 dark:text-amber-400" : "text-red-600 dark:text-red-400";
+          const Icon =
+            item.kind === "paused" ? PauseCircle
+              : item.kind === "overdue" ? AlertTriangle
+              : item.kind === "refused" ? ShieldAlert
+              : AlertCircle;
+          const tone =
+            item.kind === "overdue" || item.kind === "refused"
+              ? "text-amber-600 dark:text-amber-400"
+              : "text-red-600 dark:text-red-400";
           const body = (
             <>
               <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone}`} />
