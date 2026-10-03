@@ -141,3 +141,69 @@ describe('POST /api/subagent — outcomes', () => {
     expect(status).toBe(499);
   });
 });
+
+/*
+ * Attended or not is the CALLER's statement, and absence is the safe side. The
+ * `subagent_` prefix cannot tell a click from a follow-up the app fired by
+ * itself, so nothing here may infer it. The enforcement behind each answer is
+ * proved against the real provider in claude-provider.background-runs.test.ts.
+ */
+describe('POST /api/subagent — attended is stated, and defaults to unattended', () => {
+  beforeEach(() => vi.stubEnv('ANTHROPIC_API_KEY', 'sk-env'));
+
+  it('absent ⇒ unattended: the consequential policy, and the named tools approve nothing', async () => {
+    await post({ task: 't', extraAllowedTools: ['mcp__github__create_pull_request'] });
+    expect(params().approvalPolicy).toBe('consequential');
+    expect(params().userApprovedTools).toBeUndefined();
+    // Still exposed — exposure is not approval.
+    expect(params().allowedTools).toContain('mcp__github__create_pull_request');
+  });
+
+  it('attended: false is the same as absent', async () => {
+    await post({ task: 't', attended: false, extraAllowedTools: ['mcp__github__create_pull_request'] });
+    expect(params().approvalPolicy).toBe('consequential');
+    expect(params().userApprovedTools).toBeUndefined();
+  });
+
+  it('attended: true ⇒ policy never, and the click approves exactly the tools it named', async () => {
+    await post({ task: 't', attended: true, extraAllowedTools: ['mcp__github__create_pull_request'] });
+    expect(params().approvalPolicy).toBe('never');
+    expect(params().userApprovedTools).toEqual(['mcp__github__create_pull_request']);
+  });
+
+  it.each([['"true"', 'true'], ['1', 1], ['null', null], ['an array', [true]]])(
+    'attended: %s is a 400, not a guess',
+    async (_label, attended) => {
+      const { status, json } = await post({ task: 't', attended });
+      expect(status).toBe(400);
+      expect(json.error).toMatch(/attended/);
+      expect(mocks.queryMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([['a string', 'Write'], ['an array with a non-string', ['Write', 3]]])(
+    'extraAllowedTools as %s is a 400',
+    async (_label, extraAllowedTools) => {
+      const { status } = await post({ task: 't', attended: true, extraAllowedTools });
+      expect(status).toBe(400);
+      expect(mocks.queryMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reports the refusals the gate made, on success and on failure', async () => {
+    mocks.queryMock.mockImplementation(async function* (p: QueryParams) {
+      p.onToolRefused?.({ tool: 'Write', reason: 'Unattended run: has effects outside the app', at: 1 });
+      yield { type: 'text', content: 'could not write' };
+    });
+    const ok = await post({ task: 't' });
+    expect(ok.json.refused).toEqual([{ tool: 'Write', reason: 'Unattended run: has effects outside the app', at: 1 }]);
+
+    mocks.queryMock.mockImplementation(async function* (p: QueryParams) {
+      p.onToolRefused?.({ tool: 'Bash', reason: 'Turned off in Settings', at: 2 });
+      yield { type: 'error', message: 'boom', code: 'unknown' };
+    });
+    const failed = await post({ task: 't' });
+    expect(failed.status).toBe(502);
+    expect(failed.json.refused).toEqual([{ tool: 'Bash', reason: 'Turned off in Settings', at: 2 }]);
+  });
+});

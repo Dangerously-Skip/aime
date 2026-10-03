@@ -1519,7 +1519,7 @@ describe('canUseTool interception', () => {
     expect((await canUseTool('Write', { file_path: '/x' }, { toolUseID: 't1' })).behavior).toBe('allow');
   });
 
-  it('background runs allow read-only bash but pause acting bash (C3)', async () => {
+  it('background runs allow read-only bash but refuse acting bash (C3)', async () => {
     const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42' });
     expect((await canUseTool('Bash', { command: 'git status' }, { toolUseID: 't1' })).behavior).toBe('allow');
     expect((await canUseTool('Bash', { command: 'rm -rf /tmp/x' }, { toolUseID: 't2' })).behavior).toBe('deny');
@@ -1543,7 +1543,7 @@ describe('canUseTool interception', () => {
     const relaxed = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42', approvalPolicy: 'never' });
     expect((await relaxed.canUseTool('Write', { file_path: '/x' }, { toolUseID: 't1' })).behavior).toBe('allow');
 
-    // 'always' on an interactive chatId: even in-app actions pause.
+    // 'always' on an interactive chatId: even in-app actions are refused.
     const strict = await captureOptions(new ClaudeProvider(), { chatId: 'regular-chat', approvalPolicy: 'always' });
     expect((await strict.canUseTool('TodoWrite', { todos: [] }, { toolUseID: 't2' })).behavior).toBe('deny');
     expect((await strict.canUseTool('Read', { file_path: '/x' }, { toolUseID: 't3' })).behavior).toBe('allow');

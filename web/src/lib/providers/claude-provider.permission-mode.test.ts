@@ -158,10 +158,20 @@ describe('every tool call reaches canUseTool (the PreToolUse hook)', () => {
     expect(out.hookSpecificOutput).toMatchObject({ hookEventName: 'PreToolUse', permissionDecision: 'ask' });
   });
 
-  it('is not installed on background runs, whose approval policy has never actually fired', async () => {
-    const { options } = await turn({ surfaceId: 'code', chatId: 'subagent_1' });
-    expect(options.hooks).toBeUndefined();
-  });
+  // It was interactive-only, so in background runs the toggles, connector
+  // blocks and the 'consequential' policy never heard of an auto-approved call.
+  it.each(['subagent_1', 'standing-order-1-2', 'hb-1', 'widget-1'])(
+    'is installed on background runs too (%s)',
+    async (chatId) => {
+      const { options } = await turn({ surfaceId: 'code', chatId });
+      const hooks = options.hooks as { PreToolUse: Array<{ hooks: Array<(...a: unknown[]) => Promise<unknown>> }> };
+      expect(hooks.PreToolUse).toHaveLength(1);
+      const out = (await hooks.PreToolUse[0].hooks[0]({ tool_name: 'Write', tool_input: {} }, 'x', {})) as {
+        hookSpecificOutput: { permissionDecision: string };
+      };
+      expect(out.hookSpecificOutput.permissionDecision).toBe('ask');
+    },
+  );
 });
 
 describe('Ask permissions — "asks before every file edit and every command that could change something"', () => {

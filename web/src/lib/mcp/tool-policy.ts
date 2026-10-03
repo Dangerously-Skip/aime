@@ -5,9 +5,11 @@
  * delete, send and publish on your behalf: interactive surfaces run with
  * `bypassPermissions` and an approval policy of 'never' (the human is watching
  * the stream), so a freshly added server's destructive tools execute with no
- * prompt. Unattended runs were already covered — they infer the 'consequential'
- * policy, and C3's classifier fails closed on unknown names — but an interactive
- * session had nothing between "connected" and "ran".
+ * prompt. Unattended runs were believed covered — they carry the 'consequential'
+ * policy, and C3's classifier fails closed on unknown names — but until the
+ * PreToolUse hook went on for background runs too, the CLI never asked about an
+ * auto-approved call there, so neither half of this file reached them. An
+ * interactive session had nothing between "connected" and "ran".
  *
  * WHERE THE GATE ACTUALLY LIVES — read this before touching the file.
  *

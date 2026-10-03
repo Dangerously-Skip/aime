@@ -82,6 +82,9 @@ export async function dispatchCanvasToolCall(
       ...(await subagentRoute(surfaceId)),
       cwd: cwd || undefined,
       extraAllowedTools,
+      // A button the user clicked: attended, and the click approves the tool
+      // the button names (and only that one). See /api/subagent.
+      attended: true,
     }),
   });
 
@@ -117,6 +120,10 @@ export async function refreshCanvasDoc(
       surfaceId,
       ...(await subagentRoute(surfaceId)),
       cwd: cwd || undefined,
+      // NOT attended, deliberately: the click was for the writeback above. This
+      // re-runs a prompt the canvas author wrote and the user never saw, so it
+      // reads and re-renders (both allowed unattended) and may do nothing else.
+      // Omitting `attended` is how a caller says so.
       // Refresh prompts often need MCP tools the surface doesn't expose
       // (e.g. Atlassian + canvas from chat). We don't know which exactly,
       // so request the union of canvas + common MCP-prefixed read tools.

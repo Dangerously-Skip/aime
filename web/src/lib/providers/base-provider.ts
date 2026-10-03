@@ -213,10 +213,27 @@ export interface QueryParams {
    */
   browserToolsAvailable?: boolean;
   /**
-   * Approval policy for this run (P6/C3). Unset ⇒ the provider infers:
-   * unattended runs gate consequential actions, interactive sessions don't.
+   * Approval policy for this run (P6/C3), enforced in `canUseTool` for every
+   * run. Background callers STATE it — a standing order 'consequential', a
+   * widget 'never', a subagent whatever its request says it is. Unset ⇒ a
+   * fail-safe inference: a background chatId prefix (`standing-order-`,
+   * `subagent_`, `hb-`, `widget-`) gets 'consequential', anything else 'never'.
    */
   approvalPolicy?: import('../runs/types').ApprovalPolicy;
+  /**
+   * Full tool names the user's own action has already approved for this run —
+   * the tool an attended subagent was started to call ("Create PR", a canvas
+   * button). It answers the connector gate's `always_ask` question, which this
+   * run has no client to put to anyone. Nothing else: a stored denial, a
+   * security toggle and a non-'never' approval policy still refuse it.
+   */
+  userApprovedTools?: string[];
+  /**
+   * Told of every tool call this run's gate refuses, with a short user-facing
+   * reason, so a background caller can record it on its Run. The model is told
+   * too; this is for the person who was not watching.
+   */
+  onToolRefused?: (refusal: import('../runs/types').RunRefusal) => void;
   /**
    * The permission mode the user picked in Code's composer. Honoured for the
    * Code surface only — ignored anywhere else, so no caller can choose its own

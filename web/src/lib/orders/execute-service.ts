@@ -9,14 +9,17 @@
  * snapshot-skip; the completion check uses the same verifier as everything
  * else (fail closed: an unreachable verifier keeps the order running).
  *
- * The chatId keeps the `standing-order-` prefix, so C3's approval policy
- * gates consequential tools exactly as it did for renderer-driven runs.
+ * Runs under the 'consequential' approval policy, stated here rather than left
+ * to the provider's chatId inference: reads and in-app actions go ahead, and
+ * anything with effects outside the app is REFUSED — nobody is there to ask,
+ * and nothing queues it for later. Every refusal is recorded on the Run, which
+ * is how the Cockpit and the Activity tab can say what did not happen.
  */
 import { hashSnapshot } from '@/lib/standing-order-engine';
-import { startRun, finishRun, costFromStreamUsage } from '@/lib/runs/runs';
+import { startRun, finishRun, costFromStreamUsage, collectRefusals } from '@/lib/runs/runs';
 import { appendRun } from '@/lib/runs/run-log';
 import { verifyRunAgainstGoal } from '@/lib/runs/verify-service';
-import { standingOrderToGoal } from '@/lib/runs/standing-order-goal';
+import { standingOrderToGoal, STANDING_ORDER_POLICY } from '@/lib/runs/standing-order-goal';
 import type { Run } from '@/lib/runs/types';
 import type { InboxEntry, ManifestOrder } from './manifest';
 
@@ -58,9 +61,10 @@ export async function executeOrderServerSide(order: ManifestOrder): Promise<Orde
     surfaceId: 'assistant',
     model: 'sonnet',
   });
+  const refused = collectRefusals();
 
   const fail = async (error: string): Promise<OrderExecutionResult> => {
-    run = finishRun(run, { now: Date.now(), status: 'failed', error });
+    run = finishRun(run, { now: Date.now(), status: 'failed', error, refusals: refused.list });
     await appendRun(run).catch(() => false);
 
     const errorCount = order.errorCount + 1;
@@ -101,6 +105,8 @@ export async function executeOrderServerSide(order: ManifestOrder): Promise<Orde
       surfaceId: 'assistant',
       model: 'sonnet',
       apiKey,
+      approvalPolicy: STANDING_ORDER_POLICY,
+      onToolRefused: refused.record,
     })) {
       if (chunk.type === 'text') fullText += (chunk.content as string) ?? '';
       else if (chunk.type === 'done' && chunk.usage) {
@@ -114,7 +120,7 @@ export async function executeOrderServerSide(order: ManifestOrder): Promise<Orde
   if (!fullText.trim()) return fail('Empty response from agent');
 
   const cost = costFromStreamUsage(usage);
-  run = finishRun(run, { now: Date.now(), status: 'succeeded', cost });
+  run = finishRun(run, { now: Date.now(), status: 'succeeded', cost, refusals: refused.list });
   await appendRun(run).catch(() => false);
 
   // ── Snapshot skip: unchanged output on a conditional order → no card ────

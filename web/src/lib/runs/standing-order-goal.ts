@@ -9,8 +9,16 @@
  *
  * Pure — no store access — so it can be tested and reused server-side.
  */
-import type { Goal } from './types';
+import type { ApprovalPolicy, Goal } from './types';
 import { parseIntervalMs } from '@/lib/schedule/interval';
+
+/**
+ * The policy each kind of schedule RUNS under — read by the executor that
+ * enforces it and by every screen that describes it, so the two cannot drift.
+ * (They had: attended jobs were labelled 'consequential' and ran as chats.)
+ */
+export const STANDING_ORDER_POLICY: ApprovalPolicy = 'consequential';
+export const ATTENDED_JOB_POLICY: ApprovalPolicy = 'never';
 
 /** The slice of a StandingOrder this adapter needs. */
 export interface StandingOrderLike {
@@ -73,9 +81,12 @@ export function standingOrderToGoal(order: StandingOrderLike): Goal {
      * to decide completion, never to grade the run.
      */
     constraints: order.condition,
-    // Standing orders predate approval policy. 'consequential' is the safe
-    // default: unattended work still pauses before side effects.
-    approvalPolicy: 'consequential',
+    // Standing orders run on the server with nobody watching, so they carry
+    // 'consequential' — and the executor passes THIS value to the provider, so
+    // the label and the enforcement cannot drift apart. Reads and in-app
+    // actions run; anything with effects outside the app is REFUSED and
+    // recorded on the run. Not paused: there is nothing to resume it.
+    approvalPolicy: STANDING_ORDER_POLICY,
     schedule,
     // Only an active order is live; paused/completed/expired must not appear to
     // be scheduled.
@@ -116,7 +127,14 @@ export function attendedJobToGoal(job: AttendedJobLike): Goal {
     id: `job:${job.id}`,
     sourceId: job.id,
     objective: job.prompt,
-    approvalPolicy: 'consequential',
+    /*
+     * 'never', because that is what runs. An attended job fires as an ordinary
+     * conversation turn in the renderer (`job-conversation.ts`), and a turn on
+     * the chat route gets the interactive policy. This said 'consequential' —
+     * a promise of refusals nothing enforced. The Security settings and the
+     * user's connector blocks still apply, as they do to any chat.
+     */
+    approvalPolicy: ATTENDED_JOB_POLICY,
     schedule:
       job.trigger.type === 'cron' && job.trigger.expression
         ? { cron: job.trigger.expression }

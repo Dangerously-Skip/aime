@@ -201,10 +201,28 @@ mechanisms are, and both fail the build rather than asking you to remember:
    passed, because the tests called `canUseTool` directly. What makes it run is
    a `PreToolUse` hook in `claude-provider.ts` answering `ask` for every call,
    and `claude-provider.real-sdk.test.ts` proves it against the REAL CLI
-   binary. That hook is on for interactive turns only: background runs
-   (subagents, standing orders, widgets) still go through an approval policy
-   that has never actually been exercised, so do not assume the toggles reach
-   them.
+   binary. That hook is on for EVERY run, background included — it was
+   interactive-only until 2026-10, which left the toggles, connector blocks and
+   the approval policy inert in every subagent, standing order and widget.
+
+   **Background runs: who decides, and what they may do.** Each caller STATES
+   its approval policy (`QueryParams.approvalPolicy`); the chatId prefix
+   (`standing-order-`/`subagent_`/`hb-`/`widget-`) is only a fail-safe default
+   to `consequential` for a caller that forgets, and never relaxes one.
+   Standing orders and heartbeats run `consequential`: reads and in-app actions
+   run, anything with effects outside the app (Write, non-read Bash, MCP
+   writes, `MailDraft`) is REFUSED — not paused, there is no resume — and
+   recorded on the Run (`Run.refusals`, shown in Cockpit/Activity run rows and
+   as a "Needs attention" item). Widgets run `never` with the toggles.
+   `/api/subagent` takes `attended: true` (strict boolean, absent ⇒
+   unattended) from callers a click started — Create PR, a canvas button —
+   which gets `never`, and the tools that click named in `extraAllowedTools`
+   answer the connector "ask first" question (`userApprovedTools`, exact name,
+   never for money servers or a stored denial). Canvas refresh is unattended on
+   purpose. Where a gate would need to ask and no client is attached, it
+   refuses, in every kind of run. Proved per run kind through the real callers
+   in `claude-provider.background-runs.test.ts`, and against the real CLI in
+   `claude-provider.real-sdk.test.ts`.
 2. **`npm run test:mutation`** (Stryker, scoped to `lib/security/**`,
    `path-containment.ts`, `tool-policy.ts`; weekly in CI, never per-push). A green
    suite says the code ran; only this says the assertions would notice if it
