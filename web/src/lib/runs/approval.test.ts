@@ -35,6 +35,52 @@ describe('classifyToolCall — built-ins', () => {
     expect(classifyToolCall('browser_click')).toBe('app');
     expect(classifyToolCall('browser_inspect')).toBe('app');
   });
+
+  /*
+   * The SDK's own plumbing. As unknowns, an unattended run could not load a
+   * deferred connector tool's schema, so the gate refused the run's first step.
+   */
+  it('the SDK plumbing is judged by what it does', () => {
+    for (const t of ['ToolSearch', 'ListMcpResourcesTool', 'ReadMcpResourceTool', 'BashOutput']) {
+      expect(classifyToolCall(t), t).toBe('read');
+    }
+    for (const t of ['Agent', 'ExitPlanMode']) expect(classifyToolCall(t), t).toBe('app');
+  });
+
+  // A connector cannot borrow the SDK's names to get waved through.
+  it('the plumbing classes apply to the bare SDK names only', () => {
+    expect(classifyToolCall('mcp__evil__Agent')).toBe('unknown');
+    expect(classifyToolCall('mcp__evil__ToolSearch')).not.toBe('read');
+  });
+});
+
+describe("classifyToolCall — the app's own in-process tools", () => {
+  /*
+   * Noun-named, so the verb rules got them wrong both ways: MailSearch and
+   * CalendarEvents were unknowns — the Morning Briefing template, refused
+   * everything it reads — and WidgetCreate read as a world-side create.
+   */
+  it('reads what reads and acts in-app where it acts in-app', () => {
+    for (const t of ['MailSearch', 'MailRead', 'CalendarEvents', 'ContactsSearch', 'ExcelRead', 'FetchUrl', 'SearchWeb']) {
+      expect(classifyToolCall(`mcp__aime__${t}`), t).toBe('read');
+    }
+    expect(classifyToolCall('mcp__aime__WidgetCreate')).toBe('app');
+    expect(classifyToolCall('mcp__aime__StandingOrderCreate')).toBe('app');
+    expect(classifyToolCall('mcp__aime__RequestConnector')).toBe('app');
+  });
+
+  it('keeps the ones that leave the app gated', () => {
+    // A draft is not a send, but it lands in a real mailbox from a run that
+    // may have read a prompt injection.
+    for (const t of ['MailDraft', 'ExcelWrite', 'ExcelEdit', 'DocumentCreate', 'CreateImage', 'SkillCreate']) {
+      expect(classifyToolCall(`mcp__aime__${t}`), t).toBe('consequential');
+    }
+  });
+
+  it('vouches for its own server only — a connector named the same is a connector', () => {
+    expect(classifyToolCall('mcp__acme__MailRead')).toBe('unknown');
+    expect(classifyToolCall('mcp__acme__CalendarEvents')).toBe('unknown');
+  });
 });
 
 describe('classifyToolCall — MCP tools by verb', () => {
@@ -133,7 +179,7 @@ describe('evaluateApproval', () => {
     }
   });
 
-  it("'consequential' allows reads and app actions, pauses world effects", () => {
+  it("'consequential' allows reads and app actions, refuses world effects", () => {
     expect(evaluateApproval('consequential', 'Read').allow).toBe(true);
     expect(evaluateApproval('consequential', 'gmail__list_messages').allow).toBe(true);
     expect(evaluateApproval('consequential', 'TodoWrite').allow).toBe(true);
@@ -161,13 +207,21 @@ describe('evaluateApproval', () => {
   });
 
   // The old deny message claimed "an approval card has been created" — nothing
-  // ever created one. The replacement must not promise machinery that
-  // doesn't exist.
+  // ever created one — and its successor told the model the user could "set
+  // its approval policy", a setting that does not exist. Neither may return.
   it('the deny reason is honest and actionable', () => {
     const out = evaluateApproval('consequential', 'gmail__send_email');
     expect(out.reason).toMatch(/unattended/i);
-    expect(out.reason).toMatch(/interactively|approval policy/i);
-    expect(out.reason).not.toMatch(/card has been created/i);
+    expect(out.reason).toMatch(/refused/i);
+    expect(out.reason).toMatch(/will not run later/i);
+    expect(out.reason).not.toMatch(/card has been created|approval policy|paus/i);
+  });
+
+  it('a refusal carries a short label for the run log', () => {
+    expect(evaluateApproval('consequential', 'Write').summary).toBe('Unattended run: has effects outside the app');
+    expect(evaluateApproval('consequential', 'mcp__x__frob').summary).toMatch(/could not be classified/);
+    expect(evaluateApproval('always', 'TodoWrite').summary).toMatch(/may only read/);
+    expect(evaluateApproval('consequential', 'Read').summary).toBeUndefined();
   });
 });
 
