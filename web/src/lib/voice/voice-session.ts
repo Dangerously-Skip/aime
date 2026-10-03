@@ -22,6 +22,7 @@
  * Deliberately free of React and of Electron so it can be driven directly from
  * tests.
  */
+import { detectSpokenLanguage, type WhisperInternals } from '@/lib/whisper/detect-language';
 
 /** Where the single session is in its cycle. */
 export type VoiceStatus = 'idle' | 'recording' | 'transcribing';
@@ -170,16 +171,25 @@ function deliverTranscript(text: string): void {
 
 // ── Whisper ────────────────────────────────────────────────────────────────
 // Lazily loaded and shared, because the model is tens of megabytes.
+//
+// Its weights live in the renderer's Cache Storage (transformers.js's browser
+// cache, key 'transformers-cache'), which is in the Electron profile under the
+// user-data dir — not in the app bundle — so an app update does not delete
+// them. (It is per-origin like localStorage, which is why packaged builds keep
+// a fixed port; see main-web.js.) That is why this side, unlike the server
+// extractor (`getModelCacheDir` in `lib/app-paths.ts`), leaves the library's
+// cache settings alone; `extractors/audio.test.ts` pins the key.
 
 /**
  * The slice of the transformers.js ASR pipeline this module uses. The real
  * pipeline is ASSIGNED to it below (not cast), so a library upgrade that changes
  * the call shape fails `tsc` here instead of failing a dictation at runtime.
  */
-type Transcriber = (
+type Transcriber = ((
   audio: Float32Array,
-  options?: { language?: string; task?: string },
-) => Promise<{ text: string }>;
+  options?: { language?: string; task?: 'transcribe' },
+) => Promise<{ text: string }>) &
+  WhisperInternals;
 
 let pipelinePromise: Promise<Transcriber> | null = null;
 let pipelineInstance: Transcriber | null = null;
@@ -246,9 +256,14 @@ let chunks: Blob[] = [];
  */
 let starting = false;
 let stopRequestedWhileStarting = false;
-let language = 'en';
+/**
+ * A Whisper language code to force, or null to detect it from the recording.
+ * The default was 'en', and Whisper told "this is English" about French speech
+ * does not fail — it hands back a fluent English TRANSLATION.
+ */
+let language: string | null = null;
 
-export function setVoiceLanguage(lang: string): void {
+export function setVoiceLanguage(lang: string | null): void {
   language = lang;
 }
 
@@ -350,7 +365,10 @@ async function transcribe(blob: Blob): Promise<void> {
     // Under half a second at 16 kHz: a stray keypress, not speech.
     if (float32.length < 8000) return;
 
-    const result = await pipe(float32, { language, task: 'transcribe' });
+    const spoken = language ?? (await detectSpokenLanguage(pipe, float32));
+    // No language (detection impossible) means none passed: the library then
+    // assumes English, and an English-only model would reject `task` outright.
+    const result = await pipe(float32, spoken ? { language: spoken, task: 'transcribe' } : {});
     const text = result.text?.trim();
     if (!text) return;
 
@@ -398,7 +416,7 @@ export function resetVoiceSession(): void {
   stopRequestedWhileStarting = false;
   sinks.length = 0;
   targetScope = null;
-  language = 'en';
+  language = null;
   pipelinePromise = null;
   pipelineInstance = null;
   loadError = null;

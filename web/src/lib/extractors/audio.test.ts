@@ -1,21 +1,37 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { Tensor } from '@huggingface/transformers';
 import { decodeWav, extractAudio, WHISPER_MODEL } from './audio';
 
 /**
  * Server-side Whisper transcription (attachments, and video via ffmpeg).
  *
- * Real: WAV parsing, the call into the pipeline, the error path — and, in the
- * cache block, the actual transformers.js `env`. Faked: the model itself. A
- * real Whisper run downloads ~950 MB on first use, so it is not a unit test;
- * the upgrade to transformers 4.x was smoke-tested against real speech (see the
- * commit message).
+ * Real: WAV parsing, the call into the pipeline, the error path, the cache
+ * move (real files in a tmpdir) — and the actual transformers.js `env`, which
+ * the mock below passes through so `env.cacheDir` is the library's own. Faked:
+ * the model itself, and the cache-presence check that decides whether it must
+ * download. A real Whisper run downloads ~950 MB on first use, so it is not a
+ * unit test: `audio.real-model.test.ts` is, opt-in.
  */
 
 const transcribe = vi.fn(async (_audio: Float32Array, _opts?: unknown) => ({ text: '  hello there  ' }));
-const pipeline = vi.fn(async (..._args: unknown[]) => transcribe);
-vi.mock('@huggingface/transformers', () => ({ pipeline: (...args: unknown[]) => pipeline(...args) }));
+const pipeline = vi.fn(async (..._args: unknown[]): Promise<unknown> => transcribe);
+const isPipelineCached = vi.fn(async (..._args: unknown[]) => true);
+vi.mock('@huggingface/transformers', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@huggingface/transformers')>();
+  return {
+    env: real.env,
+    Tensor: real.Tensor,
+    pipeline: (...args: unknown[]) => pipeline(...args),
+    ModelRegistry: { is_pipeline_cached: (...args: unknown[]) => isPipelineCached(...args) },
+  };
+});
+
+/** Stand-ins for ~/.aime/models/transformers and the in-package `.cache/`. */
+const dirs = vi.hoisted(() => ({ root: '', appCache: '', legacyCache: '' }));
+vi.mock('@/lib/app-paths', () => ({ getModelCacheDir: () => dirs.appCache }));
 
 /** A canonical 44-byte-header PCM16 WAV, from raw int16 sample values. */
 function pcm16Wav(samples: number[], sampleRate = 16000): Buffer {
@@ -114,24 +130,61 @@ async function samplesSentToWhisper(buffer: Buffer): Promise<Float32Array> {
 
 const frames = (n: number, ...channels: number[]) => Array.from({ length: n }, () => channels);
 
-beforeEach(() => {
-  globalThis.__whisperPipeline = undefined;
-  pipeline.mockClear();
+const realEnv = vi.hoisted(() => ({ cacheDir: undefined as string | null | undefined }));
+
+beforeEach(async () => {
+  globalThis.__whisper = undefined;
+  pipeline.mockReset();
+  pipeline.mockImplementation(async () => transcribe);
   transcribe.mockClear();
+  isPipelineCached.mockReset();
+  isPipelineCached.mockResolvedValue(true);
+
+  dirs.root = fs.mkdtempSync(path.join(os.tmpdir(), 'aime-audio-test-'));
+  dirs.appCache = path.join(dirs.root, 'home', '.aime', 'models', 'transformers');
+  dirs.legacyCache = path.join(dirs.root, 'pkg', '.cache');
+  // The library's default, pointed at a tmpdir: a real cache in the shared
+  // node_modules must never be what a unit test moves.
+  const { env } = await vi.importActual<typeof import('@huggingface/transformers')>('@huggingface/transformers');
+  realEnv.cacheDir ??= env.cacheDir;
+  env.cacheDir = dirs.legacyCache;
 });
 
 afterEach(() => {
-  globalThis.__whisperPipeline = undefined;
+  globalThis.__whisper = undefined;
+  fs.rmSync(dirs.root, { recursive: true, force: true });
 });
+
+afterAll(async () => {
+  const { env } = await vi.importActual<typeof import('@huggingface/transformers')>('@huggingface/transformers');
+  env.cacheDir = realEnv.cacheDir ?? null;
+});
+
+/** A promise settled from outside, for a download that is still running. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 describe('extractAudio', () => {
   it('transcribes a 16 kHz WAV: samples in, trimmed text out', async () => {
     const result = await extractAudio(pcm16Wav([0, 16384, -32768, 8192]), 'note.wav');
 
     expect(result).toEqual({ text: 'hello there', metadata: { type: 'audio', format: 'wav' } });
-    expect(pipeline).toHaveBeenCalledWith('automatic-speech-recognition', WHISPER_MODEL, { dtype: 'fp32' });
+    expect(pipeline).toHaveBeenCalledWith(
+      'automatic-speech-recognition',
+      WHISPER_MODEL,
+      expect.objectContaining({ dtype: 'fp32' }),
+    );
     const [audio, opts] = transcribe.mock.calls[0];
     expect(Array.from(audio)).toEqual([0, 0.5, -1, 0.25]);
+    // A pipeline that cannot detect (this fake has no model internals) is given
+    // no language — not a guessed 'en'.
     expect(opts).toEqual({ chunk_length_s: 30, stride_length_s: 5, return_timestamps: false });
   });
 
@@ -142,15 +195,175 @@ describe('extractAudio', () => {
     expect(transcribe).toHaveBeenCalledTimes(2);
   });
 
+  it('two attachments in the same moment start ONE load', async () => {
+    const [a, b] = await Promise.all([
+      extractAudio(pcm16Wav([100]), 'a.wav'),
+      extractAudio(pcm16Wav([200]), 'b.wav'),
+    ]);
+    expect([a.text, b.text]).toEqual(['hello there', 'hello there']);
+    expect(pipeline).toHaveBeenCalledTimes(1);
+  });
+
   it('a failed model load comes back as text, not a thrown error, and is retried next time', async () => {
-    pipeline.mockRejectedValueOnce(new Error('fetch failed'));
+    pipeline.mockRejectedValueOnce(new Error('onnxruntime could not create a session'));
     const failed = await extractAudio(pcm16Wav([100]), 'a.wav');
-    expect(failed.text).toMatch(/^\[Audio transcription failed: fetch failed\./);
-    expect(failed.metadata).toEqual({ type: 'audio', error: 'fetch failed' });
+    expect(failed.text).toBe('[Audio transcription failed: onnxruntime could not create a session]');
+    expect(failed.metadata).toEqual({ type: 'audio', error: 'onnxruntime could not create a session' });
 
     const retried = await extractAudio(pcm16Wav([100]), 'a.wav');
     expect(retried.text).toBe('hello there');
     expect(pipeline).toHaveBeenCalledTimes(2);
+  });
+
+  it('an undecodable file says what failed — not that a model is downloading', async () => {
+    const result = await extractAudio(Buffer.from('RIFF....WAVEjunk'), 'x.wav');
+    expect(result.text).toMatch(/^\[Audio transcription failed: /);
+    expect(result.text).not.toMatch(/950|download/i);
+  });
+});
+
+/**
+ * Left to transformers.js, Whisper is told every file is English, and
+ * translates whatever is not. The detected language is what goes in now.
+ */
+describe('spoken language', () => {
+  /** The fake transcriber, given the model internals detection reads. */
+  function multilingual(winner: '<|en|>' | '<|fr|>' | '<|de|>') {
+    const langToId = { '<|en|>': 1, '<|fr|>': 2, '<|de|>': 3 };
+    const logits = new Float32Array(8).fill(-1);
+    logits[langToId[winner]] = 5;
+    return Object.assign(transcribe, {
+      processor: vi.fn(async () => ({ input_features: 'features' })),
+      model: Object.assign(
+        vi.fn(async () => ({ logits: new Tensor('float32', logits, [1, 1, 8]) })),
+        { generation_config: { decoder_start_token_id: 0, is_multilingual: true, lang_to_id: langToId } },
+      ),
+    });
+  }
+
+  it('transcribes in the detected language, and reports it', async () => {
+    pipeline.mockImplementation(async () => multilingual('<|fr|>'));
+    const result = await extractAudio(pcm16Wav([0, 100, 200]), 'note.wav');
+
+    expect(transcribe.mock.calls[0][1]).toEqual({
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      return_timestamps: false,
+      language: 'fr',
+      task: 'transcribe',
+    });
+    expect(result.metadata).toEqual({ type: 'audio', format: 'wav', language: 'fr' });
+  });
+
+  it('detects per file: the next attachment can be another language', async () => {
+    const fake = multilingual('<|de|>');
+    pipeline.mockImplementation(async () => fake);
+    await extractAudio(pcm16Wav([1]), 'a.wav');
+    const en = new Float32Array(8).fill(-1);
+    en[1] = 5;
+    fake.model.mockResolvedValueOnce({ logits: new Tensor('float32', en, [1, 1, 8]) });
+    await extractAudio(pcm16Wav([2]), 'b.wav');
+
+    expect(transcribe.mock.calls.map(([, opts]) => (opts as { language?: string }).language)).toEqual(['de', 'en']);
+  });
+});
+
+/**
+ * Where the weights live. The library default — `.cache/` inside the installed
+ * package — is inside the app bundle when packaged, so an update deleted
+ * ~950 MB of weights and the next attachment downloaded them again unseen.
+ */
+describe('model cache: the app data dir, not node_modules', () => {
+  it('points transformers.js at the app cache before the pipeline loads', async () => {
+    const { env } = await vi.importActual<typeof import('@huggingface/transformers')>('@huggingface/transformers');
+    let cacheDirAtLoad: string | null = null;
+    pipeline.mockImplementation(async () => {
+      cacheDirAtLoad = env.cacheDir;
+      return transcribe;
+    });
+
+    await extractAudio(pcm16Wav([1]), 'a.wav');
+    expect(cacheDirAtLoad).toBe(dirs.appCache);
+  });
+
+  it('moves a model the old in-package cache holds instead of downloading it again', async () => {
+    const legacyModel = path.join(dirs.legacyCache, WHISPER_MODEL);
+    fs.mkdirSync(path.join(legacyModel, 'onnx'), { recursive: true });
+    fs.writeFileSync(path.join(legacyModel, 'config.json'), '{}');
+    fs.writeFileSync(path.join(legacyModel, 'onnx', 'encoder_model.onnx'), 'weights');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    let presentAtLoad = false;
+    pipeline.mockImplementation(async () => {
+      presentAtLoad = fs.existsSync(path.join(dirs.appCache, WHISPER_MODEL, 'onnx', 'encoder_model.onnx'));
+      return transcribe;
+    });
+    const result = await extractAudio(pcm16Wav([1]), 'a.wav');
+
+    expect(result.text).toBe('hello there');
+    expect(presentAtLoad).toBe(true);
+    expect(fs.existsSync(legacyModel)).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Moved the cached model'));
+    log.mockRestore();
+  });
+});
+
+/**
+ * First use. The chat route gives extraction 30 seconds; a ~950 MB download
+ * does not fit, so waiting for it only ever produced "Extraction timed out"
+ * while the download carried on with nobody told.
+ */
+describe('first use: the model is downloading', () => {
+  it('says so at once — size and destination, ONCE — then transcribes when it lands', async () => {
+    isPipelineCached.mockResolvedValue(false);
+    const download = deferred<typeof transcribe>();
+    let onProgress: ((info: { status: string; progress: number }) => void) | undefined;
+    pipeline.mockImplementation(async (...args: unknown[]) => {
+      onProgress = (args[2] as { progress_callback: typeof onProgress }).progress_callback;
+      return download.promise;
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const first = await extractAudio(pcm16Wav([1]), 'a.wav');
+    expect(first.metadata).toEqual({ type: 'audio', error: 'model-downloading' });
+    expect(first.text).toContain('~950 MB');
+    expect(first.text).toContain(dirs.appCache);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`~950 MB.*${dirs.appCache}`)));
+
+    onProgress?.({ status: 'progress_total', progress: 42.7 });
+    const second = await extractAudio(pcm16Wav([1]), 'a.wav');
+    expect(second.metadata).toEqual({ type: 'audio', error: 'model-downloading' });
+    expect(second.text).toContain('still downloading (42% done)');
+    expect(second.text).not.toContain('950');
+    expect(second.text).not.toContain(dirs.appCache);
+
+    download.resolve(transcribe);
+    await vi.waitFor(() => expect(globalThis.__whisper?.transcriber).toBeDefined());
+    const third = await extractAudio(pcm16Wav([1]), 'a.wav');
+    expect(third.text).toBe('hello there');
+    expect(pipeline).toHaveBeenCalledTimes(1);
+    log.mockRestore();
+  });
+
+  it('a failed download is reported to the next request, which starts it again', async () => {
+    isPipelineCached.mockResolvedValue(false);
+    const download = deferred<typeof transcribe>();
+    pipeline.mockImplementationOnce(async () => download.promise);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await extractAudio(pcm16Wav([1]), 'a.wav');
+    download.reject(new Error('fetch failed'));
+    await vi.waitFor(() => expect(globalThis.__whisper?.started).toBeUndefined());
+
+    const pending = deferred<typeof transcribe>();
+    pipeline.mockImplementationOnce(async () => pending.promise);
+    const next = await extractAudio(pcm16Wav([1]), 'a.wav');
+    expect(next.text).toContain('The last download failed (fetch failed); trying again.');
+    expect(next.text).toContain(dirs.appCache);
+    expect(pipeline).toHaveBeenCalledTimes(2);
+    log.mockRestore();
+    warn.mockRestore();
   });
 });
 
@@ -242,23 +455,34 @@ describe('WAV decoding: whatever the file, Whisper gets 16 kHz mono', () => {
 });
 
 /**
- * Where the weights live. Both are library defaults rather than settings of
- * ours, so an upgrade can move them silently — and a moved cache is a fresh
- * ~950 MB (server) / ~80 MB (voice input) download for every existing user, or
- * a dead feature for one who is offline. 3.8.1 and 4.3.0 agree on both values;
- * this pins them so the next major has to be a decision.
+ * The library defaults this code still depends on. Neither is where the server
+ * keeps weights any more, but each matters: the server default is where an
+ * existing install's model is MOVED FROM (a library that changed it would
+ * strand ~950 MB and download it again), and the renderer's Cache API key is
+ * where voice input's ~80 MB lives — in the Electron profile, not the app
+ * bundle, so an update never touched it and it is deliberately left alone.
+ * 3.8.1 and 4.3.0 agree on both; this pins them so the next major is a decision.
  */
-describe('transformers.js model cache location (real library, not the mock)', () => {
-  it('server side: <package>/.cache/, where 3.x put it', async () => {
-    const { env } = await vi.importActual<typeof import('@huggingface/transformers')>('@huggingface/transformers');
+describe('transformers.js defaults this depends on (real library, not the mock)', () => {
+  it('server side: the default is <package>/.cache/ — the migration source', () => {
     // realpath: Node resolves ESM through symlinks, and worktrees symlink node_modules.
     const pkgDir = fs.realpathSync(path.join(__dirname, '..', '..', '..', 'node_modules', '@huggingface', 'transformers'));
-    expect(path.resolve(env.cacheDir ?? '')).toBe(path.join(pkgDir, '.cache'));
+    expect(path.resolve(realEnv.cacheDir ?? '')).toBe(path.join(pkgDir, '.cache'));
+  });
+
+  it('server side: the filesystem cache is on, and the browser one is not', async () => {
+    const { env } = await vi.importActual<typeof import('@huggingface/transformers')>('@huggingface/transformers');
     expect(env.useFSCache).toBe(true);
+    expect(env.useBrowserCache).toBe(false);
   });
 
   it("renderer: the Cache API store voice input has always used ('transformers-cache')", async () => {
     const { env } = await vi.importActual<typeof import('@huggingface/transformers')>('@huggingface/transformers');
     expect(env.cacheKey).toBe('transformers-cache');
+  });
+
+  it('renderer: voice input leaves the cache settings alone', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'voice', 'voice-session.ts'), 'utf-8');
+    expect(source).not.toMatch(/\benv\s*\.\s*(cacheDir|cacheKey|useBrowserCache|useFSCache)\b/);
   });
 });

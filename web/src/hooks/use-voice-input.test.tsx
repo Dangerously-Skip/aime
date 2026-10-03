@@ -33,8 +33,13 @@ import {
  * and the Whisper model — see __fixtures__/fake-media.
  */
 
+/** The options each transcription was given. */
+const whisperOptions = vi.hoisted(() => [] as unknown[]);
 vi.mock('@huggingface/transformers', () => ({
-  pipeline: vi.fn(async () => async (_input: Float32Array) => ({ text: ' dictated words ' })),
+  pipeline: vi.fn(async () => async (_input: Float32Array, opts?: unknown) => {
+    whisperOptions.push(opts);
+    return { text: ' dictated words ' };
+  }),
 }));
 vi.mock('@/lib/telemetry/events', () => ({ sendFeatureAdoptionEvent: vi.fn() }));
 
@@ -164,6 +169,22 @@ describe('one recording session per app', () => {
     });
     expect(a.result.current.isListening).toBe(false);
     expect(media.getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('the mic button does not force English on the recording', async () => {
+    // The hook defaulted `lang` to 'en' and pushed it into the session on mount,
+    // overriding detection for every composer in the app.
+    whisperOptions.length = 0;
+    await mountComposer();
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Voice input'));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByTitle('Stop recording'));
+    });
+    await waitFor(() => expect(transcripts).toEqual(['dictated words']));
+    expect(whisperOptions).toHaveLength(1);
+    expect(whisperOptions[0]).not.toHaveProperty('language');
   });
 });
 

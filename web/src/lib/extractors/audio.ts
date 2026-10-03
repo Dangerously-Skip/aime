@@ -3,60 +3,196 @@
  * (onnxruntime-node, server side).
  *
  * The loaded pipeline is kept on globalThis so it survives dev-server module
- * reloads. The weights themselves are cached on disk by transformers.js, in
- * `env.cacheDir` — `.cache/` inside the installed package, the same directory
- * in 3.x and 4.x (see audio.test.ts), so an upgrade does not re-download them.
+ * reloads. The weights are cached on disk in the app data dir
+ * (`getModelCacheDir`, ~/.aime/models/transformers) — not the library's
+ * default, `.cache/` inside the installed package, which an app update or an
+ * `npm ci` deletes. A cache already there is moved, not re-downloaded (see
+ * `model-cache-migration.ts`).
+ *
+ * The spoken language is detected per file (`lib/whisper/detect-language.ts`);
+ * left to transformers.js, every file is assumed English and anything else
+ * comes back TRANSLATED into English.
  */
+import * as path from 'path';
+import { getModelCacheDir } from '@/lib/app-paths';
+import { detectSpokenLanguage, type WhisperInternals } from '@/lib/whisper/detect-language';
+import { moveModelCache } from './model-cache-migration';
 import type { ExtractionResult } from './types';
 
 /**
  * The slice of the ASR pipeline used here. The real pipeline is ASSIGNED to it
  * (not cast), so an upgrade that changes the call shape fails `tsc`.
  */
-type Transcriber = (
+type Transcriber = ((
   audio: Float32Array,
-  options?: { chunk_length_s?: number; stride_length_s?: number; return_timestamps?: boolean },
-) => Promise<{ text: string }>;
+  options?: {
+    chunk_length_s?: number;
+    stride_length_s?: number;
+    return_timestamps?: boolean;
+    language?: string;
+    task?: 'transcribe';
+  },
+) => Promise<{ text: string }>) &
+  WhisperInternals;
+
+interface LoadStarted {
+  /** Where the weights are (or are going). */
+  dir: string;
+  /** Whether this load has to download them first. */
+  downloading: boolean;
+  /** The one model load in flight — from disk, or a first-use download. */
+  loading: Promise<Transcriber>;
+}
+
+interface WhisperState {
+  transcriber?: Transcriber;
+  /** Cache settled and load started; shared, so concurrent requests start ONE load. */
+  started?: Promise<LoadStarted>;
+  /** Present while the weights are downloading; percent done once known. */
+  download?: { progress: number | null };
+  /** Why the last background download failed, until the next request reports it. */
+  downloadError?: string;
+}
 
 declare global {
-  var __whisperPipeline: Transcriber | undefined;
+  var __whisper: WhisperState | undefined;
 }
 
 export const WHISPER_MODEL = 'Xenova/whisper-small';
+const WHISPER_DTYPE = 'fp32';
+/** What the user is told to expect: the fp32 encoder + merged decoder + configs. */
+const WHISPER_DOWNLOAD_SIZE = '~950 MB';
 
-async function getWhisperPipeline(): Promise<Transcriber> {
-  if (globalThis.__whisperPipeline) return globalThis.__whisperPipeline;
+function whisperState(): WhisperState {
+  return (globalThis.__whisper ??= {});
+}
 
-  const { pipeline } = await import('@huggingface/transformers');
-  const transcriber: Transcriber = await pipeline('automatic-speech-recognition', WHISPER_MODEL, {
-    dtype: 'fp32',
-  });
-  globalThis.__whisperPipeline = transcriber;
-  return transcriber;
+/**
+ * Point transformers.js at the app data dir, first moving a model that the
+ * library's default location already holds. Runs before the first load.
+ */
+async function adoptAppModelCache(): Promise<string> {
+  const { env } = await import('@huggingface/transformers');
+  const dir = getModelCacheDir();
+  const legacy = env.cacheDir; // <package>/.cache/ until we change it
+  if (legacy && path.resolve(legacy) !== path.resolve(dir)) {
+    await moveModelCache({ from: path.join(legacy, WHISPER_MODEL), to: path.join(dir, WHISPER_MODEL) });
+  }
+  env.cacheDir = dir;
+  return dir;
+}
+
+async function startLoad(state: WhisperState): Promise<LoadStarted> {
+  const dir = await adoptAppModelCache();
+  const { pipeline, ModelRegistry } = await import('@huggingface/transformers');
+  const cached = await ModelRegistry.is_pipeline_cached('automatic-speech-recognition', WHISPER_MODEL, {
+    dtype: WHISPER_DTYPE,
+  }).catch(() => false);
+
+  if (!cached) {
+    state.download = { progress: null };
+    console.log(`[Whisper] Downloading ${WHISPER_MODEL} (${WHISPER_DOWNLOAD_SIZE}, first use only) to ${dir}`);
+  }
+  let reported = 0;
+  const load = async (): Promise<Transcriber> => {
+    const transcriber: Transcriber = await pipeline('automatic-speech-recognition', WHISPER_MODEL, {
+      dtype: WHISPER_DTYPE,
+      progress_callback: (info) => {
+        if (info.status !== 'progress_total' || !state.download) return;
+        state.download.progress = Math.floor(info.progress);
+        if (info.progress >= reported + 10) {
+          reported = Math.floor(info.progress / 10) * 10;
+          console.log(`[Whisper] Downloading ${WHISPER_MODEL}: ${reported}%`);
+        }
+      },
+    });
+    return transcriber;
+  };
+  const loading = load().then(
+    (transcriber) => {
+      if (state.download) console.log(`[Whisper] ${WHISPER_MODEL} downloaded to ${dir}`);
+      state.transcriber = transcriber;
+      state.download = undefined;
+      return transcriber;
+    },
+    (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (state.download) {
+        console.warn(`[Whisper] Download of ${WHISPER_MODEL} failed: ${msg}`);
+        state.downloadError = msg;
+      }
+      state.download = undefined;
+      state.started = undefined; // the next request tries again
+      throw err;
+    },
+  );
+  // A download nobody awaits must not surface as an unhandled rejection; its
+  // failure reaches the next request through `downloadError`.
+  loading.catch(() => {});
+  return { dir, downloading: !cached, loading };
+}
+
+/**
+ * The loaded transcriber — or, while the model downloads, what to say instead.
+ * The download is ~950 MB and the chat route gives extraction 30 seconds, so
+ * waiting would only end in "timed out" with the download running unseen.
+ *
+ * How big the model is and where it goes is said ONCE, by the request that
+ * started the download; requests during it only say it is still going.
+ */
+async function whisperOrNotice(): Promise<Transcriber | ExtractionResult> {
+  const state = whisperState();
+  if (state.transcriber) return state.transcriber;
+
+  const first = !state.started;
+  const previousFailure = first ? state.downloadError : undefined;
+  if (!state.started) {
+    state.downloadError = undefined;
+    state.started = startLoad(state).catch((err: unknown) => {
+      state.started = undefined;
+      throw err;
+    });
+  }
+  const { dir, downloading, loading } = await state.started;
+
+  if (state.download) {
+    const retry = previousFailure ? `The last download failed (${previousFailure}); trying again. ` : '';
+    const progress = state.download.progress === null ? '' : ` (${state.download.progress}% done)`;
+    const text =
+      first && downloading
+        ? `[Not transcribed yet: ${retry}the speech-recognition model (Whisper, ${WHISPER_DOWNLOAD_SIZE}) is downloading — once, on first use — to ${dir}. Attach the file again when it finishes.]`
+        : `[Not transcribed yet: the speech-recognition model is still downloading${progress}. Attach the file again when it finishes.]`;
+    return { text, metadata: { type: 'audio', error: 'model-downloading' } };
+  }
+  return state.transcriber ?? (await loading);
 }
 
 export async function extractAudio(buffer: Buffer, name: string): Promise<ExtractionResult> {
   try {
-    const transcriber = await getWhisperPipeline();
+    const transcriber = await whisperOrNotice();
+    if (typeof transcriber !== 'function') return transcriber;
 
     // Convert buffer to Float32Array (WAV PCM expected by Whisper)
     // For non-WAV formats, we need to decode the audio first
     const audioData = await decodeAudioBuffer(buffer, name);
 
+    const language = await detectSpokenLanguage(transcriber, audioData);
     const result = await transcriber(audioData, {
       chunk_length_s: 30,
       stride_length_s: 5,
       return_timestamps: false,
+      // Without a language transformers.js assumes English — and translates.
+      ...(language ? { language, task: 'transcribe' as const } : {}),
     });
 
     return {
       text: result.text.trim(),
-      metadata: { type: 'audio', format: name.split('.').pop() },
+      metadata: { type: 'audio', format: name.split('.').pop(), ...(language ? { language } : {}) },
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
-      text: `[Audio transcription failed: ${msg}. The Whisper model downloads on first use (~950 MB), which needs a network connection.]`,
+      text: `[Audio transcription failed: ${msg}]`,
       metadata: { type: 'audio', error: msg },
     };
   }
