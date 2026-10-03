@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { createRequire } from 'module';
@@ -62,14 +62,47 @@ describe('pushArgs', () => {
 
 const hasGit = spawnSync('git', ['--version']).status === 0;
 
+/**
+ * The environment for a git that must act on the temp repos below and nothing
+ * else: every inherited `GIT_*` variable is dropped.
+ *
+ * Git exports GIT_DIR (and friends) to its hooks, and the pre-push hook runs
+ * this suite. With GIT_DIR inherited, `git init --bare remote.git` did not
+ * create a temp repo — it RE-INITIALISED THE REAL ONE as bare, flipping
+ * `core.bare = true` in the shared config and breaking every worktree of the
+ * checkout, mid-push. cwd does not protect you: GIT_DIR wins over discovery.
+ */
+function isolatedGitEnv(env = process.env) {
+  const clean = Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith('GIT_')));
+  return { ...clean, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' };
+}
+
+describe.skipIf(!hasGit)('isolatedGitEnv', () => {
+  it('a git run from inside a hook (GIT_DIR set) cannot touch the repo the hook belongs to', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'git-args-victim-'));
+    try {
+      const victim = path.join(root, 'victim');
+      execFileSync('git', ['init', '-q', victim], { env: isolatedGitEnv() });
+      const victimGitDir = path.join(victim, '.git');
+      const hookEnv = { ...process.env, GIT_DIR: victimGitDir, GIT_WORK_TREE: victim };
+      const scratch = path.join(root, 'scratch');
+      mkdirSync(scratch);
+
+      execFileSync('git', ['init', '-q', '--bare', 'remote.git'], { cwd: scratch, env: isolatedGitEnv(hookEnv) });
+
+      const bare = execFileSync('git', ['config', '--get', 'core.bare'], { cwd: victim, env: isolatedGitEnv() });
+      expect(bare.toString().trim()).toBe('false');
+      expect(existsSync(path.join(scratch, 'remote.git', 'HEAD'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe.skipIf(!hasGit)('against a real git and a real remote', () => {
   let dir;
   const git = (cwd, ...args) =>
-    execFileSync('git', args, {
-      cwd,
-      stdio: 'pipe',
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' },
-    }).toString();
+    execFileSync('git', args, { cwd, stdio: 'pipe', env: isolatedGitEnv() }).toString();
 
   beforeAll(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'git-args-'));
@@ -99,7 +132,7 @@ describe.skipIf(!hasGit)('against a real git and a real remote', () => {
     const marker = path.join(dir, 'pwned');
     // Bypass the validator on purpose: this proves the SECOND lock on its own.
     const args = ['push', '-u', 'origin', '--', `--receive-pack=touch ${marker}`];
-    const r = spawnSync('git', args, { cwd: work, stdio: 'pipe', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+    const r = spawnSync('git', args, { cwd: work, stdio: 'pipe', env: isolatedGitEnv() });
     expect(r.status).not.toBe(0);
     expect(existsSync(marker)).toBe(false);
 
@@ -107,7 +140,7 @@ describe.skipIf(!hasGit)('against a real git and a real remote', () => {
     spawnSync('git', ['push', `--receive-pack=touch ${marker}`, 'origin', 'feat'], {
       cwd: work,
       stdio: 'pipe',
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: isolatedGitEnv(),
     });
     expect(existsSync(marker)).toBe(true);
   });

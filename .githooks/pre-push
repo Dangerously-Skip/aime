@@ -44,6 +44,13 @@ fi
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root/web"
 
+# Git runs this hook with GIT_DIR (and other repo-local variables) exported. Any
+# test that spawns git inherits them, and GIT_DIR beats cwd-based discovery — so
+# a test's `git init --bare` in a temp dir re-initialised THIS repo as bare,
+# breaking every worktree mid-push. Drop them: from here on, git finds the repo
+# from the working directory like it does in a terminal.
+for var in $(git rev-parse --local-env-vars); do unset "$var"; done
+
 echo "pre-push: running 'npm run verify' (~70s; skip with SKIP_VERIFY=1 or --no-verify)"
 start=$SECONDS
 
@@ -52,8 +59,8 @@ if ! npm run --silent verify; then
 
 pre-push: verify FAILED — push aborted.
 
-  Nothing downstream will catch this: rulesets and branch protection are both
-  403 on this plan, so a red CI run does not block a merge.
+  CI runs the same checks on the pull request, and main's ruleset requires
+  them, so this only saves you a slower round trip — it is not the last line.
 
   Run the pieces:  cd web && npm run typecheck | npm run lint | npm test | npm run build
   Push anyway:     SKIP_VERIFY=1 git push
