@@ -171,11 +171,21 @@ function deliverTranscript(text: string): void {
 // ── Whisper ────────────────────────────────────────────────────────────────
 // Lazily loaded and shared, because the model is tens of megabytes.
 
-let pipelinePromise: Promise<unknown> | null = null;
-let pipelineInstance: unknown = null;
+/**
+ * The slice of the transformers.js ASR pipeline this module uses. The real
+ * pipeline is ASSIGNED to it below (not cast), so a library upgrade that changes
+ * the call shape fails `tsc` here instead of failing a dictation at runtime.
+ */
+type Transcriber = (
+  audio: Float32Array,
+  options?: { language?: string; task?: string },
+) => Promise<{ text: string }>;
+
+let pipelinePromise: Promise<Transcriber> | null = null;
+let pipelineInstance: Transcriber | null = null;
 let loadError: string | null = null;
 
-async function getWhisperPipeline(): Promise<unknown> {
+async function getWhisperPipeline(): Promise<Transcriber> {
   if (pipelineInstance) return pipelineInstance;
   if (loadError) throw new Error(loadError);
 
@@ -183,7 +193,7 @@ async function getWhisperPipeline(): Promise<unknown> {
     pipelinePromise = (async () => {
       try {
         const { pipeline } = await import('@huggingface/transformers');
-        const pipe = await pipeline(
+        const pipe: Transcriber = await pipeline(
           'automatic-speech-recognition',
           'onnx-community/whisper-base',
           { dtype: 'q8', device: 'wasm' },
@@ -334,10 +344,7 @@ function finishRecording(mimeType: string): void {
 
 async function transcribe(blob: Blob): Promise<void> {
   try {
-    const pipe = (await getWhisperPipeline()) as (
-      input: Float32Array,
-      options?: { language?: string; task?: string },
-    ) => Promise<{ text: string }>;
+    const pipe = await getWhisperPipeline();
 
     const float32 = await audioToFloat32(blob);
     // Under half a second at 16 kHz: a stray keypress, not speech.
