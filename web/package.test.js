@@ -83,3 +83,33 @@ describe('one Node version, everywhere', () => {
     expect(new Set(versions)).toEqual(new Set(['22']));
   });
 });
+
+describe('sharp is past the libvips/libheif advisories', () => {
+  // GHSA-f88m-g3jw-g9cj and GHSA-rgj7-g3m4-5g8c (high) affect sharp <= 0.35.4-rc.0.
+  // Nothing here imports sharp: it arrives through @huggingface/transformers
+  // (Whisper) and as next's optional image optimiser. transformers 3.x pinned it
+  // to ^0.34, which is what kept the advisory open; 4.3.0 takes ^0.35.4. Checked
+  // across the whole lockfile, because a NESTED old copy is exactly what a
+  // dependency still pinning the old range would leave behind.
+  const lock = JSON.parse(readFileSync(path.join(__dirname, 'package-lock.json'), 'utf-8'));
+  const atLeast = (version, [maj, min, patch]) => {
+    const [a, b, c] = version.split(/[.-]/).map((n) => parseInt(n, 10));
+    return a > maj || (a === maj && (b > min || (b === min && c >= patch)));
+  };
+
+  it('every sharp in the lockfile is >= 0.35.4, and not a prerelease of it', () => {
+    const copies = Object.entries(lock.packages).filter(
+      ([key]) => key === 'node_modules/sharp' || key.endsWith('/node_modules/sharp'),
+    );
+    expect(copies.length).toBeGreaterThan(0);
+    for (const [key, entry] of copies) {
+      expect(atLeast(entry.version, [0, 35, 4]), `${key}@${entry.version}`).toBe(true);
+      expect(entry.version, key).not.toMatch(/^0\.35\.4-/);
+    }
+  });
+
+  it('@huggingface/transformers is on 4.3.0 or later, the first release that allows a fixed sharp', () => {
+    expect(pkg.dependencies['@huggingface/transformers']).toMatch(/^\^4\./);
+    expect(atLeast(lock.packages['node_modules/@huggingface/transformers'].version, [4, 3, 0])).toBe(true);
+  });
+});

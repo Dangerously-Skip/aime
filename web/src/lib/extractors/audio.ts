@@ -1,29 +1,43 @@
 /**
- * Audio transcription using @huggingface/transformers Whisper pipeline.
- * Model is cached on globalThis to avoid re-downloading between requests.
+ * Audio transcription using @huggingface/transformers Whisper pipeline
+ * (onnxruntime-node, server side).
+ *
+ * The loaded pipeline is kept on globalThis so it survives dev-server module
+ * reloads. The weights themselves are cached on disk by transformers.js, in
+ * `env.cacheDir` — `.cache/` inside the installed package, the same directory
+ * in 3.x and 4.x (see audio.test.ts), so an upgrade does not re-download them.
  */
 import type { ExtractionResult } from './types';
 
+/**
+ * The slice of the ASR pipeline used here. The real pipeline is ASSIGNED to it
+ * (not cast), so an upgrade that changes the call shape fails `tsc`.
+ */
+type Transcriber = (
+  audio: Float32Array,
+  options?: { chunk_length_s?: number; stride_length_s?: number; return_timestamps?: boolean },
+) => Promise<{ text: string }>;
+
 declare global {
-  var __whisperPipeline: unknown;
+  var __whisperPipeline: Transcriber | undefined;
 }
 
-async function getWhisperPipeline() {
+export const WHISPER_MODEL = 'Xenova/whisper-small';
+
+async function getWhisperPipeline(): Promise<Transcriber> {
   if (globalThis.__whisperPipeline) return globalThis.__whisperPipeline;
 
   const { pipeline } = await import('@huggingface/transformers');
-  const transcriber = await pipeline(
-    'automatic-speech-recognition',
-    'Xenova/whisper-small',
-    { dtype: 'fp32' },
-  );
+  const transcriber: Transcriber = await pipeline('automatic-speech-recognition', WHISPER_MODEL, {
+    dtype: 'fp32',
+  });
   globalThis.__whisperPipeline = transcriber;
   return transcriber;
 }
 
 export async function extractAudio(buffer: Buffer, name: string): Promise<ExtractionResult> {
   try {
-    const transcriber = await getWhisperPipeline() as (input: Float32Array, opts?: Record<string, unknown>) => Promise<{ text: string }>;
+    const transcriber = await getWhisperPipeline();
 
     // Convert buffer to Float32Array (WAV PCM expected by Whisper)
     // For non-WAV formats, we need to decode the audio first
@@ -42,7 +56,7 @@ export async function extractAudio(buffer: Buffer, name: string): Promise<Extrac
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
-      text: `[Audio transcription failed: ${msg}. The Whisper model may need to download on first use (~150MB).]`,
+      text: `[Audio transcription failed: ${msg}. The Whisper model downloads on first use (~950 MB), which needs a network connection.]`,
       metadata: { type: 'audio', error: msg },
     };
   }
