@@ -13,6 +13,18 @@ import { useComposerDrafts } from '@/components/shared/composer/draft-store';
 import { ChatSurface } from '@/components/surfaces/chat/chat-surface';
 import { streamRegistry } from '@/lib/stream-registry';
 import { APP_NAME } from '@/config/branding';
+import { AppShell } from '@/components/layout/app-shell';
+
+// For rendering the real shell around the real project page: its other heavy
+// children are stubbed (none of them is what these tests are about).
+vi.mock('@/components/layout/surface-router', () => ({ SurfaceRouter: () => null }));
+vi.mock('@/components/layout/tabbar', () => ({ Tabbar: () => null }));
+vi.mock('@/components/layout/sidebar', () => ({ Sidebar: () => null }));
+vi.mock('@/components/layout/schedulers', () => ({ Schedulers: () => null }));
+vi.mock('@/components/layout/activity-feed-panel', () => ({ ActivityFeedPanel: () => null }));
+vi.mock('@/components/layout/search-palette', () => ({ SearchPalette: () => null }));
+vi.mock('@/components/shared/update-banner', () => ({ UpdateBanner: () => null }));
+vi.mock('@/hooks/use-push-to-talk', () => ({ usePushToTalk: () => {} }));
 
 const project = (over: Partial<Project> = {}): Project => ({
   id: 'p1',
@@ -141,16 +153,22 @@ describe('ProjectDetail', () => {
     it('files a chat under the project, opens it, and hands Chat the message', async () => {
       const fetchMock = answerModels(true);
       vi.stubGlobal('fetch', fetchMock);
-      const onOpen = vi.fn();
-      render(<ProjectDetail projectId="p1" onBack={() => {}} onOpenConversation={onOpen} onOpenSettings={() => {}} />);
+      /*
+       * Inside the real shell. The page creates the conversation and asks the
+       * shell to open it in the same click, and the shell used to look it up
+       * in a list from before the click — so the page switched the surface
+       * itself, for Chat only. Now the shell does, from the store.
+       */
+      useAppStore.setState({ sidebarMode: 'projects', viewingProjectId: 'p1' } as never);
+      render(<AppShell />);
       await act(async () => { await Promise.resolve(); });
       await type('Summarise the launch plan');
 
       const conv = useConversationStore.getState().conversations.find((c) => c.projectId === 'p1')!;
       expect(conv).toMatchObject({ surface: 'chat' });
-      expect(onOpen).toHaveBeenCalledWith(conv.id);
       expect(useConversationStore.getState().activeId).toBe(conv.id);
       expect(useAppStore.getState().activeSurface).toBe('chat');
+      expect(useAppStore.getState().viewingProjectId).toBeNull();
       // The page sends nothing itself: Chat runs the turn.
       expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/api/chat/'))).toBe(false);
       expect(useHandoffStore.getState().turns[`chat:${conv.id}`]).toMatchObject({ text: 'Summarise the launch plan' });
@@ -183,7 +201,9 @@ describe('ProjectDetail', () => {
       Element.prototype.scrollIntoView = () => {};
       useChatStore.setState({ messages: {}, currentChatId: null, streamingChats: {} } as never);
 
-      const detail = render(<ProjectDetail projectId="p1" onBack={() => {}} onOpenConversation={() => {}} onOpenSettings={() => {}} />);
+      // Opening is the shell's job (covered above); here, just its effect.
+      const open = (id: string) => useConversationStore.getState().setActiveConversation(id);
+      const detail = render(<ProjectDetail projectId="p1" onBack={() => {}} onOpenConversation={open} onOpenSettings={() => {}} />);
       await act(async () => { await Promise.resolve(); });
       await type('Summarise the launch plan');
       detail.unmount();

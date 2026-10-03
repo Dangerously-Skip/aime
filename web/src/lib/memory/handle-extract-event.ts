@@ -1,15 +1,23 @@
-// Lazy imports to avoid circular dependencies with Turbopack's module evaluation.
-// Deliberately require() rather than static import: a static import here is
-// evaluated at module load and reintroduces the cycle.
-/* eslint-disable @typescript-eslint/no-require-imports */
-const getMemoryStore = () => require('@/stores/memory-store').useMemoryStore;
-const getConversationStore = () => require('@/stores/conversation-store').useConversationStore;
-const getSettingsStore = () => require('@/stores/settings-store').useSettingsStore;
-/* eslint-enable @typescript-eslint/no-require-imports */
-import type { MemoryCategory } from './types';
-import type { Conversation } from '@/stores/conversation-store';
+/*
+ * Static imports. These were lazy `require()`s, added against a Turbopack TDZ
+ * cycle when this module was reached from the surfaces. Nothing these stores
+ * import reaches back here (checked when the pull replaced the stream event),
+ * and the `require`s had a cost: vitest does not resolve `@/` inside one, so
+ * this handler could not be tested against the real store — and never was.
+ */
+import { useMemoryStore } from '@/stores/memory-store';
+import { useConversationStore, type Conversation } from '@/stores/conversation-store';
+import { useSettingsStore } from '@/stores/settings-store';
+import type { Memory, MemoryCategory } from './types';
 
-interface ExtractedMemoryEvent {
+export interface ExtractedMemoryEvent {
+  /**
+   * Stable id from the server's pending queue. Becomes the stored memory's id,
+   * so the same item delivered twice is stored once. Content dedup alone does
+   * not give that: an exact duplicate SUPERSEDES the old record with a new one,
+   * so every re-delivery would add another row.
+   */
+  id?: string;
   content: string;
   category: string;
   tags: string[];
@@ -17,8 +25,8 @@ interface ExtractedMemoryEvent {
 }
 
 /**
- * Handle a memory_extract SSE event by storing extracted memories.
- * Checks auto-extraction setting before storing.
+ * Store memories extracted from `conversationId`'s turn.
+ * Checks the auto-extraction setting before storing.
  */
 export function handleMemoryExtractEvent(
   extracted: ExtractedMemoryEvent[],
@@ -26,17 +34,19 @@ export function handleMemoryExtractEvent(
 ): void {
   if (!Array.isArray(extracted) || extracted.length === 0) return;
 
-  const autoExtractEnabled = getSettingsStore().getState().autoExtractMemories;
+  const autoExtractEnabled = useSettingsStore.getState().autoExtractMemories;
   if (autoExtractEnabled === false) return;
 
-  const conv = getConversationStore().getState().conversations.find(
+  const conv = useConversationStore.getState().conversations.find(
     (c: Conversation) => c.id === conversationId
   );
   const projectId = conv?.projectId || null;
 
   for (const mem of extracted) {
-    getMemoryStore().getState().addMemoryWithDedup({
-      id: crypto.randomUUID(),
+    const store = useMemoryStore.getState();
+    if (mem.id && store.memories.some((m: Memory) => m.id === mem.id)) continue;
+    store.addMemoryWithDedup({
+      id: mem.id || crypto.randomUUID(),
       content: mem.content,
       category: mem.category as MemoryCategory,
       scope: projectId ? 'project' : 'global',

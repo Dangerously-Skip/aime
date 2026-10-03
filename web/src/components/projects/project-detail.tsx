@@ -11,7 +11,7 @@ import { NoModelCard } from "@/components/shared/no-model-card";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { useAppStore, type Surface } from "@/stores/app-store";
+import type { Surface } from "@/stores/app-store";
 import { useModelReady } from "@/hooks/use-model-ready";
 import { handOffTurn } from "@/hooks/use-handoff-turn";
 import { isSessionCommand } from "@/lib/slash-commands";
@@ -137,12 +137,10 @@ export function ProjectDetail({
   const removeKnowledgeFile = useProjectStore((s) => s.removeKnowledgeFile);
   const conversations = useConversationStore((s) => s.conversations);
   const addConversation = useConversationStore((s) => s.addConversation);
-  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
 
   // The project page starts Chat conversations, so it uses Chat's model picker.
   const modelRoute = useChatStore((s) => s.modelRoute);
   const setModelRoute = useChatStore((s) => s.setModelRoute);
-  const setActiveSurface = useAppStore((s) => s.setActiveSurface);
   // "Connect a model" rather than opening a chat whose first turn can only fail.
   const modelReady = useModelReady(modelRoute, CAPABILITY);
   const [noModelAttempted, setNoModelAttempted] = useState(false);
@@ -210,8 +208,7 @@ export function ProjectDetail({
     const conv = newSurfaceConversation("chat", projectId);
     addConversation(conv);
     handOffTurn("chat", conv.id, { text, attachments });
-    setActiveConversation(conv.id);
-    setActiveSurface("chat");
+    // The shell opens it — surface included, though it was created just now.
     onOpenConversation(conv.id);
     return true;
   }
@@ -219,7 +216,6 @@ export function ProjectDetail({
   function handleStartInSurface(surface: Surface) {
     const conv = newSurfaceConversation(surface, projectId);
     addConversation(conv);
-    setActiveConversation(conv.id);
     onOpenConversation(conv.id);
   }
 

@@ -2,7 +2,6 @@
 
 import { useAssistantStore } from '@/stores/assistant-store';
 import { handleWidgetCreateEvent } from '@/lib/widgets/handle-create-event';
-import { handleMemoryExtractEvent } from '@/lib/memory/handle-extract-event';
 import { useToolBudgetStore } from '@/stores/tool-budget-store';
 import type { ToolBudgetReport } from '@/lib/mcp/filter';
 import type { ChunkType } from '@/lib/providers/base-provider';
@@ -21,7 +20,8 @@ import type { ChunkType } from '@/lib/providers/base-provider';
  *
  *   standing_order_create   handled on 1 of 5 surfaces
  *   cron_create             handled on 3 of 5
- *   memory_extract          handled on 3 of 5
+ *   memory_extract          handled on 3 of 5 (since moved off the stream
+ *                           entirely: lib/memory/pending-pull.ts)
  *   widget_create           handled on 2 of 5 (fixed by hand first, which is
  *                           what prompted looking properly)
  *
@@ -44,7 +44,6 @@ export type AgnosticChunkType =
   | 'cron_create'
   | 'standing_order_create'
   | 'widget_create'
-  | 'memory_extract'
   // Writes the mounted-tool count to a global store so the Connectors screen can
   // warn that adding more has started to hurt tool selection. Purely global, so
   // it belongs here — it was on chat and cowork only, meaning the warning simply
@@ -59,13 +58,12 @@ const _agnosticAreRealChunks: readonly ChunkType[] = [
   'cron_create',
   'standing_order_create',
   'widget_create',
-  'memory_extract',
   'system_init',
 ] satisfies readonly AgnosticChunkType[];
 void _agnosticAreRealChunks;
 
 export interface AgnosticChunkContext {
-  /** Conversation the stream belongs to — memory extraction is scoped to it. */
+  /** Conversation the stream belongs to. */
   chatId: string;
   /** Log prefix, e.g. 'Chat'. Cosmetic. */
   surface: string;
@@ -143,16 +141,6 @@ const HANDLERS: Record<AgnosticChunkType, Handler> = {
       useToolBudgetStore.getState().setReport(event.toolBudget as ToolBudgetReport);
     }
   },
-  memory_extract: (event, ctx) =>
-    handleMemoryExtractEvent(
-      event.memories as Array<{
-        content: string;
-        category: string;
-        tags: string[];
-        confidence: number;
-      }>,
-      ctx.chatId,
-    ),
 };
 
 export function isAgnosticChunk(type: string): type is AgnosticChunkType {

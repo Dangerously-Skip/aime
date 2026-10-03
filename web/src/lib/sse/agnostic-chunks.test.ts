@@ -22,7 +22,6 @@ const AGNOSTIC: AgnosticChunkType[] = [
   'cron_create',
   'standing_order_create',
   'widget_create',
-  'memory_extract',
 ];
 
 beforeEach(() => {
@@ -187,7 +186,6 @@ describe('handleAgnosticChunk', () => {
       { type: 'cron_create', input: null },
       { type: 'standing_order_create', input: {} },
       { type: 'widget_create', input: 'nonsense' },
-      { type: 'memory_extract' },
     ]) {
       expect(handleAgnosticChunk(bad as never, { chatId: 'c1', surface: 'T' }), JSON.stringify(bad))
         .toBe(true);
