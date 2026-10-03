@@ -35,7 +35,6 @@ export function AppShell() {
   const setActiveSurface = useAppStore((s) => s.setActiveSurface);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
   const addConversation = useConversationStore((s) => s.addConversation);
-  const conversations = useConversationStore((s) => s.conversations);
   const addProject = useProjectStore((s) => s.addProject);
   const { isElectron } = useElectron();
 
@@ -155,7 +154,10 @@ export function AppShell() {
   }
 
   function handleOpenConversation(conversationId: string) {
-    const conv = conversations.find((c) => c.id === conversationId);
+    // From the store, not this render's list: a caller that has just created
+    // the conversation (the project page does, in the same click) is opening
+    // one this render has never seen, and the surface then never switched.
+    const conv = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
     if (conv) setActiveSurface(conv.surface as Surface);
     setActiveConversation(conversationId);
     setSidebarMode("history");
