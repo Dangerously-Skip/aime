@@ -8,9 +8,14 @@
  * default, `.cache/` inside the installed package, which an app update or an
  * `npm ci` deletes. A cache already there is moved, not re-downloaded (see
  * `model-cache-migration.ts`).
+ *
+ * The spoken language is detected per file (`lib/whisper/detect-language.ts`);
+ * left to transformers.js, every file is assumed English and anything else
+ * comes back TRANSLATED into English.
  */
 import * as path from 'path';
 import { getModelCacheDir } from '@/lib/app-paths';
+import { detectSpokenLanguage, type WhisperInternals } from '@/lib/whisper/detect-language';
 import { moveModelCache } from './model-cache-migration';
 import type { ExtractionResult } from './types';
 
@@ -18,10 +23,17 @@ import type { ExtractionResult } from './types';
  * The slice of the ASR pipeline used here. The real pipeline is ASSIGNED to it
  * (not cast), so an upgrade that changes the call shape fails `tsc`.
  */
-type Transcriber = (
+type Transcriber = ((
   audio: Float32Array,
-  options?: { chunk_length_s?: number; stride_length_s?: number; return_timestamps?: boolean },
-) => Promise<{ text: string }>;
+  options?: {
+    chunk_length_s?: number;
+    stride_length_s?: number;
+    return_timestamps?: boolean;
+    language?: string;
+    task?: 'transcribe';
+  },
+) => Promise<{ text: string }>) &
+  WhisperInternals;
 
 interface LoadStarted {
   /** Where the weights are (or are going). */
@@ -164,15 +176,18 @@ export async function extractAudio(buffer: Buffer, name: string): Promise<Extrac
     // For non-WAV formats, we need to decode the audio first
     const audioData = await decodeAudioBuffer(buffer, name);
 
+    const language = await detectSpokenLanguage(transcriber, audioData);
     const result = await transcriber(audioData, {
       chunk_length_s: 30,
       stride_length_s: 5,
       return_timestamps: false,
+      // Without a language transformers.js assumes English — and translates.
+      ...(language ? { language, task: 'transcribe' as const } : {}),
     });
 
     return {
       text: result.text.trim(),
-      metadata: { type: 'audio', format: name.split('.').pop() },
+      metadata: { type: 'audio', format: name.split('.').pop(), ...(language ? { language } : {}) },
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

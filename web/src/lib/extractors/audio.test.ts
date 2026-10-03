@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vites
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { Tensor } from '@huggingface/transformers';
 import { decodeWav, extractAudio, WHISPER_MODEL } from './audio';
 
 /**
@@ -22,6 +23,7 @@ vi.mock('@huggingface/transformers', async (importOriginal) => {
   const real = await importOriginal<typeof import('@huggingface/transformers')>();
   return {
     env: real.env,
+    Tensor: real.Tensor,
     pipeline: (...args: unknown[]) => pipeline(...args),
     ModelRegistry: { is_pipeline_cached: (...args: unknown[]) => isPipelineCached(...args) },
   };
@@ -181,6 +183,8 @@ describe('extractAudio', () => {
     );
     const [audio, opts] = transcribe.mock.calls[0];
     expect(Array.from(audio)).toEqual([0, 0.5, -1, 0.25]);
+    // A pipeline that cannot detect (this fake has no model internals) is given
+    // no language — not a guessed 'en'.
     expect(opts).toEqual({ chunk_length_s: 30, stride_length_s: 5, return_timestamps: false });
   });
 
@@ -215,6 +219,52 @@ describe('extractAudio', () => {
     const result = await extractAudio(Buffer.from('RIFF....WAVEjunk'), 'x.wav');
     expect(result.text).toMatch(/^\[Audio transcription failed: /);
     expect(result.text).not.toMatch(/950|download/i);
+  });
+});
+
+/**
+ * Left to transformers.js, Whisper is told every file is English, and
+ * translates whatever is not. The detected language is what goes in now.
+ */
+describe('spoken language', () => {
+  /** The fake transcriber, given the model internals detection reads. */
+  function multilingual(winner: '<|en|>' | '<|fr|>' | '<|de|>') {
+    const langToId = { '<|en|>': 1, '<|fr|>': 2, '<|de|>': 3 };
+    const logits = new Float32Array(8).fill(-1);
+    logits[langToId[winner]] = 5;
+    return Object.assign(transcribe, {
+      processor: vi.fn(async () => ({ input_features: 'features' })),
+      model: Object.assign(
+        vi.fn(async () => ({ logits: new Tensor('float32', logits, [1, 1, 8]) })),
+        { generation_config: { decoder_start_token_id: 0, is_multilingual: true, lang_to_id: langToId } },
+      ),
+    });
+  }
+
+  it('transcribes in the detected language, and reports it', async () => {
+    pipeline.mockImplementation(async () => multilingual('<|fr|>'));
+    const result = await extractAudio(pcm16Wav([0, 100, 200]), 'note.wav');
+
+    expect(transcribe.mock.calls[0][1]).toEqual({
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      return_timestamps: false,
+      language: 'fr',
+      task: 'transcribe',
+    });
+    expect(result.metadata).toEqual({ type: 'audio', format: 'wav', language: 'fr' });
+  });
+
+  it('detects per file: the next attachment can be another language', async () => {
+    const fake = multilingual('<|de|>');
+    pipeline.mockImplementation(async () => fake);
+    await extractAudio(pcm16Wav([1]), 'a.wav');
+    const en = new Float32Array(8).fill(-1);
+    en[1] = 5;
+    fake.model.mockResolvedValueOnce({ logits: new Tensor('float32', en, [1, 1, 8]) });
+    await extractAudio(pcm16Wav([2]), 'b.wav');
+
+    expect(transcribe.mock.calls.map(([, opts]) => (opts as { language?: string }).language)).toEqual(['de', 'en']);
   });
 });
 

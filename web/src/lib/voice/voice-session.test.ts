@@ -8,6 +8,7 @@ import {
   releaseTranscriptTarget,
   resetVoiceSession,
   setTranscriptTarget,
+  setVoiceLanguage,
   startRecording,
   stopRecording,
   toggleRecording,
@@ -27,9 +28,24 @@ import { installFakeMediaStack, type FakeMediaStack } from './__fixtures__/fake-
  * which exists under vitest (see __fixtures__/fake-media).
  */
 
-const transcribe = vi.fn(async (_input: Float32Array) => ({ text: ' hello there ' }));
+const transcribe = vi.fn(async (_input: Float32Array, _opts?: unknown) => ({ text: ' hello there ' }));
+/**
+ * Model internals for the language-detection tests, attached to the fake
+ * pipeline when set. Without them the fake is a plain function, as before.
+ */
+const internals = vi.hoisted(() => ({ current: undefined as object | undefined }));
 vi.mock('@huggingface/transformers', () => ({
-  pipeline: vi.fn(async () => (input: Float32Array) => transcribe(input)),
+  pipeline: vi.fn(async () =>
+    Object.assign((input: Float32Array, opts?: unknown) => transcribe(input, opts), internals.current ?? {}),
+  ),
+  // The renderer gets no real onnxruntime under jsdom; detection only builds one.
+  Tensor: class {
+    constructor(
+      public type: string,
+      public data: unknown,
+      public dims: number[],
+    ) {}
+  },
 }));
 vi.mock('@/lib/telemetry/events', () => ({ sendFeatureAdoptionEvent: vi.fn() }));
 
@@ -45,6 +61,7 @@ async function settle() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  internals.current = undefined;
   transcribe.mockResolvedValue({ text: ' hello there ' });
   resetVoiceSession();
   media = installFakeMediaStack();
@@ -291,5 +308,57 @@ describe('voice session — where the transcript goes', () => {
 
     releaseTranscriptTarget('chat');
     expect(getTranscriptTarget()).toBeNull();
+  });
+});
+
+/**
+ * Dictation used to pass `language: 'en'` on every take, and Whisper told French
+ * speech is English answers with an English translation. The language now
+ * comes from the recording unless a caller forces one.
+ */
+describe('voice session — spoken language', () => {
+  /** Fake model internals whose next-token scores favour token `winner`. */
+  function multilingualInternals(winner: number) {
+    const logits = new Float32Array(8).fill(-1);
+    logits[winner] = 5;
+    const model = Object.assign(
+      vi.fn(async () => ({ logits: { dims: [1, 1, 8], data: logits } })),
+      {
+        generation_config: {
+          decoder_start_token_id: 0,
+          is_multilingual: true,
+          lang_to_id: { '<|en|>': 1, '<|fr|>': 2, '<|de|>': 3 },
+        },
+      },
+    );
+    return { processor: vi.fn(async () => ({ input_features: 'features' })), model };
+  }
+
+  async function dictate() {
+    await startRecording();
+    stopRecording();
+    await vi.waitFor(() => expect(getVoiceSnapshot().status).toBe('idle'));
+  }
+
+  it('detects the language of the take and transcribes in it', async () => {
+    internals.current = multilingualInternals(2);
+    await dictate();
+    expect(transcribe).toHaveBeenCalledWith(expect.any(Float32Array), { language: 'fr', task: 'transcribe' });
+    expect(delivered).toEqual(['hello there']);
+  });
+
+  it('a language set explicitly is used as is, without running detection', async () => {
+    const fake = multilingualInternals(2);
+    internals.current = fake;
+    setVoiceLanguage('de');
+    await dictate();
+    expect(fake.model).not.toHaveBeenCalled();
+    expect(transcribe).toHaveBeenCalledWith(expect.any(Float32Array), { language: 'de', task: 'transcribe' });
+  });
+
+  it('when detection is impossible, nothing is forced — no language, no task', async () => {
+    await dictate(); // the plain fake: no model internals to detect with
+    expect(transcribe).toHaveBeenCalledWith(expect.any(Float32Array), {});
+    expect(delivered).toEqual(['hello there']);
   });
 });

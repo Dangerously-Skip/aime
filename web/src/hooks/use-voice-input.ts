@@ -34,6 +34,7 @@ import { useVoiceScopeId } from '@/lib/voice/voice-scope';
 
 interface UseVoiceInputOptions {
   onTranscript: (text: string) => void;
+  /** Whisper language code to force; omitted = detect it from each recording. */
   lang?: string;
 }
 
@@ -45,7 +46,7 @@ interface UseVoiceInputReturn {
   stopListening: () => void;
 }
 
-export function useVoiceInput({ onTranscript, lang = 'en' }: UseVoiceInputOptions): UseVoiceInputReturn {
+export function useVoiceInput({ onTranscript, lang }: UseVoiceInputOptions): UseVoiceInputReturn {
   const scope = useVoiceScopeId();
   const snapshot = useSyncExternalStore(
     subscribeToVoiceSession,
@@ -67,7 +68,7 @@ export function useVoiceInput({ onTranscript, lang = 'en' }: UseVoiceInputOption
   }, []);
 
   useEffect(() => {
-    setVoiceLanguage(lang);
+    setVoiceLanguage(lang ?? null);
   }, [lang]);
 
   useEffect(
