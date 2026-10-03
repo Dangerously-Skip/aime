@@ -64,13 +64,21 @@ export async function extractAudio(buffer: Buffer, name: string): Promise<Extrac
 
 /**
  * Decode audio buffer to Float32Array PCM.
- * For WAV files, parse directly. For other formats, attempt raw decode.
+ * WAV is parsed here; anything else, or a WAV encoding the parser does not
+ * read (ADPCM, µ-law…), goes through ffmpeg.
  */
 async function decodeAudioBuffer(buffer: Buffer, name: string): Promise<Float32Array> {
   const ext = name.split('.').pop()?.toLowerCase();
 
+  let wavError: Error | null = null;
   if (ext === 'wav') {
-    return decodeWav(buffer);
+    try {
+      return decodeWav(buffer);
+    } catch (err) {
+      // Not fatal yet: ffmpeg reads the encodings we do not, and a file named
+      // .wav is not always one.
+      wavError = err instanceof Error ? err : new Error(String(err));
+    }
   }
 
   // For MP3/M4A/OGG/WebM — try to use ffmpeg to convert to WAV first
@@ -80,51 +88,141 @@ async function decodeAudioBuffer(buffer: Buffer, name: string): Promise<Float32A
     const path = await import('path');
     const fs = await import('fs');
 
-    const tmpInput = path.join(os.tmpdir(), `audio_input_${Date.now()}.${ext}`);
-    const tmpOutput = path.join(os.tmpdir(), `audio_output_${Date.now()}.wav`);
+    // A private directory per call: concurrent uploads cannot collide, and the
+    // extension (from a user-supplied filename) is reduced to something that
+    // cannot carry a path. ffmpeg probes the content; the suffix is only a hint.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aime-audio-'));
+    const safeExt = ext && /^[a-z0-9]{1,8}$/.test(ext) ? ext : 'bin';
+    const tmpInput = path.join(dir, `input.${safeExt}`);
+    const tmpOutput = path.join(dir, 'output.wav');
 
-    fs.writeFileSync(tmpInput, buffer);
     try {
+      fs.writeFileSync(tmpInput, buffer);
       execFileSync('ffmpeg', [
+        '-loglevel', 'error',
         '-i', tmpInput,
-        '-ar', '16000',
+        '-ar', String(WHISPER_SAMPLE_RATE),
         '-ac', '1',
         '-f', 'wav',
         '-y', tmpOutput,
-      ], { timeout: 60000 });
+      ], { timeout: 60000, stdio: 'pipe' });
 
-      const wavBuffer = fs.readFileSync(tmpOutput);
-      return decodeWav(Buffer.from(wavBuffer));
+      return decodeWav(fs.readFileSync(tmpOutput));
     } finally {
-      try { fs.unlinkSync(tmpInput); } catch { /* ignore */ }
-      try { fs.unlinkSync(tmpOutput); } catch { /* ignore */ }
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   } catch {
+    if (wavError) throw new Error(`${wavError.message}, and ffmpeg could not convert it (is ffmpeg installed?)`);
     throw new Error(`Cannot decode ${ext} audio. Install ffmpeg for non-WAV format support.`);
   }
 }
 
-/** Parse WAV file to Float32Array of PCM samples at 16kHz mono. */
-function decodeWav(buffer: Buffer): Float32Array {
-  // WAV header: first 44 bytes
-  const dataOffset = buffer.indexOf('data') + 8;
-  const bitsPerSample = buffer.readUInt16LE(34);
-  const numChannels = buffer.readUInt16LE(22);
+/** Whisper's one input format: 16 kHz, mono, float samples in -1..1. */
+const WHISPER_SAMPLE_RATE = 16000;
 
-  const samples: number[] = [];
-  const bytesPerSample = bitsPerSample / 8;
+const WAVE_FORMAT_PCM = 1;
+const WAVE_FORMAT_IEEE_FLOAT = 3;
+const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
 
-  for (let i = dataOffset; i < buffer.length; i += bytesPerSample * numChannels) {
-    let sample: number;
-    if (bitsPerSample === 16) {
-      sample = buffer.readInt16LE(i) / 32768;
-    } else if (bitsPerSample === 32) {
-      sample = buffer.readFloatLE(i);
-    } else {
-      sample = (buffer[i] - 128) / 128;
-    }
-    samples.push(sample);
+/**
+ * Parse a WAV file into what Whisper expects: 16 kHz mono Float32.
+ *
+ * Walks the RIFF chunks rather than assuming the canonical 44-byte header —
+ * recorders routinely put JUNK/LIST/bext chunks before `fmt ` or `data` — then
+ * downmixes and resamples. Whisper does neither for us: given 44.1 kHz samples
+ * it hears speech 2.76x too slow, and transcribes nonsense with confidence.
+ */
+export function decodeWav(buffer: Buffer): Float32Array {
+  if (buffer.length < 12 || buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
+    throw new Error('Not a WAV file');
   }
 
-  return new Float32Array(samples);
+  let format = 0;
+  let channels = 0;
+  let sampleRate = 0;
+  let bits = 0;
+  let dataStart = -1;
+  let dataEnd = -1;
+
+  for (let offset = 12; offset + 8 <= buffer.length; ) {
+    const id = buffer.toString('ascii', offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const body = offset + 8;
+    if (id === 'fmt ' && size >= 16 && body + 16 <= buffer.length) {
+      format = buffer.readUInt16LE(body);
+      channels = buffer.readUInt16LE(body + 2);
+      sampleRate = buffer.readUInt32LE(body + 4);
+      bits = buffer.readUInt16LE(body + 14);
+      // The real format tag is the first two bytes of the sub-format GUID.
+      if (format === WAVE_FORMAT_EXTENSIBLE && size >= 40 && body + 26 <= buffer.length) {
+        format = buffer.readUInt16LE(body + 24);
+      }
+    } else if (id === 'data') {
+      dataStart = body;
+      // A streaming writer that never came back to patch the header leaves 0
+      // or 0xFFFFFFFF here; either way the samples run to the end of the file.
+      dataEnd = size === 0 || body + size > buffer.length ? buffer.length : body + size;
+      break;
+    }
+    offset = body + size + (size % 2); // chunks are word-aligned
+  }
+
+  if (!channels || !sampleRate || dataStart < 0) throw new Error('Malformed WAV file: no fmt or data chunk');
+
+  const read = sampleReader(buffer, format, bits);
+  if (!read) throw new Error(`Unsupported WAV encoding (format ${format}, ${bits}-bit)`);
+
+  const bytesPerFrame = (bits / 8) * channels;
+  const frameCount = Math.floor((dataEnd - dataStart) / bytesPerFrame);
+  const mono = new Float32Array(frameCount);
+  for (let frame = 0; frame < frameCount; frame++) {
+    const base = dataStart + frame * bytesPerFrame;
+    let sum = 0;
+    for (let ch = 0; ch < channels; ch++) sum += read(base + ch * (bits / 8));
+    mono[frame] = sum / channels;
+  }
+
+  return resample(mono, sampleRate, WHISPER_SAMPLE_RATE);
+}
+
+function sampleReader(buffer: Buffer, format: number, bits: number): ((offset: number) => number) | null {
+  if (format === WAVE_FORMAT_IEEE_FLOAT && bits === 32) return (o) => buffer.readFloatLE(o);
+  if (format === WAVE_FORMAT_IEEE_FLOAT && bits === 64) return (o) => buffer.readDoubleLE(o);
+  if (format !== WAVE_FORMAT_PCM) return null;
+  switch (bits) {
+    case 8: return (o) => (buffer[o] - 128) / 128; // 8-bit WAV is unsigned
+    case 16: return (o) => buffer.readInt16LE(o) / 0x8000;
+    case 24: return (o) => buffer.readIntLE(o, 3) / 0x800000;
+    case 32: return (o) => buffer.readInt32LE(o) / 0x80000000;
+    default: return null;
+  }
+}
+
+/**
+ * Change sample rate. Downsampling averages each output sample's window of
+ * input (a box filter: crude, but enough to keep content above the new Nyquist
+ * from folding back as audible noise); upsampling interpolates linearly.
+ */
+function resample(input: Float32Array, from: number, to: number): Float32Array {
+  if (from === to || input.length === 0) return input;
+  const ratio = from / to;
+  const output = new Float32Array(Math.round(input.length / ratio));
+
+  if (ratio > 1) {
+    for (let i = 0; i < output.length; i++) {
+      const start = Math.floor(i * ratio);
+      const end = Math.min(input.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
+      let sum = 0;
+      for (let j = start; j < end; j++) sum += input[j];
+      output[i] = sum / (end - start);
+    }
+  } else {
+    for (let i = 0; i < output.length; i++) {
+      const pos = i * ratio;
+      const j = Math.floor(pos);
+      const next = Math.min(j + 1, input.length - 1);
+      output[i] = input[j] + (input[next] - input[j]) * (pos - j);
+    }
+  }
+  return output;
 }
