@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from './route';
 import type { QueryParams, StreamChunk } from '@/lib/providers/base-provider';
-import { resetPendingExtractions } from '@/lib/memory/pending-extractions';
+import {
+  resetPendingExtractions,
+  extractionsSettled,
+  listPendingMemories,
+} from '@/lib/memory/pending-extractions';
 
 const mocks = vi.hoisted(() => ({
   queryMock: vi.fn(),
@@ -625,6 +629,21 @@ describe('agent routing', () => {
 describe('memory extraction', () => {
   const substantial = () => scriptProvider([{ type: 'text', content: 'a'.repeat(60), provider: 'claude' }]);
 
+  // The queue is a file under the data dir: keep it out of the real home.
+  let home: string;
+  beforeEach(async () => {
+    const { mkdtemp } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    home = await mkdtemp(path.join(os.tmpdir(), 'aime-route-memory-'));
+    mocks.homeRef.value = home;
+  });
+  afterEach(async () => {
+    const { rm } = await import('fs/promises');
+    mocks.homeRef.value = null;
+    await rm(home, { recursive: true, force: true });
+  });
+
   it('runs after done, on the cheap tier, and does not hold the stream open', async () => {
     substantial();
     // An extraction that never finishes must not delay the turn at all.
@@ -646,27 +665,50 @@ describe('memory extraction', () => {
     expect((opts as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
   });
 
-  it('delivers what it found with the next turn in the same conversation', async () => {
+  it('queues what it found on disk for the renderer to pull, not on a later stream', async () => {
     substantial();
-    mocks.extractMemoriesMock.mockResolvedValue([
-      { content: 'User works on AIME', category: 'fact', tags: [], confidence: 0.8 },
-    ]);
+    let finish!: (v: unknown[]) => void;
+    mocks.extractMemoriesMock.mockReturnValue(new Promise((r) => { finish = r; }));
+
     await post('chat', { message: 'hi', chatId: 'mem-1' });
     await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 0));
 
-    scriptProvider([]);
-    const other = await post('chat', { message: 'elsewhere', chatId: 'mem-2' });
-    expect(other.events.some((e) => e.type === 'memory_extract')).toBe(false);
+    /*
+     * The pull that follows `done` must be able to wait for this extraction:
+     * it is registered before `done` was written, and settles only once the
+     * result is on disk.
+     */
+    let settled = false;
+    const waiting = extractionsSettled(5_000).then(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+    finish([{ content: 'User works on AIME', category: 'fact', tags: [], confidence: 0.8 }]);
+    await waiting;
 
-    const next = await post('chat', { message: 'and now', chatId: 'mem-1' });
-    const memEvent = next.events.find((e) => e.type === 'memory_extract');
-    expect(memEvent?.memories).toEqual([
-      { content: 'User works on AIME', category: 'fact', tags: [], confidence: 0.8 },
+    expect(await listPendingMemories()).toEqual([
+      expect.objectContaining({ chatId: 'mem-1', content: 'User works on AIME', category: 'fact', confidence: 0.8 }),
     ]);
-    // Delivered once.
-    const again = await post('chat', { message: 'once more', chatId: 'mem-1' });
-    expect(again.events.some((e) => e.type === 'memory_extract')).toBe(false);
+
+    // Nothing rides on the next turn's stream any more.
+    scriptProvider([]);
+    const next = await post('chat', { message: 'and now', chatId: 'mem-1' });
+    expect(next.events.some((e) => e.type === 'memory_extract')).toBe(false);
+  });
+
+  it('releases a waiting pull even when extraction fails', async () => {
+    substantial();
+    mocks.extractMemoriesMock.mockRejectedValue(new Error('model down'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await post('chat', { message: 'hi', chatId: 'mem-1' });
+      await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalledTimes(1));
+      const started = Date.now();
+      await extractionsSettled(5_000);
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(await listPendingMemories()).toEqual([]);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it('uses the turn’s own model on a user-added provider, whose tiers the server cannot see', async () => {

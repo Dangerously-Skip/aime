@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import { useCron, type FiredJob } from "@/hooks/use-cron";
 import { useExecutionManifest } from "@/hooks/use-execution-manifest";
+import { usePendingMemoryPull } from "@/hooks/use-pending-memory-pull";
 import { useContextBusStore } from "@/stores/context-bus-store";
 import { useAssistantStore } from "@/stores/assistant-store";
 import { notifyDesktop } from "@/lib/schedule/notify";
@@ -97,6 +98,10 @@ export function Schedulers() {
    * is looking at, and a surface is the wrong owner for something global.
    */
   useExecutionManifest();
+
+  // Memories extracted after a turn the app quit before collecting. Global for
+  // the same reason: they belong to no surface.
+  usePendingMemoryPull();
 
   return null;
 }

@@ -26,6 +26,21 @@ export interface Memory {
   updatedCount?: number;        // How many times this memory has been reinforced
 }
 
+/**
+ * A memory extracted on the server after a turn, waiting for the renderer to
+ * store it (see `pending-extractions.ts`). `id` becomes the stored memory's id,
+ * which is what makes delivering it twice harmless.
+ */
+export interface PendingMemory {
+  id: string;
+  chatId: string;
+  createdAt: number;
+  content: string;
+  category: string;
+  tags: string[];
+  confidence: number;
+}
+
 export const MEMORY_CATEGORIES: { value: MemoryCategory; label: string }[] = [
   { value: 'preference', label: 'Preference' },
   { value: 'fact', label: 'Fact' },

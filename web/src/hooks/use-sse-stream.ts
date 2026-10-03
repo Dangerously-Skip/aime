@@ -13,6 +13,7 @@ import type { CodePermissionMode } from '@/lib/surfaces/code-permission-mode';
 import { resetTextBoundary } from '@/lib/sse/core-chunks';
 import { reportTurnEvent } from '@/lib/runs/turn-outcome';
 import { classifyTurnError, isTurnErrorCode, type TurnErrorCode } from '@/lib/sse/turn-error';
+import { pullPendingMemories, AFTER_TURN_WAIT_MS } from '@/lib/memory/pending-pull';
 
 /** Abort the stream if no data arrives for this long (the server heartbeats every 15s). */
 const INACTIVITY_TIMEOUT_MS = 120_000;
@@ -523,6 +524,14 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
         flushText();
         pinnedOnDone();
+        /*
+         * Collect what this turn taught us. Extraction starts only after the
+         * stream has closed, so the server holds this pull until it lands. Here
+         * rather than in a surface because every /api/chat stream comes through
+         * this hook, and memory used to reach only the surfaces that remembered
+         * to handle it.
+         */
+        void pullPendingMemories({ waitMs: AFTER_TURN_WAIT_MS });
       } catch (error: unknown) {
         // WHY the stream ended comes from the explicit cause on our own signal.
         // An AbortError with no cause (an abort raised outside this hook) is

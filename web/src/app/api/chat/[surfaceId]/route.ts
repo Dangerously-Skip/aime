@@ -3,7 +3,7 @@ import { getProvider, getAvailableProviders } from '@/lib/providers';
 import { getSurfaceConfig, getAvailableSurfaces } from '@/lib/surfaces';
 import { createSSEStream } from '@/lib/sse';
 import { extractMemories } from '@/lib/memory/extractor';
-import { stashExtractedMemories, takeExtractedMemories } from '@/lib/memory/pending-extractions';
+import { stashExtractedMemories, beginExtraction } from '@/lib/memory/pending-extractions';
 import { type SessionControls } from '@/lib/slash-commands';
 import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
@@ -397,12 +397,6 @@ export async function POST(
 
     try {
       await sse.writeEvent({ type: 'connected', message: 'Processing request...' });
-
-      // Memories extracted after this conversation's previous turn closed.
-      const carriedMemories = takeExtractedMemories(chatId);
-      if (carriedMemories.length > 0) {
-        await sse.writeEvent({ type: 'memory_extract', memories: carriedMemories });
-      }
 
       // All surfaces use ClaudeProvider (Agent SDK) for consistent tool access,
       // connector support, and session management. Gateway routing for billing is
@@ -1469,17 +1463,25 @@ export async function POST(
         });
         const turnMessage = message as string;
         const turnResponse = collectedResponse;
+        // Registered now, before `done` is written: the renderer pulls the
+        // moment `done` arrives and waits on this, rather than finding an empty
+        // queue (lib/memory/pending-extractions.ts).
+        const settle = beginExtraction();
         runAfterClose = async () => {
-          const extracted = await extractMemories(
-            turnMessage,
-            turnResponse,
-            exec.apiKey,
-            extractionModel,
-            { baseUrl: exec.baseUrl, signal: AbortSignal.timeout(MEMORY_EXTRACTION_TIMEOUT_MS) },
-          );
-          if (extracted.length > 0) {
-            stashExtractedMemories(chatId as string, extracted);
-            console.log('[MEMORY] Extracted', extracted.length, 'memories — delivered with the next turn');
+          try {
+            const extracted = await extractMemories(
+              turnMessage,
+              turnResponse,
+              exec.apiKey,
+              extractionModel,
+              { baseUrl: exec.baseUrl, signal: AbortSignal.timeout(MEMORY_EXTRACTION_TIMEOUT_MS) },
+            );
+            if (extracted.length > 0) {
+              await stashExtractedMemories(chatId as string, extracted);
+              console.log('[MEMORY] Extracted', extracted.length, 'memories — queued for the renderer');
+            }
+          } finally {
+            settle();
           }
         };
       }
