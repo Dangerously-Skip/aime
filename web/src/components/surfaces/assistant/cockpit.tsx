@@ -8,6 +8,7 @@ import { useAttendedJobs } from "@/hooks/use-attended-jobs";
 import { APP_NAME } from "@/config/branding";
 import { summarizeRuns } from "@/lib/runs/runs";
 import {
+  approvalPolicyLabel,
   byNewest,
   describeGoalSchedule,
   formatDuration,
@@ -77,6 +78,8 @@ function GoalCard({ goal, runs, now }: { goal: Goal; runs: Run[]; now: number })
               : healthLine(summary, now)}
           </p>
           <p className="text-[11px] text-muted-foreground/80">{runsWhereLabel(goal)}</p>
+          {/* What the run may do, as enforced — not as hoped. */}
+          <p className="text-[11px] text-muted-foreground/80">{approvalPolicyLabel(goal.approvalPolicy)}</p>
         </div>
         <div className="shrink-0 text-right">
           {/* In words and with the next run — never raw cron. */}

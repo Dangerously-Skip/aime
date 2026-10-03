@@ -250,3 +250,68 @@ describe.skipIf(!installed)('the real CLI consults the gate in every mode', () =
     expect(fs.existsSync(target)).toBe(false);
   }, 120_000);
 });
+
+/**
+ * The same gate in runs nobody is watching.
+ *
+ * The hook used to be interactive-only, so in a subagent on Cowork or Code —
+ * `bypassPermissions` / `acceptEdits` — the CLI ran a Write or an `rm -rf`
+ * without asking `canUseTool` at all: the 'consequential' policy and the
+ * Security toggles were inert there. Each case runs with the params its real
+ * caller sends (the policy each states), and `onToolRefused` proves the
+ * refusal came from OUR gate rather than from the CLI declining on its own.
+ */
+describe.skipIf(!installed)('the real CLI consults the gate in background runs too', () => {
+  beforeAll(() => {
+    vi.stubEnv('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '1');
+    vi.stubEnv('SEARXNG_INSTANCES', '');
+  });
+
+  /** Params as each caller sends them: execute-service, /api/subagent, refresh-service. */
+  const STANDING_ORDER = () => ({ chatId: `standing-order-o1-${Date.now()}`, surfaceId: 'assistant', approvalPolicy: 'consequential' as const });
+  const UNATTENDED_SUBAGENT = () => ({ chatId: `subagent_canvas-refresh_${Date.now()}`, surfaceId: 'cowork', approvalPolicy: 'consequential' as const });
+  const ATTENDED_SUBAGENT = () => ({ chatId: `subagent_code-pr-1_${Date.now()}`, surfaceId: 'cowork', approvalPolicy: 'never' as const });
+  const WIDGET = () => ({ chatId: `widget-w1`, surfaceId: 'assistant', approvalPolicy: 'never' as const });
+
+  async function backgroundTurn(tool: { name: string; input: Record<string, unknown> }, params: Partial<QueryParams>) {
+    const refused: string[] = [];
+    await realTurn(tool, { ...params, onToolRefused: (r) => refused.push(r.tool) });
+    return refused;
+  }
+
+  it('a standing order: the model calls Write, and it is refused — not written', async () => {
+    const target = path.join(cwd, 'standing-order-report.md');
+    const refused = await backgroundTurn({ name: 'Write', input: { file_path: target, content: 'x' } }, STANDING_ORDER());
+    expect(fs.existsSync(target)).toBe(false);
+    expect(refused).toEqual(['Write']);
+  }, 120_000);
+
+  it('an unattended subagent on Cowork (bypassPermissions): a Write is refused', async () => {
+    const target = path.join(cwd, 'unattended-subagent.md');
+    const refused = await backgroundTurn({ name: 'Write', input: { file_path: target, content: 'x' } }, UNATTENDED_SUBAGENT());
+    expect(fs.existsSync(target)).toBe(false);
+    expect(refused).toEqual(['Write']);
+  }, 120_000);
+
+  it('an attended subagent: a Write is allowed and written', async () => {
+    const target = path.join(cwd, 'attended-subagent.md');
+    const refused = await backgroundTurn({ name: 'Write', input: { file_path: target, content: 'x' } }, ATTENDED_SUBAGENT());
+    expect(fs.readFileSync(target, 'utf8')).toBe('x');
+    expect(refused).toEqual([]);
+  }, 120_000);
+
+  it.each([
+    ['an attended subagent on Cowork', ATTENDED_SUBAGENT],
+    ['a widget refresh', WIDGET],
+    ['a standing order', STANDING_ORDER],
+  ])('%s with "Block dangerous commands": rm -rf is refused', async (_label, params) => {
+    const victim = path.join(cwd, `bg-victim-${Math.random().toString(36).slice(2)}.txt`);
+    fs.writeFileSync(victim, 'x');
+    const refused = await backgroundTurn(
+      { name: 'Bash', input: { command: `rm -rf ${victim}`, description: 'remove' } },
+      { ...params(), securitySettings: { ...OFF, blockDangerousCommands: true } },
+    );
+    expect(fs.existsSync(victim)).toBe(true);
+    expect(refused).toEqual(['Bash']);
+  }, 120_000);
+});

@@ -9,6 +9,8 @@ import {
   formatRelative,
   formatTokens,
   formatUsd,
+  refusalCount,
+  refusalLabel,
   statusTone,
   type StatusTone,
 } from "@/lib/runs/format";
@@ -53,6 +55,16 @@ export function StatusIcon({ run }: { run: Run }) {
   return <Clock className={cls} />;
 }
 
+/**
+ * A run's tone. A clean finish that missed its criteria, or that had steps
+ * refused, is not a plain success — it did less than it was asked to.
+ */
+export function runTone(run: Run): StatusTone {
+  if (isUnmet(run)) return "warn";
+  if (run.status === "succeeded" && refusalCount(run) > 0) return "warn";
+  return statusTone(run.status);
+}
+
 /** A compact bar of recent outcomes — health at a glance, oldest → newest. */
 export function RunStrip({ runs }: { runs: Run[] }) {
   const recent = [...runs].sort(byNewest).slice(0, 20).reverse();
@@ -62,10 +74,12 @@ export function RunStrip({ runs }: { runs: Run[] }) {
       {recent.map((r) => (
         <span
           key={r.id}
-          title={`${outcomeLabel(r)} · ${formatDuration(r.durationMs)} · ${formatUsd(r.cost?.totalUsd)}`}
-          className={`w-1.5 rounded-sm ${
-            TONE_DOT[isUnmet(r) ? "warn" : statusTone(r.status)]
-          } ${r.status === "succeeded" && !isUnmet(r) ? "h-3" : "h-4"}`}
+          title={[outcomeLabel(r), refusalLabel(r), formatDuration(r.durationMs), formatUsd(r.cost?.totalUsd)]
+            .filter(Boolean)
+            .join(" · ")}
+          className={`w-1.5 rounded-sm ${TONE_DOT[runTone(r)]} ${
+            runTone(r) === "success" ? "h-3" : "h-4"
+          }`}
         />
       ))}
     </div>
@@ -74,10 +88,13 @@ export function RunStrip({ runs }: { runs: Run[] }) {
 
 export function RunRow({ run, now }: { run: Run; now: number }) {
   const [open, setOpen] = useState(false);
-  const hasDetail = Boolean(run.error || run.deliverables.length || run.verification?.note);
+  const refused = refusalLabel(run);
+  const hasDetail = Boolean(run.error || run.deliverables.length || run.verification?.note || refused);
   return (
     <div className="border-b border-border/40 last:border-0">
       <button
+        type="button"
+        aria-expanded={hasDetail ? open : undefined}
         onClick={() => hasDetail && setOpen((v) => !v)}
         className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs ${
           hasDetail ? "hover:bg-accent/40" : "cursor-default"
@@ -98,6 +115,9 @@ export function RunRow({ run, now }: { run: Run; now: number }) {
           {outcomeLabel(run)}
         </span>
         <span className="w-20 shrink-0 text-muted-foreground capitalize">{run.trigger}</span>
+        {refused && (
+          <span className={`shrink-0 font-medium ${TONE_CLASS.warn}`}>{refused}</span>
+        )}
         <span className="min-w-0 flex-1 truncate text-muted-foreground" title={run.model}>
           {run.model ?? "—"}
         </span>
@@ -115,6 +135,22 @@ export function RunRow({ run, now }: { run: Run; now: number }) {
       {open && (
         <div className="space-y-1.5 border-t border-border/30 bg-muted/20 px-3 py-2 pl-11 text-xs">
           {run.error && <p className="text-red-600 dark:text-red-400">{run.error}</p>}
+          {refused && (
+            <div className="space-y-0.5">
+              <p className={TONE_CLASS.warn}>
+                {refused}. They did not run and will not run later.
+              </p>
+              <ul className="space-y-0.5" aria-label="Refused steps">
+                {run.refusals!.map((r, i) => (
+                  <li key={i} className="text-muted-foreground">
+                    <span className="font-mono text-foreground">{r.tool}</span>
+                    {` — ${r.reason}`}
+                    <span className="tabular-nums">{` · ${formatRelative(r.at, now)}`}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {run.verification?.note && (
             <p className={isUnmet(run) ? TONE_CLASS.warn : "text-muted-foreground"}>
               {isUnmet(run) ? "Criteria not met: " : "Verified: "}

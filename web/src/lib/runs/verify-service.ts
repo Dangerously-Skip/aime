@@ -39,6 +39,9 @@ export async function verifyRunAgainstGoal(
         apiKey,
         // A judgement, not an investigation — no tool loop.
         maxTurns: 1,
+        // Nobody watches a verification pass. Its `verify-` id is not one the
+        // provider infers as background, so the policy is stated.
+        approvalPolicy: 'consequential',
       })) {
         if (chunk.type === 'text') text += (chunk.content as string) ?? '';
       }

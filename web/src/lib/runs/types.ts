@@ -27,7 +27,12 @@ export type RunStatus =
   | 'cancelled'
   /** Exceeded its time budget. Distinct from 'failed' — it may simply need longer. */
   | 'timeout'
-  /** Waiting on a human for a consequential action (openworker's approval gate). */
+  /**
+   * Waiting on a human for a consequential action. NOTHING PRODUCES THIS: there
+   * is no resume mechanism, so an unattended run REFUSES a gated step and
+   * records it in `Run.refusals` instead of waiting. Kept so an old record that
+   * carries it still renders.
+   */
   | 'awaiting_approval';
 
 /** A run is finished when it will not change state again without a new trigger. */
@@ -66,6 +71,22 @@ export interface RunCost {
   totalUsd: number;
 }
 
+/**
+ * One tool call the run's own gate refused — a security toggle, a connector the
+ * user blocked, or the approval policy of an unattended run.
+ *
+ * Recorded because a refusal is otherwise invisible: the model is told, and
+ * says something like "I couldn't do that" somewhere in a result nobody may
+ * read. The step did not happen and will not happen later — there is no queue.
+ */
+export interface RunRefusal {
+  /** The tool as the model called it, e.g. `Write` or `mcp__github__create_issue`. */
+  tool: string;
+  /** Short and user-facing: why it was refused, not what the model was told. */
+  reason: string;
+  at: number;
+}
+
 export interface Run {
   id: string;
   /** Null for an ad-hoc run (e.g. a plain chat turn) with no owning Goal. */
@@ -88,15 +109,25 @@ export interface Run {
   };
   /** Which model actually ran, for cost attribution across providers. */
   model?: string;
+  /** Steps the run's gate refused, oldest first. Absent ⇒ none. */
+  refusals?: RunRefusal[];
 }
 
-/** When a Goal may act without asking first. */
+/**
+ * What a run may do without a person deciding — enforced in the provider's
+ * `canUseTool` for EVERY run (see `routeToolCallToCanUseTool`).
+ *
+ * Nobody is asked under 'always' or 'consequential': those are the policies of
+ * runs nobody is watching, so a gated step is REFUSED and recorded on the run,
+ * never paused. The Security settings and the user's connector blocks apply
+ * under every policy, 'never' included.
+ */
 export type ApprovalPolicy =
-  /** Ask before every tool call with a side effect. */
+  /** Reads only; every other tool call is refused. */
   | 'always'
-  /** Ask only before consequential actions (send, delete, spend, publish). */
+  /** Reads and in-app actions run; anything with effects outside the app is refused. */
   | 'consequential'
-  /** Never ask — fully unattended. */
+  /** No policy refusals — the run acts like a chat the user is watching. */
   | 'never';
 
 export interface GoalSchedule {

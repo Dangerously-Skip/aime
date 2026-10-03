@@ -8,6 +8,7 @@ import { NO_MODEL_MESSAGE } from '@/lib/models/credential-check';
 import { classifyThrownTurnError } from '@/lib/providers/turn-errors';
 import type { ProviderExecConfig } from '@/lib/models/execution';
 import type { Capability, Tier } from '@/lib/models/types';
+import { collectRefusals } from '@/lib/runs/runs';
 
 export const runtime = 'nodejs';
 
@@ -27,8 +28,35 @@ export const runtime = 'nodejs';
  *   apiKey         - Optional transient API key
  *   cwd            - Optional working directory
  *   agentName      - Optional named agent config to use
+ *   extraAllowedTools - Tools to expose beyond the surface's own
+ *   attended       - true ONLY when a person's click started this run and
+ *                    they are waiting on it (Create PR, a canvas button).
+ *                    Absent ⇒ unattended. Anything but a boolean ⇒ 400.
  *
  * The run is tied to the request: a caller that goes away stops it.
+ *
+ * ## Attended or not is the CALLER's statement, and absence is the safe side
+ *
+ * The `subagent_` chatId prefix cannot tell a user's click from a follow-up the
+ * app fired on its own, so the request says which it is:
+ *
+ *   attended: true  → approval policy 'never' — acts like a chat the user is
+ *                     watching. The tools in `extraAllowedTools` are the ones
+ *                     the click named, so they count as approved for the
+ *                     connector gate's "ask first" question (which this run has
+ *                     no client to ask). The Security settings, the user's
+ *                     connector blocks and money-handling servers still refuse.
+ *   absent / false  → 'consequential': reads and in-app actions only; anything
+ *                     with effects outside the app is refused, and nothing in
+ *                     `extraAllowedTools` is pre-approved.
+ *
+ * Why claiming `attended` cannot broaden what an UNATTENDED run may do: the
+ * route needs the local API credential, so only the renderer reaches it, and no
+ * server-side scheduler calls it. The one way an unattended run could POST here
+ * is its own model making the request — Bash (curl, node, python…) classifies
+ * as consequential and is refused under the policy those runs carry, the
+ * built-in WebFetch is withheld, and FetchUrl is a GET that refuses private
+ * addresses. A run that already has 'never' gains nothing by calling it.
  */
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
@@ -50,6 +78,7 @@ export async function POST(req: NextRequest) {
     providerConfig = null,
     capability = null,
     tier = null,
+    attended: attendedField,
   } = body as {
     parentChatId?: string;
     task?: string;
@@ -62,14 +91,26 @@ export async function POST(req: NextRequest) {
     providerConfig?: ProviderExecConfig | null;
     capability?: Capability | null;
     tier?: Tier | null;
+    attended?: unknown;
   };
 
   if (!task || typeof task !== 'string') {
     return Response.json({ error: 'task is required' }, { status: 400 });
   }
+  // Strictly a boolean: "true", 1 or {} must not read as a person's click.
+  if (attendedField !== undefined && typeof attendedField !== 'boolean') {
+    return Response.json({ error: 'attended must be a boolean' }, { status: 400 });
+  }
+  const attended = attendedField === true;
+  if (
+    extraAllowedTools !== null &&
+    (!Array.isArray(extraAllowedTools) || extraAllowedTools.some((t) => typeof t !== 'string'))
+  ) {
+    return Response.json({ error: 'extraAllowedTools must be an array of tool names' }, { status: 400 });
+  }
 
   const subagentId = `subagent_${parentChatId ?? 'anon'}_${Date.now()}`;
-  console.log('[SUBAGENT] Spawning sub-agent:', subagentId, '| task:', task.slice(0, 80), agentName ? `| agent: ${agentName}` : '');
+  console.log('[SUBAGENT] Spawning sub-agent:', subagentId, attended ? '(attended)' : '(unattended)', '| task:', task.slice(0, 80), agentName ? `| agent: ${agentName}` : '');
 
   try {
     const provider = getProvider('claude');
@@ -141,6 +182,7 @@ export async function POST(req: NextRequest) {
     let output = '';
     let failure: { message: string; code: unknown } | null = null;
     const canvasDocs: unknown[] = [];
+    const refused = collectRefusals();
     try {
       for await (const chunk of provider.query({
         prompt: task,
@@ -165,6 +207,9 @@ export async function POST(req: NextRequest) {
         baseUrl: exec.baseUrl,
         providerEnv: exec.env,
         cwd: (cwd as string) || undefined,
+        approvalPolicy: attended ? 'never' : 'consequential',
+        userApprovedTools: attended && extraAllowedTools ? extraAllowedTools : undefined,
+        onToolRefused: refused.record,
       })) {
         if (chunk.type === 'text') {
           output += (chunk.content as string) || '';
@@ -185,7 +230,7 @@ export async function POST(req: NextRequest) {
     if (req.signal.aborted) return Response.json({ error: 'cancelled' }, { status: 499 });
     if (failure) {
       console.error('[SUBAGENT] Failed:', subagentId, failure.code, failure.message);
-      return Response.json({ error: failure.message, code: failure.code }, { status: 502 });
+      return Response.json({ error: failure.message, code: failure.code, refused: refused.list }, { status: 502 });
     }
 
     console.log('[SUBAGENT] Completed:', subagentId, '| output length:', output.length, '| canvas docs:', canvasDocs.length);
@@ -196,6 +241,9 @@ export async function POST(req: NextRequest) {
       output,
       canvasDocs,
       canvas: canvasDocs[canvasDocs.length - 1] ?? null,
+      // What the gate refused, so the caller can say so instead of only
+      // reporting that the output was not what it expected.
+      refused: refused.list,
     });
   } catch (err) {
     const { code, message } = classifyThrownTurnError(err);

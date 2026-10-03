@@ -86,6 +86,10 @@ const CANVAS_TOOL_NAME = 'canvas';
  * included — also measured, including for a subagent's own tool calls. So the
  * hook decides nothing; it only guarantees the gate is asked.
  * `claude-provider.real-sdk.test.ts` proves it end to end.
+ *
+ * Installed on EVERY run — standing orders, subagents, heartbeats and widget
+ * refreshes as well as interactive turns. It was interactive-only once, which
+ * is how every background gate came to be inert while its tests passed.
  */
 export async function routeToolCallToCanUseTool() {
   return {
@@ -95,6 +99,21 @@ export async function routeToolCallToCanUseTool() {
       permissionDecisionReason: 'Every tool call is decided by the host permission gate.',
     },
   };
+}
+
+/**
+ * The chatId prefixes of runs nobody is watching: standing orders, subagents,
+ * heartbeat check-ins and widget refreshes.
+ *
+ * Used ONLY as the fail-safe default for a caller that states no approval
+ * policy — never to relax one. The callers that produce these ids all state
+ * their policy explicitly now, so this is the net under a future caller that
+ * forgets, not the mechanism.
+ */
+const BACKGROUND_CHAT_PREFIXES = ['standing-order-', 'subagent_', 'hb-', 'widget-'] as const;
+
+export function isBackgroundChatId(chatId: string): boolean {
+  return BACKGROUND_CHAT_PREFIXES.some((prefix) => chatId.startsWith(prefix));
 }
 
 /**
@@ -280,6 +299,8 @@ export class ClaudeProvider extends BaseProvider {
       browserToolsAvailable,
       onConnectorRequest,
       onDocumentPrint,
+      userApprovedTools,
+      onToolRefused,
     } = params;
 
     /**
@@ -1797,45 +1818,48 @@ export class ClaudeProvider extends BaseProvider {
       toolGate = buildToolGate(remoteMcpServers, decisions);
     }
 
-    // Detect if this is a background/scheduled execution (not interactive)
-    const isBackgroundRun = chatId.startsWith('standing-order-') || chatId.startsWith('subagent_') || chatId.startsWith('hb-') || chatId.startsWith('widget-');
-
     /**
-     * Approval policy (P6/C3). Explicit per-query when provided (a Goal carries
-     * one); otherwise unattended runs gate consequential actions and
-     * interactive sessions gate nothing — in an interactive session the human
-     * is watching the stream and holds the abort button, which IS the approval
-     * mechanism.
+     * Approval policy (P6/C3). Background callers state it — a standing order
+     * passes 'consequential', a widget refresh 'never', `/api/subagent` whatever
+     * its request declared (attended or not). A caller that states nothing gets
+     * the FAIL-SAFE inference: a background chatId prefix means 'consequential',
+     * anything else 'never' — in an interactive session the human is watching
+     * the stream and holds the abort button, which IS the approval mechanism.
+     * The prefix can only make a run stricter; nothing reads it to relax one.
      *
      * This replaced a hardcoded ten-name tool list. That list was wrong in both
      * directions — every newly added MCP connector tool sailed through
      * ungoverned, and its deny message claimed "an approval card has been
      * created" when no such machinery existed. The classifier judges by effect
-     * (world-side vs in-app vs read) and its deny message promises nothing it
-     * doesn't do.
+     * (world-side vs in-app vs read), and a gated call is REFUSED: there is no
+     * queue and no resume, so its deny message promises neither.
      */
-    const approvalPolicy = params.approvalPolicy ?? (isBackgroundRun ? 'consequential' : 'never');
+    const approvalPolicy = params.approvalPolicy ?? (isBackgroundChatId(chatId) ? 'consequential' : 'never');
 
     /**
-     * Route every tool call through `canUseTool` — see
+     * Route every tool call through `canUseTool`, in EVERY run — see
      * `routeToolCallToCanUseTool` for why the SDK does not do it by itself.
      *
-     * Interactive runs only, for now, and deliberately. Background runs
-     * (subagents, standing orders, heartbeat, widget refresh) default to the
-     * `consequential` approval policy above, which has never actually fired for
-     * an auto-approved tool — so switching the hook on there would start
-     * refusing every Write, Edit and non-read Bash in every subagent at once.
-     * That is a product decision, not a side effect to ship inside this one.
+     * It used to be interactive-only. So in every subagent, standing order,
+     * heartbeat and widget refresh, the CLI auto-approved whatever its
+     * permission mode or `allowedTools` let through and `canUseTool` never
+     * heard of it: the four Security toggles, the user's connector blocks and
+     * the 'consequential' policy were all inert there, while the Cockpit said
+     * standing orders "pause before side effects". With the hook on they are
+     * real — and where a gate would need to ask and no client is attached, it
+     * refuses.
      */
-    if (!isBackgroundRun) {
-      queryOptions.hooks = { PreToolUse: [{ hooks: [routeToolCallToCanUseTool] }] };
-    }
+    queryOptions.hooks = { PreToolUse: [{ hooks: [routeToolCallToCanUseTool] }] };
 
     /** Where the SDK writes plan files: `<CLAUDE_CONFIG_DIR>/plans` (measured). */
     const plansDir = codeMode === 'plan' ? joinPath(getDataDir(), 'plans') : '';
 
     // Intercept AskUserQuestion, browser tools, canvas tool, and loop detection via canUseTool.
-    queryOptions.canUseTool = async (
+    //
+    // A denial may carry `refusal`: the few words the run log shows the user,
+    // as opposed to `message`, which is written for the model. The wrapper
+    // below reports it and strips it before the SDK sees the decision.
+    const decideToolUse = async (
       toolName: string,
       input: Record<string, unknown>,
       { toolUseID }: { toolUseID: string },
@@ -1860,7 +1884,7 @@ export class ClaudeProvider extends BaseProvider {
         const verdict = urlProvenance.check((input as { url?: unknown }).url);
         if (!verdict.allowed) {
           console.warn('[SECURITY] Refused a fetch of an unsourced URL:', input.url);
-          return { behavior: 'deny' as const, message: verdict.message! };
+          return { behavior: 'deny' as const, message: verdict.message!, refusal: 'A URL nothing in the run supplied' };
         }
       }
 
@@ -1875,7 +1899,7 @@ export class ClaudeProvider extends BaseProvider {
         : null;
       if (modeVerdict?.kind === 'deny') {
         console.warn(`[SECURITY] ${codeMode} mode refused:`, toolName);
-        return { behavior: 'deny' as const, message: modeVerdict.message };
+        return { behavior: 'deny' as const, message: modeVerdict.message, refusal: 'Not allowed in this permission mode' };
       }
       /** A gate below already put THIS call to the user and got a yes. */
       let approvedByUser = false;
@@ -1884,6 +1908,7 @@ export class ClaudeProvider extends BaseProvider {
         console.warn('[SECURITY] Blocked a tool withheld from this run:', toolName);
         return {
           behavior: 'deny' as const,
+          refusal: 'Turned off in Settings',
           message:
             `${toolName} is not available in this session — it has been turned off in ` +
             `settings. Do not try it again or look for another way to run it. Tell the ` +
@@ -1907,6 +1932,7 @@ export class ClaudeProvider extends BaseProvider {
             console.warn('[SECURITY] Blocked a write outside the working directory:', target);
             return {
               behavior: 'deny' as const,
+              refusal: 'Restrict to project folder: a write outside the working directory',
               message:
                 `${toolName} was refused: ${target} is outside the working directory, and this ` +
                 `session is restricted to it. Do not retry it or try to reach the same place ` +
@@ -1950,6 +1976,7 @@ export class ClaudeProvider extends BaseProvider {
           console.warn('[SECURITY] Shell write outside the working directory:', outside.target);
           return {
             behavior: 'deny' as const,
+            refusal: 'Restrict to project folder: a shell write outside the working directory',
             message:
               `That command writes to ${outside.target} via ${outside.what}, which is outside ` +
               `the working directory this session is restricted to. Write inside the working ` +
@@ -1984,6 +2011,7 @@ export class ClaudeProvider extends BaseProvider {
           if (deniedThisTurn.has(key)) {
             return {
               behavior: 'deny' as const,
+              refusal: 'Already declined in this run',
               message:
                 `That command was already declined in this turn and will not be asked again. ` +
                 `Stop retrying it and finish what you can without it.`,
@@ -1997,6 +2025,7 @@ export class ClaudeProvider extends BaseProvider {
             console.warn('[SECURITY] Approval prompt limit reached for this turn');
             return {
               behavior: 'deny' as const,
+              refusal: 'Too many approval prompts in one run',
               message:
                 `This turn has already asked the user to approve ${MAX_COMMAND_APPROVALS_PER_TURN} ` +
                 `commands, so no more will be shown. Stop and tell them what is left to do.`,
@@ -2008,6 +2037,9 @@ export class ClaudeProvider extends BaseProvider {
             console.warn(`[SECURITY] Cannot ask about a ${verdict.category} command here; denying`);
             return {
               behavior: 'deny' as const,
+              refusal:
+                `${verdict.category === 'network' ? 'Block network commands' : 'Block dangerous commands'}: ` +
+                `${verdict.reason}, and nobody was there to ask`,
               message:
                 `That command looks like ${verdict.reason} and needs the user's approval, but ` +
                 `this session cannot ask them (no interactive client attached). It was not run. ` +
@@ -2040,6 +2072,7 @@ export class ClaudeProvider extends BaseProvider {
             deniedThisTurn.add(key);
             return {
               behavior: 'deny' as const,
+              refusal: unanswered ? 'The approval prompt timed out' : 'Declined by the user',
               message: unanswered
                 ? `That command was not run: the approval prompt timed out because the user did ` +
                   `not respond. Do not retry it. Tell them it is still waiting on them and carry on.`
@@ -2061,6 +2094,7 @@ export class ClaudeProvider extends BaseProvider {
         console.warn('[Governance] Blocked a tool the user denied:', toolName);
         return {
           behavior: 'deny' as const,
+          refusal: `Blocked for ${mcpTool.server} in Customize → Connectors`,
           message:
             `${mcpTool.tool} was not run: it is blocked for ${mcpTool.server}. Do not try ` +
             `it again. Tell the user it is blocked, and that they can change that in ` +
@@ -2073,9 +2107,24 @@ export class ClaudeProvider extends BaseProvider {
         const { evaluateApproval } = await import('../runs/approval');
         const outcome = evaluateApproval(approvalPolicy, toolName, input);
         if (!outcome.allow) {
-          console.warn('[Governance] Paused', outcome.class, 'tool in unattended run:', toolName, 'chatId:', chatId);
-          return { behavior: 'deny' as const, message: outcome.reason! };
+          console.warn('[Governance] Refused', outcome.class, 'tool in unattended run:', toolName, 'chatId:', chatId);
+          return { behavior: 'deny' as const, message: outcome.reason!, refusal: outcome.summary };
         }
+      } else if (
+        mcpPolicy === 'always_ask' &&
+        mcpTool &&
+        userApprovedTools?.includes(toolName) &&
+        !toolGate!.handlesMoney(mcpTool.server)
+      ) {
+        // ── Already answered by the click that started this run ──────────
+        // An attended subagent started to call exactly this tool ("Create PR",
+        // a canvas button) IS the approval card, clicked — and it has no client
+        // to show a second one, so asking would only refuse it. Exact full name:
+        // a bare-name match would approve the same verb on every other server.
+        // Money-handling servers still need their own yes, for the reason a
+        // remembered approval does not apply to them either.
+        console.log('[Governance] Approved by the user action that started this run:', toolName);
+        approvedByUser = true;
       } else if (mcpPolicy === 'always_ask' && mcpTool) {
         // ── The interactive gate ─────────────────────────────────────────
         // approvalPolicy 'never' means "the human is watching", which is only an
@@ -2089,6 +2138,7 @@ export class ClaudeProvider extends BaseProvider {
         if (deniedThisTurn.has(toolName)) {
           return {
             behavior: 'deny' as const,
+            refusal: 'Already declined in this run',
             message:
               `${mcpTool.tool} was already declined in this turn and will not be asked ` +
               `again. Stop trying it and finish what you can without it.`,
@@ -2103,6 +2153,7 @@ export class ClaudeProvider extends BaseProvider {
           console.warn('[Governance] Cannot ask for approval on this surface; denying', toolName);
           return {
             behavior: 'deny' as const,
+            refusal: `A ${mcpTool.server} tool that asks first, and nobody was there to ask`,
             message:
               `${mcpTool.tool} needs the user's approval and this session cannot ask them ` +
               `(no interactive client attached). It was not run. Say what you would have ` +
@@ -2153,6 +2204,7 @@ export class ClaudeProvider extends BaseProvider {
           deniedThisTurn.add(toolName);
           return {
             behavior: 'deny' as const,
+            refusal: unanswered ? 'The approval prompt timed out' : 'Declined by the user',
             message: unanswered
               ? `${mcpTool.tool} was not run: the approval prompt timed out because the user ` +
                 `did not respond. Do not retry it. Tell them it is still waiting on them and ` +
@@ -2186,6 +2238,7 @@ export class ClaudeProvider extends BaseProvider {
           console.warn(`[SECURITY] ${codeMode} mode cannot ask here; denying`, toolName);
           return {
             behavior: 'deny' as const,
+            refusal: 'Needs approval in this permission mode, and nobody was there to ask',
             message:
               `${toolName} needs the user's approval in this permission mode, and this session ` +
               `cannot ask them (no interactive client attached). It was not run.`,
@@ -2239,6 +2292,7 @@ export class ClaudeProvider extends BaseProvider {
         console.error('[Claude] Loop DENIED for tool:', toolName, 'id:', toolUseID, `(${consecutiveCount} consecutive identical calls)`);
         return {
           behavior: 'deny' as const,
+          refusal: `The same call ${consecutiveCount} times in a row`,
           message: `Tool call denied — you've called ${toolName} ${consecutiveCount} times with identical inputs. This is a loop. Stop and tell the user what went wrong and suggest an alternative approach.`,
         };
       }
@@ -2365,6 +2419,31 @@ export class ClaudeProvider extends BaseProvider {
       }
 
       return { behavior: 'allow' as const };
+    };
+
+    /*
+     * Every refusal is reported to a caller that asked (`onToolRefused`) — a
+     * background run records them on its Run, because the person it ran for was
+     * not watching and the model's "I couldn't do that" is easy to miss. The
+     * `refusal` label never reaches the SDK.
+     */
+    queryOptions.canUseTool = async (
+      toolName: string,
+      input: Record<string, unknown>,
+      ctx: { toolUseID: string },
+    ) => {
+      const decision = await decideToolUse(toolName, input, ctx);
+      if (decision.behavior !== 'deny') return decision;
+      const { refusal, ...denied } = decision as typeof decision & { refusal?: string };
+      if (onToolRefused) {
+        try {
+          onToolRefused({ tool: toolName, reason: refusal ?? 'Refused by a safety check', at: Date.now() });
+        } catch (err) {
+          // Recording a refusal must never turn it into something else.
+          console.error('[Claude] onToolRefused threw:', err);
+        }
+      }
+      return denied;
     };
 
     // Set working directory — use selected folder, or fall back to a per-chat

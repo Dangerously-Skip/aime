@@ -15,7 +15,7 @@ import { describeTrigger, validateTrigger, type Trigger } from './schedule';
  * Pure: the caller passes the stores' contents and a clock.
  */
 
-export type HealthKind = 'failed' | 'paused' | 'invalid' | 'overdue' | 'failed-runs';
+export type HealthKind = 'failed' | 'paused' | 'invalid' | 'overdue' | 'failed-runs' | 'refused';
 
 export interface HealthItem {
   key: string;
@@ -52,6 +52,8 @@ export interface HealthRun {
   status: string;
   startedAt: number;
   goalId?: string | null;
+  /** Steps the run's gate refused — see `Run.refusals`. */
+  refusals?: Array<{ tool: string }>;
 }
 
 /** How late a run may be before it counts as missed: ticks are a minute apart. */
@@ -84,6 +86,14 @@ export function scheduleHealth(input: {
 }): HealthItem[] {
   const { orders, activity = [], runs = [], now } = input;
   const items: HealthItem[] = [];
+
+  // The newest run per goal decides "its last run had steps refused".
+  const latestRun = new Map<string, HealthRun>();
+  for (const r of runs) {
+    if (!r.goalId) continue;
+    const seen = latestRun.get(r.goalId);
+    if (!seen || r.startedAt > seen.startedAt) latestRun.set(r.goalId, r);
+  }
 
   // The newest activity entry per order decides "currently failing".
   const latest = new Map<string, HealthActivity>();
@@ -129,6 +139,26 @@ export function scheduleHealth(input: {
         detail: `${describeTrigger(order.trigger)} — missed its run ${late} ago${
           order.attended ? ` (runs only while ${input.appName ?? 'the app'} is open)` : ''
         }`,
+      });
+    }
+
+    /*
+     * REFUSED STEPS. A background order runs with nobody to ask, so a step with
+     * effects outside the app is refused rather than paused — and a run that
+     * "succeeded" without doing half its job is exactly the quiet failure this
+     * list exists to surface. Only the LATEST run counts: the next clean run
+     * clears it, as the next success clears a failure.
+     */
+    const refusals = order.attended ? undefined : latestRun.get(`so:${order.id}`)?.refusals;
+    if (refusals?.length) {
+      const tools = [...new Set(refusals.map((r) => r.tool))];
+      const named = tools.slice(0, 3).join(', ') + (tools.length > 3 ? ', …' : '');
+      items.push({
+        key: `refused:${order.id}`,
+        kind: 'refused',
+        orderId: openable(order),
+        title,
+        detail: `Last run had ${refusals.length} step${refusals.length === 1 ? '' : 's'} refused (${named}) — see its runs in the Cockpit`,
       });
     }
   }

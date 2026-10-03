@@ -164,6 +164,10 @@ export function BranchHeader({
           model: route?.model ?? null,
           providerConfig: route?.providerConfig ?? null,
           extraAllowedTools: ["mcp__github__create_pull_request"],
+          // The user clicked Create PR and is waiting on it: this run acts like
+          // a chat they are watching, and the click approves the one tool named
+          // above. See /api/subagent.
+          attended: true,
         }),
       });
 

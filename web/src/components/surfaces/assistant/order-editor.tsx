@@ -14,6 +14,8 @@ import {
   type Trigger,
 } from "@/lib/schedule/schedule";
 import { editableOrderJson, parseOrderEdit } from "@/lib/schedule/order-edit";
+import { approvalPolicyLabel } from "@/lib/runs/format";
+import { STANDING_ORDER_POLICY } from "@/lib/runs/standing-order-goal";
 import {
   X, Play, Pause, Trash2,
   Zap, CheckCircle2, AlertCircle,
@@ -212,6 +214,7 @@ export function OrderEditor({ orderId, onClose }: OrderEditorProps) {
                     <p className="text-xs text-muted-foreground">Next run: {formatNextRun(next, now)}</p>
                   )}
                   <p className="text-xs text-muted-foreground">Runs in background — even with the window closed</p>
+                  <p className="text-xs text-muted-foreground">{approvalPolicyLabel(STANDING_ORDER_POLICY)}</p>
                 </div>
                 <div>
                   <span className="text-xs font-medium text-muted-foreground">Status</span>

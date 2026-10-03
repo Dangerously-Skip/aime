@@ -20,6 +20,8 @@ import { DoctorPanel } from './doctor-panel';
 import { useAttendedJobs } from '@/hooks/use-attended-jobs';
 import { SchedulePicker, type ScheduleChange } from '@/components/schedule/schedule-picker';
 import { describeTrigger, type Trigger } from '@/lib/schedule/schedule';
+import { approvalPolicyLabel } from '@/lib/runs/format';
+import { ATTENDED_JOB_POLICY } from '@/lib/runs/standing-order-goal';
 
 // ── Scheduled jobs ────────────────────────────────────────────────────────────
 
@@ -99,7 +101,8 @@ function CronPanel({ initialDraft }: { initialDraft?: CronDraft | null }) {
             <span className="text-xs font-medium">When</span>
             <SchedulePicker value={startTrigger} onChange={setSchedule} compact />
             <p className="text-[11px] text-muted-foreground">
-              Runs in the surface you pick, in a conversation of its own — only while {APP_NAME} is open.
+              Runs in the surface you pick, in a conversation of its own — only while {APP_NAME} is open.{' '}
+              {approvalPolicyLabel(ATTENDED_JOB_POLICY)}
             </p>
           </div>
           <div className="space-y-1">

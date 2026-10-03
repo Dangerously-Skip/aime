@@ -230,6 +230,60 @@ describe('every toggle that claims enforcement is enforced', () => {
   );
 });
 
+/**
+ * The same claims, in runs nobody is watching.
+ *
+ * The badge says ENFORCED with no "except in the background" — and for months
+ * that was false: the PreToolUse hook was interactive-only, so in a standing
+ * order, subagent, heartbeat or widget refresh the CLI never asked `canUseTool`
+ * about an auto-approved call. Each kind is listed with the policy its caller
+ * states (heartbeat states none; the prefix inference is what it gets).
+ *
+ * Under a 'consequential' policy the probe would be refused by the policy too,
+ * so the message is what proves the TOGGLE did it — the toggles run first. The
+ * on/off/control trio runs where the policy refuses nothing.
+ */
+const BACKGROUND_RUNS = [
+  ['standing order', { chatId: 'standing-order-o1-1', surfaceId: 'assistant', approvalPolicy: 'consequential' }],
+  ['heartbeat', { chatId: 'hb-1', surfaceId: 'assistant' }],
+  ['widget refresh', { chatId: 'widget-w1', surfaceId: 'assistant', approvalPolicy: 'never' }],
+  ['attended subagent', { chatId: 'subagent_canvas-action_1', surfaceId: 'cowork', approvalPolicy: 'never' }],
+  ['unattended subagent', { chatId: 'subagent_canvas-refresh_1', surfaceId: 'cowork', approvalPolicy: 'consequential' }],
+] as const;
+const UNGATED_RUNS = BACKGROUND_RUNS.filter(([, p]) => 'approvalPolicy' in p && p.approvalPolicy === 'never');
+
+describe('every enforced toggle is enforced in background runs too', () => {
+  it.each(BACKGROUND_RUNS)('a %s routes every tool call to canUseTool', async (_kind, run) => {
+    await canUseToolWithToggle('blockDangerousCommands', true, run);
+    const hooks = queryMock.mock.calls.at(-1)![0].options.hooks as {
+      PreToolUse?: Array<{ hooks: Array<() => Promise<{ hookSpecificOutput: { permissionDecision: string } }>> }>;
+    };
+    expect((await hooks!.PreToolUse![0].hooks[0]()).hookSpecificOutput.permissionDecision).toBe('ask');
+  });
+
+  it.each(enforced.flatMap((t) => BACKGROUND_RUNS.map(([kind, run]) => [t.key, kind, run] as const)))(
+    '%s is refused in a %s',
+    async (key, _kind, run) => {
+      const probe = PROBES[key]!;
+      const canUseTool = await canUseToolWithToggle(key, true, { ...probe.params, ...run });
+      const result = await canUseTool(probe.tool, probe.input, { toolUseID: `bg-${key}` });
+      expect(result.behavior).toBe('deny');
+      expect(result.message ?? '').toMatch(probe.message);
+    },
+  );
+
+  it.each(enforced.flatMap((t) => UNGATED_RUNS.map(([kind, run]) => [t.key, kind, run] as const)))(
+    '%s in a %s: allowed with the setting off, control allowed with it on',
+    async (key, _kind, run) => {
+      const probe = PROBES[key]!;
+      const off = await canUseToolWithToggle(key, false, { ...probe.params, ...run });
+      expect((await off(probe.tool, probe.input, { toolUseID: `bg-off-${key}` })).behavior).toBe('allow');
+      const on = await canUseToolWithToggle(key, true, { ...probe.params, ...run });
+      expect((await on(probe.control.tool, probe.control.input, { toolUseID: `bg-ctl-${key}` })).behavior).toBe('allow');
+    },
+  );
+});
+
 describe('every toggle that admits to being guidance says so out loud', () => {
   it.each(guidance.map((t) => [t.key, t.description] as const))(
     '%s tells the user it is not enforced',

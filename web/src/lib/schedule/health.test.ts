@@ -103,3 +103,37 @@ describe('expectedRunAt', () => {
     expect(expectedRunAt(order({ trigger: { type: 'event', event: 'x' } }))).toBeNull();
   });
 });
+
+/*
+ * A standing order that "succeeded" with half its job refused is the quiet
+ * failure this list exists for: refused, not paused, so nothing will finish it.
+ */
+describe('scheduleHealth — refused steps', () => {
+  const refused = (tools: string[], startedAt = NOW - HOUR) => ({
+    status: 'succeeded',
+    startedAt,
+    goalId: 'so:o1',
+    refusals: tools.map((tool) => ({ tool })),
+  });
+
+  it("flags an order whose last run had steps refused, naming the tools", () => {
+    const items = scheduleHealth({ orders: [order()], runs: [refused(['Write', 'Bash', 'Write'])], now: NOW });
+    expect(items).toEqual([
+      expect.objectContaining({ kind: 'refused', orderId: 'o1', detail: expect.stringMatching(/3 steps refused \(Write, Bash\)/) }),
+    ]);
+  });
+
+  it('clears once a later run had none — as a success clears a failure', () => {
+    const items = scheduleHealth({
+      orders: [order()],
+      runs: [refused(['Write'], NOW - 2 * HOUR), { status: 'succeeded', startedAt: NOW - HOUR, goalId: 'so:o1' }],
+      now: NOW,
+    });
+    expect(items).toEqual([]);
+  });
+
+  it("ignores another goal's refusals", () => {
+    const items = scheduleHealth({ orders: [order()], runs: [{ ...refused(['Write']), goalId: 'so:other' }], now: NOW });
+    expect(items).toEqual([]);
+  });
+});

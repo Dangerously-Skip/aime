@@ -51,7 +51,7 @@ export const SECURITY_TOGGLES: SecurityToggle[] = [
     setter: 'setBlockDangerousCommands',
     label: 'Ask before destructive commands',
     description:
-      'Pauses and asks you before running rm -rf, sudo, mkfs, dd, chmod 777, force pushes and the like. Errs towards asking. Unattended runs refuse them instead, since nobody is there to ask.',
+      'Pauses and asks you before running rm -rf, sudo, mkfs, dd, chmod 777, force pushes and the like. Errs towards asking. Runs with no chat to ask in — standing orders, widget refreshes, subagents — refuse them instead.',
   },
   {
     key: 'blockNetworkCommands',
@@ -59,7 +59,7 @@ export const SECURITY_TOGGLES: SecurityToggle[] = [
     setter: 'setBlockNetworkCommands',
     label: 'Ask before commands that reach the network',
     description:
-      'Pauses and asks you before netcat, socat, SSH tunnels, curl uploads, scp/rsync to a remote host, and piping a download into an interpreter. npm install, pip install, git push and brew are unaffected. Unattended runs refuse them instead, since nobody is there to ask.',
+      'Pauses and asks you before netcat, socat, SSH tunnels, curl uploads, scp/rsync to a remote host, and piping a download into an interpreter. npm install, pip install, git push and brew are unaffected. Runs with no chat to ask in — standing orders, widget refreshes, subagents — refuse them instead.',
   },
   {
     key: 'restrictToProjectFolder',

@@ -8,6 +8,8 @@ import { useAssistantStore } from "@/stores/assistant-store";
 import { SchedulePicker, type ScheduleChange } from "@/components/schedule/schedule-picker";
 import { specToTrigger } from "@/lib/schedule/schedule";
 import { NOTIFY_OPTIONS } from "./order-editor";
+import { approvalPolicyLabel } from "@/lib/runs/format";
+import { STANDING_ORDER_POLICY } from "@/lib/runs/standing-order-goal";
 
 interface TemplateDialogProps {
   template: StandingOrderTemplate;
@@ -62,6 +64,10 @@ export function TemplateDialog({ template, onClose }: TemplateDialogProps) {
         {/* Body */}
         <div className="px-5 py-4 space-y-4">
           <p className="text-sm text-muted-foreground">{template.description}</p>
+          {/* Said BEFORE activating: it runs unattended, and this is what that means. */}
+          <p className="text-xs text-muted-foreground">
+            Runs in background. {approvalPolicyLabel(STANDING_ORDER_POLICY)}
+          </p>
 
           <div>
             <span className="text-xs font-medium text-muted-foreground block mb-1">Schedule</span>
