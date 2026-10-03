@@ -182,6 +182,16 @@ describe('option assembly', () => {
     expect(env.CLAUDE_CONFIG_DIR).toBe(path.join(os.homedir(), '.aime'));
   });
 
+  it('never hands the local API token to the subprocess the agent runs Bash in', async () => {
+    vi.stubEnv('AIME_API_TOKEN', 'local-api-token-0123456789abcdef');
+    for (const params of [{}, { apiKey: 'sk-ant-x' }]) {
+      const { options } = await captureOptions(new ClaudeProvider(), params);
+      const env = options.env as Record<string, string>;
+      expect(env.AIME_API_TOKEN).toBeUndefined();
+      expect(JSON.stringify(env)).not.toContain('local-api-token-0123456789abcdef');
+    }
+  });
+
   it('maps think levels to SDK thinking config', async () => {
     const { options } = await captureOptions(new ClaudeProvider(), {
       sessionControls: controls({ thinkLevel: 'high' }),

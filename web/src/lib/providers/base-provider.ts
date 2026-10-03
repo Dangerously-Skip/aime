@@ -214,8 +214,8 @@ export interface QueryParams {
   browserToolsAvailable?: boolean;
   /**
    * Approval policy for this run (P6/C3), enforced in `canUseTool` for every
-   * run. Background callers STATE it — a standing order 'consequential', a
-   * widget 'never', a subagent whatever its request says it is. Unset ⇒ a
+   * run. Background callers STATE it — a standing order or widget refresh
+   * 'consequential', a subagent whatever its request says it is. Unset ⇒ a
    * fail-safe inference: a background chatId prefix (`standing-order-`,
    * `subagent_`, `hb-`, `widget-`) gets 'consequential', anything else 'never'.
    */

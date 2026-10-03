@@ -1820,7 +1820,7 @@ export class ClaudeProvider extends BaseProvider {
 
     /**
      * Approval policy (P6/C3). Background callers state it — a standing order
-     * passes 'consequential', a widget refresh 'never', `/api/subagent` whatever
+     * or widget refresh passes 'consequential', `/api/subagent` whatever
      * its request declared (attended or not). A caller that states nothing gets
      * the FAIL-SAFE inference: a background chatId prefix means 'consequential',
      * anything else 'never' — in an interactive session the human is watching
@@ -2478,7 +2478,14 @@ export class ClaudeProvider extends BaseProvider {
 
     // IMPORTANT: Always strip CLAUDECODE from subprocess env to prevent
     // "nested session" detection when the app is launched from a Claude Code terminal.
-    const { CLAUDECODE: _cc, ...safeEnv } = process.env;
+    //
+    // AIME_API_TOKEN goes too. It is the credential for the local API, and the
+    // agent's Bash inherits this environment: with it, a turn (or a prompt
+    // injection steering one) could call /api/subagent with `attended: true`
+    // and start a run the user never clicked. Nothing in the subprocess needs
+    // it — the one legitimate use, our own llm-proxy, is handed it explicitly
+    // below as ANTHROPIC_AUTH_TOKEN, scoped to that base URL.
+    const { CLAUDECODE: _cc, AIME_API_TOKEN: _apiToken, ...safeEnv } = process.env;
     queryOptions.env = {
       ...safeEnv,
       CLAUDE_CONFIG_DIR: getDataDir(),

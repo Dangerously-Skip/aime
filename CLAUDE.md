@@ -213,7 +213,11 @@ mechanisms are, and both fail the build rather than asking you to remember:
    run, anything with effects outside the app (Write, non-read Bash, MCP
    writes, `MailDraft`) is REFUSED — not paused, there is no resume — and
    recorded on the Run (`Run.refusals`, shown in Cockpit/Activity run rows and
-   as a "Needs attention" item). Widgets run `never` with the toggles.
+   as a "Needs attention" item). Widget refreshes run `consequential` too —
+   nobody watches them, and `never` would have allowed Write/Bash in a
+   web-grounded refresh. The SDK subprocess never receives `AIME_API_TOKEN`
+   (the agent's Bash inherits that env), so a run cannot call `/api/subagent`
+   and claim `attended` for itself.
    `/api/subagent` takes `attended: true` (strict boolean, absent ⇒
    unattended) from callers a click started — Create PR, a canvas button —
    which gets `never`, and the tools that click named in `extraAllowedTools`

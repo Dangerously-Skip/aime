@@ -253,7 +253,7 @@ describe('a heartbeat run that states no policy gets the safe one', () => {
 
 // ── Widget refresh ───────────────────────────────────────────────────────────
 
-describe('a widget refresh keeps its policy but gets the toggles', () => {
+describe('a widget refresh is unattended: consequential, plus the toggles', () => {
   const widget = { id: 'w1', title: 'PRs', recipe: 'List my open PRs', render: null, enabled: true, createdAt: 0 };
 
   async function refresh(calls: Call[]) {
@@ -263,9 +263,15 @@ describe('a widget refresh keeps its policy but gets the toggles', () => {
     return { decisions, run: result.run };
   }
 
-  it("'never' — a scratch write is not refused by any policy", async () => {
+  it('a file write is refused and recorded — nobody is watching a refresh', async () => {
     const { decisions, run } = await refresh([write('/tmp/aime-widget-scratch.json')]);
     await expectHookInstalled();
+    expect(decisions[0].behavior).toBe('deny');
+    expect(run.refusals?.map((r) => r.tool)).toEqual(['Write']);
+  });
+
+  it('reading still works, so a refresh can do its job', async () => {
+    const { decisions, run } = await refresh([{ name: 'Read', input: { file_path: '/tmp/x' } }]);
     expect(decisions[0].behavior).toBe('allow');
     expect(run.refusals).toBeUndefined();
   });
