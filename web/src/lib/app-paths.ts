@@ -74,6 +74,19 @@ export function getScratchDir(chatId: string, home: string = os.homedir()): stri
   return path.join(getScratchRoot(home), chatId);
 }
 
+/**
+ * ~/.aime/models/transformers — where server-side transformers.js keeps
+ * downloaded model weights (Whisper: ~950 MB).
+ *
+ * NOT the library default, which is `.cache/` inside the installed package: in
+ * a packaged app that is inside the app bundle, so every update deleted the
+ * weights (and every `npm ci` in development), and the next audio attachment
+ * silently downloaded them all again.
+ */
+export function getModelCacheDir(home: string = os.homedir()): string {
+  return path.join(getDataDir(home), 'models', 'transformers');
+}
+
 /** ~/.claude/.aime-mcp.json — migrates the legacy .quarry-mcp.json on first touch. */
 export function getMcpConfigPath(home: string = os.homedir()): string {
   const claudeDir = path.join(home, '.claude');

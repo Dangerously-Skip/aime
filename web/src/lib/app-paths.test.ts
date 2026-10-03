@@ -8,6 +8,7 @@ import {
   getScratchRoot,
   getMcpConfigPath,
   getMcpClientsPath,
+  getModelCacheDir,
 } from './app-paths';
 import {
   DATA_DIR_NAME,
@@ -51,6 +52,13 @@ describe('getDataDir', () => {
 
     getDataDir(home);
     expect(fs.existsSync(path.join(home, LEGACY_DATA_DIR_NAME))).toBe(true);
+  });
+});
+
+describe('getModelCacheDir', () => {
+  it('lives in the data dir, outside anything an app update or npm ci replaces', () => {
+    expect(getModelCacheDir(home)).toBe(path.join(home, DATA_DIR_NAME, 'models', 'transformers'));
+    expect(getModelCacheDir(home)).not.toContain('node_modules');
   });
 });
 

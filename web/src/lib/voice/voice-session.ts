@@ -170,6 +170,14 @@ function deliverTranscript(text: string): void {
 
 // ── Whisper ────────────────────────────────────────────────────────────────
 // Lazily loaded and shared, because the model is tens of megabytes.
+//
+// Its weights live in the renderer's Cache Storage (transformers.js's browser
+// cache, key 'transformers-cache'), which is in the Electron profile under the
+// user-data dir — not in the app bundle — so an app update does not delete
+// them. (It is per-origin like localStorage, which is why packaged builds keep
+// a fixed port; see main-web.js.) That is why this side, unlike the server
+// extractor (`getModelCacheDir` in `lib/app-paths.ts`), leaves the library's
+// cache settings alone; `extractors/audio.test.ts` pins the key.
 
 /**
  * The slice of the transformers.js ASR pipeline this module uses. The real
