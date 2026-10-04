@@ -47,15 +47,28 @@ describe('creating', () => {
     expect(order.trigger).toEqual({ type: 'cron', expression: '0 9 * * *' });
   });
 
-  it('does not fire in the minute it was created', async () => {
+  it('does not fire in the minute it was created — and does in the next', async () => {
     /*
      * A `* * * * *` job created mid-minute would otherwise be due immediately,
      * which reads as the UI running it on save. Same reasoning as the
      * migration's herd guard.
+     *
+     * Each instant is placed explicitly. This used to check `lastRun + 1s` off
+     * the real clock, which lands in the NEXT minute — where the job is rightly
+     * due — whenever the test happened to run in a minute's last second: about
+     * one CI run in sixty failed with nothing wrong.
      */
-    await createAttendedJob({ ...NEW, expression: '* * * * *' });
-    const [order] = written();
-    expect(isJobDue(order, order.lastRun + 1_000)).toBe(false);
+    const createdAt = Date.UTC(2026, 9, 4, 10, 30, 59, 500); // last second of 10:30
+    vi.useFakeTimers({ now: createdAt, toFake: ['Date'] });
+    try {
+      await createAttendedJob({ ...NEW, expression: '* * * * *' });
+      const [order] = written();
+      expect(order.lastRun).toBe(createdAt);
+      expect(isJobDue(order, createdAt + 400)).toBe(false); // 10:30:59.9, same minute
+      expect(isJobDue(order, Date.UTC(2026, 9, 4, 10, 31, 0, 0))).toBe(true); // first tick after
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the orders that were already there', async () => {
