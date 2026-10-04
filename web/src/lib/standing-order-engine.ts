@@ -3,26 +3,8 @@
  * Evaluates which standing orders should fire based on their trigger type and current time.
  */
 
-import { matchesCron } from '@/lib/schedule/due';
 import type { StandingOrder } from '@/stores/assistant-store';
 import { isJobDue } from '@/lib/schedule/due';
-
-/**
- * Parse an interval expression like "5m", "1h", "30s" into milliseconds.
- */
-function parseInterval(expression: string): number | null {
-  const match = expression.match(/^(\d+)\s*(s|sec|m|min|h|hr|d|day)s?$/i);
-  if (!match) return null;
-  const value = parseInt(match[1], 10);
-  const unit = match[2].toLowerCase();
-  switch (unit) {
-    case 's': case 'sec': return value * 1000;
-    case 'm': case 'min': return value * 60000;
-    case 'h': case 'hr': return value * 3600000;
-    case 'd': case 'day': return value * 86400000;
-    default: return null;
-  }
-}
 
 /**
  * Evaluate all standing orders and return those whose triggers match the current time.

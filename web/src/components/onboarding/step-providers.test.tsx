@@ -44,12 +44,13 @@ afterEach(() => {
 const noop = () => {};
 
 describe('StepProviders', () => {
-  it('offers the three provider paths and a skip', () => {
+  it('offers the three provider paths and a single way forward', () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
     expect(screen.getByText('Anthropic')).toBeTruthy();
     expect(screen.getByText('OpenRouter')).toBeTruthy();
     expect(screen.getByText(/Local \(Ollama/)).toBeTruthy();
-    expect(screen.getByText(/Skip — set up later/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeTruthy();
+    expect(screen.queryByText(/Skip — set up later/)).toBeNull();
   });
 
   it('Anthropic path saves the key AND mirrors it to the keychain', async () => {
@@ -107,7 +108,7 @@ describe('StepProviders', () => {
     expect(credCalls()).toHaveLength(0); // no key involved
   });
 
-  it('configuring flips the skip button into a Continue', async () => {
+  it('configuring makes Continue the primary button', async () => {
     render(<StepProviders onContinue={noop} onBack={noop} />);
     fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-ant-test' } });
     fireEvent.click(screen.getByText('Save & verify'));
@@ -166,6 +167,25 @@ describe('StepProviders — the other presets', () => {
     expect(screen.getByText(/cannot list its models/)).toBeTruthy();
     // The button stops promising verification it cannot perform.
     expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+  });
+
+  it('says "Saved (not checked)" — never "verified" — for a provider it could not check', async () => {
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    fireEvent.click(screen.getByText(/Other providers/));
+    fireEvent.click(screen.getByText('AWS Bedrock'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText(/Saved \(not checked\)/)).toBeTruthy();
+    expect(screen.queryByText(/verified/i)).toBeNull();
+    expect(scanCalls()).toHaveLength(0);
+  });
+
+  it('says "Verified" when a scan actually answered', async () => {
+    render(<StepProviders onContinue={() => {}} onBack={() => {}} />);
+    fireEvent.click(screen.getByText('OpenRouter'));
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-or-test' } });
+    fireEvent.click(screen.getByText('Save & verify'));
+    expect(await screen.findByText(/^Verified/)).toBeTruthy();
   });
 
   it('clears typed fields when switching preset, so a key is never resubmitted elsewhere', () => {

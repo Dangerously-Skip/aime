@@ -3,35 +3,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createSSEStream } from '@/lib/sse';
 import type { ProviderExecConfig } from '@/lib/models/execution';
 import type { Capability, Tier } from '@/lib/models/types';
+import { toApiModelId } from '@/lib/models/api-model-id';
+import { classifyThrownTurnError } from '@/lib/providers/turn-errors';
 
 export const runtime = 'nodejs';
-
-/**
- * SDK model aliases → concrete Messages API model ids.
- *
- * Every other surface hands `opus`/`sonnet`/`haiku` to the Agent SDK, which
- * resolves them itself. The raw Messages API does not accept an alias, so this
- * route has to resolve it — and the registry cannot answer: its `driverModel` IS
- * the alias, and its `id` is a registry-internal key (`claude-opus`). Neither is
- * an API model id.
- *
- * These were pinned to Claude 4 (`claude-sonnet-4-20250514` and siblings), so the
- * browser surface has been running a deprecated generation while every other
- * surface got current models for free by going through the SDK. That is the cost
- * of a second inference path, and it is the reason this route now resolves
- * through the registry rather than a hardcoded map of its own.
- */
-const ALIAS_TO_MODEL_ID: Record<string, string> = {
-  fable: 'claude-fable-5',
-  opus: 'claude-opus-5',
-  sonnet: 'claude-sonnet-5',
-  haiku: 'claude-haiku-4-5',
-};
-
-/** An alias resolves; anything else is assumed to be a concrete id already. */
-function toApiModelId(model: string): string {
-  return ALIAS_TO_MODEL_ID[model] ?? model;
-}
 
 /**
  * Single-turn streaming endpoint for the browser agent.
@@ -124,9 +99,11 @@ export async function POST(req: NextRequest) {
   // which meant the surface was unusable for anyone whose credentials live
   // server-side — env, the encrypted credential store, or a user-added provider.
   const { resolveExecution } = await import('@/lib/models/execution');
+  const { providerSafeRequestKey } = await import('@/lib/models/server-turn');
   const exec = await resolveExecution({
     providerConfig,
-    requestApiKey: userApiKey,
+    // Never the Anthropic key to a user-added provider (see server-turn.ts).
+    requestApiKey: await providerSafeRequestKey(providerConfig, userApiKey),
     // openai-compat providers route through the shim on this same server.
     shimOrigin: new URL(req.url).origin,
     loadFields: async (id) => {
@@ -164,14 +141,18 @@ export async function POST(req: NextRequest) {
   // A user-added provider supplies its own base URL; Bedrock and Vertex carry
   // their own credentials; only the plain Anthropic path needs a key.
   const { getServerAnthropicKey } = await import('@/lib/models/credentials');
-  const resolvedApiKey =
-    exec.apiKey || (await getServerAnthropicKey()) || process.env.ANTHROPIC_API_KEY;
+  // The Anthropic fallbacks are for the Anthropic path only: with a user-added
+  // provider they sent the Anthropic key to that provider's base URL.
+  const resolvedApiKey = providerConfig
+    ? exec.apiKey
+    : exec.apiKey || (await getServerAnthropicKey()) || process.env.ANTHROPIC_API_KEY;
   const usesGatewayCreds = Boolean(gatewayEnv);
   if (!resolvedApiKey && !exec.baseUrl && !usesGatewayCreds) {
     return Response.json(
       {
         error:
-          'No API key is configured. Add one in Settings → API Access, or set ANTHROPIC_API_KEY.',
+          'No API key is configured. Add one in Settings → Models & API keys, or set ANTHROPIC_API_KEY.',
+        code: 'no_model',
       },
       { status: 400 },
     );
@@ -221,7 +202,12 @@ export async function POST(req: NextRequest) {
         streamParams.tools = tools;
       }
 
-      const stream = client.messages.stream(streamParams);
+      /*
+       * Tied to the request: the webview agent's client aborts its fetch on
+       * Stop and when it gives up, and without the signal the model kept
+       * generating — and billing — a turn nobody would read.
+       */
+      const stream = client.messages.stream(streamParams, { signal: req.signal });
 
       let toolInputJson = '';
 
@@ -262,9 +248,13 @@ export async function POST(req: NextRequest) {
         usage: finalMessage.usage,
       });
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error('[BROWSER-TURN] Error:', msg);
-      await sse.writeEvent({ type: 'error', message: msg });
+      if (req.signal.aborted) {
+        console.log('[BROWSER-TURN] Client went away — stream cancelled');
+      } else {
+        const { code, message } = classifyThrownTurnError(error);
+        console.error('[BROWSER-TURN] Error:', code, message);
+        await sse.writeEvent({ type: 'error', message, code });
+      }
     } finally {
       clearInterval(heartbeat);
       await sse.close();

@@ -5,6 +5,7 @@ import { resolveSendRoute, type ModelOption } from '@/lib/models/client-options'
 import { useProviderStore } from '@/stores/provider-store';
 import { useSettingsStore } from '@/stores/settings-store';
 import { useBuiltinAccess } from '@/hooks/use-builtin-access';
+import { refreshHarnessStatus } from '@/hooks/use-harness-status';
 
 /**
  * Start a goal run from the ordinary composer.
@@ -25,7 +26,9 @@ const CAPABILITY = 'code' as const;
 export type StartPhase = 'idle' | 'planning' | 'starting';
 
 /**
- * The `{model, providerConfig, apiKey}` every harness request needs.
+ * The `{model, providerConfig}` every harness request needs. No API key: the
+ * server reads the one saved in Settings from its credential store, so the key
+ * never has to live in (or leave) the browser.
  *
  * Extracted because it was built in exactly one place and the RESUME path — the
  * POST that restarts a loop after a parked question is answered — was written
@@ -39,7 +42,6 @@ export type StartPhase = 'idle' | 'planning' | 'starting';
 export function useHarnessRoute(modelRoute: ModelOption | null) {
   const tierModels = useSettingsStore((s) => s.tierModels);
   const providers = useProviderStore((s) => s.providers);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const { hasAnthropicKey, hasBedrock, known } = useBuiltinAccess();
 
   return useCallback(() => {
@@ -69,27 +71,22 @@ export function useHarnessRoute(modelRoute: ModelOption | null) {
     return {
       model: route?.model ?? null,
       providerConfig: route?.providerConfig ?? null,
-      apiKey: anthropicApiKey || null,
       modelPricing: priced?.pricing ?? null,
     };
-  }, [modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, known, anthropicApiKey]);
+  }, [modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, known]);
 }
 
 export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOption | null) {
   const [phase, setPhase] = useState<StartPhase>('idle');
   const [error, setError] = useState<string | null>(null);
 
-  const tierModels = useSettingsStore((s) => s.tierModels);
-  const providers = useProviderStore((s) => s.providers);
   /*
-   * The BYOK key from Settings.
-   *
-   * Every other surface sends it and this one did not, so a user whose key lives
-   * only in Settings hit "Not logged in · Please run /login" — the same failure
-   * 335e0ca fixed for the provider routes, reintroduced one layer up.
+   * The same route builder the resume path uses, so the two cannot diverge.
+   * No BYOK key is sent: a user whose key lives only in Settings once hit
+   * "Not logged in · Please run /login" here because nothing supplied it; the
+   * provider now reads the saved key from the credential store itself.
    */
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
-  const { hasAnthropicKey, hasBedrock, known } = useBuiltinAccess();
+  const harnessRoute = useHarnessRoute(modelRoute);
 
   const start = useCallback(
     async (args: {
@@ -100,21 +97,11 @@ export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOpti
       sessionCap: number;
     }): Promise<boolean> => {
       setError(null);
-      const route = resolveSendRoute(modelRoute, providers, {
-        capability: CAPABILITY,
-        tierModels,
-        hasAnthropicKey,
-        hasBedrock,
-        known,
-      });
-
       const common = {
         conversationId: args.conversationId,
         workingDir: args.workingDir,
         surfaceId,
-        model: route?.model ?? null,
-        providerConfig: route?.providerConfig ?? null,
-        apiKey: anthropicApiKey || null,
+        ...harnessRoute(),
       };
 
       setPhase('planning');
@@ -151,6 +138,9 @@ export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOpti
           return false;
         }
         setPhase('idle');
+        // The shared status poll idles slowly while nothing runs; a run that
+        // just started should show up now, and switch it to fast polling.
+        void refreshHarnessStatus(args.conversationId, args.workingDir);
         return true;
       } catch (e) {
         setPhase('idle');
@@ -158,7 +148,7 @@ export function useStartGoal(surfaceId: 'cowork' | 'code', modelRoute: ModelOpti
         return false;
       }
     },
-    [surfaceId, modelRoute, providers, tierModels, hasAnthropicKey, hasBedrock, known, anthropicApiKey],
+    [surfaceId, harnessRoute],
   );
 
   return { start, phase, error, setError };

@@ -18,6 +18,11 @@ import { FolderPicker } from "@/components/shared/folder-picker";
 import { useGitStatus } from "@/hooks/use-git-status";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { useSettingsStore } from "@/stores/settings-store";
+import { useProviderStore } from "@/stores/provider-store";
+import { useCodeStore } from "@/stores/code-store";
+import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { resolveSendRoute } from "@/lib/models/client-options";
+import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useElectron } from "@/hooks/use-electron";
 import {
   getGitLog,
@@ -32,6 +37,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { BranchPicker } from "./branch-picker";
+
+const CAPABILITY = getSurfaceRoute("code").capability;
 
 interface BranchHeaderProps {
   workspace: string | null;
@@ -58,7 +65,13 @@ export function BranchHeader({
 }: BranchHeaderProps) {
   const { status } = useGitStatus(workspace);
   const { resetLayout } = useCodeWorkspace(workspace);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
+  // The PR subagent runs on the Code surface's route — the same one its turns
+  // use — so an OpenRouter-only user can open a PR at all. No API key is sent:
+  // the server reads the one saved in Settings from its credential store.
+  const modelRoute = useCodeStore((s) => s.modelRoute);
+  const providers = useProviderStore((s) => s.providers);
+  const tierModels = useSettingsStore((s) => s.tierModels);
+  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
   const { showNotification } = useElectron();
 
   const [creatingPr, setCreatingPr] = useState(false);
@@ -133,6 +146,13 @@ export function BranchHeader({
         `creating the PR, respond with ONLY the PR URL (no commentary).`,
       ].join("\n");
 
+      const route = resolveSendRoute(modelRoute, providers, {
+        capability: CAPABILITY,
+        tierModels,
+        hasAnthropicKey,
+        hasBedrock,
+        known: builtinAccessKnown,
+      });
       const res = await fetch("/api/subagent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -141,8 +161,13 @@ export function BranchHeader({
           task,
           surfaceId: "code",
           cwd: workspace,
-          apiKey: anthropicApiKey || undefined,
+          model: route?.model ?? null,
+          providerConfig: route?.providerConfig ?? null,
           extraAllowedTools: ["mcp__github__create_pull_request"],
+          // The user clicked Create PR and is waiting on it: this run acts like
+          // a chat they are watching, and the click approves the one tool named
+          // above. See /api/subagent.
+          attended: true,
         }),
       });
 
@@ -168,7 +193,19 @@ export function BranchHeader({
     } finally {
       setCreatingPr(false);
     }
-  }, [workspace, status?.branch, effectiveBase, creatingPr, anthropicApiKey, showNotification]);
+  }, [
+    workspace,
+    status?.branch,
+    effectiveBase,
+    creatingPr,
+    modelRoute,
+    providers,
+    tierModels,
+    hasAnthropicKey,
+    hasBedrock,
+    builtinAccessKnown,
+    showNotification,
+  ]);
 
   const handleOpenInFinder = useCallback(() => {
     if (!workspace || typeof window === "undefined") return;

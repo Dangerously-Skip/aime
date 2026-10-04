@@ -16,7 +16,7 @@ import { getSurfaceRoute } from '@/lib/models/surface-routes';
  * capability. Derived rather than typed out, so it follows if that changes.
  */
 const WIDGET_CAPABILITY = getSurfaceRoute('assistant').capability;
-import { startRun, finishRun } from '@/lib/runs/runs';
+import { startRun, finishRun, collectRefusals } from '@/lib/runs/runs';
 import { hasSearch } from '@/lib/search/resolve';
 import { appendRun } from '@/lib/runs/run-log';
 import type { Run, RunTrigger } from '@/lib/runs/types';
@@ -178,6 +178,7 @@ export async function refreshWidget(
     surfaceId: 'assistant',
     model,
   });
+  const refused = collectRefusals();
 
   const settle = async (
     status: 'succeeded' | 'failed' | 'timeout',
@@ -188,6 +189,7 @@ export async function refreshWidget(
       status,
       error: extra.error,
       deliverables: extra.node ? [{ kind: 'widget', title: widget.title, data: extra.node }] : [],
+      refusals: refused.list,
     });
     await appendRun(run).catch(() => false);
     return run;
@@ -263,6 +265,14 @@ export async function refreshWidget(
         model: exec.model,
         apiKey: exec.apiKey,
         maxTurns: grounded ? 6 : 1,
+        /*
+         * The widget's own policy ('never' — read-only generation), stated so
+         * the provider's fail-safe inference for a `widget-` id does not apply.
+         * The Security settings and connector blocks still do: the gate runs
+         * for every run, and what it refuses is recorded on this Run.
+         */
+        approvalPolicy: goal.approvalPolicy,
+        onToolRefused: refused.record,
       })) {
         if (chunk.type === 'text') text += (chunk.content as string) ?? '';
       }

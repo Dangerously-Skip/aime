@@ -30,6 +30,41 @@ const MermaidBlock = dynamic(
   { ssr: false }
 );
 
+/**
+ * Does this href leave the app? Absolute http(s)/mailto, or protocol-relative.
+ * Exported for the test.
+ */
+export function isExternalHref(href: string | undefined): boolean {
+  if (!href) return false;
+  return /^(https?:|mailto:)/i.test(href) || href.startsWith("//");
+}
+
+/**
+ * Links in model output open OUTSIDE the app window.
+ *
+ * A plain `<a href="https://…">` in a reply navigated the main window itself,
+ * and that window holds the preload bridge. Main now refuses the navigation
+ * (electron/nav-policy.js), but a link that is refused does nothing visible —
+ * so external links are rendered as `target="_blank"`, which main's window-open
+ * handler hands to the OS browser. `noopener noreferrer` so the page opened
+ * gets neither a handle on this window nor its URL. In-page anchors and
+ * relative links are left as they were.
+ */
+function MarkdownLink({ href, children, node: _node, ...props }: React.ComponentProps<"a"> & { node?: unknown }) {
+  if (isExternalHref(href)) {
+    return (
+      <a href={href} {...props} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    );
+  }
+  return (
+    <a href={href} {...props}>
+      {children}
+    </a>
+  );
+}
+
 function extractText(node: React.ReactNode): string {
   if (typeof node === "string") return node;
   if (Array.isArray(node)) return node.map(extractText).join("");
@@ -63,6 +98,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
 
   const components = useMemo(
     () => ({
+      a: MarkdownLink,
       pre({ children, ...props }: React.ComponentProps<"pre">) {
         const codeText = extractText(children);
         return (

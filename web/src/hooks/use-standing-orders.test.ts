@@ -4,6 +4,7 @@ import { renderHook, act, waitFor, cleanup } from '@testing-library/react';
 import { useStandingOrders, applyInboxEntry } from './use-standing-orders';
 import { useAssistantStore, type StandingOrder } from '@/stores/assistant-store';
 import { useContextBusStore } from '@/stores/context-bus-store';
+import { useSettingsStore } from '@/stores/settings-store';
 import type { InboxEntry, ManifestOrder } from '@/lib/orders/manifest';
 
 /**
@@ -27,6 +28,7 @@ function installMinuteTickMock() {
         await Promise.all([...listeners].map((l) => l(ts)));
       });
     },
+    listenerCount: () => listeners.size,
   };
 }
 
@@ -173,6 +175,20 @@ describe('useStandingOrders (sync + replay)', () => {
   });
 });
 
+describe('minute-tick listener lifecycle', () => {
+  it('removes its tick listener on unmount, so remounts do not stack them', () => {
+    // The unsubscribe `onMinuteTick` returns was discarded: every remount left
+    // one more listener replaying the inbox on every tick.
+    const mock = installMinuteTickMock();
+    for (let i = 0; i < 3; i++) renderHook(() => useStandingOrders()).unmount();
+    expect(mock.listenerCount()).toBe(0);
+    const { unmount } = renderHook(() => useStandingOrders());
+    expect(mock.listenerCount()).toBe(1);
+    unmount();
+    expect(mock.listenerCount()).toBe(0);
+  });
+});
+
 describe('applyInboxEntry', () => {
   it('publishes results to the context bus with inject: routing', () => {
     applyInboxEntry(entry({ notifyVia: 'inject:cowork', summary: 'big news' }));
@@ -186,10 +202,55 @@ describe('applyInboxEntry', () => {
     expect(useAssistantStore.getState().cards[0]).toMatchObject({ summary: 'AAPL is at $187.' });
   });
 
-  it('records error entries as activity without touching cards', () => {
-    applyInboxEntry(entry({ kind: 'error', error: 'upstream 502' }));
-    expect(useAssistantStore.getState().cards).toHaveLength(0);
-    expect(useAssistantStore.getState().activity[0]).toMatchObject({ type: 'order-error' });
+  /*
+   * A failed run used to be ONE activity row and nothing else — invisible
+   * unless you went looking. It is a failure card, an activity row, and a
+   * desktop notification (outside quiet hours).
+   */
+  describe('a failed run is shown, not just logged', () => {
+    const notify = vi.fn();
+    beforeEach(() => {
+      notify.mockReset();
+      (window as unknown as { electronAPI: unknown }).electronAPI = { showNotification: notify };
+      useSettingsStore.setState({ quietHours: null });
+    });
+    afterEach(() => {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    });
+
+    it('adds an error card, an activity row, and a notification', () => {
+      applyInboxEntry(entry({ kind: 'error', error: 'upstream 502' }));
+      expect(useAssistantStore.getState().cards[0]).toMatchObject({
+        orderId: 'o1',
+        title: 'Failed: Watch AAPL',
+        summary: 'upstream 502',
+        tone: 'error',
+      });
+      expect(useAssistantStore.getState().activity[0]).toMatchObject({ type: 'order-error' });
+      expect(notify).toHaveBeenCalledWith('Schedule failed: Watch AAPL', 'upstream 502');
+    });
+
+    it('an error-pause is a failure card too, and notifies', () => {
+      useAssistantStore.setState({ orders: [order()] });
+      applyInboxEntry(entry({ kind: 'paused', summary: 'Paused after 3 errors' }));
+      expect(useAssistantStore.getState().cards[0]).toMatchObject({ tone: 'error' });
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it('respects quiet hours — the card is still there, the ping is not', () => {
+      useSettingsStore.setState({ quietHours: { fromHour: 0, toHour: 0 } }); // always quiet
+      applyInboxEntry(entry({ kind: 'error', error: 'upstream 502' }));
+      expect(useAssistantStore.getState().cards).toHaveLength(1);
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('a toast-notified result notifies through the same quiet-hours gate', () => {
+      applyInboxEntry(entry({ notifyVia: 'toast', title: 'Stretch', summary: 'Time to stretch' }));
+      expect(notify).toHaveBeenCalledWith('Stretch', 'Time to stretch');
+      notify.mockReset();
+      applyInboxEntry(entry({ notifyVia: 'assistant' }));
+      expect(notify).not.toHaveBeenCalled();
+    });
   });
 });
 

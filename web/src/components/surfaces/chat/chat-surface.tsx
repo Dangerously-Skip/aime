@@ -7,77 +7,41 @@ import { ChatTitleBar } from "@/components/shared/chat-title-bar";
 import { useChatStore } from "@/stores/chat-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
-import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
-import { handleCoreChunk } from "@/lib/sse/core-chunks";
-import { streamRegistry } from "@/lib/stream-registry";
-import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
-import { ArrowUp, Square, X, ImageIcon, FileText, File, FilePen, PanelRight, PanelRightClose, LayoutDashboard, Pencil, Sparkles, Code2, Lightbulb } from "lucide-react";
-import { AttachmentMenu } from "@/components/shared/attachment-menu";
+import { FileText, FilePen, PanelRight, PanelRightClose, LayoutDashboard, Pencil, Sparkles, Code2, Lightbulb } from "lucide-react";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
-import type { Message } from "@/stores/chat-store";
+import { Composer, type ComposerHandle } from "@/components/shared/composer/composer";
+import { addComposerAttachment, setComposerText } from "@/components/shared/composer/draft-store";
 import { useProjectContext } from "@/hooks/use-project-context";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { DropOverlay } from "@/components/shared/drop-overlay";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
-import { useMemoryStore } from "@/stores/memory-store";
-import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
-import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
-import { summarizeConversation } from "@/lib/memory/summarizer";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
 import { ArtifactPanel } from "@/components/shared/artifact-panel";
 import type { ParsedArtifact } from "@/lib/artifacts/parser";
-import { useElectron } from "@/hooks/use-electron";
-import { VoiceButton } from "@/components/shared/voice-button";
-import { parseSlashCommand, applySlashCommand, getSlashSuggestions, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
-import type { SessionControls } from "@/lib/slash-commands";
-import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
-import { useAtSuggestions, removeAtQuery } from "@/hooks/use-at-suggestions";
+import { DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { CanvasOverlay } from "@/components/shared/canvas-overlay";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
 import type { CanvasArtifact } from "@/stores/chat-store";
-import { useAssistantStore } from "@/stores/assistant-store";
 import { FilePreviewSheet } from "@/components/shared/file-preview-sheet";
-import { categorizeToolCall, isValidSidebarEntry, artifactsFromMessages } from "@/lib/artifact-tracker";
-import { sendFeatureAdoptionEvent } from "@/lib/telemetry/events";
-import { useProviderStore } from "@/stores/provider-store";
-import { resolveSendRoute } from "@/lib/models/client-options";
+import { categorizeToolCall, isValidSidebarEntry } from "@/lib/artifact-tracker";
+import { artifactsOf } from "./artifacts-of";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useTurnWiring } from "@/hooks/use-turn-wiring";
-import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { useToolBudgetStore } from "@/stores/tool-budget-store";
-import type { ToolBudgetReport } from "@/lib/mcp/filter";
-import { useDocumentPrint } from "@/hooks/use-document-print";
-import { useDeckTheme } from "@/hooks/use-deck-theme";
-import { useSearchSettings } from "@/hooks/use-search-settings";
-import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
+import { useSurfaceTurn, type SessionControlsAccess } from "@/hooks/use-surface-turn";
+import { useTurnSettings, memoriesFor } from "@/hooks/use-turn-settings";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
 
 const EMPTY_SUGGESTIONS: string[] = [];
-
-function AttachmentIcon({ category }: { category: AttachmentFile['category'] }) {
-  switch (category) {
-    case 'image': return <ImageIcon className="h-3 w-3" />
-    case 'document': return <File className="h-3 w-3" />
-    default: return <FileText className="h-3 w-3" />
-  }
-}
-
-const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_CANVAS_ARTIFACTS: CanvasArtifact[] = [];
 
-/** Truncate text at the nearest word boundary before maxLen. */
-function truncateAtWordBoundary(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  const truncated = text.substring(0, maxLen);
-  const lastSpace = truncated.lastIndexOf(' ');
-  return lastSpace > maxLen * 0.5 ? truncated.substring(0, lastSpace) : truncated;
-}
+/** Slash-command settings live per conversation in the chat store. */
+const SESSION_CONTROLS: SessionControlsAccess = {
+  get: (id) => useChatStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS,
+  set: (id, controls) => useChatStore.getState().setSessionControls(id, controls),
+};
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -87,35 +51,105 @@ function getGreeting(): string {
 }
 
 export function ChatSurface() {
-  const [inputValue, setInputValue] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<ParsedArtifact | null>(null);
-  const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
-  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
-  const { fileSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
-    useAtSuggestions();
-  // Cron jobs now route to standing orders via useAssistantStore (see cron_create handler)
+  const composerRef = useRef<ComposerHandle>(null);
   // Artifact tracking — files created by Write/Edit/Bash tool calls
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  // Dropped files join the draft of the conversation on screen — the same
+  // place the composer's own attach button and paste put them.
   const { isDragging, dropZoneProps } = useFileDrop(
-    useCallback((file: AttachmentFile) => setAttachments((prev) => [...prev, file]), [])
+    useCallback(
+      (file: AttachmentFile) => addComposerAttachment("chat", useChatStore.getState().currentChatId ?? "", file),
+      [],
+    )
   );
-  const currentChatId = useChatStore((s) => s.currentChatId);
-  const chatId = currentChatId ?? "";
-  // Canvas SSE handler + persisted per-chat canvas artifacts now live in chat-store.
-  const onCanvasEvent = useCanvasSseHandler('chat', chatId);
+  const chatId = useChatStore((s) => s.currentChatId) ?? "";
+  const onCanvas = useCanvasSseHandler("chat");
   const canvasArtifacts = useChatStore((s) => (chatId ? s.canvasArtifacts[chatId] : undefined) ?? EMPTY_CANVAS_ARTIFACTS);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
   const setCanvasOpen = useCanvasStore((s) => s.setOpen);
   // Local: collapse/expand the right Artifacts column
   const [artifactsSidebarOpen, setArtifactsSidebarOpen] = useState(true);
 
-  const messages = useChatStore(
-    (s) =>
-      (s.currentChatId ? s.messages[s.currentChatId] : undefined) ??
-      EMPTY_MESSAGES
-  );
+  const modelRoute = useChatStore((s) => s.modelRoute);
+  const setModelRoute = useChatStore((s) => s.setModelRoute);
+  const clearMessages = useChatStore((s) => s.clearMessages);
+  const updateConversation = useConversationStore((s) => s.updateConversation);
+  const removeConversation = useConversationStore((s) => s.removeConversation);
+  const chatTitle = useConversationStore((s) => s.conversations.find((c) => c.id === chatId)?.title) || "New conversation";
+  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+  const displayName = useSettingsStore((s) => s.displayName);
+  const toolProfile = useSettingsStore((s) => s.toolProfile);
+  const suggestions = useChatStore((s) => chatId ? (s.suggestions[chatId] ?? EMPTY_SUGGESTIONS) : EMPTY_SUGGESTIONS);
+  const sessionControls = useChatStore((s) => (chatId ? s.sessionControls[chatId] : undefined) ?? DEFAULT_SESSION_CONTROLS);
+  const { projectInstructions, projectKnowledge, projectName, projectIcon, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "chat");
+  /*
+   * The settings half of a turn, which Chat alone once sent none of: a chosen
+   * deck theme never reached the model (every deck came back an unstyled pptx)
+   * and search resolved to `none`. Built by the one hook every surface uses.
+   */
+  const settings = useTurnSettings(chatId, { projectInstructions, projectKnowledge, crossSurfaceContext });
+  const allProjects = useProjectStore((s) => s.projects);
+  const assignToProject = useConversationStore((s) => s.assignToProject);
+  const navigateToProject = useAppStore((s) => s.navigateToProject);
+  const setSidebarMode = useAppStore((s) => s.setSidebarMode);
+
+  const turn = useSurfaceTurn({
+    surface: "chat",
+    label: "Chat",
+    store: useChatStore,
+    capability: CAPABILITY,
+    modelRoute,
+    sessionControls: SESSION_CONTROLS,
+    trigger: "chat",
+    onCanvas,
+    summarizeOnLeave: true,
+    request: ({ chatId: id, text }) => {
+      if (currentProjectId) useProjectStore.getState().addConversationToProject(currentProjectId, "chat", id);
+      // A new turn's suggestions replace the last one's.
+      useChatStore.getState().clearSuggestions(id);
+      return { ...settings, toolProfile, memories: memoriesFor(text, currentProjectId) };
+    },
+    chunks: {
+      // Chat's one difference on a tool call: a written file is filed against
+      // the project. The artifact panel itself reads the transcript.
+      core: (cid) => ({
+        onToolStarted: (_toolId, toolName, toolInput) => {
+          const categorized = categorizeToolCall(toolName, toolInput);
+          if (categorized?.category !== "artifact" || !isValidSidebarEntry(categorized.path)) return;
+          if (!currentProjectId) return;
+          useProjectStore.getState().addArtifact(currentProjectId, {
+            id: crypto.randomUUID(),
+            name: categorized.path.split("/").pop() || categorized.path,
+            path: categorized.path,
+            type: "file",
+            surface: "chat",
+            conversationId: cid,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+        },
+      }),
+      after: (event, cid) => {
+        if (event.type === "prompt_suggestion") {
+          const suggestion = event.suggestion as string;
+          if (suggestion) useChatStore.getState().addSuggestion(cid, suggestion);
+        } else if (event.type === "document_extracted") {
+          const extractedText = event.extractedText as string | undefined;
+          if (!extractedText || !cid) return;
+          const msgs = useChatStore.getState().messages[cid] || [];
+          const lastUser = msgs.findLast((m) => m.role === "user");
+          if (lastUser) {
+            const docBlock = `\n\n<document name="${event.name as string}">\n${extractedText}\n</document>`;
+            useChatStore.getState().updateMessageContent(cid, lastUser.id, lastUser.content + docBlock);
+          }
+        }
+      },
+    },
+  });
+  const { messages, isStreaming } = turn;
+  const isEmpty = messages.length === 0;
 
   /*
    * Read back from the transcript rather than accumulated as the stream runs.
@@ -126,555 +160,52 @@ export function ChatSurface() {
    * messages carry the tool calls and are persisted, so there was never anything
    * to accumulate.
    */
-  const artifactFiles = useMemo(() => artifactsFromMessages(messages), [messages]);
-  const modelRoute = useChatStore((s) => s.modelRoute);
-  const isStreaming = useChatStore((s) => s.isStreaming);
-  const setModelRoute = useChatStore((s) => s.setModelRoute);
-  const addMessage = useChatStore((s) => s.addMessage);
-  const appendToLastAssistant = useChatStore(
-    (s) => s.appendToLastAssistant
-  );
-  const addToolCall = useChatStore((s) => s.addToolCall);
-  const completeRunningTools = useChatStore((s) => s.completeRunningTools);
-  const updateMessage = useChatStore((s) => s.updateMessage);
-  const updateToolResult = useChatStore((s) => s.updateToolResult);
-  const startStreaming = useChatStore((s) => s.startStreaming);
-  const stopStreaming = useChatStore((s) => s.stopStreaming);
-  const setCurrentChat = useChatStore((s) => s.setCurrentChat);
-  const setIsStreaming = useChatStore((s) => s.setIsStreaming);
-  const clearMessages = useChatStore((s) => s.clearMessages);
-  const updateConversation = useConversationStore(
-    (s) => s.updateConversation
-  );
-  const addConversation = useConversationStore(
-    (s) => s.addConversation
-  );
-  const removeConversation = useConversationStore(
-    (s) => s.removeConversation
-  );
-  const conversations = useConversationStore((s) => s.conversations);
-  const activeConvId = useConversationStore((s) => s.activeId);
-  const allConversations = useConversationStore((s) => s.conversations);
-  const setActiveConversation = useConversationStore(
-    (s) => s.setActiveConversation
-  );
-  const displayName = useSettingsStore((s) => s.displayName);
-  const printDocument = useDocumentPrint();
-  const personalPreferences = useSettingsStore((s) => s.personalPreferences);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
-  /**
-   * The settings half of a turn, which Chat alone was not sending.
-   *
-   * Cowork and Code sent all three; Chat sent none, so on this surface a chosen
-   * deck theme never reached the model (every deck came back as an unstyled
-   * pptx, because the format steering is gated on a theme being set) and search
-   * resolved to `none`. The server log said so plainly once it was asked:
-   *
-   *   [Claude] No deck theme on this request — pptx stays available…
-   *   [Claude] aime tools: icloud=yes search=none
-   *
-   * Same shape as the cowork auto-continue drift: a second place that builds
-   * the request and fell behind the first.
-   */
-  const deckTheme = useDeckTheme(chatId);
-  const searchSettings = useSearchSettings();
-  const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
-  const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
-  const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
-  const disableBashTool = useSettingsStore((s) => s.disableBashTool);
-  // Built-in (Claude) reachability, which is the user's key OR the server's env
-  // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
-  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
-  const toolProfile = useSettingsStore((s) => s.toolProfile);
-  const tierModels = useSettingsStore((s) => s.tierModels);
-  const providers = useProviderStore((s) => s.providers);
-  const setSessionControlsInStore = useChatStore((s) => s.setSessionControls);
-  const addSuggestion = useChatStore((s) => s.addSuggestion);
-  const clearSuggestions = useChatStore((s) => s.clearSuggestions);
-  const suggestions = useChatStore((s) => chatId ? (s.suggestions[chatId] ?? EMPTY_SUGGESTIONS) : EMPTY_SUGGESTIONS);
-  const sessionControlsMap = useChatStore((s) => s.sessionControls);
-  const sessionControls: SessionControls = chatId
-    ? (sessionControlsMap[chatId] ?? DEFAULT_SESSION_CONTROLS)
-    : DEFAULT_SESSION_CONTROLS;
-  const { projectInstructions, projectKnowledge, projectName, projectIcon, projectId: currentProjectId, crossSurfaceContext, projectFolder } = useProjectContext(chatId, "chat");
-  const allProjects = useProjectStore((s) => s.projects);
-  const assignToProject = useConversationStore((s) => s.assignToProject);
-  const navigateToProject = useAppStore((s) => s.navigateToProject);
-  const setSidebarMode = useAppStore((s) => s.setSidebarMode);
+  const artifactFiles = useMemo(() => artifactsOf(messages), [messages]);
 
-  const { showNotification } = useElectron();
-  const isEmpty = messages.length === 0;
-  const currentConversation = conversations.find((c) => c.id === chatId);
-  const chatTitle = currentConversation?.title || "New conversation";
-
+  // The preview is a transient panel; the next conversation cannot derive it.
+  const prevChatIdRef = useRef(chatId);
   useEffect(() => {
-    if (!activeConvId) return;
-    const conv = allConversations.find((c) => c.id === activeConvId);
-    if (conv?.surface === "chat") setCurrentChat(activeConvId);
-  }, [activeConvId, allConversations, setCurrentChat]);
-
-  // Episodic memory: summarize previous conversation when switching.
-  // Also abort any running stream for the old conversation to prevent spillover.
-  const prevChatIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prevId = prevChatIdRef.current;
-    prevChatIdRef.current = chatId || null;
-    if (prevId && prevId !== chatId) {
-      /*
-       * Deliberately NOT aborting the previous conversation's stream.
-       *
-       * It used to, "so its chunks don't land in the new conversation" — a real
-       * concern, already solved somewhere else: `useSSEStream` pins its
-       * callbacks at stream start, so output goes to the chat the stream was
-       * STARTED for regardless of what is on screen, and
-       * `chat-surface.stream.test.tsx` has asserted that for a while.
-       *
-       * With the spillover handled, the abort only did harm: opening or
-       * switching to another chat killed a turn that was still working, and a
-       * long research run could not be left to finish while you did something
-       * else. Concurrent conversations are the point of a registry keyed by
-       * chatId.
-       */
-      const prevMessages = useChatStore.getState().messages[prevId];
-      if (prevMessages && prevMessages.length > 0) {
-        summarizeConversation(prevId, prevMessages);
-      }
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- ref-guarded conversation switch; the preview is a transient panel, not something the new conversation can derive
-      setPreviewPath(null);
-    }
+    if (prevChatIdRef.current === chatId) return;
+    prevChatIdRef.current = chatId;
+    setPreviewPath(null);
   }, [chatId]);
 
-  // Read the CURRENT chatId from the store at call time, not from the
-  // closure. On the first message in a new chat, the closure chatId is ""
-  // because setCurrentChat(newId) hasn't triggered a re-render yet.
-  // This causes chunks to be written to chatId "" instead of the new ID.
-  const getChatId = () => useChatStore.getState().currentChatId ?? "";
-
-  /**
-   * The chat the in-flight stream was started for.
-   *
-   * `getChatId()` answers "which conversation is on screen NOW", which is the
-   * right question while chunks are arriving and the wrong one when a turn ends:
-   * a timeout firing after a cross-surface switch appended its error text to
-   * whatever the user was reading instead of the conversation that failed.
-   */
-  const streamChatIdRef = useRef("");
-
-  const ownsChat = useCallback(
-    (id: string) => !!useChatStore.getState().messages[id]?.length,
-    [],
-  );
-  // Run recording + the two card-answer persisters, shared with the other three
-  // surfaces (see use-turn-wiring for why it is not inlined here any more).
-  const { runRecorder, onQuestionAnswered, onConnectorSettled } = useTurnWiring({
-    surfaceId: "chat",
-    chatId,
-    ownsChat,
-    updateMessage,
-  });
-
-  const { sendMessage, abort } = useSSEStream({
-    chatId,
-    setIsStreaming,
-    onUsage: runRecorder.onUsage,
-    onChunk(event) {
-      // Chunks whose handling is the same on every surface — cron jobs,
-      // standing orders, widgets, memory. Handled in ONE place
-      // (lib/sse/agnostic-chunks) because each surface having its own case
-      // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Chat' })) return;
-
-      const cid = getChatId();
-
-      // The six chunks whose handling is identical on chat, cowork and code —
-      // recorded once in lib/sse/core-chunks against the nine-action store
-      // contract all three already satisfied. Chat's one genuine difference (it
-      // files an artifact against the project) is the callback below, which makes
-      // that difference visible instead of buried in a near-identical switch.
-      if (
-        handleCoreChunk(event, {
-          chatId: cid,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
-          printDocument,
-          onCanvas: onCanvasEvent,
-          notify: (title, body) => {
-            if (!document.hasFocus()) showNotification(title, body);
-          },
-          onToolStarted: (_toolId, toolName, toolInput) => {
-            const categorized = categorizeToolCall(toolName, toolInput);
-            if (categorized?.category !== "artifact" || !isValidSidebarEntry(categorized.path)) return;
-            // The panel derives itself from the transcript (see `artifactFiles`);
-            // this callback exists only for the side effect below.
-            if (!currentProjectId) return;
-            const fileName = categorized.path.split("/").pop() || categorized.path;
-            useProjectStore.getState().addArtifact(currentProjectId, {
-              id: crypto.randomUUID(),
-              name: fileName,
-              path: categorized.path,
-              type: "file",
-              surface: "chat",
-              conversationId: cid,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            });
-          },
-        })
-      ) {
-        return;
-      }
-
-      switch (event.type) {
-        case "prompt_suggestion": {
-          const suggestion = event.suggestion as string;
-          if (suggestion) {
-            addSuggestion(getChatId(), suggestion);
-          }
-          break;
-        }
-        case "document_extracted": {
-          const extractedText = event.extractedText as string | undefined;
-          const docName = event.name as string;
-          const did = getChatId();
-          if (extractedText && did) {
-            const msgs = useChatStore.getState().messages[did] || [];
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              if (msgs[i].role === 'user') {
-                const docBlock = `\n\n<document name="${docName}">\n${extractedText}\n</document>`;
-                useChatStore.getState().updateMessageContent(did, msgs[i].id, msgs[i].content + docBlock);
-                break;
-              }
-            }
-          }
-          break;
-        }
-      }
-    },
-    onDone() {
-      runRecorder.succeed();
-      const doneId = streamChatIdRef.current || getChatId();
-      completeRunningTools(doneId);
-      stopStreaming(doneId);
-      if (!document.hasFocus()) {
-        showNotification("Task complete", "Claude has finished working on your request.");
-      }
-    },
-    onError(error) {
-      runRecorder.fail(error.message);
-      // The conversation that failed, not whichever one is on screen by now.
-      const errorId = streamChatIdRef.current || getChatId();
-      stopStreaming(errorId);
-      appendToLastAssistant(errorId, `\n\n**Error:** ${error.message}`);
-    },
-  });
-
-  const handleSubmit = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return;
-      const trimmed = text.trim();
-
-      // ── Slash command interception ─────────────────────────────────────
-      const parsed = parseSlashCommand(trimmed);
-      if (parsed) {
-        const result = applySlashCommand(parsed, sessionControls);
-        if (result) {
-          // Apply the new controls
-          const currentId = chatId || crypto.randomUUID();
-          setSessionControlsInStore(currentId, result.controls);
-          // Add a system-like assistant message showing the result
-          let id = chatId;
-          if (!id) {
-            id = currentId;
-            addConversation({
-              id,
-              title: trimmed.substring(0, 50),
-              surface: "chat",
-              lastMessage: trimmed,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            });
-            setActiveConversation(id);
-            setCurrentChat(id);
-          }
-          addMessage(id, { id: crypto.randomUUID(), role: "user", content: trimmed, timestamp: Date.now() });
-          addMessage(id, { id: crypto.randomUUID(), role: "assistant", content: result.message, timestamp: Date.now() });
-          setInputValue("");
-          return;
-        }
-      }
-
-      // Auto-create conversation if none active
-      let id = chatId;
-      if (!id) {
-        id = crypto.randomUUID();
-        addConversation({
-          id,
-          title: truncateAtWordBoundary(trimmed, 50),
-          surface: "chat",
-          lastMessage: trimmed,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-        setActiveConversation(id);
-        setCurrentChat(id);
-      }
-
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        timestamp: Date.now(),
-        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
-      });
-
-      updateConversation(id, {
-        title: trimmed.substring(0, 50),
-        lastMessage: trimmed,
-        updatedAt: Date.now(),
-      });
-
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        isLoading: true,
-        isStreaming: true,
-      });
-
-      startStreaming(id);
-      setInputValue("");
-
-      const currentAttachments = [...attachments];
-      const currentWebSearch = webSearchEnabled;
-      setAttachments([]);
+  // Web search is a per-message switch: it applies to this send only.
+  const submitFromComposer = useCallback(
+    (text: string, attachments: AttachmentFile[]) => {
+      if (!turn.guardModel(text)) return false;
+      const webSearch = webSearchEnabled;
       setWebSearchEnabled(false);
-
-      if (currentWebSearch) sendFeatureAdoptionEvent({ feature: 'web_search', surface: 'chat' });
-      if (currentAttachments.length > 0) sendFeatureAdoptionEvent({ feature: 'file_attachment', surface: 'chat' });
-      if (sessionControls.thinkLevel && sessionControls.thinkLevel !== 'off') sendFeatureAdoptionEvent({ feature: 'extended_thinking', surface: 'chat' });
-
-      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
-      const priorMessages = useChatStore.getState().messages[id] || [];
-      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
-
-      // Register conversation with project
-      if (currentProjectId) {
-        useProjectStore.getState().addConversationToProject(currentProjectId, "chat", id);
-      }
-
-      // Retrieve relevant memories
-      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
-        projectId: currentProjectId,
-        query: trimmed,
-      });
-      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
-      // Touch accessed memories
-      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
-
-      // Clear prompt suggestions when user sends a new message
-      if (chatId) clearSuggestions(chatId);
-
-      // A tier route resolves here (it can land on a user provider's model); a
-      // pinned model passes through. Null ⇒ nothing resolved, so fall back to
-      // the surface's built-in model rather than send an empty one.
-      const route = resolveSendRoute(modelRoute, providers, {
-        capability: CAPABILITY,
-        tierModels,
-        hasAnthropicKey,
-        hasBedrock,
-        known: builtinAccessKnown,
-      });
-
-      // Open the run record before the turn starts so an immediate failure is
-      // still attributed rather than lost.
-      runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
-      // Pin the target before the stream starts: everything that finalises the
-      // turn must land here even if the user has moved on by then.
-      streamChatIdRef.current = id;
-      await sendMessage(trimmed, id, "chat", route?.model ?? null, {
-        personalPreferences: personalPreferences || undefined,
-        displayName: displayName || undefined,
-        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-        webSearch: currentWebSearch || undefined,
-        projectInstructions: projectInstructions || undefined,
-        projectKnowledge: projectKnowledge || undefined,
-        apiKey: anthropicApiKey || undefined,
-        history: history.length > 0 ? history : undefined,
-        memories: memoriesStr || undefined,
-        crossSurfaceContext: crossSurfaceContext || undefined,
-        sessionControls: sessionControls,
-        toolProfile: toolProfile,
-        providerConfig: route?.providerConfig,
-        securitySettings: {
-          blockDangerousCommands,
-          blockNetworkCommands,
-          restrictToProjectFolder,
-          disableBashTool,
-        },
-        searchSettings,
-        deckTheme,
-      });
+      void turn.submit(text, attachments, webSearch ? { webSearch: true } : undefined);
     },
-    [
-      chatId,
-      runRecorder,
-      modelRoute,
-      providers,
-      tierModels,
-      anthropicApiKey,
-      hasAnthropicKey,
-      hasBedrock,
-      builtinAccessKnown,
-      addMessage,
-      startStreaming,
-      sendMessage,
-      updateConversation,
-      addConversation,
-      setActiveConversation,
-      setCurrentChat,
-      personalPreferences,
-      displayName,
-      attachments,
-      webSearchEnabled,
-      projectInstructions,
-      projectKnowledge,
-      // Read inside the callback and previously missing, so a slash command or a
-      // project change did not take effect until some other dep changed. All
-      // six are primitives or stable store references, so adding them only
-      // affects this callback's identity — it is never used in an effect.
-      sessionControls,
-      setSessionControlsInStore,
-      clearSuggestions,
-      currentProjectId,
-      crossSurfaceContext,
-      toolProfile,
-      // Read inside the callback. Omitting them means a theme change, a search
-      // provider change or a security toggle does not take effect until some
-      // OTHER dependency happens to change — the stale-closure bug the cowork
-      // dep list already records.
-      deckTheme,
-      searchSettings,
-      blockDangerousCommands,
-      blockNetworkCommands,
-      restrictToProjectFolder,
-      disableBashTool,
-    ]
+    [turn, webSearchEnabled],
   );
 
-  /*
-   * A due cron job runs HERE, through this surface's own submit — not through a
-   * scheduler with a send path of its own, which would be a fourth place that
-   * starts a turn. Before this, a job published to the bus, switched surface,
-   * and nothing ran it.
-   */
-  useScheduledPrompt('chat', handleSubmit, () => useChatStore.getState().isStreaming);
+  const attachmentMenu = {
+    onWebSearchToggle: () => setWebSearchEnabled((prev) => !prev),
+    webSearchEnabled,
+    currentProjectId,
+    onAddToProject: (pid: string) => assignToProject(chatId, pid),
+    onNewProject: () => setSidebarMode("projects"),
+    projects: allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon })),
+  };
 
-  const handleRetry = useCallback(() => {
-    if (!chatId || isStreaming) return;
-    const msgs = useChatStore.getState().messages[chatId];
-    if (!msgs || msgs.length < 2) return;
-    // Find last user message
-    const lastUserMsg = [...msgs].reverse().find((m) => m.role === 'user');
-    if (!lastUserMsg) return;
-    handleSubmit(lastUserMsg.content);
-  }, [chatId, isStreaming, handleSubmit]);
-
-  // Both the mic button and the global dictation hotkey land here. The hotkey is
-  // owned once by the app shell (see app-shell / use-push-to-talk) and delivers
-  // to whichever surface is on screen, so this surface does not gate on being
-  // active — the comparison that used to live here is the router's job now.
-  const handleVoiceTranscript = useCallback(
-    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
-    []
+  const modelSelector = (
+    <ModelSelector
+      value={modelRoute?.id ?? ''}
+      onSelectModel={setModelRoute}
+      capability={CAPABILITY}
+      className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
+    />
   );
 
-  // Merged suggestions: slash takes priority
-  const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
-    ? cmdSuggestions
-    : fileSuggestions.map((f) => ({
-        type: 'at' as const,
-        value: f.path,
-        label: '@' + f.name,
-        description: undefined,
-        meta: f.relative,
-      }));
-
-  function handleSelectSuggestion(s: CommandSuggestion) {
-    if (s.type === 'slash') {
-      setInputValue(s.value + ' ');
-      setCmdSuggestions([]);
-    } else {
-      const newVal = removeAtQuery(inputValue);
-      setInputValue(newVal);
-      clearAtSuggestions();
-      resolveFileAsAttachment(s.value).then((att) => {
-        if (att) setAttachments((prev) => [...prev, att]);
-      });
-    }
-    setSelectedSuggestionIdx(0);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (activeSuggestions.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.min(i + 1, activeSuggestions.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === 'Tab' || (e.key === 'Enter' && activeSuggestions.length > 0)) {
-        e.preventDefault();
-        handleSelectSuggestion(activeSuggestions[selectedSuggestionIdx]);
-        return;
-      }
-      if (e.key === 'Escape') {
-        setCmdSuggestions([]);
-        clearAtSuggestions();
-        return;
-      }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (isStreaming) {
-        abort();
-      } else {
-        handleSubmit(inputValue);
-      }
-    }
-  }
-
-  function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const val = e.target.value;
-    setInputValue(val);
-    const textarea = e.target;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-    // Slash suggestions
-    setCmdSuggestions(
-      getSlashSuggestions(val).map((cmd) => ({
-        type: 'slash' as const,
-        value: cmd.name,
-        label: cmd.name,
-        description: cmd.args,
-        meta: cmd.description,
-      }))
-    );
-    // @ file suggestions: chat has no CWD so just clear them
-    clearAtSuggestions();
-    setSelectedSuggestionIdx(0);
-  }
-
-  function handleButtonClick() {
-    if (isStreaming) {
-      abort();
-    } else {
-      handleSubmit(inputValue);
-    }
-  }
+  const composerProps = {
+    ...turn.composer,
+    ref: composerRef,
+    onSubmit: submitFromComposer,
+    attachmentMenu,
+    toolbarEnd: modelSelector,
+  };
 
   const handleArtifactSaved = useCallback(
     (artifactId: string, filePath: string) => {
@@ -736,73 +267,7 @@ export function ChatSurface() {
 
           {/* Centered input card */}
           <div className="w-full max-w-2xl">
-            <CommandPicker
-              suggestions={activeSuggestions}
-              selectedIndex={selectedSuggestionIdx}
-              onSelect={handleSelectSuggestion}
-              onSelectedIndexChange={setSelectedSuggestionIdx}
-            />
-            <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-              <Textarea
-                value={inputValue}
-                onChange={handleTextareaChange}
-                onKeyDown={handleKeyDown}
-                placeholder="How can I help you today?"
-                rows={3}
-                className="min-h-[120px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-              />
-              {/* Attachment chips */}
-              {attachments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-                  {attachments.map((att, i) => (
-                    <span
-                      key={i}
-                      className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                    >
-                      <AttachmentIcon category={att.category} />
-                      {att.name}
-                      <button
-                        type="button"
-                        onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                        className="hover:text-foreground"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center justify-between px-4 py-2.5">
-                <div className="flex items-center gap-1">
-                  <AttachmentMenu
-                    onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                    onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                    webSearchEnabled={webSearchEnabled}
-                    currentProjectId={currentProjectId}
-                    onAddToProject={(pid) => assignToProject(chatId, pid)}
-                    onNewProject={() => setSidebarMode("projects")}
-                    projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                  />
-                  <VoiceButton onTranscript={handleVoiceTranscript} />
-                </div>
-                <div className="flex items-center gap-2">
-                  <ModelSelector
-                    value={modelRoute?.id ?? ''}
-                    onSelectModel={setModelRoute}
-                    capability={CAPABILITY}
-                    className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                  />
-                  <Button
-                    size="icon"
-                    className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/80"
-                    onClick={handleButtonClick}
-                    disabled={!inputValue.trim()}
-                  >
-                    <ArrowUp className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
+            <Composer {...composerProps} variant="hero" placeholder="How can I help you today?" />
 
             {/* Quick-start suggestion pills */}
             <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
@@ -814,7 +279,7 @@ export function ChatSurface() {
               ].map((pill) => (
                 <button
                   key={pill.label}
-                  onClick={() => { setInputValue(pill.prompt); setTimeout(() => document.querySelector<HTMLTextAreaElement>('[placeholder="How can I help you today?"]')?.focus(), 50); }}
+                  onClick={() => { setComposerText("chat", chatId, pill.prompt); composerRef.current?.focus(); }}
                   className="flex items-center gap-1.5 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-card hover:border-border transition-colors"
                 >
                   <pill.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -853,7 +318,7 @@ export function ChatSurface() {
             {/* Messages column */}
             <div className="flex flex-1 flex-col min-w-0">
               {/* Messages */}
-              <MessageList messages={messages} conversationId={chatId} surfaceId="chat" onArtifactClick={handleArtifactClick} onQuestionAnswered={onQuestionAnswered} onConnectorSettled={onConnectorSettled} onRetry={handleRetry} onCancel={chatId ? () => streamRegistry.abort(chatId) : undefined} />
+              <MessageList {...turn.transcript} surfaceId="chat" onArtifactClick={handleArtifactClick} showReasoning={sessionControls.reasoningVisible} expandToolCalls={sessionControls.verboseMode} />
 
               {/* Prompt suggestions */}
               {suggestions.length > 0 && !isStreaming && (
@@ -862,7 +327,7 @@ export function ChatSurface() {
                     {suggestions.map((s, i) => (
                       <button
                         key={i}
-                        onClick={() => setInputValue(s)}
+                        onClick={() => { setComposerText("chat", chatId, s); composerRef.current?.focus(); }}
                         className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                       >
                         {s}
@@ -875,81 +340,7 @@ export function ChatSurface() {
               {/* Bottom input card */}
               <div className="px-6 pb-4 pt-2">
                 <div className="max-w-3xl mx-auto">
-                  <CommandPicker
-                    suggestions={activeSuggestions}
-                    selectedIndex={selectedSuggestionIdx}
-                    onSelect={handleSelectSuggestion}
-                    onSelectedIndexChange={setSelectedSuggestionIdx}
-                  />
-                  <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-                    <Textarea
-                      value={inputValue}
-                      onChange={handleTextareaChange}
-                      onKeyDown={handleKeyDown}
-                      placeholder="Reply..."
-                      rows={2}
-                      className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-                      style={{ opacity: isStreaming ? 0.6 : 1 }}
-                    />
-                    {/* Attachment chips */}
-                    {attachments.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-                        {attachments.map((att, i) => (
-                          <span
-                            key={i}
-                            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                          >
-                            {att.name}
-                            <button
-                              type="button"
-                              onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                              className="hover:text-foreground"
-                            >
-                              <X className="h-3 w-3" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between px-4 py-2.5">
-                      <div className="flex items-center gap-1">
-                        <AttachmentMenu
-                          onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-                          onWebSearchToggle={() => setWebSearchEnabled((prev) => !prev)}
-                          webSearchEnabled={webSearchEnabled}
-                          currentProjectId={currentProjectId}
-                          onAddToProject={(pid) => assignToProject(chatId, pid)}
-                          onNewProject={() => setSidebarMode("projects")}
-                          projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                        />
-                        <VoiceButton onTranscript={handleVoiceTranscript} />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <ModelSelector
-                          value={modelRoute?.id ?? ''}
-                                onSelectModel={setModelRoute}
-                          capability={CAPABILITY}
-                          className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-                        />
-                        <Button
-                          size="icon"
-                          className={`h-8 w-8 rounded-lg ${
-                            isStreaming
-                              ? "bg-destructive hover:bg-destructive/80"
-                              : "bg-primary hover:bg-primary/80"
-                          }`}
-                          onClick={handleButtonClick}
-                          disabled={!isStreaming && !inputValue.trim()}
-                        >
-                          {isStreaming ? (
-                            <Square className="h-3.5 w-3.5" />
-                          ) : (
-                            <ArrowUp className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
+                  <Composer {...composerProps} placeholder="Reply..." />
                 </div>
               </div>
             </div>
@@ -963,6 +354,7 @@ export function ChatSurface() {
                   onClick={() => setArtifactsSidebarOpen(true)}
                   className="flex items-center justify-center py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
                   title="Show artifacts"
+                  aria-label="Show artifacts"
                 >
                   <PanelRight className="h-4 w-4" />
                 </button>
@@ -983,6 +375,7 @@ export function ChatSurface() {
                     onClick={() => setArtifactsSidebarOpen(false)}
                     className="text-muted-foreground hover:text-foreground transition-colors"
                     title="Hide artifacts"
+                    aria-label="Hide artifacts"
                   >
                     <PanelRightClose className="h-3.5 w-3.5" />
                   </button>

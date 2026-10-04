@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, cleanup, waitFor } from '@testing-library/react';
+import { render, cleanup } from '@testing-library/react';
 
 /**
  * The 3-second hydration timeout must not let a late rehydrate clobber state the
@@ -23,9 +23,6 @@ import { render, cleanup, waitFor } from '@testing-library/react';
  * Anything the user did in that window is lost the same way; onboarding is just
  * where it is most visible, because the wizard gates the whole app.
  */
-
-/** Longer than the render-anyway fallback, which is now 15s (was 3s). */
-const SLOW_MS = 20_000;
 
 let store: Record<string, string>;
 

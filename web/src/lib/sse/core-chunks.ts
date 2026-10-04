@@ -1,6 +1,8 @@
 'use client';
 
 import type { ChunkType } from '@/lib/providers/base-provider';
+import { classifyTurnError, isTurnErrorCode, type TurnErrorCode } from '@/lib/sse/turn-error';
+import { APP_NAME } from '@/config/branding';
 
 /**
  * The conversation-stream contract every surface store already satisfied.
@@ -19,6 +21,21 @@ export interface ConversationStreamStore {
   addToolCall: (chatId: string, toolCall: ToolCallInit) => void;
   updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
   completeRunningTools: (chatId: string) => void;
+  /**
+   * Record a failed turn on its reply, to be shown as a banner. Optional so a
+   * store that has not adopted it yet keeps the old inline text rather than
+   * losing the error altogether.
+   */
+  setTurnError?: (chatId: string, error: { code: TurnErrorCode; message: string }) => void;
+  /** Show / clear "Retrying (attempt n)…" on the reply. */
+  setRetryStatus?: (chatId: string, retrying: { attempt: number; delayMs: number } | null) => void;
+  /** Note where an API response's output starts — see the `retract` case. */
+  markSegment?: (chatId: string, segment: string, lead?: number) => void;
+  /** Take a retracted response back out of the reply. */
+  retractSegments?: (
+    chatId: string,
+    retraction: { segments: string[]; toolUseIds: string[] },
+  ) => { endsAfterTool: boolean };
 }
 
 /** The message shape all three stores accept, narrowed to what the stream sets. */
@@ -39,6 +56,12 @@ export interface ToolCallInit {
   input: Record<string, unknown>;
   status: 'running' | 'complete' | 'error';
   startTime: number;
+  /**
+   * Where in the reply's text the call was made. Left to the store, which
+   * stamps the reply's length when the call is recorded — see the `tool_use`
+   * case for why that is the right moment.
+   */
+  textOffset?: number;
 }
 
 /**
@@ -65,9 +88,14 @@ export type CoreChunkType =
   | 'input_request'
   | 'connector_request'
   | 'document_print'
-  | 'canvas';
+  | 'canvas'
+  // The provider is backing off and will try again. Emitted by the chat route
+  // rather than a provider, hence not in ChunkType.
+  | 'retry'
+  // The SDK threw a refused reply away and re-ran it on a fallback model.
+  | 'retract';
 
-const CORE: readonly ChunkType[] = [
+const CORE: readonly (ChunkType | 'retry')[] = [
   'turn_start',
   'text',
   'thinking',
@@ -78,6 +106,8 @@ const CORE: readonly ChunkType[] = [
   'connector_request',
   'document_print',
   'canvas',
+  'retry',
+  'retract',
 ] satisfies readonly CoreChunkType[];
 
 export interface CoreChunkContext {
@@ -131,7 +161,7 @@ export interface CoreChunkContext {
    *
    * A migration affordance, not a design: cowork's `tool_use`/`tool_result` carry
    * a lot of surface-specific work (a stuck-tool watchdog, artifact
-   * categorisation, a QUARRY_CRON sniffer over both input and output) that would
+   * categorisation, a cron-marker sniffer over both input and output) that would
    * be misrepresented as a one-line callback. Listing them here keeps the opt-out
    * VISIBLE and typed, rather than a surface quietly not calling the shared
    * handler at all — which is the failure mode this whole exercise is about.
@@ -207,8 +237,11 @@ export function handleCoreChunk(
        * corruption rather than a missing separator, which is why it kept being
        * mistaken for something worse.
        */
-      const resumed = textResumedAfterTool(chatId);
-      store.appendToLastAssistant(chatId, (resumed ? '\n\n' : '') + ((event.content as string) || ''));
+      const lead = textResumedAfterTool(chatId) ? '\n\n' : '';
+      // The segment starts AFTER the separator: the break belongs to the tool
+      // call before it, and must survive if this response is retracted.
+      if (typeof event.segment === 'string') store.markSegment?.(chatId, event.segment, lead.length);
+      store.appendToLastAssistant(chatId, lead + ((event.content as string) || ''));
       return true;
     }
 
@@ -217,6 +250,14 @@ export function handleCoreChunk(
       return true;
 
     case 'tool_use': {
+      /*
+       * The call is recorded with the reply's length at this moment as its
+       * `textOffset` (the store stamps it), so the reply renders as text, the
+       * tools it introduced, then the text that followed — instead of every
+       * call in one bar above the whole reply, where "Let me search…" appeared
+       * after the searches it announced. Exact because every event is in
+       * order: coalesced text is flushed before any other event is delivered.
+       */
       // The next text block belongs to a new paragraph — see the `text` case.
       toolSinceText.add(chatId);
       store.completeRunningTools(chatId);
@@ -224,6 +265,8 @@ export function handleCoreChunk(
       const name = (event.name as string) || 'Unknown';
       const raw = (event.input as Record<string, unknown>) || {};
       const input = ctx.normaliseToolInput ? ctx.normaliseToolInput(name, raw) : raw;
+      // A response can open with a tool call; its segment starts here.
+      if (typeof event.segment === 'string') store.markSegment?.(chatId, event.segment);
       store.addToolCall(chatId, { id: toolId, name, input, status: 'running', startTime: Date.now() });
       ctx.onToolStarted?.(toolId, name, input);
       return true;
@@ -238,12 +281,46 @@ export function handleCoreChunk(
       return true;
     }
 
-    case 'error':
-      store.appendToLastAssistant(
-        chatId,
-        `\n\n**Error:** ${(event.message as string) || 'An error occurred'}`,
-      );
+    case 'error': {
+      const message = (event.message as string) || 'An error occurred';
+      if (!store.setTurnError) {
+        store.appendToLastAssistant(chatId, `\n\n**Error:** ${message}`);
+        return true;
+      }
+      // The server classifies; an older server (or a relayed error) may not,
+      // so classify the text rather than render every failure as "unknown".
+      const code = isTurnErrorCode(event.code) ? event.code : classifyTurnError(message);
+      store.setTurnError(chatId, { code, message });
       return true;
+    }
+
+    case 'retry': {
+      const attempt = typeof event.attempt === 'number' ? event.attempt : 1;
+      const delayMs = typeof event.delayMs === 'number' ? event.delayMs : 0;
+      store.setRetryStatus?.(chatId, { attempt, delayMs });
+      return true;
+    }
+
+    case 'retract': {
+      /*
+       * Agent SDK 0.3 re-runs a refused reply on a fallback model and names
+       * what it threw away. The provider translates that into the segments
+       * (one per API response) and tool calls this client was sent; they come
+       * off the reply here, before the fallback's answer is read as following
+       * on from them. Whether the next text needs a paragraph break is
+       * re-derived, since the call that set it may be the one just removed.
+       */
+      const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+      const result = store.retractSegments?.(chatId, {
+        segments: strings(event.segments),
+        toolUseIds: strings(event.toolUseIds),
+      });
+      if (result) {
+        if (result.endsAfterTool) toolSinceText.add(chatId);
+        else toolSinceText.delete(chatId);
+      }
+      return true;
+    }
 
     case 'input_request':
       store.addMessage(chatId, {
@@ -254,7 +331,7 @@ export function handleCoreChunk(
         questionData: event.questions,
         questionToolUseId: event.toolUseId as string,
       });
-      ctx.notify?.('Claude needs your input', 'A question or permission prompt is waiting for you.');
+      ctx.notify?.('The assistant needs your input', 'A question or permission prompt is waiting for you.');
       return true;
 
     case 'connector_request':
@@ -269,7 +346,7 @@ export function handleCoreChunk(
           toolUseId: event.toolUseId as string,
         },
       });
-      ctx.notify?.('A connection is needed', 'AIME is waiting to connect a service.');
+      ctx.notify?.('A connection is needed', `${APP_NAME} is waiting to connect a service.`);
       return true;
 
     case 'document_print':

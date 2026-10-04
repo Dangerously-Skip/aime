@@ -1,26 +1,22 @@
 "use client";
 
-import { useState, useRef, useMemo, useCallback } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useProjectStore, type KnowledgeFile } from "@/stores/project-store";
 import { useConversationStore, type Conversation } from "@/stores/conversation-store";
 import { useChatStore } from "@/stores/chat-store";
-import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream } from "@/hooks/use-sse-stream";
-import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
-import { handleCoreChunk } from "@/lib/sse/core-chunks";
-import { useDocumentPrint } from "@/hooks/use-document-print";
-import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
-import { buildProjectContext } from "@/lib/project/context-builder";
 import { ModelSelector } from "@/components/shared/model-selector";
-import { AttachmentMenu } from "@/components/shared/attachment-menu";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
+import { Composer } from "@/components/shared/composer/composer";
+import { NoModelCard } from "@/components/shared/no-model-card";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { Surface } from "@/stores/app-store";
+import { useModelReady } from "@/hooks/use-model-ready";
+import { handOffTurn } from "@/hooks/use-handoff-turn";
+import { isSessionCommand } from "@/lib/slash-commands";
 import {
   ArrowLeft,
-  ArrowUp,
   Star,
   Ellipsis,
   Plus,
@@ -36,7 +32,6 @@ import {
   Timer,
   ToggleLeft,
   ToggleRight,
-  Users,
   Bot,
 } from "lucide-react";
 import {
@@ -49,15 +44,17 @@ import {
 import { ProjectEditDialog } from "./project-edit-dialog";
 import { ProjectIcon } from "@/components/shared/project-icon";
 import { ProjectCanvases } from "./project-canvases";
-import { useProviderStore } from "@/stores/provider-store";
-import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useTurnWiring } from "@/hooks/use-turn-wiring";
-import { useBuiltinAccess } from "@/hooks/use-builtin-access";
 import { useAttendedJobs } from '@/hooks/use-attended-jobs';
+import { SchedulePicker, type ScheduleChange } from "@/components/schedule/schedule-picker";
+import { describeTrigger, type Trigger } from "@/lib/schedule/schedule";
+import { APP_NAME } from "@/config/branding";
 
 /** Project chats run on the chat surface, so they route with its capability. */
 const CAPABILITY = getSurfaceRoute("chat").capability;
+
+/** What a new project automation opens on: Mondays at 9. */
+const DEFAULT_JOB_TRIGGER: Trigger = { type: "cron", expression: "0 9 * * 1" };
 
 const SURFACE_CONFIG: Record<
   Surface,
@@ -140,28 +137,13 @@ export function ProjectDetail({
   const removeKnowledgeFile = useProjectStore((s) => s.removeKnowledgeFile);
   const conversations = useConversationStore((s) => s.conversations);
   const addConversation = useConversationStore((s) => s.addConversation);
-  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
 
+  // The project page starts Chat conversations, so it uses Chat's model picker.
   const modelRoute = useChatStore((s) => s.modelRoute);
   const setModelRoute = useChatStore((s) => s.setModelRoute);
-  const addMessage = useChatStore((s) => s.addMessage);
-  const startStreaming = useChatStore((s) => s.startStreaming);
-  const appendToLastAssistant = useChatStore((s) => s.appendToLastAssistant);
-  const addToolCall = useChatStore((s) => s.addToolCall);
-  // Needed by the shared stream handler; this screen never bound it, which is
-  // why a tool left running was never marked complete here.
-  const completeRunningTools = useChatStore((s) => s.completeRunningTools);
-  const updateToolResult = useChatStore((s) => s.updateToolResult);
-  const stopStreaming = useChatStore((s) => s.stopStreaming);
-  const setIsStreaming = useChatStore((s) => s.setIsStreaming);
-  const displayName = useSettingsStore((s) => s.displayName);
-  const personalPreferences = useSettingsStore((s) => s.personalPreferences);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
-  // Built-in (Claude) reachability, which is the user's key OR the server's env
-  // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
-  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
-  const tierModels = useSettingsStore((s) => s.tierModels);
-  const providers = useProviderStore((s) => s.providers);
+  // "Connect a model" rather than opening a chat whose first turn can only fail.
+  const modelReady = useModelReady(modelRoute, CAPABILITY);
+  const [noModelAttempted, setNoModelAttempted] = useState(false);
 
   // Both stores (DR-24 step 5) — see `useAttendedJobs`.
   const {
@@ -172,95 +154,16 @@ export function ProjectDetail({
   } = useAttendedJobs();
   const cronJobs = useMemo(() => allAttendedJobs.filter((j) => j.projectId === projectId), [allAttendedJobs, projectId]);
 
-  const [inputValue, setInputValue] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [editingInstructions, setEditingInstructions] = useState(false);
   const [instructionsDraft, setInstructionsDraft] = useState("");
   const [addingCron, setAddingCron] = useState(false);
-  const [cronExpr, setCronExpr] = useState("");
+  const [cronSchedule, setCronSchedule] = useState<ScheduleChange>({ trigger: DEFAULT_JOB_TRIGGER, error: null });
   const [cronPrompt, setCronPrompt] = useState("");
   const [cronSurface, setCronSurface] = useState("cowork");
   const [cronError, setCronError] = useState("");
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [surfaceFilter, setSurfaceFilter] = useState<Surface | "all">("all");
   const knowledgeInputRef = useRef<HTMLInputElement>(null);
-  // Track the conversation id launched from this page so SSE handlers can target it
-  const launchedConvIdRef = useRef<string>("");
-  const [activeChatId, setActiveChatId] = useState("");
-  // Required relay deps. This screen streams as the CHAT surface (see
-  // sendMessage below), so it can receive AskUserQuestion, RequestConnector
-  // and DocumentCreate — all three of which park the turn server-side. It
-  // handled none of them, so an approval card here hung for 300s.
-  const printDocument = useDocumentPrint();
-  // `activeChatId`, not the ref: reading a ref during render is a React
-  // violation (eslint caught it), and this value only needs to be the
-  // conversation the canvas belongs to.
-  const onCanvasEvent = useCanvasSseHandler("chat", activeChatId);
-
-
-  // Scoped to the conversation this page launched, so an abort here cannot close
-  // the Chat surface's Run — both record against the 'chat' surface.
-  const ownsChat = useCallback(
-    (id: string) => !!id && id === launchedConvIdRef.current,
-    [],
-  );
-  // Shared with the three surfaces (see use-turn-wiring). No `updateMessage`: this
-  // page renders no question or connect cards, so the answer persisters are
-  // deliberately inert rather than wired to a list that would never show one.
-  const { runRecorder } = useTurnWiring({
-    surfaceId: "chat",
-    chatId: activeChatId,
-    ownsChat,
-  });
-
-  const { sendMessage } = useSSEStream({
-    chatId: activeChatId,
-    setIsStreaming,
-    onUsage: runRecorder.onUsage,
-    onChunk(event) {
-      // Chunks whose handling is the same on every surface — cron jobs,
-      // standing orders, widgets, memory. Handled in ONE place
-      // (lib/sse/agnostic-chunks) because each surface having its own case
-      // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: launchedConvIdRef.current ?? "", surface: 'Project' })) return;
-
-      const cid = launchedConvIdRef.current;
-      if (!cid) return;
-
-      // This screen streams as the CHAT surface, so every chunk chat can receive
-      // it can receive too — including the three that PARK THE TURN until the
-      // client answers. It handled none of them, so an approval card here hung
-      // for 300s with nothing on screen. Delegating gets all of them at once.
-      if (
-        handleCoreChunk(event, {
-          chatId: cid,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
-          printDocument,
-          onCanvas: onCanvasEvent,
-        })
-      ) {
-        return;
-      }
-
-      // No switch left: every chunk this screen handles is now handled centrally.
-      // `tool_use` was the last case and the shared core does it identically.
-    },
-    onDone() {
-      runRecorder.succeed();
-      const cid = launchedConvIdRef.current;
-      if (cid) {
-        stopStreaming(cid);
-      }
-    },
-    onError(error) {
-      runRecorder.fail(error.message);
-      const cid = launchedConvIdRef.current;
-      if (cid) {
-        stopStreaming(cid);
-        appendToLastAssistant(cid, `\n\n**Error:** ${error.message}`);
-      }
-    },
-  });
 
   const projectConversations = conversations
     .filter((c) => c.projectId === projectId)
@@ -285,104 +188,35 @@ export function ProjectDetail({
     );
   }
 
-  function handleStartChat() {
-    if (!inputValue.trim()) return;
-    const trimmed = inputValue.trim();
-
-    const conv: Conversation = {
-      id: crypto.randomUUID(),
-      title: trimmed.substring(0, 50),
-      surface: "chat",
-      lastMessage: trimmed,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      projectId,
-    };
+  /*
+   * Start a project chat by HANDING the message to the Chat surface.
+   *
+   * This page used to run the turn itself — its own stream, run record and
+   * request, the sixth copy of the send path. It sent less than Chat does (no
+   * memories, deck theme, search or security settings), wrote failures into
+   * the reply as text, and could not retry: the component that owned the
+   * stream unmounted the moment it opened the chat. Now it files the
+   * conversation under the project and Chat sends the message through its own
+   * turn, the same as anything typed there — project instructions included,
+   * because they come from the conversation's project.
+   */
+  function handleStartChat(text: string, attachments: AttachmentFile[]): boolean {
+    if (!modelReady && !isSessionCommand(text)) {
+      setNoModelAttempted(true);
+      return false;
+    }
+    const conv = newSurfaceConversation("chat", projectId);
     addConversation(conv);
-    setActiveConversation(conv.id);
-    launchedConvIdRef.current = conv.id;
-    setActiveChatId(conv.id);
-
-    addMessage(conv.id, {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: trimmed,
-      timestamp: Date.now(),
-    });
-    addMessage(conv.id, {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-      timestamp: Date.now(),
-      isLoading: true,
-      isStreaming: true,
-    });
-    startStreaming(conv.id);
-
-    let projectInstructions: string | undefined;
-    let projectKnowledge: string | undefined;
-    if (project!.customInstructions) {
-      projectInstructions = project!.customInstructions;
-    }
-    if (project!.knowledgeFiles.length > 0) {
-      projectKnowledge = project!.knowledgeFiles
-        .map((f) => `[File: ${f.name}]\n${f.content}`)
-        .join("\n\n---\n\n");
-    }
-
-    const currentAttachments = [...attachments];
-    setInputValue("");
-    setAttachments([]);
-
+    handOffTurn("chat", conv.id, { text, attachments });
+    // The shell opens it — surface included, though it was created just now.
     onOpenConversation(conv.id);
-
-    const crossSurfaceContext = buildProjectContext(project!, "chat", conv.id);
-
-    // A tier route resolves here (it can land on a user provider's model); a
-    // pinned model passes through. Null ⇒ nothing resolved, so fall back to the
-    // built-in model rather than send an empty one.
-    const route = resolveSendRoute(modelRoute, providers, {
-      capability: CAPABILITY,
-      tierModels,
-      hasAnthropicKey,
-      hasBedrock,
-      known: builtinAccessKnown,
-    });
-
-    // Open the run record before the turn starts so an immediate failure is
-    // still attributed rather than lost.
-    runRecorder.begin({ trigger: "chat", model: route?.model ?? undefined });
-    sendMessage(trimmed, conv.id, "chat", route?.model ?? null, {
-      personalPreferences: personalPreferences || undefined,
-      displayName: displayName || undefined,
-      attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-      projectInstructions,
-      projectKnowledge,
-      crossSurfaceContext: crossSurfaceContext || undefined,
-      apiKey: anthropicApiKey || undefined,
-      providerConfig: route?.providerConfig,
-    });
+    return true;
   }
 
   function handleStartInSurface(surface: Surface) {
     const conv = newSurfaceConversation(surface, projectId);
     addConversation(conv);
-    setActiveConversation(conv.id);
     onOpenConversation(conv.id);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleStartChat();
-    }
-  }
-
-  function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setInputValue(e.target.value);
-    const textarea = e.target;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
   }
 
   function handleDelete() {
@@ -392,19 +226,16 @@ export function ProjectDetail({
 
   async function handleAddCron() {
     setCronError("");
-    const parts = cronExpr.trim().split(/\s+/);
-    if (parts.length !== 5) { setCronError("Must have 5 fields: min hour dom month dow"); return; }
     if (!cronPrompt.trim()) { setCronError("Prompt is required"); return; }
-    const res = await fetch("/api/cron", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface }),
-    });
-    if (!res.ok) { const d = await res.json() as { error?: string }; setCronError(d.error ?? "Invalid"); return; }
-    // A round trip now; a failure must be visible rather than silently losing
-    // the schedule the user just described.
-    void createAttended({ expression: cronExpr.trim(), prompt: cronPrompt.trim(), surfaceId: cronSurface, projectId });
-    setCronExpr(""); setCronPrompt(""); setAddingCron(false);
+    const trigger = cronSchedule.trigger;
+    if (!trigger) { setCronError(cronSchedule.error ?? "Pick a schedule"); return; }
+    // A round trip now, and a failure must be visible rather than silently
+    // losing the schedule the user just described — the result was ignored.
+    const id = await createAttended({ trigger, prompt: cronPrompt.trim(), surfaceId: cronSurface, projectId });
+    if (!id) { setCronError("Could not save the schedule. Try again."); return; }
+    setCronSchedule({ trigger: DEFAULT_JOB_TRIGGER, error: null });
+    setCronPrompt("");
+    setAddingCron(false);
   }
 
   function startEditInstructions() {
@@ -456,7 +287,7 @@ export function ProjectDetail({
         <div className="flex items-start justify-between mb-2">
           <div className="flex items-center gap-3">
             <ProjectIcon icon={project.icon} className="h-7 w-7 text-muted-foreground" />
-            <h1 className="text-3xl font-light text-foreground tracking-tight">
+            <h1 className="text-2xl font-semibold text-foreground tracking-tight">
               {project.name}
             </h1>
           </div>
@@ -504,58 +335,23 @@ export function ProjectDetail({
         )}
         {!project.description && <div className="mb-6" />}
 
-        {/* Chat input card */}
-        <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden mb-4">
-          <Textarea
-            value={inputValue}
-            onChange={handleTextareaChange}
-            onKeyDown={handleKeyDown}
+        {/* Chat input card — the shared Composer; its draft is kept per project. */}
+        <div className="mb-4">
+          <Composer
+            surface="project"
+            conversationId={projectId}
             placeholder="How can I help you today?"
-            rows={2}
-            className="min-h-[56px] max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-          />
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-              {attachments.map((att, i) => (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                >
-                  {att.name}
-                  <button
-                    type="button"
-                    onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
-                    className="hover:text-foreground"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center justify-between px-4 py-2.5">
-            <AttachmentMenu
-              onFileSelect={(file) => setAttachments((prev) => [...prev, file])}
-              onWebSearchToggle={() => {}}
-              webSearchEnabled={false}
-            />
-            <div className="flex items-center gap-2">
+            onSubmit={handleStartChat}
+            header={modelReady ? undefined : <NoModelCard attempted={noModelAttempted} />}
+            toolbarEnd={
               <ModelSelector
                 value={modelRoute?.id ?? ''}
-                      onSelectModel={setModelRoute}
+                onSelectModel={setModelRoute}
                 capability={CAPABILITY}
                 className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
               />
-              <Button
-                size="icon"
-                className="h-8 w-8 rounded-full bg-primary hover:bg-primary/80"
-                onClick={handleStartChat}
-                disabled={!inputValue.trim()}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
+            }
+          />
         </div>
 
         {/* Surface launcher buttons */}
@@ -655,6 +451,7 @@ export function ProjectDetail({
                 size="icon"
                 className="h-7 w-7 text-muted-foreground"
                 onClick={() => setAddingCron((v) => !v)}
+                aria-label="Add automation"
               >
                 <Plus className="h-4 w-4" />
               </Button>
@@ -663,18 +460,16 @@ export function ProjectDetail({
             {addingCron && (
               <div className="p-4 border-b border-border space-y-3 bg-muted/20">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Cron Expression</label>
-                  <input
-                    value={cronExpr}
-                    onChange={(e) => setCronExpr(e.target.value)}
-                    placeholder="0 9 * * 1"
-                    className="w-full h-8 rounded-md border border-input bg-background px-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  <p className="text-[11px] text-muted-foreground">min hour dom month dow — e.g. every Monday 9am</p>
+                  <span className="text-xs font-medium text-muted-foreground">When</span>
+                  <SchedulePicker value={DEFAULT_JOB_TRIGGER} onChange={setCronSchedule} compact />
+                  <p className="text-[11px] text-muted-foreground">
+                    Runs in the project, with its instructions — only while {APP_NAME} is open.
+                  </p>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Prompt</label>
+                  <label htmlFor="project-job-prompt" className="text-xs font-medium text-muted-foreground">Prompt</label>
                   <input
+                    id="project-job-prompt"
                     value={cronPrompt}
                     onChange={(e) => setCronPrompt(e.target.value)}
                     placeholder="Summarize this week's progress"
@@ -682,8 +477,9 @@ export function ProjectDetail({
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Surface</label>
+                  <label htmlFor="project-job-surface" className="text-xs font-medium text-muted-foreground">Surface</label>
                   <select
+                    id="project-job-surface"
                     value={cronSurface}
                     onChange={(e) => setCronSurface(e.target.value)}
                     className="w-full h-8 rounded-md border border-input bg-background px-3 text-xs focus:outline-none"
@@ -693,7 +489,7 @@ export function ProjectDetail({
                     <option value="code">Code</option>
                   </select>
                 </div>
-                {cronError && <p className="text-xs text-destructive">{cronError}</p>}
+                {cronError && <p role="alert" className="text-xs text-destructive">{cronError}</p>}
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleAddCron}>Save</Button>
                   <Button size="sm" variant="ghost" onClick={() => { setAddingCron(false); setCronError(""); }}>Cancel</Button>
@@ -703,7 +499,7 @@ export function ProjectDetail({
 
             {cronJobs.length === 0 && !addingCron ? (
               <div className="px-5 py-6 text-xs text-muted-foreground">
-                No automations yet. Add a cron job to schedule recurring agent runs for this project.
+                No automations yet. Add a schedule to run the agent in this project on a timetable.
               </div>
             ) : (
               <div className="divide-y divide-border">
@@ -713,6 +509,9 @@ export function ProjectDetail({
                       onClick={() => void setAttendedEnabled(job.id, job.status !== 'active')}
                       className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
                       title={(job.status === 'active') ? "Disable" : "Enable"}
+                      role="switch"
+                      aria-checked={job.status === 'active'}
+                      aria-label={`Automation: ${job.prompt}`}
                     >
                       {(job.status === 'active')
                         ? <ToggleRight className="h-4 w-4 text-primary" />
@@ -720,10 +519,13 @@ export function ProjectDetail({
                       }
                     </button>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-mono text-muted-foreground">{job.trigger.expression}</p>
+                      <p className="text-xs text-muted-foreground" title={job.trigger.expression}>
+                        {describeTrigger(job.trigger)}
+                      </p>
                       <p className="text-sm mt-0.5 truncate">{job.prompt}</p>
                       <div className="flex items-center gap-2 mt-1">
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{job.surfaceId}</span>
+                        <span className="text-[10px] text-muted-foreground">Needs {APP_NAME} open</span>
                         {job.lastRun && (
                           <span className="text-[10px] text-muted-foreground">
                             last run {formatTimeAgo(job.lastRun)}
@@ -735,8 +537,11 @@ export function ProjectDetail({
                       </div>
                     </div>
                     <button
-                      onClick={() => void removeAttended(job.id)}
+                      onClick={() => {
+                        if (window.confirm(`Delete the automation "${job.prompt.slice(0, 60)}"?`)) void removeAttended(job.id);
+                      }}
                       className="shrink-0 text-muted-foreground hover:text-destructive transition-colors mt-0.5"
+                      aria-label="Delete automation"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -771,7 +576,7 @@ export function ProjectDetail({
                 <Textarea
                   value={instructionsDraft}
                   onChange={(e) => setInstructionsDraft(e.target.value)}
-                  placeholder="Add instructions to tailor Claude's responses..."
+                  placeholder="Add instructions to tailor the assistant's responses..."
                   rows={4}
                   className="resize-none text-sm"
                   autoFocus
@@ -798,7 +603,7 @@ export function ProjectDetail({
             ) : (
               <div className="px-5 py-3">
                 <p className="text-sm text-muted-foreground">
-                  Add instructions to tailor Claude&apos;s responses
+                  Add instructions to tailor the assistant&apos;s responses
                 </p>
               </div>
             )}
@@ -859,37 +664,6 @@ export function ProjectDetail({
               </div>
             )}
           </div>
-        {/* Team / Multiplayer — Coming Soon */}
-        <div className="mt-4 rounded-xl border border-border/50 bg-card/50 overflow-hidden opacity-50 pointer-events-none select-none">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-border/50">
-            <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Team
-            </h3>
-            <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50">
-              Multiplayer Mode Coming Soon
-            </span>
-          </div>
-          <div className="px-5 py-4 space-y-3">
-            {/* Fake member rows */}
-            {["Project Owner", "Collaborator", "Viewer"].map((role) => (
-              <div key={role} className="flex items-center gap-3">
-                <div className="h-7 w-7 rounded-full bg-muted border border-border/50 shrink-0" />
-                <div className="flex-1 space-y-1">
-                  <div className="h-2.5 w-24 rounded bg-muted" />
-                  <div className="h-2 w-16 rounded bg-muted/60" />
-                </div>
-                <div className="h-5 w-14 rounded-full bg-muted/60" />
-              </div>
-            ))}
-            <div className="pt-1">
-              <div className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border/50 px-3 py-2 text-xs text-muted-foreground/60">
-                <Plus className="h-3.5 w-3.5" />
-                Invite teammate
-              </div>
-            </div>
-          </div>
-        </div>
         </div>
       </div>
 

@@ -84,7 +84,7 @@ describe('QuestionCard', () => {
     fireEvent.click(screen.getByText('Deny'));
     fireEvent.click(screen.getByRole('button', { name: /Submit/ }));
 
-    await waitFor(() => expect(screen.getByText(/Claude is continuing/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/assistant is continuing/)).toBeTruthy());
     expect(screen.queryByRole('button', { name: /Submit/ })).toBeNull();
 
     // Clicking a different option after the fact must not send a second verdict.
@@ -113,7 +113,7 @@ describe('QuestionCard', () => {
     expect(retry.disabled).toBe(false);
 
     fireEvent.click(retry);
-    await waitFor(() => expect(screen.getByText(/Claude is continuing/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/assistant is continuing/)).toBeTruthy());
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

@@ -30,7 +30,6 @@ const src = fs.readFileSync(path.join(process.cwd(), 'src/lib/browser-tools.ts')
  * source. A reconstruction is a second implementation of the thing under test,
  * and it can differ from it in exactly the way that hides the bug.
  */
-const injected = (js: string) => js;
 
 const PAGE = `
   <h1>Camera listings</h1>

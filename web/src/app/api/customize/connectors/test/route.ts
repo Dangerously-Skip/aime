@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { findExecutable } from '@/lib/find-executable';
 
 export const runtime = 'nodejs';
 
@@ -59,21 +60,17 @@ export async function POST(req: NextRequest) {
   }
 
   if (type === 'stdio') {
-    if (!command) {
+    if (!command || typeof command !== 'string') {
       return Response.json({ error: 'command is required for stdio connectors' }, { status: 400 });
     }
 
-    try {
-      const { execSync } = await import('child_process');
-      // Check if command exists
-      execSync(`which ${command}`, { timeout: 5000 });
-      return Response.json({ success: true });
-    } catch {
-      return Response.json({
-        success: false,
-        error: `Command '${command}' not found on PATH`,
-      });
-    }
+    // No shell: `command` comes straight from the request body.
+    const resolved = await findExecutable(command);
+    if (resolved) return Response.json({ success: true });
+    return Response.json({
+      success: false,
+      error: `Command '${command}' not found on PATH`,
+    });
   }
 
   return Response.json({ error: 'type must be stdio, http, or sse' }, { status: 400 });

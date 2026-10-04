@@ -159,6 +159,16 @@ packaged, by `dev-with-port.js` in development, never written to disk. The
 window receives it once as `?t=` on the initial load; the proxy exchanges it for
 an HttpOnly cookie and redirects to strip it from the URL.
 
+**Our own inference clients get a narrower token.** BYOK traffic goes out
+through `/api/llm-proxy/*`, and the Agent SDK subprocess can only be handed a
+credential through its environment — which the agent's own Bash can read. So it
+never gets `AIME_API_TOKEN`: it gets `HMAC-SHA256(AIME_API_TOKEN,
+"aime:llm-proxy:v1")` (`deriveProxyToken` / `proxyToken`), which `decide()`
+accepts as a Bearer on `/api/llm-proxy/*` only — not as the cookie, not for
+`?t=`, not on any other route. A leaked copy buys model calls through the user's
+provider, which the agent holding it could already make; not subagents,
+identity files or connector config.
+
 **No token configured means everything is refused (503), not allowed.** A dev
 bypass here is the shape of the four security toggles that shipped doing
 nothing, except it is the one that would survive into a build on a shared
@@ -173,7 +183,7 @@ unauthenticated. A new route cannot land outside the gate.
 
 Unit tests use Vitest (`web/vitest.config.ts`, node environment by default, `@/` alias). Test files live next to the code they test (`*.test.ts`); React hook/component tests use jsdom via a `// @vitest-environment jsdom` pragma and Testing Library. E2E smoke tests use Playwright (`web/playwright.config.ts`, specs in `web/e2e/`, boots `next dev` on port 3100): `npm run test:e2e`.
 
-Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming (server + client hook), memory retriever/dedup, store actions (conversation, cowork, assistant, context-bus, memory), settings migrations (v1→v7 via real rehydrate), minute-tick hooks (cron, heartbeat), API routes (cron, webhooks CRUD + trigger), ClaudeProvider (SDK mocked: option assembly, session resumption, stream translation, canUseTool governance/loop-detection/interception), the chat SSE route (validation, streaming, tool profiles, agent routing, security injection, memory extraction), canvas templates (registry + expansion), gateway/bedrock env mapping, pending-questions bridge, xlsx extractor (real files), and browser-boot smoke E2E.
+Every code change should include tests: unit for logic, and a regression test reproducing the bug first for bug fixes. Existing coverage: slash commands, cron matching, ROI calc, artifact parsing/categorization, server detection, AGENTS.md parsing, SKILL.md parsing, standing-order import/engine, SSE streaming (server + client hook), memory retriever/dedup, store actions (conversation, cowork, assistant, context-bus, memory), settings migrations (v1→v7 via real rehydrate), minute-tick hooks (cron, scheduled prompts), API routes (cron, subagent), ClaudeProvider (SDK mocked: option assembly, session resumption, stream translation, canUseTool governance/loop-detection/interception), the chat SSE route (validation, streaming, tool profiles, agent routing, security injection, memory extraction), canvas templates (registry + expansion), gateway/bedrock env mapping, pending-questions bridge, xlsx extractor (real files), and browser-boot smoke E2E.
 
 ### Security controls: the bar is a failing test, not a careful reading
 
@@ -190,9 +200,43 @@ mechanisms are, and both fail the build rather than asking you to remember:
 1. **`enforcement: 'enforced' | 'guidance'`** on every entry in
    `SECURITY_TOGGLES` (`settings/sections/security-section.tsx`). Declaring
    `'enforced'` is a claim `security-section.enforcement.test.ts` checks by
-   driving the real `canUseTool` — the one hook that runs whatever
-   `permissionMode` says. A new enforced toggle with no probe fails. The badge is
-   rendered in Settings, so the claim is visible to the user too.
+   driving the real `canUseTool`. A new enforced toggle with no probe fails. The
+   badge is rendered in Settings, so the claim is visible to the user too.
+
+   **`canUseTool` does NOT run on its own in every mode.** The SDK CLI skips it
+   under `bypassPermissions` and `acceptEdits` and for anything on
+   `allowedTools` (it logs `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`). For months that
+   meant "Block dangerous commands" and "Restrict to project folder" — on by
+   default, badged Enforced — did nothing in Chat and Cowork, while every test
+   passed, because the tests called `canUseTool` directly. What makes it run is
+   a `PreToolUse` hook in `claude-provider.ts` answering `ask` for every call,
+   and `claude-provider.real-sdk.test.ts` proves it against the REAL CLI
+   binary. That hook is on for EVERY run, background included — it was
+   interactive-only until 2026-10, which left the toggles, connector blocks and
+   the approval policy inert in every subagent, standing order and widget.
+
+   **Background runs: who decides, and what they may do.** Each caller STATES
+   its approval policy (`QueryParams.approvalPolicy`); the chatId prefix
+   (`standing-order-`/`subagent_`/`hb-`/`widget-`) is only a fail-safe default
+   to `consequential` for a caller that forgets, and never relaxes one.
+   Standing orders and heartbeats run `consequential`: reads and in-app actions
+   run, anything with effects outside the app (Write, non-read Bash, MCP
+   writes, `MailDraft`) is REFUSED — not paused, there is no resume — and
+   recorded on the Run (`Run.refusals`, shown in Cockpit/Activity run rows and
+   as a "Needs attention" item). Widget refreshes run `consequential` too —
+   nobody watches them, and `never` would have allowed Write/Bash in a
+   web-grounded refresh. The SDK subprocess never receives `AIME_API_TOKEN`
+   (the agent's Bash inherits that env), so a run cannot call `/api/subagent`
+   and claim `attended` for itself.
+   `/api/subagent` takes `attended: true` (strict boolean, absent ⇒
+   unattended) from callers a click started — Create PR, a canvas button —
+   which gets `never`, and the tools that click named in `extraAllowedTools`
+   answer the connector "ask first" question (`userApprovedTools`, exact name,
+   never for money servers or a stored denial). Canvas refresh is unattended on
+   purpose. Where a gate would need to ask and no client is attached, it
+   refuses, in every kind of run. Proved per run kind through the real callers
+   in `claude-provider.background-runs.test.ts`, and against the real CLI in
+   `claude-provider.real-sdk.test.ts`.
 2. **`npm run test:mutation`** (Stryker, scoped to `lib/security/**`,
    `path-containment.ts`, `tool-policy.ts`; weekly in CI, never per-push). A green
    suite says the code ran; only this says the assertions would notice if it
@@ -216,7 +260,7 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 1. **Electron Main** (`web/main-web.js`) — Window lifecycle, IPC handlers, auto-updater, minute-tick heartbeat, GitHub OAuth
 2. **Electron Preload** (`web/preload-web.js`) — IPC bridge via `contextBridge` (file dialogs, auth windows, notifications, updates, `onMinuteTick`)
 3. **Next.js App** (`web/src/`) — React UI with shadcn/ui, Zustand stores
-4. **API Routes** (`web/src/app/api/`) — SSE streaming, connectors, telemetry, identity, memory, webhooks, cron, subagents
+4. **API Routes** (`web/src/app/api/`) — SSE streaming, connectors, telemetry, identity, cron, subagents
 
 ### Surfaces (`web/src/components/surfaces/`)
 
@@ -235,29 +279,31 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 - `browser-store.ts` — Browser DOM state, navigation, tool results
 - `assistant-store.ts` — Standing orders, automation templates
 - `conversation-store.ts` — Conversation list, metadata, tokenUsage, effortEstimate, ROI, ratings
-- `settings-store.ts` — User preferences (v6, persisted)
+- `settings-store.ts` — User preferences (v15, persisted)
 - `project-store.ts` — Projects, artifacts, per-project settings
 - `connector-store.ts` — Connected service status
+- `provider-store.ts` — BYOK providers and their scanned models
 - `canvas-store.ts` — A2UI canvas panel state
-- `cron-store.ts` — Cron jobs + `matchesCron()`
-- `heartbeat-store.ts` — Connection health
 - `memory-store.ts` — Memory extraction/retrieval
 - `context-bus-store.ts` — Inter-component event bus
-- `reminder-store.ts` — Task reminders
+- `run-store.ts` — Goals + an in-memory window of recent runs (durable log is `/api/runs`)
+- `widget-store.ts` — Cockpit widgets (stored recipe + last render)
+- `code-workspace-store.ts` — Per-workspace Code IDE layout (panels, sizes, open tabs)
+- `tool-budget-store.ts` — Last observed tool count from a live session (not persisted)
 
 ### API Routes (`web/src/app/api/`)
 
-**Core:** `POST /api/chat/[surfaceId]` (SSE streaming with agent routing), `POST /api/abort`, `GET /api/providers`, `GET /api/models`, `GET /api/health`, `GET /api/doctor`, `GET /api/surfaces`
+**Core:** `POST /api/chat/[surfaceId]` (SSE streaming with agent routing), `POST /api/abort`, `GET /api/models`, `GET /api/health`, `GET /api/doctor`, `GET /api/surfaces`
 
-**Identity & Memory:** `GET|POST /api/identity/user-md`, `GET|POST /api/identity/soul-md`, `POST /api/memory/daily`
+**Identity:** `GET|POST /api/identity/user-md`, `GET|POST /api/identity/soul-md`
 
 **Telemetry:** `POST /api/telemetry/events`, `POST /api/telemetry/estimate-effort`, `GET /api/settings/costs`
 
-**Connectors:** `/api/connectors/oauth/*`, `/api/connectors/provision`, `/api/connectors/status`, `/api/nango/*`
+**Connectors:** `/api/connectors/oauth/*`, `/api/connectors/provision`
 
 **Customization:** `/api/customize/connectors/*`, `/api/customize/plugins`, `/api/customize/skills/*`, `/api/marketplace`
 
-**Automation:** `GET|POST|DELETE /api/cron`, `GET|POST|DELETE /api/webhooks`, `POST /api/webhooks/[token]`, `POST /api/subagent`, `POST /api/subagent/batch`, `POST /api/session/reset`, `GET /api/agents`
+**Automation:** `GET|POST|DELETE /api/cron`, `POST /api/subagent`, `GET /api/agents`
 
 **Files:** `/api/files/read`, `/api/files/delete`, `/api/files/search`, `POST /api/upload`
 
@@ -269,7 +315,7 @@ been exhaustive (`WidgetCreate` is on none of them and works everywhere).
 
 ### Providers (`web/src/lib/providers/`)
 
-- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` searxng + in-process `aime` server), handles tool interception (canvas, spawn_agent, loop detection), session controls.
+- `claude-provider.ts` — The provider (Claude Agent SDK). Injects MCP servers (connectors + optional `web-search` + in-process `aime` server), handles tool interception (canvas, loop detection), session controls.
 
 ### Models are configured in exactly one place, and two tests hold that line
 
@@ -317,21 +363,18 @@ config, hence the try/catch at the call site; that is not defensive habit.
 - `standing-order-engine.ts` / `standing-order-templates.ts` — Automation execution
 - `browser-tools.ts` — DOM interaction, element inspection, navigation
 - `artifacts/` — Parser, persistence, server-detector
-- `hooks/` — Server-side audit logger, cost tracker, file watcher, tool monitor
+- `hooks/` — Server-side cost tracker + tool monitor (nothing creates them today; `/api/settings/costs` reads an always-empty map)
 
 ### Hooks (`web/src/hooks/`)
 
 - `use-sse-stream.ts` — SSE streaming with TTFT tracking, `onUsage` callback
-- `use-heartbeat.ts` — Subscribes to `minute:tick` IPC
-- `use-cron.ts` — Cron evaluation on heartbeat
-- `use-session-reset.ts` — Idle/daily session reset
+- `use-cron.ts` — Cron evaluation on the minute tick
 - `use-electron.ts` — Electron IPC (file dialogs, auth)
 - `use-voice-input.ts` — Local Whisper speech-to-text
 - `use-at-suggestions.ts` — @-mention autocomplete
 - `use-browser-agent.ts` — Browser automation coordination
 - `use-file-drop.ts` — Drag-and-drop file handling
 - `use-standing-orders.ts` — Automation template execution
-- `use-auto-project.ts` — Auto-associate conversations with projects
 - `use-conversations.ts` — Conversation list management
 - `use-project-context.ts` — Project-scoped context injection
 - `use-scratch-dir.ts` — Scratch directory lifecycle management
@@ -339,31 +382,31 @@ config, hence the try/catch at the call site; that is not defensive habit.
 ## External Integrations
 
 - **OAuth connectors** provisioned to `~/.claude/.mcp.json` via `loadProvisionedMcpServers()` at request time
-- **Web search** via the `web-search` MCP — opt-in, only mounted when `SEARXNG_INSTANCES` is set
+- **Web search** via the `web-search` MCP — mounted only when `lib/search/resolve.ts` finds a configured provider: the choice in Settings → Web Search, else legacy `SEARXNG_INSTANCES`, else an OpenRouter key borrowed from the model providers. Off if none of those exist
 - **Telemetry** via SigV4-signed analytics API (`ANALYTICS_API_URL`)
 - **Auto-update** from generic provider URL in electron-builder config
-- **Nango** (optional) for 700+ OAuth connector hub
 
 ## Environment Variables
 
-Defined in `.env` (copy from `.env.example`):
+Defined in `web/.env` (copy from `web/.env.example`, which lists every variable
+the app reads — `env-example.test.ts` enforces that):
 
 - `ANTHROPIC_API_KEY` — Claude inference via the Anthropic API (BYOK; also settable per-user in Settings → API Access)
-- `CLAUDE_CODE_USE_BEDROCK=1` + AWS credentials — Alternative: Claude inference via Bedrock
-- `NIB_COWORK_DEFAULT_MODEL` — Default model (`sonnet`)
+- `AWS_REGION` + AWS credentials (profile, access keys, or `AWS_BEARER_TOKEN_BEDROCK`) — Alternative: Claude inference via Bedrock
+- `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` — Pin the model ids the SDK aliases resolve to on Bedrock. There is no default-model env var: the tier grid decides
+- `MEMORY_EXTRACTION_MODEL` — Memory-extraction model when the tier grid resolves none (unset = skip)
 - `ANALYTICS_API_URL` / `ANALYTICS_AWS_REGION` — ROI telemetry pipeline (opt-in; telemetry is off without it)
-- `SEARXNG_INSTANCES` — searxng URL for web search (no default; feature off without it)
-- OAuth credentials (GitHub, Slack, Atlassian, MS365, Google, Figma, Miro, Zoom) — see `.env.example`
-- `NANGO_*` — Optional Nango connector hub
+- `SEARXNG_INSTANCES` — legacy searxng URL for web search, used only when nothing is chosen in Settings → Web Search
+- OAuth credentials (GitHub, Slack, Atlassian, MS365, Google, Figma, Miro, Zoom) — see `web/.env.example`
 
 ## Key Patterns
 
 - **SSE streaming**: API routes yield chunks via `createSSEStream()`; client reads via `response.body.getReader()` in `use-sse-stream.ts`
 - **Session controls**: Slash commands parsed into `SessionControls` (thinkLevel, verboseMode, modelOverride, agentName) passed to provider
 - **Agent routing**: `route.ts` loads AGENTS.md, matches on triggers or `/agent` command, injects agent system prompt
-- **Tool interception**: `canvas` tool → SSE event → canvas-store; `spawn_agent` → HTTP to `/api/subagent`; loop detection via sliding window
-- **Cowork sidebar**: Tool calls categorized into Context (Read/Glob/Grep/Bash) and Artifacts (Write/Edit/NotebookEdit) by `categorizeToolCall()`. Search results from MCP searxng aggregated into `SearchResultsCard`. WebFetch URLs from search follow-ups are suppressed from Context.
-- **Minute tick**: Electron main sends `minute:tick` IPC → preload exposes `onMinuteTick` → hooks subscribe for cron, heartbeat, session reset
+- **Tool interception**: `canvas` tool → SSE event → canvas-store; loop detection via sliding window
+- **Cowork sidebar**: Tool calls categorized into Context (Read/Glob/Grep/Bash) and Artifacts (Write/Edit/NotebookEdit) by `categorizeToolCall()`. Search results from the `web-search` MCP aggregated into `SearchResultsCard`. WebFetch URLs from search follow-ups are suppressed from Context.
+- **Minute tick**: Electron main sends `minute:tick` IPC → preload exposes `onMinuteTick` → hooks subscribe for cron and scheduled work (mounted in `components/layout/schedulers.tsx`)
 - **Identity files**: `SOUL.md` (personality) + `USER.md` (user context) injected into system prompt
 - **ROI tracking**: `done` SSE event with token/cost/duration → effort estimation via Haiku → conversation metrics
 

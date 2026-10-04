@@ -22,7 +22,6 @@ const AGNOSTIC: AgnosticChunkType[] = [
   'cron_create',
   'standing_order_create',
   'widget_create',
-  'memory_extract',
 ];
 
 beforeEach(() => {
@@ -32,32 +31,58 @@ beforeEach(() => {
 
 describe('the registry is the only handler', () => {
   const SRC = path.resolve(__dirname, '../..');
-  /** Every file that consumes the SSE chunk stream. */
-  const CONSUMERS = [
+  /** Files that read the SSE chunk stream directly, and so must offer every event to the registry. */
+  const DIRECT = [
+    // The one turn path Chat, Cowork, Code and Browser share.
+    'hooks/use-surface-turn.tsx',
+    'components/surfaces/assistant/assistant-surface.tsx',
+  ];
+  /**
+   * Surfaces that see chunks only through the shared turn's `chunks` hooks —
+   * which it calls AFTER offering the event to the registry, so an agnostic
+   * event never reaches them.
+   */
+  const VIA_SHARED_TURN = [
     'components/surfaces/chat/chat-surface.tsx',
     'components/surfaces/cowork/cowork-surface.tsx',
     'components/surfaces/code/code-surface.tsx',
-    'components/surfaces/assistant/assistant-surface.tsx',
-    // Joined the list when it stopped hand-rolling its own loop against the raw
+    // Joined when it stopped hand-rolling its own loop against the raw
     // Messages API and started routing goals through the main chat path (DR-22).
     'components/surfaces/browser/browser-surface.tsx',
-    'components/projects/project-detail.tsx',
   ];
+  const read = (rel: string) => fs.readFileSync(path.join(SRC, rel), 'utf8');
+  /** A local case means the event is handled twice, or differently here than everywhere else. */
+  const handlesLocally = (src: string, t: string) =>
+    new RegExp(`case\\s+["']${t}["']|event\\.type\\s*===\\s*["']${t}["']`).test(src);
 
-  it.each(CONSUMERS)('%s delegates rather than handling them itself', (rel) => {
-    const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
+  it.each(DIRECT)('%s delegates rather than handling them itself', (rel) => {
+    const src = read(rel);
     expect(src, `${rel} does not call the shared handler`).toContain('handleAgnosticChunk(');
     for (const t of AGNOSTIC) {
-      // A local case means the event is handled twice, or handled differently
-      // here than everywhere else — which is how these diverged in the first place.
-      expect(src, `${rel} still cases on '${t}' itself`).not.toMatch(
-        new RegExp(`case\\s+["']${t}["']`),
-      );
+      expect(handlesLocally(src, t), `${rel} still handles '${t}' itself`).toBe(false);
     }
   });
 
+  it.each(VIA_SHARED_TURN)('%s receives chunks only through the shared turn', (rel) => {
+    const src = read(rel);
+    expect(src).toContain('useSurfaceTurn(');
+    expect(src, `${rel} reads the stream itself`).not.toMatch(/\bonChunk\s*\(/);
+    for (const t of AGNOSTIC) {
+      expect(handlesLocally(src, t), `${rel} still handles '${t}' itself`).toBe(false);
+    }
+  });
+
+  it('the shared turn offers every event to the registry before the surface sees it', () => {
+    const src = read('hooks/use-surface-turn.tsx');
+    const onChunk = src.slice(src.indexOf('onChunk(event, cid)'));
+    const registry = onChunk.indexOf('handleAgnosticChunk(');
+    expect(registry).toBeGreaterThan(-1);
+    expect(registry).toBeLessThan(onChunk.indexOf('chunks?.before'));
+    expect(registry).toBeLessThan(onChunk.indexOf('chunks?.after'));
+  });
+
   it('covers every streaming consumer in the tree', () => {
-    // Guards the list above from going stale when a surface is added.
+    // Guards the lists above from going stale when a surface is added.
     const found: string[] = [];
     const walk = (dir: string) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -65,10 +90,9 @@ describe('the registry is the only handler', () => {
         if (e.isDirectory()) walk(p);
         else if (e.name.endsWith('.tsx') && !e.name.includes('.test.')) {
           const src = fs.readFileSync(p, 'utf8');
-          // Two dispatch shapes exist: an `onChunk` switch (four surfaces) and an
-          // if/else chain on `event.type` (the assistant, which reads the stream
-          // directly). A detector that only knew the first missed the surface
-          // that had the ONLY standing_order_create handler.
+          // Two dispatch shapes exist: an `onChunk` handler and an if/else
+          // chain on `event.type`. A detector that only knew the first missed
+          // the surface that had the ONLY standing_order_create handler.
           if (/\bonChunk\s*\(/.test(src) || /event\.type\s*===/.test(src)) {
             found.push(path.relative(SRC, p));
           }
@@ -76,7 +100,11 @@ describe('the registry is the only handler', () => {
       }
     };
     walk(path.join(SRC, 'components'));
-    expect(found.sort()).toEqual([...CONSUMERS].sort());
+    walk(path.join(SRC, 'hooks'));
+    for (const rel of DIRECT) expect(found, `${rel} no longer reads the stream`).toContain(rel);
+    for (const rel of found) {
+      expect([...DIRECT, ...VIA_SHARED_TURN], `${rel} reads the stream but is not listed`).toContain(rel);
+    }
   });
 });
 
@@ -158,7 +186,6 @@ describe('handleAgnosticChunk', () => {
       { type: 'cron_create', input: null },
       { type: 'standing_order_create', input: {} },
       { type: 'widget_create', input: 'nonsense' },
-      { type: 'memory_extract' },
     ]) {
       expect(handleAgnosticChunk(bad as never, { chatId: 'c1', surface: 'T' }), JSON.stringify(bad))
         .toBe(true);

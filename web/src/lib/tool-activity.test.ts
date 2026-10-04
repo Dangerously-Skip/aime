@@ -20,7 +20,6 @@ describe('describeToolActivity', () => {
     ['mcp__aime__MailSearch', {}, 'Searching your mail'],
     ['mcp__aime__CalendarEvents', {}, 'Checking your calendar'],
     ['Grep', { pattern: 'TODO' }, 'Searching files for “TODO”'],
-    ['spawn_agent', { agentName: 'researcher' }, 'Handing off to the researcher agent'],
   ])('%s → a sentence', (name, input, expected) => {
     expect(describeToolActivity(name, input)).toBe(expected);
   });

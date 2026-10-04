@@ -1,3 +1,6 @@
+import { createHmac } from 'node:crypto';
+import { PROXY_TOKEN_SCOPE } from './local-token';
+
 /**
  * The credential our OWN inference clients need to reach our OWN proxy.
  *
@@ -22,7 +25,11 @@
  * rule this auth was written under is that it FAILS CLOSED. So the credential
  * travels with the request instead.
  *
- * TWO CALLERS, TWO MECHANISMS, ONE TOKEN:
+ * TWO CALLERS, TWO MECHANISMS, ONE TOKEN — and not the API token. Both get
+ * the PROXY-SCOPED token (`proxyToken`, see lib/auth/local-token), which the
+ * gate accepts on /api/llm-proxy/* and nowhere else: the subprocess's
+ * environment is readable by the agent's own Bash.
+ *
  *
  *   in-process (`turn-client`) -> `defaultHeaders: { Authorization: Bearer … }`
  *   subprocess (Agent SDK)     -> `ANTHROPIC_AUTH_TOKEN`, which the Anthropic
@@ -54,6 +61,15 @@ export function internalToken(
 }
 
 /**
+ * The proxy-scoped token (same derivation as `deriveProxyToken`, synchronously
+ * via node:crypto), or null when the server has no API token.
+ */
+export function proxyToken(env: Record<string, string | undefined> = process.env): string | null {
+  const t = internalToken(env);
+  return t ? createHmac('sha256', t).update(PROXY_TOKEN_SCOPE).digest('hex') : null;
+}
+
+/**
  * Headers for an in-process client whose base URL is our own proxy.
  *
  * Empty for a real provider — sending our local token to Anthropic or
@@ -64,7 +80,7 @@ export function internalAuthHeaders(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
   if (!isSelfProxy(baseUrl)) return {};
-  const token = internalToken(env);
+  const token = proxyToken(env);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -78,6 +94,6 @@ export function internalAuthEnv(
   env: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
   if (!isSelfProxy(baseUrl)) return {};
-  const token = internalToken(env);
+  const token = proxyToken(env);
   return token ? { ANTHROPIC_AUTH_TOKEN: token } : {};
 }

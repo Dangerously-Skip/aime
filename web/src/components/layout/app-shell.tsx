@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Schedulers } from "./schedulers";
 import { Sidebar } from "./sidebar";
 import { Tabbar } from "./tabbar";
@@ -17,8 +17,9 @@ import { ProjectSettings } from "@/components/projects/project-settings";
 import { ProjectCreate } from "@/components/projects/project-create";
 import { CustomizeView } from "@/components/customize/customize-view";
 import { UpdateBanner } from "@/components/shared/update-banner";
-import { ReminderModal } from "@/components/shared/reminder-modal";
 import { ActivityFeedPanel } from "./activity-feed-panel";
+import { SidebarFrame, useResponsiveSidebar } from "./responsive-sidebar";
+import { SearchPalette } from "./search-palette";
 
 export function AppShell() {
   // Minute-tick schedulers, mounted once. See schedulers.tsx for why they live
@@ -34,12 +35,26 @@ export function AppShell() {
   const setActiveSurface = useAppStore((s) => s.setActiveSurface);
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
   const addConversation = useConversationStore((s) => s.addConversation);
-  const conversations = useConversationStore((s) => s.conversations);
   const addProject = useProjectStore((s) => s.addProject);
   const { isElectron } = useElectron();
 
   const pushToTalkEnabled = useSettingsStore((s) => s.pushToTalkEnabled);
   const pushToTalkAccelerator = useSettingsStore((s) => s.pushToTalkAccelerator);
+
+  // Below 1100px the sidebar collapses and the toggle opens it as an overlay.
+  const narrowWindow = useResponsiveSidebar();
+  const closeSidebar = useCallback(() => setSidebarVisible(false), [setSidebarVisible]);
+  const activeConversationId = useConversationStore((s) => s.activeId);
+
+  // Picking a conversation from the overlay is done with it: close it so the
+  // conversation is what you see, rather than a sidebar over it.
+  // Only a NEW conversation closes it — not crossing the breakpoint itself.
+  const lastConversationId = useRef(activeConversationId);
+  useEffect(() => {
+    if (lastConversationId.current === activeConversationId) return;
+    lastConversationId.current = activeConversationId;
+    if (narrowWindow) setSidebarVisible(false);
+  }, [activeConversationId, narrowWindow, setSidebarVisible]);
 
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [creatingProject, setCreatingProject] = useState(false);
@@ -55,6 +70,25 @@ export function AppShell() {
   // lib/voice/voice-session, via the VoiceScope the router provides.
   usePushToTalk({ enabled: pushToTalkEnabled, accelerator: pushToTalkAccelerator });
 
+  // ⌘K search palette. Owned here so the shortcut and the sidebar's Search
+  // button open the same thing.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+
+  const handleNewChat = useCallback(() => {
+    const conv = {
+      id: crypto.randomUUID(),
+      title: "New Chat",
+      surface: activeSurface,
+      lastMessage: "",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    addConversation(conv);
+    setActiveConversation(conv.id);
+    setSidebarMode("history");
+  }, [activeSurface, addConversation, setActiveConversation, setSidebarMode]);
+
   // Global keyboard shortcuts: Cmd+, (settings), Cmd+N (new chat), Cmd+K (search)
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -64,27 +98,18 @@ export function AppShell() {
         setSettingsOpen(true);
       } else if (e.key === "n" && !e.shiftKey) {
         e.preventDefault();
-        const conv = {
-          id: crypto.randomUUID(),
-          title: "New Chat",
-          surface: activeSurface,
-          lastMessage: "",
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-        addConversation(conv);
-        setActiveConversation(conv.id);
-        setSidebarMode("history");
-      } else if (e.key === "k") {
+        handleNewChat();
+      } else if (e.key.toLowerCase() === "k" && !e.shiftKey) {
+        // A focused component that claims ⌘K for itself (the code terminal's
+        // clear-screen) has already handled it; don't also open the palette.
+        if (e.defaultPrevented) return;
         e.preventDefault();
-        if (!sidebarVisible) setSidebarVisible(true);
-        setSidebarMode("history");
-        setTimeout(() => document.querySelector<HTMLInputElement>('[placeholder="Search..."]')?.focus(), 50);
+        setSearchOpen((v) => !v);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [setSettingsOpen, activeSurface, addConversation, setActiveConversation, setSidebarMode, sidebarVisible, setSidebarVisible]);
+  }, [setSettingsOpen, handleNewChat]);
 
   // Listen for "open-settings" from Electron menu (Settings… menu item)
   useEffect(() => {
@@ -129,7 +154,10 @@ export function AppShell() {
   }
 
   function handleOpenConversation(conversationId: string) {
-    const conv = conversations.find((c) => c.id === conversationId);
+    // From the store, not this render's list: a caller that has just created
+    // the conversation (the project page does, in the same click) is opening
+    // one this render has never seen, and the surface then never switched.
+    const conv = useConversationStore.getState().conversations.find((c) => c.id === conversationId);
     if (conv) setActiveSurface(conv.surface as Surface);
     setActiveConversation(conversationId);
     setSidebarMode("history");
@@ -149,14 +177,10 @@ export function AppShell() {
       */}
       <Schedulers />
 
-      {/* Sidebar */}
-      <div
-        className={`h-full shrink-0 transition-all duration-200 ${
-          sidebarVisible ? "w-[250px]" : "w-0"
-        } overflow-hidden`}
-      >
-        <Sidebar isElectron={isElectron} onNewProject={handleNewProject} />
-      </div>
+      {/* Sidebar — docked, or an overlay below the narrow-window breakpoint */}
+      <SidebarFrame narrow={narrowWindow} open={sidebarVisible} onClose={closeSidebar}>
+        <Sidebar isElectron={isElectron} onNewProject={handleNewProject} onSearch={openSearch} />
+      </SidebarFrame>
 
       {/* Main content */}
       <div className="flex flex-1 flex-col min-w-0">
@@ -192,8 +216,8 @@ export function AppShell() {
         </div>
       </div>
 
+      <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} onNewChat={handleNewChat} />
       <UpdateBanner />
-      <ReminderModal />
       <ActivityFeedPanel />
 
       {editingProjectId && (

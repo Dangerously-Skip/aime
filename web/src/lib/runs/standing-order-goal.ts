@@ -9,7 +9,16 @@
  *
  * Pure — no store access — so it can be tested and reused server-side.
  */
-import type { Goal } from './types';
+import type { ApprovalPolicy, Goal } from './types';
+import { parseIntervalMs } from '@/lib/schedule/interval';
+
+/**
+ * The policy each kind of schedule RUNS under — read by the executor that
+ * enforces it and by every screen that describes it, so the two cannot drift.
+ * (They had: attended jobs were labelled 'consequential' and ran as chats.)
+ */
+export const STANDING_ORDER_POLICY: ApprovalPolicy = 'consequential';
+export const ATTENDED_JOB_POLICY: ApprovalPolicy = 'never';
 
 /** The slice of a StandingOrder this adapter needs. */
 export interface StandingOrderLike {
@@ -27,25 +36,15 @@ export interface StandingOrderLike {
 }
 
 /**
- * Parse an interval expression into seconds. Standing orders express intervals
- * as free text ("30m", "2 hours", "90"), so be permissive and return null when
- * it can't be read rather than guessing a schedule that would fire wrongly.
+ * An interval expression in seconds, or null when it cannot be read.
+ *
+ * DELEGATES to the one parser the tickers use. This had its own, more permissive
+ * grammar ("1.5h", "90 minutes", a bare "90") while the tickers rejected those —
+ * so the Cockpit showed a next run for an order that never fired.
  */
 export function parseIntervalSeconds(expression?: string): number | null {
-  if (!expression) return null;
-  const text = expression.trim().toLowerCase();
-
-  const match = text.match(/^(\d+(?:\.\d+)?)\s*([a-z]*)$/);
-  if (!match) return null;
-  const value = Number(match[1]);
-  if (!Number.isFinite(value) || value <= 0) return null;
-
-  const unit = match[2];
-  if (!unit || unit.startsWith('s')) return Math.round(value);
-  if (unit.startsWith('m') && !unit.startsWith('mo')) return Math.round(value * 60);
-  if (unit.startsWith('h')) return Math.round(value * 3_600);
-  if (unit.startsWith('d')) return Math.round(value * 86_400);
-  return null;
+  const ms = parseIntervalMs(expression);
+  return ms === null ? null : Math.round(ms / 1_000);
 }
 
 /**
@@ -82,9 +81,12 @@ export function standingOrderToGoal(order: StandingOrderLike): Goal {
      * to decide completion, never to grade the run.
      */
     constraints: order.condition,
-    // Standing orders predate approval policy. 'consequential' is the safe
-    // default: unattended work still pauses before side effects.
-    approvalPolicy: 'consequential',
+    // Standing orders run on the server with nobody watching, so they carry
+    // 'consequential' — and the executor passes THIS value to the provider, so
+    // the label and the enforcement cannot drift apart. Reads and in-app
+    // actions run; anything with effects outside the app is REFUSED and
+    // recorded on the run. Not paused: there is nothing to resume it.
+    approvalPolicy: STANDING_ORDER_POLICY,
     schedule,
     // Only an active order is live; paused/completed/expired must not appear to
     // be scheduled.
@@ -96,6 +98,54 @@ export function standingOrderToGoal(order: StandingOrderLike): Goal {
       order.runCount > 0 || order.errorCount > 0
         ? { runCount: order.runCount, errorCount: order.errorCount, totalUsd: order.totalCost }
         : undefined,
+  };
+}
+
+/** The slice of an attended job (a manifest order run by the renderer) this adapter needs. */
+export interface AttendedJobLike {
+  id: string;
+  prompt: string;
+  surfaceId: string;
+  status: string;
+  trigger: { type: 'cron' | 'interval' | 'event'; expression?: string };
+  lastRun?: number;
+  createdAt?: number;
+  runCount: number;
+}
+
+/**
+ * An attended job as a Goal, so the Cockpit lists EVERY schedule.
+ *
+ * Jobs created from Customize or a project run in the renderer against a
+ * surface, and the Cockpit only ever adapted standing orders — so the schedules
+ * that most need watching (they stop when the window closes) were the ones it
+ * could not show.
+ */
+export function attendedJobToGoal(job: AttendedJobLike): Goal {
+  const everySeconds = job.trigger.type === 'interval' ? parseIntervalSeconds(job.trigger.expression) : null;
+  return {
+    id: `job:${job.id}`,
+    sourceId: job.id,
+    objective: job.prompt,
+    /*
+     * 'never', because that is what runs. An attended job fires as an ordinary
+     * conversation turn in the renderer (`job-conversation.ts`), and a turn on
+     * the chat route gets the interactive policy. This said 'consequential' —
+     * a promise of refusals nothing enforced. The Security settings and the
+     * user's connector blocks still apply, as they do to any chat.
+     */
+    approvalPolicy: ATTENDED_JOB_POLICY,
+    schedule:
+      job.trigger.type === 'cron' && job.trigger.expression
+        ? { cron: job.trigger.expression }
+        : everySeconds != null
+          ? { everySeconds }
+          : undefined,
+    enabled: job.status === 'active',
+    createdAt: job.createdAt ?? 0,
+    lastRunAt: job.lastRun,
+    surfaceId: job.surfaceId,
+    attended: true,
   };
 }
 

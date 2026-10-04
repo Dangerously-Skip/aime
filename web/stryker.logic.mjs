@@ -27,7 +27,7 @@ import { base, ratchet } from './stryker.base.mjs';
  *                                 equivalent-mutant territory; see the note on
  *                                 `ratchet` in stryker.base.mjs
  */
-export default {
+const config = {
   ...base,
   htmlReporter: { fileName: 'reports/mutation/logic/index.html' },
   mutate: [
@@ -37,3 +37,5 @@ export default {
   ],
   thresholds: ratchet(78),
 };
+
+export default config;

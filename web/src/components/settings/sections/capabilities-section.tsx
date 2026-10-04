@@ -7,19 +7,16 @@ import { detectPlatform, formatAcceleratorForDisplay } from '@/lib/voice/acceler
 import { useVoiceHotkeyStatus } from '@/hooks/use-voice-input'
 import { useState, useEffect } from 'react'
 import { Badge } from '@/components/ui/badge'
+import { friendlyToolLabels } from './tool-labels'
 
 interface SurfaceConfig {
   name: string
   allowedTools: string[]
-  model: string
   maxTurns: number
   maxBudgetUsd: number
-  permissionMode: string
 }
 
 export function CapabilitiesSection() {
-  const toolAccessMode = useSettingsStore((s) => s.toolAccessMode)
-  const setToolAccessMode = useSettingsStore((s) => s.setToolAccessMode)
   const toolProfile = useSettingsStore((s) => s.toolProfile)
   const setToolProfile = useSettingsStore((s) => s.setToolProfile)
 
@@ -77,8 +74,6 @@ export function CapabilitiesSection() {
       })
   }, [])
 
-  const modelOptions = ['sonnet', 'opus', 'haiku'] as const
-
   return (
     <div className="space-y-6">
       {/* Push-to-talk (P4.1) — off by default; enabling claims a system-wide key. */}
@@ -95,7 +90,11 @@ export function CapabilitiesSection() {
               While on, no other app can use that combination.
             </p>
           </div>
-          <Switch checked={pushToTalkEnabled} onCheckedChange={setPushToTalkEnabled} />
+          <Switch
+            checked={pushToTalkEnabled}
+            onCheckedChange={setPushToTalkEnabled}
+            aria-label="Dictate with a global hotkey"
+          />
         </div>
 
         {/* Editing the combination. Without this the validator was 140 lines
@@ -107,7 +106,7 @@ export function CapabilitiesSection() {
           <Input
             id="push-to-talk-accelerator"
             aria-label="Push-to-talk shortcut"
-            className="h-7 w-56 font-mono text-xs"
+            className="h-7 min-w-0 flex-1 font-mono text-xs"
             spellCheck={false}
             value={acceleratorDraft ?? pushToTalkAccelerator}
             onChange={(e) => {
@@ -146,45 +145,22 @@ export function CapabilitiesSection() {
         )}
       </div>
 
-      {/* Tool Access Mode */}
-      <div>
-        <label className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          Tool Access Mode
-        </label>
-        <div className="mt-2 inline-flex rounded-lg border border-border bg-muted p-0.5">
-          <button
-            onClick={() => setToolAccessMode('onDemand')}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              toolAccessMode === 'onDemand'
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Load when needed
-          </button>
-          <button
-            onClick={() => setToolAccessMode('alwaysLoaded')}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              toolAccessMode === 'alwaysLoaded'
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Always loaded
-          </button>
-        </div>
-      </div>
-
       {/* Tool Profile */}
       <div>
-        <label className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          Tool Profile
-        </label>
+        <h4 id="tool-profile-heading" className="text-sm font-medium">
+          Tool profile
+        </h4>
         <p className="mt-1 text-xs text-muted-foreground">Limits which tools the agent can use across all surfaces.</p>
-        <div className="mt-2 inline-flex rounded-lg border border-border bg-muted p-0.5">
+        <div
+          role="group"
+          aria-labelledby="tool-profile-heading"
+          className="mt-2 inline-flex rounded-lg border border-border bg-muted p-0.5"
+        >
           {(['minimal', 'coding', 'full'] as const).map((profile) => (
             <button
               key={profile}
+              type="button"
+              aria-pressed={toolProfile === profile}
               onClick={() => setToolProfile(profile)}
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors capitalize ${
                 toolProfile === profile
@@ -197,17 +173,15 @@ export function CapabilitiesSection() {
           ))}
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          {toolProfile === 'minimal' && 'WebSearch + WebFetch only'}
-          {toolProfile === 'coding' && 'Read/Write/Edit/Glob/Grep/Bash + Web tools'}
-          {toolProfile === 'full' && 'All surface defaults'}
+          {toolProfile === 'minimal' && 'Web search and reading web pages only'}
+          {toolProfile === 'coding' && 'Files, terminal commands and the web'}
+          {toolProfile === 'full' && 'Everything each surface allows'}
         </p>
       </div>
 
       {/* Per-surface Tool Summary */}
       <div>
-        <label className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          Surface Configuration
-        </label>
+        <h4 className="text-sm font-medium">What each surface can do</h4>
         <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
           {loading ? (
             <p className="text-sm text-muted-foreground col-span-2">
@@ -227,14 +201,17 @@ export function CapabilitiesSection() {
                   {surface.name}
                 </h4>
                 <div className="mt-2 flex flex-wrap gap-1">
-                  {(surface.allowedTools || []).map((tool) => (
+                  {friendlyToolLabels(surface.allowedTools || []).map((tool) => (
                     <Badge key={tool} variant="secondary">
                       {tool}
                     </Badge>
                   ))}
                 </div>
+                {/* No "Model:" line. The surface config's model is only the
+                    last-resort fallback; which model a surface runs is decided
+                    by the tier grid in Models & API keys, and printing
+                    "sonnet" here contradicted it. */}
                 <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                  <p>Model: {surface.model}</p>
                   <p>Max turns: {surface.maxTurns}</p>
                   <p>Budget: ${surface.maxBudgetUsd?.toFixed(2)}</p>
                 </div>

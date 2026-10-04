@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import { useAppStore, type Surface } from "@/stores/app-store";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useContextBusStore } from "@/stores/context-bus-store";
@@ -13,6 +13,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SIDEBAR_ID } from "./responsive-sidebar";
 
 const SURFACES: { id: Surface; label: string; shortcut: string }[] = [
   { id: "chat", label: "Chat", shortcut: "1" },
@@ -21,6 +22,12 @@ const SURFACES: { id: Surface; label: string; shortcut: string }[] = [
   { id: "browser", label: "Browser", shortcut: "4" },
   { id: "assistant", label: "Assistant", shortcut: "5" },
 ];
+
+/** The surface a ⌘/Ctrl+digit keystroke selects, or null. */
+function surfaceForShortcut(e: KeyboardEvent): Surface | null {
+  if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return null;
+  return SURFACES.find((s) => s.shortcut === e.key)?.id ?? null;
+}
 
 interface TabbarProps {
   isElectron?: boolean;
@@ -31,6 +38,8 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
   const unreadWidgets = useWidgetStore((s) => unreadCountOf(s.widgets));
   const setActiveSurface = useAppStore((s) => s.setActiveSurface);
   const sidebarVisible = useAppStore((s) => s.sidebarVisible);
+  const sidebarMode = useAppStore((s) => s.sidebarMode);
+  const setSidebarMode = useAppStore((s) => s.setSidebarMode);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const goBack = useConversationStore((s) => s.goBack);
   const goForward = useConversationStore((s) => s.goForward);
@@ -40,19 +49,33 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
   // called conditionally or in a loop. Badge counts are derived per surface.
   const busEvents = useContextBusStore((s) => s.events);
 
-  // Keyboard shortcuts
+  /*
+   * Customize and Projects REPLACE the surface area (see app-shell), so while
+   * either is open no surface is on screen and no tab may claim to be. Picking
+   * a tab from there has to leave that mode too — otherwise the click only
+   * moves a highlight the user cannot see the result of.
+   */
+  const inSurfaces = sidebarMode === "history";
+  const goToSurface = useCallback(
+    (id: Surface) => {
+      setActiveSurface(id);
+      if (useAppStore.getState().sidebarMode !== "history") setSidebarMode("history");
+    },
+    [setActiveSurface, setSidebarMode],
+  );
+
+  // Keyboard shortcuts: ⌘1..⌘N, one per tab. Derived from SURFACES so the
+  // number printed on a tab is always one that works (⌘5 used to do nothing).
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey)) return;
-      const num = parseInt(e.key);
-      if (num >= 1 && num <= 4) {
-        e.preventDefault();
-        setActiveSurface(SURFACES[num - 1].id);
-      }
+      const id = surfaceForShortcut(e);
+      if (!id) return;
+      e.preventDefault();
+      goToSurface(id);
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [setActiveSurface]);
+  }, [goToSurface]);
 
   return (
     <div
@@ -71,6 +94,10 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
           size="icon"
           className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
           onClick={toggleSidebar}
+          aria-label={sidebarVisible ? "Hide sidebar" : "Show sidebar"}
+          aria-expanded={sidebarVisible}
+          aria-controls={SIDEBAR_ID}
+          title={sidebarVisible ? "Hide sidebar" : "Show sidebar"}
         >
           {sidebarVisible ? (
             <PanelLeftClose className="h-4 w-4" />
@@ -113,7 +140,7 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         {SURFACES.map((surface) => {
-          const isActive = activeSurface === surface.id;
+          const isActive = inSurfaces && activeSurface === surface.id;
           const unreadCount =
             busEvents.filter(
               e => !e.consumed && (e.priority === 'p0' || e.priority === 'p1') && (!e.targetSurface || e.targetSurface === surface.id)
@@ -133,7 +160,9 @@ export function Tabbar({ isElectron = false }: TabbarProps) {
           return (
             <button
               key={surface.id}
-              onClick={() => setActiveSurface(surface.id)}
+              onClick={() => goToSurface(surface.id)}
+              aria-current={isActive ? "page" : undefined}
+              title={`${surface.label} (⌘${surface.shortcut})`}
               className={`relative rounded-md px-3.5 py-1 text-sm font-medium transition-all ${
                 isActive
                   ? "bg-card text-foreground shadow-sm"

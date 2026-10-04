@@ -1,17 +1,12 @@
 export const runtime = 'nodejs';
 
-import { rm, readFile, writeFile, chmod } from 'fs/promises';
+import { rm } from 'fs/promises';
 import { dirname, join } from 'path';
 import { getMcpConfigPath, getMcpClientsPath } from '@/lib/app-paths';
 import { sanitizePluginName, resolveInstallDir } from '@/lib/mcp/install-guard';
 import { forgetObservedTools } from '@/lib/mcp/observed-tools';
 import type { EntrySecrets } from '@/lib/mcp/secrets';
-
-/** Both files hold live tokens and client secrets — owner-only. */
-async function writeSecret(path: string, data: unknown): Promise<void> {
-  await writeFile(path, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
-  await chmod(path, 0o600).catch(() => {});
-}
+import { updateMcpConfig, updateJsonFile, SKIP_WRITE } from '@/lib/mcp/config-store';
 
 /**
  * Every key shape a server may have been provisioned under: the MCP OAuth route
@@ -134,26 +129,32 @@ export async function POST(request: Request) {
 
     await rm(pluginDir.value, { recursive: true, force: true });
 
-    // Remove from MCP config
+    // Remove from MCP config and registered clients. Both hold live tokens and
+    // client secrets, so both go through the locked, atomic, owner-only writer —
+    // which also refuses to overwrite a file it cannot parse (it quarantines it
+    // and throws; logged, because the credentials are already gone by now).
     try {
-      const config = JSON.parse(await readFile(mcpConfigFile, 'utf-8'));
-      if (config.mcpServers) {
-        for (const key of serverKeys) delete config.mcpServers[key];
-        // A disabled entry is stashed outside mcpServers (see the provision
-        // route); disconnecting must take that copy too.
-        if (config.disabledMcpServers) {
-          for (const key of serverKeys) delete config.disabledMcpServers[key];
+      await updateMcpConfig((config) => {
+        if (!config.mcpServers && !config.disabledMcpServers) return SKIP_WRITE;
+        for (const key of serverKeys) {
+          delete config.mcpServers?.[key];
+          // A disabled entry is stashed outside mcpServers (see the provision
+          // route); disconnecting must take that copy too.
+          delete config.disabledMcpServers?.[key];
         }
-        await writeSecret(mcpConfigFile, config);
-      }
-    } catch {}
+      }, mcpConfigFile);
+    } catch (err) {
+      console.error('[MCP Uninstall] Could not update the MCP config:', err instanceof Error ? err.message : err);
+    }
 
-    // Remove from registered clients
     try {
-      const clients = JSON.parse(await readFile(mcpClientsFile, 'utf-8'));
-      delete clients[safeName.value];
-      await writeSecret(mcpClientsFile, clients);
-    } catch {}
+      await updateJsonFile<Record<string, unknown>, void>(mcpClientsFile, () => ({}), (clients) => {
+        if (!Object.hasOwn(clients, safeName.value)) return SKIP_WRITE;
+        delete clients[safeName.value];
+      });
+    } catch (err) {
+      console.error('[MCP Uninstall] Could not update the clients file:', err instanceof Error ? err.message : err);
+    }
 
     // Forget the tool names this server taught us. Two hosts can derive the same
     // server name, so a stale list would govern a DIFFERENT server on its first

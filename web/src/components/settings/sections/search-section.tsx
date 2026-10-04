@@ -7,6 +7,8 @@ import { useSettingsStore } from '@/stores/settings-store'
 import { useProviderStore } from '@/stores/provider-store'
 import { SEARCH_PROVIDERS, searchProviderPreset, type SearchProviderId } from '@/lib/search/providers'
 import { resolveSearchRoute } from '@/lib/search/resolve'
+import { deleteCredentials, saveCredentials, SEARCH_CREDENTIAL_ID } from '@/lib/models/credentials-client'
+import { cn } from '@/lib/utils'
 import { Check, Globe, Loader2, AlertCircle } from 'lucide-react'
 
 /**
@@ -22,15 +24,17 @@ import { Check, Globe, Loader2, AlertCircle } from 'lucide-react'
  * credential is stored but does NOT resolve, and the app correctly behaves as
  * if search is off. Showing "Brave selected" there would be the same lie the
  * whole subsystem exists to remove.
+ *
+ * A search API key typed here goes to the encrypted credential store under
+ * `search`, never into settings. It used to be a plain settings field — so it
+ * sat in localStorage and rode along, in clear, on every chat request.
  */
 export function SearchSection() {
   const {
     searchProvider,
-    searchApiKey,
     searchInstanceUrl,
     searchCredentialProviderId,
     setSearchProvider,
-    setSearchApiKey,
     setSearchInstanceUrl,
     setSearchCredentialProviderId,
   } = useSettingsStore()
@@ -47,6 +51,9 @@ export function SearchSection() {
     s.providers.find((p) => p.enabled && p.presetId === 'openrouter' && p.hasCredentials),
   )
 
+  const [keyDraft, setKeyDraft] = useState('')
+  const [savingKey, setSavingKey] = useState(false)
+  const [keyError, setKeyError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
 
@@ -63,21 +70,55 @@ export function SearchSection() {
    * section's own doc comment claims it exists to display.
    */
   const route = resolveSearchRoute(
-    {
-      searchProvider,
-      searchApiKey,
-      searchInstanceUrl,
-      searchCredentialProviderId,
-    },
+    { searchProvider, searchInstanceUrl, searchCredentialProviderId },
     {},
     { openrouterProviderId: borrowable?.id ?? null },
   )
 
+  /** Which card reads as chosen: the explicit choice, else what resolves by default. */
+  const activeId: SearchProviderId | 'none' | null =
+    searchProvider ?? (route ? route.providerId : null)
+
+  const usingBorrowed = !!borrowable && searchCredentialProviderId === borrowable.id
+  const usingOwnKey = searchCredentialProviderId === SEARCH_CREDENTIAL_ID
+
   const select = (id: SearchProviderId | 'none' | null) => {
     setSearchProvider(id)
     // Default to borrowing when we can: the whole point is not asking twice.
+    // A key saved for a different provider does not carry over — a Brave key is
+    // not a Tavily key.
     setSearchCredentialProviderId(id === 'openrouter' && borrowable ? borrowable.id : null)
+    setKeyDraft('')
+    setKeyError(null)
     setTestResult(null)
+  }
+
+  const saveKey = async () => {
+    const key = keyDraft.trim()
+    if (!key) return
+    setSavingKey(true)
+    setKeyError(null)
+    try {
+      await saveCredentials(SEARCH_CREDENTIAL_ID, { apiKey: key })
+      setSearchCredentialProviderId(SEARCH_CREDENTIAL_ID)
+      setKeyDraft('')
+      setTestResult(null)
+    } catch (err) {
+      setKeyError(err instanceof Error ? err.message : 'Could not store the key')
+    } finally {
+      setSavingKey(false)
+    }
+  }
+
+  const removeKey = async () => {
+    setKeyError(null)
+    try {
+      await deleteCredentials(SEARCH_CREDENTIAL_ID)
+      setSearchCredentialProviderId(null)
+      setTestResult(null)
+    } catch (err) {
+      setKeyError(err instanceof Error ? err.message : 'Could not remove the key')
+    }
   }
 
   /**
@@ -96,12 +137,7 @@ export function SearchSection() {
         body: JSON.stringify({
           query: 'anthropic claude',
           max_results: 3,
-          settings: {
-            searchProvider,
-            searchApiKey,
-            searchInstanceUrl,
-            searchCredentialProviderId,
-          },
+          settings: { searchProvider, searchInstanceUrl, searchCredentialProviderId },
         }),
       })
       const data = await res.json()
@@ -127,6 +163,12 @@ export function SearchSection() {
     }
   }
 
+  const card = (selected: boolean) =>
+    cn(
+      'w-full rounded-lg border p-3 text-left transition-colors',
+      selected ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/30',
+    )
+
   return (
     <div className="space-y-4">
       <div>
@@ -137,15 +179,19 @@ export function SearchSection() {
         </p>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2" role="group" aria-label="Search provider">
         <button
           type="button"
+          aria-pressed={activeId === 'none' || activeId === null}
           onClick={() => select('none')}
-          className={`w-full text-left rounded-lg p-3 ring-1 transition ${
-            searchProvider === 'none' ? 'ring-foreground/30 bg-foreground/5' : 'ring-foreground/10'
-          }`}
+          className={card(activeId === 'none' || activeId === null)}
         >
-          <div className="font-medium text-sm">No search</div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm">No search</span>
+            {(activeId === 'none' || activeId === null) && (
+              <Check className="ml-auto size-3.5 text-primary" aria-hidden="true" />
+            )}
+          </div>
           <div className="text-muted-foreground text-xs">
             The agent answers from what it knows and says what it could not check.
           </div>
@@ -155,10 +201,9 @@ export function SearchSection() {
           <button
             key={p.id}
             type="button"
+            aria-pressed={activeId === p.id}
             onClick={() => select(p.id)}
-            className={`w-full text-left rounded-lg p-3 ring-1 transition ${
-              searchProvider === p.id ? 'ring-foreground/30 bg-foreground/5' : 'ring-foreground/10'
-            }`}
+            className={card(activeId === p.id)}
           >
             <div className="flex items-center gap-2">
               <span className="font-medium text-sm">{p.label}</span>
@@ -167,6 +212,9 @@ export function SearchSection() {
                   no new account
                 </span>
               )}
+              {activeId === p.id && (
+                <Check className="ml-auto size-3.5 shrink-0 text-primary" aria-hidden="true" />
+              )}
             </div>
             <div className="text-muted-foreground text-xs mt-0.5">{p.description}</div>
           </button>
@@ -174,8 +222,8 @@ export function SearchSection() {
       </div>
 
       {preset && (
-        <div className="space-y-3 rounded-lg p-3 ring-1 ring-foreground/10">
-          {preset.requires.includes('apiKey') && searchCredentialProviderId && borrowable ? (
+        <div className="space-y-3 rounded-lg border border-border p-3">
+          {preset.requires.includes('apiKey') && usingBorrowed ? (
             <div className="flex items-start gap-2 rounded-md bg-emerald-500/5 p-2">
               <Check className="mt-0.5 size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
               <div className="text-xs">
@@ -192,18 +240,50 @@ export function SearchSection() {
                 </div>
               </div>
             </div>
+          ) : preset.requires.includes('apiKey') && usingOwnKey ? (
+            <div className="flex items-start gap-2 rounded-md bg-emerald-500/5 p-2">
+              <Check className="mt-0.5 size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <div className="text-xs">
+                <div className="font-medium">API key saved</div>
+                <div className="text-muted-foreground">
+                  Encrypted on this machine, not kept in settings.{' '}
+                  <button type="button" className="underline" onClick={() => setSearchCredentialProviderId(null)}>
+                    Replace it
+                  </button>
+                  {' · '}
+                  <button type="button" className="underline" onClick={() => void removeKey()}>
+                    Remove it
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : preset.requires.includes('apiKey') ? (
-            <div className="space-y-1">
-              <label className="text-xs font-medium">API key</label>
-              <Input
-                type="password"
-                value={searchApiKey ?? ''}
-                placeholder={`${preset.label} API key`}
-                onChange={(e) => {
-                  setSearchApiKey(e.target.value || null)
-                  setTestResult(null)
-                }}
-              />
+            <div className="space-y-1.5">
+              <label htmlFor="search-api-key" className="block text-xs font-medium">
+                API key
+              </label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="search-api-key"
+                  type="password"
+                  value={keyDraft}
+                  placeholder={`${preset.label} API key`}
+                  onChange={(e) => {
+                    setKeyDraft(e.target.value)
+                    setKeyError(null)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void saveKey()
+                  }}
+                />
+                <Button size="sm" onClick={() => void saveKey()} disabled={!keyDraft.trim() || savingKey}>
+                  {savingKey ? <Loader2 className="size-3 animate-spin" /> : null}
+                  Save key
+                </Button>
+              </div>
+              <p className="text-muted-foreground text-[11px]">
+                Stored encrypted on this machine with a key from your OS keychain.
+              </p>
               {borrowable && searchProvider === 'openrouter' && (
                 <button
                   type="button"
@@ -216,10 +296,20 @@ export function SearchSection() {
             </div>
           ) : null}
 
+          {keyError && (
+            <p role="alert" className="flex items-start gap-1.5 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 size-3 shrink-0" />
+              {keyError}
+            </p>
+          )}
+
           {preset.requires.includes('instanceUrl') && (
             <div className="space-y-1">
-              <label className="text-xs font-medium">Instance URL</label>
+              <label htmlFor="search-instance-url" className="block text-xs font-medium">
+                Instance URL
+              </label>
               <Input
+                id="search-instance-url"
                 value={searchInstanceUrl ?? ''}
                 placeholder="https://searxng.example.com"
                 onChange={(e) => {
@@ -242,7 +332,7 @@ export function SearchSection() {
                 rel="noreferrer"
                 className="text-muted-foreground hover:text-foreground text-xs underline"
               >
-                Get a key
+                {preset.requires.includes('apiKey') ? 'Get a key' : 'Setup guide'}
               </a>
             )}
           </div>
@@ -257,7 +347,8 @@ export function SearchSection() {
             <p className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 text-xs">
               <AlertCircle className="size-3 shrink-0" />
               Not active yet — {preset.label} still needs its{' '}
-              {preset.requires.join(' and ')}. The agent is being told it has no search.
+              {preset.requires.map((r) => (r === 'apiKey' ? 'API key' : 'instance URL')).join(' and ')}.
+              The agent is being told it has no search.
             </p>
           )}
 

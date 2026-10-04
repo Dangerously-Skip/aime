@@ -14,11 +14,24 @@ import {
   X as XIcon,
   Search,
   Check,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { useCodeWorkspace } from "@/hooks/use-code-workspace";
 import { readFile, writeFile } from "@/lib/code-workspace/ipc";
+import { subscribe as subscribeToFs } from "@/lib/code-workspace/file-watcher";
 import { getRenderer, UNPRINTABLE_BINARY_EXTS } from "@/components/shared/file-renderers";
 import { HighlightedEditor } from "./highlighted-editor";
+import {
+  FIND_MATCH_CAP,
+  clearPaneHighlights,
+  findMatches,
+  rangesFor,
+  scrollMatchIntoView,
+  setPaneHighlights,
+  textSegments,
+  type FindMatch,
+} from "./find-in-pane";
 import { Button } from "@/components/ui/button";
 import { getExt, MAX_AUTO_LOAD_BYTES } from "@/lib/code-workspace/fs-tree";
 
@@ -162,6 +175,58 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
     };
   }, [path, ext, overrideLarge]);
 
+  /*
+   * KEEP THE TAB HONEST ABOUT THE DISK.
+   *
+   * Content was read once, on path change, and `save()` wrote the draft
+   * blindly. So a tab left open while the agent edited the file showed the old
+   * text indefinitely, and saving a hand-edit silently reverted the agent's
+   * work. Now: a change on disk reloads a clean tab, raises a "changed on disk"
+   * bar on a dirty one, and save refuses to clobber a version newer than the
+   * one this tab loaded (`load.content` is that baseline) without asking.
+   *
+   * Read through a ref because the watcher callback outlives renders.
+   */
+  const [diskConflict, setDiskConflict] = useState<{ content: string; onSave: boolean } | null>(null);
+  const liveRef = useRef({ content: "", editing: false, draft: "", skip: true });
+  useEffect(() => {
+    liveRef.current = {
+      content: load.content,
+      editing,
+      draft,
+      skip: load.loading || load.binary || load.needsConfirm || !!load.error,
+    };
+  });
+  useEffect(() => setDiskConflict(null), [path]);
+  useEffect(() => {
+    if (!path || !workspace || UNPRINTABLE_BINARY_EXTS.has(ext)) return;
+    let cancelled = false;
+    let off: (() => void) | null = null;
+    void subscribeToFs(workspace, (evt) => {
+      if (evt.path !== path || evt.kind === "delete") return;
+      void (async () => {
+        const disk = await readFile(path);
+        if (cancelled || !disk) return;
+        const live = liveRef.current;
+        if (live.skip || disk.content === live.content) return;
+        if (live.editing && live.draft !== live.content) {
+          setDiskConflict({ content: disk.content, onSave: false });
+          return;
+        }
+        const size = (disk as { size?: number }).size ?? disk.content.length;
+        setLoad((l) => ({ ...l, content: disk.content, size }));
+        if (live.editing) setDraft(disk.content);
+      })();
+    }).then((unsubscribe) => {
+      if (cancelled) unsubscribe();
+      else off = unsubscribe;
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [workspace, path, ext]);
+
   // Empty / diff / loading / error / large-file states — these render
   // without the toolbar.
 
@@ -242,13 +307,23 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
     setDraft("");
     setSaveError(null);
   }
-  async function save() {
+  async function save(opts: { force?: boolean } = {}) {
     if (!path) return;
     setSaving(true);
     setSaveError(null);
     try {
+      if (!opts.force) {
+        // Someone else (usually the agent) wrote since this tab loaded: ask.
+        // A failed read (file deleted) falls through — saving recreates it.
+        const disk = await readFile(path);
+        if (disk && disk.content !== load.content) {
+          setDiskConflict({ content: disk.content, onSave: true });
+          return;
+        }
+      }
       const res = await writeFile(path, draft);
       if (res.ok) {
+        setDiskConflict(null);
         setLoad((l) => ({ ...l, content: draft, size: draft.length }));
         setEditing(false);
         setJustSaved(true);
@@ -261,10 +336,53 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
     }
   }
 
+  /** Take the disk version, discarding this tab's edits. */
+  function reloadFromDisk() {
+    if (!diskConflict) return;
+    const content = diskConflict.content;
+    setLoad((l) => ({ ...l, content, size: content.length }));
+    setEditing(false);
+    setDraft("");
+    setDiskConflict(null);
+  }
+  /**
+   * Keep this tab's edits. The disk version becomes the baseline, so the draft
+   * stays dirty against it and the next save does not ask again; if the
+   * conflict came from a save, finish that save.
+   */
+  function keepMine() {
+    if (!diskConflict) return;
+    const { content, onSave } = diskConflict;
+    setLoad((l) => ({ ...l, content }));
+    setDiskConflict(null);
+    if (onSave) void save({ force: true });
+  }
+
   const Renderer = path ? getRenderer(ext) : null;
 
   return (
     <FileEditor
+      banner={
+        diskConflict ? (
+          <div
+            role="alert"
+            className="flex items-center gap-2 px-3 py-1.5 text-[11px] bg-amber-500/10 border-t border-amber-500/30 text-amber-700 dark:text-amber-300 shrink-0"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+            <span className="flex-1 min-w-0">
+              {diskConflict.onSave
+                ? "This file changed on disk since you opened it. Saving would overwrite that change."
+                : "This file changed on disk while you were editing it."}
+            </span>
+            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={reloadFromDisk}>
+              Reload
+            </Button>
+            <Button variant="outline" size="sm" className="h-6 text-[11px]" onClick={keepMine}>
+              {diskConflict.onSave ? "Overwrite" : "Keep mine"}
+            </Button>
+          </div>
+        ) : null
+      }
       path={path}
       name={name}
       dirty={dirty}
@@ -279,7 +397,7 @@ export function ViewerPane({ workspace, forcedPath }: ViewerPaneProps) {
       onDiff={() => path && openDiff(path)}
       onEdit={startEdit}
       onCancelEdit={cancelEdit}
-      onSave={save}
+      onSave={() => void save()}
     >
       {editing ? (
         /*
@@ -326,6 +444,8 @@ interface FileEditorProps {
   onEdit: () => void;
   onCancelEdit: () => void;
   onSave: () => void;
+  /** A notice under the toolbar (e.g. "changed on disk"). */
+  banner?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -348,35 +468,85 @@ function FileEditor({
   onEdit,
   onCancelEdit,
   onSave,
+  banner,
   children,
 }: FileEditorProps) {
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [find, setFind] = useState("");
+  const finder = useFindInBody(bodyRef, findOpen ? find : "");
 
   useEffect(() => {
     if (findOpen) searchRef.current?.focus();
   }, [findOpen]);
 
-  // Cmd/Ctrl+S — save. Cmd/Ctrl+F — find. Esc — close find.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && editing) {
-        e.preventDefault();
-        onSave();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        setFindOpen(true);
-      } else if (e.key === "Escape" && findOpen) {
-        setFindOpen(false);
-      }
+  /**
+   * Open (or re-focus) the find bar. A short single-line selection becomes the
+   * query: select a name, press ⌘F, and you are already searching for it.
+   */
+  function openFind() {
+    const active = document.activeElement;
+    const selected =
+      active instanceof HTMLTextAreaElement
+        ? active.value.slice(active.selectionStart, active.selectionEnd)
+        : (window.getSelection()?.toString() ?? "");
+    if (selected && !selected.includes("\n") && selected.length <= 200) setFind(selected);
+    setFindOpen(true);
+    // Already open: the effect above will not fire again, so focus here.
+    searchRef.current?.focus();
+    searchRef.current?.select();
+  }
+
+  /**
+   * Close, and in edit mode hand the caret back to the textarea WITH the
+   * current match selected, so Esc leaves you editing at what you found.
+   */
+  function closeFind() {
+    setFindOpen(false);
+    const m = finder.current();
+    const ta = bodyRef.current?.querySelector("textarea");
+    if (ta && editing) {
+      ta.focus();
+      if (m) ta.setSelectionRange(m.start, m.end);
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [editing, findOpen, onSave]);
+  }
+
+  // Cmd/Ctrl+S save. Cmd/Ctrl+F find. Cmd/Ctrl+G next match. Esc closes find.
+  //
+  // On this pane's own element, not `window`: every open file tab mounts one
+  // of these, and a window listener meant ⌘S saved EVERY tab in edit mode and
+  // ⌘F opened a find bar in all of them — from any surface. Keys now reach
+  // only the tab that has focus. `tabIndex={-1}` makes a click anywhere in the
+  // body focus the pane, so a read-only view still gets ⌘F.
+  function onKeyDown(e: React.KeyboardEvent) {
+    const cmd = e.metaKey || e.ctrlKey;
+    const key = e.key.toLowerCase();
+    if (cmd && key === "s") {
+      // Swallowed even when not editing: the browser's "Save page" is never
+      // what ⌘S in an editor means.
+      e.preventDefault();
+      if (editing) onSave();
+    } else if (cmd && key === "f") {
+      e.preventDefault();
+      openFind();
+    } else if (cmd && key === "g" && findOpen) {
+      e.preventDefault();
+      if (e.shiftKey) finder.prev();
+      else finder.next();
+    } else if (e.key === "Escape" && findOpen) {
+      e.preventDefault();
+      closeFind();
+    }
+  }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div
+      className="flex flex-col h-full min-h-0 outline-none"
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      data-testid="file-editor"
+    >
       <div className="flex items-center gap-1 px-2 h-8 shrink-0 min-w-0">
         <span className="flex-1 min-w-0 truncate font-mono text-[11px] text-muted-foreground">
           {path ?? name}
@@ -395,7 +565,7 @@ function FileEditor({
         />
         <ToolbarBtn onClick={onDiff} title="Diff vs HEAD (⌥-click in the tree does the same)" icon={GitCompare} />
         <ToolbarBtn
-          onClick={() => setFindOpen((v) => !v)}
+          onClick={() => (findOpen ? closeFind() : openFind())}
           title="Find in file (⌘F)"
           icon={Search}
           active={findOpen}
@@ -429,12 +599,52 @@ function FileEditor({
             type="text"
             value={find}
             onChange={(e) => setFind(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter / Shift+Enter step through matches, as in every editor.
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (e.shiftKey) finder.prev();
+                else finder.next();
+              }
+            }}
             placeholder="Find…"
+            aria-label="Find in file"
             className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
           />
+          {find && (
+            <span
+              className="text-[11px] tabular-nums text-muted-foreground shrink-0"
+              data-testid="find-count"
+              aria-live="polite"
+            >
+              {finder.count === 0
+                ? "No results"
+                : `${finder.index + 1} of ${finder.count}${finder.count >= FIND_MATCH_CAP ? "+" : ""}`}
+            </span>
+          )}
           <button
             type="button"
-            onClick={() => setFindOpen(false)}
+            onClick={finder.prev}
+            disabled={finder.count === 0}
+            className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-40"
+            aria-label="Previous match"
+            title="Previous match (⇧Enter)"
+          >
+            <ChevronUp className="h-3 w-3" strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            onClick={finder.next}
+            disabled={finder.count === 0}
+            className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-40"
+            aria-label="Next match"
+            title="Next match (Enter)"
+          >
+            <ChevronDown className="h-3 w-3" strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            onClick={closeFind}
             className="h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/50"
             aria-label="Close find"
           >
@@ -442,12 +652,15 @@ function FileEditor({
           </button>
         </div>
       )}
+      {banner}
       {saveError && (
         <div className="px-3 py-1 text-[11px] text-destructive bg-destructive/5 border-t border-destructive/20 shrink-0">
           {saveError}
         </div>
       )}
-      <div className="flex-1 min-h-0 overflow-auto">{children}</div>
+      <div ref={bodyRef} className="flex-1 min-h-0 overflow-auto">
+        {children}
+      </div>
     </div>
   );
 }
@@ -483,4 +696,94 @@ function ToolbarBtn({ onClick, title, icon: Icon, active, accent, disabled }: To
       <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
     </button>
   );
+}
+
+/**
+ * The finding behind the find bar: matches in whatever the body renders,
+ * painted, counted, and stepped through.
+ *
+ * The body is watched rather than keyed on props, because what it renders is
+ * not always ready when props change (the overlay re-highlights after a
+ * keystroke, a renderer may fill in after a load). A MutationObserver sees the
+ * text that is actually there. Painting changes no DOM, so it cannot trigger
+ * itself.
+ */
+function useFindInBody(bodyRef: React.RefObject<HTMLDivElement | null>, query: string) {
+  const [pane] = useState(() => Symbol("find-pane"));
+  const [count, setCount] = useState(0);
+  const [index, setIndex] = useState(0);
+  const [revision, setRevision] = useState(0);
+  const ranges = useRef<Range[]>([]);
+  const matches = useRef<FindMatch[]>([]);
+  /** Scroll only when the USER moved, not every time an edit re-matches. */
+  const scrollPending = useRef(false);
+
+  // A new query starts again at its first match (adjusted during render, the
+  // React-sanctioned alternative to resetting state from an effect).
+  const [prevQuery, setPrevQuery] = useState(query);
+  if (query !== prevQuery) {
+    setPrevQuery(query);
+    setIndex(0);
+  }
+
+  useEffect(() => {
+    const root = bodyRef.current;
+    scrollPending.current = true;
+    if (!root || !query) {
+      ranges.current = [];
+      matches.current = [];
+      clearPaneHighlights(pane);
+      return;
+    }
+    const compute = () => {
+      const seg = textSegments(root);
+      matches.current = findMatches(seg.text, query);
+      ranges.current = rangesFor(seg, matches.current);
+      setCount(matches.current.length);
+      setIndex((i) => Math.min(i, Math.max(0, matches.current.length - 1)));
+      setRevision((r) => r + 1);
+    };
+    // One frame: coalesces a burst of keystrokes (and of overlay re-renders)
+    // into one pass over the text.
+    let frame = 0;
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(compute);
+    };
+    schedule();
+    const observer = new MutationObserver(schedule);
+    observer.observe(root, { subtree: true, childList: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [bodyRef, query, pane]);
+
+  useEffect(() => {
+    const current = ranges.current[index] ?? null;
+    if (ranges.current.length) setPaneHighlights(pane, ranges.current, current);
+    else clearPaneHighlights(pane);
+    if (current && scrollPending.current && bodyRef.current) {
+      scrollPending.current = false;
+      scrollMatchIntoView(current, bodyRef.current);
+    }
+  }, [index, revision, pane, bodyRef]);
+
+  useEffect(() => () => clearPaneHighlights(pane), [pane]);
+
+  const step = (delta: number) => {
+    const n = matches.current.length;
+    if (!n) return;
+    scrollPending.current = true;
+    setIndex((i) => (i + delta + n) % n);
+  };
+
+  return {
+    count,
+    index,
+    next: () => step(1),
+    prev: () => step(-1),
+    /** The match the bar is on, as offsets into the body's text. */
+    current: (): FindMatch | null => matches.current[index] ?? null,
+  };
 }

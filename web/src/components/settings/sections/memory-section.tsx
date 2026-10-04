@@ -64,10 +64,10 @@ function MemoryItem({
                 if (e.key === 'Escape') setEditing(false)
               }}
             />
-            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={handleSave}>
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label="Save memory" onClick={handleSave}>
               <Check className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setEditing(false)}>
+            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label="Cancel editing" onClick={() => setEditing(false)}>
               <X className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -89,13 +89,13 @@ function MemoryItem({
           </span>
         </div>
       </div>
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
         {!editing && (
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(true)}>
+          <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit memory" onClick={() => setEditing(true)}>
             <Edit2 className="h-3.5 w-3.5" />
           </Button>
         )}
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={onDelete}>
+        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Delete memory" onClick={onDelete}>
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -172,6 +172,7 @@ export function MemorySection() {
         <Switch
           checked={autoExtractMemories}
           onCheckedChange={setAutoExtractMemories}
+          aria-label="Auto-extract memories"
         />
       </div>
 
@@ -183,15 +184,21 @@ export function MemorySection() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search memories..."
+            aria-label="Search memories"
             className="pl-9 h-8 text-sm"
           />
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex flex-wrap gap-1">
-            {[{ value: 'all' as const, label: 'All' }, ...MEMORY_CATEGORIES].map((cat) => (
+        {/* Two labelled filter groups. They used to be one unlabelled row with
+            an "All" chip in each half, so the default state showed two
+            identical selected "All"s and no way to tell what each governed. */}
+        <div className="space-y-1.5">
+          <div role="group" aria-label="Filter by type" className="flex flex-wrap items-center gap-1">
+            <span className="mr-1 w-10 text-[11px] text-muted-foreground">Type</span>
+            {[{ value: 'all' as const, label: 'All types' }, ...MEMORY_CATEGORIES].map((cat) => (
               <button
                 key={cat.value}
                 type="button"
+                aria-pressed={filterCategory === cat.value}
                 onClick={() => setFilterCategory(cat.value as MemoryCategory | 'all')}
                 className={`rounded-full px-2 py-0.5 text-xs transition-colors ${
                   filterCategory === cat.value
@@ -203,21 +210,24 @@ export function MemorySection() {
               </button>
             ))}
           </div>
-          <div className="w-px h-4 bg-border" />
-          {(['all', 'global', 'project'] as const).map((scope) => (
-            <button
-              key={scope}
-              type="button"
-              onClick={() => setFilterScope(scope)}
-              className={`rounded-full px-2 py-0.5 text-xs capitalize transition-colors ${
-                filterScope === scope
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
-              }`}
-            >
-              {scope}
-            </button>
-          ))}
+          <div role="group" aria-label="Filter by scope" className="flex flex-wrap items-center gap-1">
+            <span className="mr-1 w-10 text-[11px] text-muted-foreground">Scope</span>
+            {([['all', 'All scopes'], ['global', 'Global'], ['project', 'Project']] as const).map(([scope, label]) => (
+              <button
+                key={scope}
+                type="button"
+                aria-pressed={filterScope === scope}
+                onClick={() => setFilterScope(scope)}
+                className={`rounded-full px-2 py-0.5 text-xs transition-colors ${
+                  filterScope === scope
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

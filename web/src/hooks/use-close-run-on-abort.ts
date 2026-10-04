@@ -21,6 +21,8 @@ import { onStreamAborted } from '@/lib/stream-registry';
 type RunFinish = (
   status: 'succeeded' | 'failed' | 'cancelled' | 'timeout',
   error?: string,
+  /** The aborted conversation — a surface runs one Run per conversation. */
+  chatId?: string,
 ) => void;
 
 /** What a timed-out Run records, so the reason survives into the run log. */
@@ -39,8 +41,8 @@ export function useCloseRunOnAbort(closeRun: RunFinish, ownsChat: (chatId: strin
         if (!ownsChat(chatId)) return;
         // A timeout may simply have needed longer; a cancel was a decision.
         // Collapsing them makes "is this automation broken?" unanswerable.
-        if (reason === 'timeout') closeRun('timeout', TIMED_OUT_RUN_ERROR);
-        else closeRun('cancelled');
+        if (reason === 'timeout') closeRun('timeout', TIMED_OUT_RUN_ERROR, chatId);
+        else closeRun('cancelled', undefined, chatId);
       }),
     [closeRun, ownsChat],
   );

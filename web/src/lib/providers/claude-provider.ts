@@ -14,11 +14,21 @@ import { UrlProvenance, isUrlFetchTool } from '../security/url-provenance';
 import { runSearch, SearchError } from '../search/execute';
 import { BaseProvider, type QueryParams, type StreamChunk, type ProviderConfig } from './base-provider';
 import { toolDeadlineMs, isNetworkTool } from './tool-deadlines';
+import { ResponseLedger } from './response-ledger';
+import {
+  classifyThrownTurnError,
+  cleanSdkErrorText,
+  codeForRetry,
+  codeForSdkError,
+  sdkErrorKindOf,
+} from './turn-errors';
+import { classifyTurnError, type TurnErrorCode } from '../sse/turn-error';
 import { getSurfaceConfig } from '../surfaces';
 import { internalAuthEnv } from '../auth/internal-credential';
 import { getBedrockEnv, isBedrockConfigured } from '../bedrock-env';
 import { waitForAnswer } from '../pending-questions';
 import { randomUUID } from 'node:crypto';
+import { join as joinPath } from 'node:path';
 import { BROWSER_TOOL_NAMES } from '../browser-tools';
 import { buildIfServable, browserMcpToolNames } from '../mcp/browser-tool-bridge';
 import { waitForBrowserToolResult } from '../pending-browser-tools';
@@ -27,13 +37,22 @@ import { waitForDocumentPrint } from '../pending-documents';
 import { issueHandle } from '../rendezvous';
 import { expandCanvasTemplate } from '../canvas/templates';
 import {
+  MODEL_TRIGGER_TYPES,
+  TRIGGER_EXPRESSION_HELP,
+  refusedScheduleResult,
+  validateCronToolInput,
+  validateStandingOrderInput,
+} from '../schedule/tool-input';
+import {
   SHELL_TOOLS,
   classifyCommand,
   buildCommandApprovalQuestion,
 } from '../security/destructive-commands';
 import { isFileWriteTool, writeTargetAllowed, writeTargetOf } from '../security/write-scope';
 import { toolMatches } from '../security/tool-names';
-import { getScratchDir } from '../app-paths';
+import { getDataDir, getScratchDir } from '../app-paths';
+import { evaluatePermissionMode, type ModeVerdict } from '../security/permission-mode';
+import { isCodePermissionMode, SDK_PERMISSION_MODE } from '../surfaces/code-permission-mode';
 import { loadSecuritySettings } from '../security/settings';
 import { describeThemes as describeThemesForPrompt } from '../documents/themes';
 import {
@@ -49,8 +68,53 @@ import {
 
 /** Canvas tool name — intercepted to push A2UI documents to client. */
 const CANVAS_TOOL_NAME = 'canvas';
-/** Spawn-agent tool name — intercepted to fire a sub-agent HTTP request. */
-const SPAWN_AGENT_TOOL_NAME = 'spawn_agent';
+
+/**
+ * The PreToolUse hook that makes `canUseTool` run for every tool call.
+ *
+ * `canUseTool` is where every refusal in this file lives — the security
+ * toggles, the write scope, the connector policy, URL provenance, loop
+ * detection, Code's permission modes — and the SDK does NOT consult it on its
+ * own. Measured against the real CLI (Agent SDK 0.3.285, a local stand-in for
+ * the Messages API): under `bypassPermissions` and `acceptEdits` a Bash or
+ * Write call ran without `canUseTool` being called once, and under `default`
+ * the same happened for any tool on `allowedTools`. Chat and Cowork run
+ * `bypassPermissions`, so every one of those gates was inert there.
+ *
+ * Hooks run before the permission mode and before the allow rules, and a hook
+ * answering `ask` sends the call to `canUseTool` in every mode, `bypass`
+ * included — also measured, including for a subagent's own tool calls. So the
+ * hook decides nothing; it only guarantees the gate is asked.
+ * `claude-provider.real-sdk.test.ts` proves it end to end.
+ *
+ * Installed on EVERY run — standing orders, subagents, heartbeats and widget
+ * refreshes as well as interactive turns. It was interactive-only once, which
+ * is how every background gate came to be inert while its tests passed.
+ */
+export async function routeToolCallToCanUseTool() {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse' as const,
+      permissionDecision: 'ask' as const,
+      permissionDecisionReason: 'Every tool call is decided by the host permission gate.',
+    },
+  };
+}
+
+/**
+ * The chatId prefixes of runs nobody is watching: standing orders, subagents,
+ * heartbeat check-ins and widget refreshes.
+ *
+ * Used ONLY as the fail-safe default for a caller that states no approval
+ * policy — never to relax one. The callers that produce these ids all state
+ * their policy explicitly now, so this is the net under a future caller that
+ * forgets, not the mechanism.
+ */
+const BACKGROUND_CHAT_PREFIXES = ['standing-order-', 'subagent_', 'hb-', 'widget-'] as const;
+
+export function isBackgroundChatId(chatId: string): boolean {
+  return BACKGROUND_CHAT_PREFIXES.some((prefix) => chatId.startsWith(prefix));
+}
 
 /**
  * Cached system:init data from the most recent session.
@@ -66,6 +130,26 @@ export interface SystemInitData {
   /** Summary of how many tools each MCP server contributed. */
   toolBudget?: import('../mcp/filter').ToolBudgetReport;
   [key: string]: unknown;
+}
+
+/** Escape text placed inside the history XML envelope. */
+/**
+ * The Anthropic key saved in Settings, or undefined. Imported lazily — the
+ * credential store reaches `fs` and the keychain-derived master key — and never
+ * thrown: an unreadable store means "no stored key", and the turn then fails
+ * with the SDK's own (typed) auth error rather than a crash here.
+ */
+async function storedAnthropicKey(): Promise<string | undefined> {
+  try {
+    const { getServerAnthropicKey } = await import('../models/credentials');
+    return await getServerAnthropicKey();
+  } catch {
+    return undefined;
+  }
+}
+
+function escapeXml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /**
@@ -215,7 +299,20 @@ export class ClaudeProvider extends BaseProvider {
       browserToolsAvailable,
       onConnectorRequest,
       onDocumentPrint,
+      userApprovedTools,
+      onToolRefused,
     } = params;
+
+    /**
+     * Code's permission mode, as the user picked it in the composer. Only ever
+     * honoured for the Code surface and only from the allowlist — the route
+     * checks both, and so does this, because a client choosing its own mode on
+     * Chat would be choosing its own security.
+     */
+    const codeMode = surfaceId === 'code' && isCodePermissionMode(params.permissionMode) ? params.permissionMode : null;
+    if (params.permissionMode !== undefined && !codeMode) {
+      console.warn('[SECURITY] Ignoring a permission mode requested for surface', surfaceId);
+    }
 
     // Load surface config if surfaceId is provided, otherwise use defaults
     let surfaceConfig: ReturnType<typeof getSurfaceConfig> | null = null;
@@ -546,7 +643,9 @@ export class ClaudeProvider extends BaseProvider {
     const model = explicitModel
       || surfaceConfig?.model
       || undefined;
-    const permissionMode = surfaceConfig?.permissionMode
+    // The user's choice when there is one; otherwise the surface's default.
+    const permissionMode = (codeMode && SDK_PERMISSION_MODE[codeMode])
+      || surfaceConfig?.permissionMode
       || this.permissionMode;
 
     // Scan for installed plugins to pass to SDK
@@ -631,6 +730,8 @@ export class ClaudeProvider extends BaseProvider {
      * assistant message. Cleared on `message_start`.
      */
     const streamedBlocks = new Map<number, string>();
+    /** How many of the current message's text blocks the assistant branch has matched to those. */
+    let reconciledTextBlocks = 0;
 
     const abortController = new AbortController();
     /** Every rendezvous this query opens dies with it. */
@@ -754,7 +855,7 @@ export class ClaudeProvider extends BaseProvider {
      * itself up by: the outcome is NOT passed through `updatedInput`, since
      * RequestConnector is an in-process MCP tool and the SDK zod-parses its
      * arguments and STRIPS unknown keys before the handler runs (verified by
-     * execution). The `__x` pattern works for AskUserQuestion, spawn_agent and
+     * execution). The `__x` pattern works for AskUserQuestion and
      * browser tools precisely because those are not MCP tools.
      *
      * It used to be `Map<connectorId, outcome>` with no delete — a last-write-wins
@@ -1135,16 +1236,17 @@ export class ClaudeProvider extends BaseProvider {
           'CronCreate',
           'Schedule a recurring reminder or task using a cron expression. Use this whenever the user asks to be reminded about something at a future time or on a recurring schedule. Do NOT use Bash crontab commands.',
           {
-            expression: z.string().describe('5-field cron expression (min hour dom month dow). E.g. "32 9 * * *" for 9:32am daily, "*/10 * * * *" for every 10 minutes.'),
+            expression: z.string().describe('5-field cron expression (min hour dom month dow). E.g. "32 9 * * *" for 9:32am daily, "*/10 * * * *" for every 10 minutes. Validated before saving; an invalid one is refused with the reason.'),
             prompt: z.string().describe('The reminder message or task to run when the cron fires'),
             surfaceId: z.string().optional().describe('Surface to run on: cowork (default), chat, or code'),
           },
           async ({ expression, prompt, surfaceId }: { expression: string; prompt: string; surfaceId?: string }) => {
-            if (expression && prompt) {
-              pendingCronJobs.push({ expression, prompt, surfaceId: surfaceId ?? 'cowork' });
-            }
+            // Refused, not saved-to-never-fire — see lib/schedule/tool-input.
+            const invalid = validateCronToolInput({ expression, prompt });
+            if (invalid) return refusedScheduleResult('The reminder', invalid);
+            pendingCronJobs.push({ expression, prompt, surfaceId: surfaceId ?? 'cowork' });
             return {
-              content: [{ type: 'text' as const, text: `Reminder scheduled: "${prompt}" (${expression}). It will appear in Customize → Automation → Cron Jobs.` }],
+              content: [{ type: 'text' as const, text: `Reminder scheduled: "${prompt}" (${expression}). It will appear in Customize → Automation → Scheduled jobs.` }],
             };
           }
         ),
@@ -1154,16 +1256,20 @@ export class ClaudeProvider extends BaseProvider {
           'Create a standing order — a persistent, stateful instruction that runs on a schedule or interval. Use this for reminders, monitoring, recurring tasks, and any "watch for X and do Y" requests. Preferred over CronCreate for new orders.',
           {
             instruction: z.string().describe('What to do when this order fires — the task or prompt to execute'),
-            trigger_type: z.enum(['cron', 'interval']).describe('When to trigger: "cron" for specific times (cron expression), "interval" for recurring delays like "5m" or "1h"'),
-            expression: z.string().describe('Trigger expression: 5-field cron (e.g. "0 9 * * 1-5") or interval (e.g. "5m", "2h", "1d")'),
+            trigger_type: z.enum(MODEL_TRIGGER_TYPES).describe('When to trigger: "cron" for specific times (cron expression), "interval" for a recurring delay'),
+            expression: z.string().describe(`Trigger expression — ${TRIGGER_EXPRESSION_HELP} Validated before saving; an invalid one is refused with the reason.`),
             condition: z.string().optional().describe('Only act when this condition is true (natural language)'),
             completionCondition: z.string().optional().describe('Auto-complete the order when this condition is met'),
             agentName: z.string().optional().describe('Agent from AGENTS.md to execute the order'),
             notifyVia: z.enum(['assistant', 'toast']).optional().describe('How to notify: "assistant" shows in card feed (default), "toast" shows desktop notification'),
-            maxExecutions: z.number().optional().describe('Maximum number of times to run before auto-completing'),
-            expiresInHours: z.number().optional().describe('Auto-expire after this many hours'),
+            maxExecutions: z.number().int().positive().optional().describe('Maximum number of times to run before auto-completing'),
+            expiresInHours: z.number().positive().optional().describe('Auto-expire after this many hours'),
           },
           async (input: { instruction: string; trigger_type: string; expression: string; condition?: string; completionCondition?: string; agentName?: string; notifyVia?: string; maxExecutions?: number; expiresInHours?: number }) => {
+            // Validated with the scheduler's parsers: an unparseable schedule was
+            // saved as an order that never fired. See lib/schedule/tool-input.
+            const invalid = validateStandingOrderInput(input);
+            if (invalid) return refusedScheduleResult('The standing order', invalid);
             const triggerDesc = input.trigger_type === 'cron' ? `cron: ${input.expression}` : `every ${input.expression}`;
             const key = creationKey([input.instruction, input.trigger_type, input.expression]);
             if (!recordOnce(seenOrderKeys, key, true).isNew) {
@@ -1712,27 +1818,48 @@ export class ClaudeProvider extends BaseProvider {
       toolGate = buildToolGate(remoteMcpServers, decisions);
     }
 
-    // Detect if this is a background/scheduled execution (not interactive)
-    const isBackgroundRun = chatId.startsWith('standing-order-') || chatId.startsWith('subagent_') || chatId.startsWith('hb-') || chatId.startsWith('widget-');
-
     /**
-     * Approval policy (P6/C3). Explicit per-query when provided (a Goal carries
-     * one); otherwise unattended runs gate consequential actions and
-     * interactive sessions gate nothing — in an interactive session the human
-     * is watching the stream and holds the abort button, which IS the approval
-     * mechanism.
+     * Approval policy (P6/C3). Background callers state it — a standing order
+     * or widget refresh passes 'consequential', `/api/subagent` whatever
+     * its request declared (attended or not). A caller that states nothing gets
+     * the FAIL-SAFE inference: a background chatId prefix means 'consequential',
+     * anything else 'never' — in an interactive session the human is watching
+     * the stream and holds the abort button, which IS the approval mechanism.
+     * The prefix can only make a run stricter; nothing reads it to relax one.
      *
      * This replaced a hardcoded ten-name tool list. That list was wrong in both
      * directions — every newly added MCP connector tool sailed through
      * ungoverned, and its deny message claimed "an approval card has been
      * created" when no such machinery existed. The classifier judges by effect
-     * (world-side vs in-app vs read) and its deny message promises nothing it
-     * doesn't do.
+     * (world-side vs in-app vs read), and a gated call is REFUSED: there is no
+     * queue and no resume, so its deny message promises neither.
      */
-    const approvalPolicy = params.approvalPolicy ?? (isBackgroundRun ? 'consequential' : 'never');
+    const approvalPolicy = params.approvalPolicy ?? (isBackgroundChatId(chatId) ? 'consequential' : 'never');
+
+    /**
+     * Route every tool call through `canUseTool`, in EVERY run — see
+     * `routeToolCallToCanUseTool` for why the SDK does not do it by itself.
+     *
+     * It used to be interactive-only. So in every subagent, standing order,
+     * heartbeat and widget refresh, the CLI auto-approved whatever its
+     * permission mode or `allowedTools` let through and `canUseTool` never
+     * heard of it: the four Security toggles, the user's connector blocks and
+     * the 'consequential' policy were all inert there, while the Cockpit said
+     * standing orders "pause before side effects". With the hook on they are
+     * real — and where a gate would need to ask and no client is attached, it
+     * refuses.
+     */
+    queryOptions.hooks = { PreToolUse: [{ hooks: [routeToolCallToCanUseTool] }] };
+
+    /** Where the SDK writes plan files: `<CLAUDE_CONFIG_DIR>/plans` (measured). */
+    const plansDir = codeMode === 'plan' ? joinPath(getDataDir(), 'plans') : '';
 
     // Intercept AskUserQuestion, browser tools, canvas tool, and loop detection via canUseTool.
-    queryOptions.canUseTool = async (
+    //
+    // A denial may carry `refusal`: the few words the run log shows the user,
+    // as opposed to `message`, which is written for the model. The wrapper
+    // below reports it and strips it before the SDK sees the decision.
+    const decideToolUse = async (
       toolName: string,
       input: Record<string, unknown>,
       { toolUseID }: { toolUseID: string },
@@ -1757,14 +1884,31 @@ export class ClaudeProvider extends BaseProvider {
         const verdict = urlProvenance.check((input as { url?: unknown }).url);
         if (!verdict.allowed) {
           console.warn('[SECURITY] Refused a fetch of an unsourced URL:', input.url);
-          return { behavior: 'deny' as const, message: verdict.message! };
+          return { behavior: 'deny' as const, message: verdict.message!, refusal: 'A URL nothing in the run supplied' };
         }
       }
+
+      /*
+       * Code's permission mode. A refusal (plan mode) lands here, before any
+       * other gate can put a card in front of the user for a call that was
+       * never going to run; a question waits until the security gates below
+       * have had their say, for the same reason.
+       */
+      const modeVerdict: ModeVerdict | null = codeMode
+        ? evaluatePermissionMode(codeMode, toolName, input, { cwd: effectiveCwd, plansDir })
+        : null;
+      if (modeVerdict?.kind === 'deny') {
+        console.warn(`[SECURITY] ${codeMode} mode refused:`, toolName);
+        return { behavior: 'deny' as const, message: modeVerdict.message, refusal: 'Not allowed in this permission mode' };
+      }
+      /** A gate below already put THIS call to the user and got a yes. */
+      let approvedByUser = false;
 
       if (toolMatches(toolName, denied)) {
         console.warn('[SECURITY] Blocked a tool withheld from this run:', toolName);
         return {
           behavior: 'deny' as const,
+          refusal: 'Turned off in Settings',
           message:
             `${toolName} is not available in this session — it has been turned off in ` +
             `settings. Do not try it again or look for another way to run it. Tell the ` +
@@ -1788,6 +1932,7 @@ export class ClaudeProvider extends BaseProvider {
             console.warn('[SECURITY] Blocked a write outside the working directory:', target);
             return {
               behavior: 'deny' as const,
+              refusal: 'Restrict to project folder: a write outside the working directory',
               message:
                 `${toolName} was refused: ${target} is outside the working directory, and this ` +
                 `session is restricted to it. Do not retry it or try to reach the same place ` +
@@ -1831,6 +1976,7 @@ export class ClaudeProvider extends BaseProvider {
           console.warn('[SECURITY] Shell write outside the working directory:', outside.target);
           return {
             behavior: 'deny' as const,
+            refusal: 'Restrict to project folder: a shell write outside the working directory',
             message:
               `That command writes to ${outside.target} via ${outside.what}, which is outside ` +
               `the working directory this session is restricted to. Write inside the working ` +
@@ -1865,6 +2011,7 @@ export class ClaudeProvider extends BaseProvider {
           if (deniedThisTurn.has(key)) {
             return {
               behavior: 'deny' as const,
+              refusal: 'Already declined in this run',
               message:
                 `That command was already declined in this turn and will not be asked again. ` +
                 `Stop retrying it and finish what you can without it.`,
@@ -1878,6 +2025,7 @@ export class ClaudeProvider extends BaseProvider {
             console.warn('[SECURITY] Approval prompt limit reached for this turn');
             return {
               behavior: 'deny' as const,
+              refusal: 'Too many approval prompts in one run',
               message:
                 `This turn has already asked the user to approve ${MAX_COMMAND_APPROVALS_PER_TURN} ` +
                 `commands, so no more will be shown. Stop and tell them what is left to do.`,
@@ -1889,6 +2037,9 @@ export class ClaudeProvider extends BaseProvider {
             console.warn(`[SECURITY] Cannot ask about a ${verdict.category} command here; denying`);
             return {
               behavior: 'deny' as const,
+              refusal:
+                `${verdict.category === 'network' ? 'Block network commands' : 'Block dangerous commands'}: ` +
+                `${verdict.reason}, and nobody was there to ask`,
               message:
                 `That command looks like ${verdict.reason} and needs the user's approval, but ` +
                 `this session cannot ask them (no interactive client attached). It was not run. ` +
@@ -1921,6 +2072,7 @@ export class ClaudeProvider extends BaseProvider {
             deniedThisTurn.add(key);
             return {
               behavior: 'deny' as const,
+              refusal: unanswered ? 'The approval prompt timed out' : 'Declined by the user',
               message: unanswered
                 ? `That command was not run: the approval prompt timed out because the user did ` +
                   `not respond. Do not retry it. Tell them it is still waiting on them and carry on.`
@@ -1929,6 +2081,7 @@ export class ClaudeProvider extends BaseProvider {
                   `you could not do, and carry on with the rest.`,
             };
           }
+          approvedByUser = true;
         }
       }
 
@@ -1941,6 +2094,7 @@ export class ClaudeProvider extends BaseProvider {
         console.warn('[Governance] Blocked a tool the user denied:', toolName);
         return {
           behavior: 'deny' as const,
+          refusal: `Blocked for ${mcpTool.server} in Customize → Connectors`,
           message:
             `${mcpTool.tool} was not run: it is blocked for ${mcpTool.server}. Do not try ` +
             `it again. Tell the user it is blocked, and that they can change that in ` +
@@ -1953,9 +2107,24 @@ export class ClaudeProvider extends BaseProvider {
         const { evaluateApproval } = await import('../runs/approval');
         const outcome = evaluateApproval(approvalPolicy, toolName, input);
         if (!outcome.allow) {
-          console.warn('[Governance] Paused', outcome.class, 'tool in unattended run:', toolName, 'chatId:', chatId);
-          return { behavior: 'deny' as const, message: outcome.reason! };
+          console.warn('[Governance] Refused', outcome.class, 'tool in unattended run:', toolName, 'chatId:', chatId);
+          return { behavior: 'deny' as const, message: outcome.reason!, refusal: outcome.summary };
         }
+      } else if (
+        mcpPolicy === 'always_ask' &&
+        mcpTool &&
+        userApprovedTools?.includes(toolName) &&
+        !toolGate!.handlesMoney(mcpTool.server)
+      ) {
+        // ── Already answered by the click that started this run ──────────
+        // An attended subagent started to call exactly this tool ("Create PR",
+        // a canvas button) IS the approval card, clicked — and it has no client
+        // to show a second one, so asking would only refuse it. Exact full name:
+        // a bare-name match would approve the same verb on every other server.
+        // Money-handling servers still need their own yes, for the reason a
+        // remembered approval does not apply to them either.
+        console.log('[Governance] Approved by the user action that started this run:', toolName);
+        approvedByUser = true;
       } else if (mcpPolicy === 'always_ask' && mcpTool) {
         // ── The interactive gate ─────────────────────────────────────────
         // approvalPolicy 'never' means "the human is watching", which is only an
@@ -1969,6 +2138,7 @@ export class ClaudeProvider extends BaseProvider {
         if (deniedThisTurn.has(toolName)) {
           return {
             behavior: 'deny' as const,
+            refusal: 'Already declined in this run',
             message:
               `${mcpTool.tool} was already declined in this turn and will not be asked ` +
               `again. Stop trying it and finish what you can without it.`,
@@ -1983,6 +2153,7 @@ export class ClaudeProvider extends BaseProvider {
           console.warn('[Governance] Cannot ask for approval on this surface; denying', toolName);
           return {
             behavior: 'deny' as const,
+            refusal: `A ${mcpTool.server} tool that asks first, and nobody was there to ask`,
             message:
               `${mcpTool.tool} needs the user's approval and this session cannot ask them ` +
               `(no interactive client attached). It was not run. Say what you would have ` +
@@ -2033,6 +2204,7 @@ export class ClaudeProvider extends BaseProvider {
           deniedThisTurn.add(toolName);
           return {
             behavior: 'deny' as const,
+            refusal: unanswered ? 'The approval prompt timed out' : 'Declined by the user',
             message: unanswered
               ? `${mcpTool.tool} was not run: the approval prompt timed out because the user ` +
                 `did not respond. Do not retry it. Tell them it is still waiting on them and ` +
@@ -2044,6 +2216,62 @@ export class ClaudeProvider extends BaseProvider {
           };
         }
         // allow-once / always-allow fall through, so loop detection still applies.
+        approvedByUser = true;
+      }
+
+      // ── Code's permission mode: the question ────────────────────────────
+      // Asked here, after every gate that could refuse the call outright, and
+      // skipped when one of them has just asked about this very call — one
+      // card per call, not two.
+      if (modeVerdict?.kind === 'ask' && !approvedByUser) {
+        if (deniedThisTurn.has(modeVerdict.key)) {
+          return {
+            behavior: 'deny' as const,
+            message:
+              `The user already declined that in this turn and will not be asked again. ` +
+              `Stop retrying it and finish what you can without it.`,
+          };
+        }
+        if (!onInputRequest) {
+          // Nothing can show the card, and this mode's promise is that the user
+          // is asked — so the call does not run.
+          console.warn(`[SECURITY] ${codeMode} mode cannot ask here; denying`, toolName);
+          return {
+            behavior: 'deny' as const,
+            refusal: 'Needs approval in this permission mode, and nobody was there to ask',
+            message:
+              `${toolName} needs the user's approval in this permission mode, and this session ` +
+              `cannot ask them (no interactive client attached). It was not run.`,
+          };
+        }
+        const question = modeVerdict.question;
+        awaitingHuman.add(toolUseID);
+        // A nonce, not the SDK's id — see issueHandle and the gates above.
+        const approvalHandle = issueHandle(toolUseID);
+        let decision: ApprovalDecision;
+        let unanswered = false;
+        try {
+          await onInputRequest(approvalHandle, [question]);
+          decision = readApprovalAnswer(await waitForAnswer(approvalHandle, waitOptions), question.question);
+        } catch {
+          decision = 'deny';
+          unanswered = true;
+        } finally {
+          awaitingHuman.delete(toolUseID);
+        }
+        console.log(`[SECURITY] ${codeMode} mode approval for`, toolName, '→', decision);
+        if (decision !== 'allow-once' && decision !== 'always-allow') {
+          deniedThisTurn.add(modeVerdict.key);
+          return {
+            behavior: 'deny' as const,
+            message: unanswered
+              ? `${toolName} was not run: the approval prompt timed out because the user did not ` +
+                `respond. Do not retry it. Tell them it is still waiting on them and carry on.`
+              : `${toolName} was not run — the user did not approve it. Do not retry it or look ` +
+                `for another way to do the same thing. Tell them which part of the task you ` +
+                `could not do, and carry on with the rest.`,
+          };
+        }
       }
       // ── Loop detection ─────────────────────────────────────────────────
       const inputHash = JSON.stringify(input);
@@ -2064,6 +2292,7 @@ export class ClaudeProvider extends BaseProvider {
         console.error('[Claude] Loop DENIED for tool:', toolName, 'id:', toolUseID, `(${consecutiveCount} consecutive identical calls)`);
         return {
           behavior: 'deny' as const,
+          refusal: `The same call ${consecutiveCount} times in a row`,
           message: `Tool call denied — you've called ${toolName} ${consecutiveCount} times with identical inputs. This is a loop. Stop and tell the user what went wrong and suggest an alternative approach.`,
         };
       }
@@ -2113,33 +2342,6 @@ export class ClaudeProvider extends BaseProvider {
           };
         } finally {
           awaitingHuman.delete(toolUseID);
-        }
-      }
-
-      // ── Spawn agent ────────────────────────────────────────────────────
-      if (toolName === SPAWN_AGENT_TOOL_NAME) {
-        const task = typeof input.task === 'string' ? input.task : JSON.stringify(input);
-        const subSurfaceId = typeof input.surfaceId === 'string' ? input.surfaceId : (surfaceId ?? 'cowork');
-        const subModel = typeof input.model === 'string' ? input.model : null;
-        console.log('[Claude] Intercepting spawn_agent — task:', task.slice(0, 80));
-        try {
-          const res = await fetch('http://localhost:3000/api/subagent', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ parentChatId: chatId, task, surfaceId: subSurfaceId, model: subModel, cwd, apiKey: apiKey || undefined }),
-          });
-          const data = await res.json() as { ok?: boolean; output?: string; error?: string };
-          const subOutput = data.ok ? (data.output ?? '') : `Sub-agent error: ${data.error}`;
-          return {
-            behavior: 'allow' as const,
-            updatedInput: { ...input, __spawn_agent_output: subOutput },
-          };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return {
-            behavior: 'allow' as const,
-            updatedInput: { ...input, __spawn_agent_output: `Failed to spawn sub-agent: ${msg}` },
-          };
         }
       }
 
@@ -2219,6 +2421,31 @@ export class ClaudeProvider extends BaseProvider {
       return { behavior: 'allow' as const };
     };
 
+    /*
+     * Every refusal is reported to a caller that asked (`onToolRefused`) — a
+     * background run records them on its Run, because the person it ran for was
+     * not watching and the model's "I couldn't do that" is easy to miss. The
+     * `refusal` label never reaches the SDK.
+     */
+    queryOptions.canUseTool = async (
+      toolName: string,
+      input: Record<string, unknown>,
+      ctx: { toolUseID: string },
+    ) => {
+      const decision = await decideToolUse(toolName, input, ctx);
+      if (decision.behavior !== 'deny') return decision;
+      const { refusal, ...denied } = decision as typeof decision & { refusal?: string };
+      if (onToolRefused) {
+        try {
+          onToolRefused({ tool: toolName, reason: refusal ?? 'Refused by a safety check', at: Date.now() });
+        } catch (err) {
+          // Recording a refusal must never turn it into something else.
+          console.error('[Claude] onToolRefused threw:', err);
+        }
+      }
+      return denied;
+    };
+
     // Set working directory — use selected folder, or fall back to a per-chat
     // scratch dir so the agent never defaults to the app's own source tree.
     // Using a per-chat path (not a shared temp) ensures session resumption
@@ -2251,20 +2478,40 @@ export class ClaudeProvider extends BaseProvider {
 
     // IMPORTANT: Always strip CLAUDECODE from subprocess env to prevent
     // "nested session" detection when the app is launched from a Claude Code terminal.
-    const { getDataDir } = await import('../app-paths');
-    const { CLAUDECODE: _cc, ...safeEnv } = process.env;
+    //
+    // AIME_API_TOKEN goes too. It is the credential for the local API, and the
+    // agent's Bash inherits this environment: with it, a turn (or a prompt
+    // injection steering one) could call /api/subagent with `attended: true`
+    // and start a run the user never clicked. Nothing in the subprocess needs
+    // it. Our own llm-proxy gets a DIFFERENT, derived token below
+    // (ANTHROPIC_AUTH_TOKEN via internalAuthEnv) that the gate accepts on
+    // /api/llm-proxy/* only — see lib/auth/local-token `deriveProxyToken`.
+    const { CLAUDECODE: _cc, AIME_API_TOKEN: _apiToken, ...safeEnv } = process.env;
     queryOptions.env = {
       ...safeEnv,
       CLAUDE_CONFIG_DIR: getDataDir(),
     };
 
+    /*
+     * The key for the built-in path: the request's, else the one saved in
+     * Settings (the encrypted credential store). Resolved HERE, where the SDK
+     * environment is built, so no caller can forget it — the surfaces are
+     * moving the key out of the browser and stop sending it, and a caller that
+     * did not look the stored key up itself (the goal-run routes did not) would
+     * otherwise boot a subprocess with no credential and get "Not logged in".
+     * A user-added provider (base URL) or a Bedrock/Vertex provider (env)
+     * brings its own credential, so the Anthropic key is never handed to one.
+     */
+    const effectiveApiKey =
+      apiKey || (baseUrl || providerEnv ? undefined : await storedAnthropicKey());
+
     // BYOK: a user-provided API key routes directly to the Anthropic API
     // and takes priority over Bedrock env.
-    if (apiKey) {
+    if (effectiveApiKey) {
       queryOptions.env = {
         ...safeEnv,
         ...(queryOptions.env as Record<string, string> || {}),
-        ANTHROPIC_API_KEY: apiKey,
+        ANTHROPIC_API_KEY: effectiveApiKey,
       };
       console.log('[Claude] API key provided, routing to the Anthropic API');
     } else if (isBedrockConfigured()) {
@@ -2276,12 +2523,24 @@ export class ClaudeProvider extends BaseProvider {
     // gateway, or the local openai-compat shim) supplies an Anthropic-compat
     // base URL. Point the SDK at it. Applies on top of whichever key branch ran.
     if (baseUrl) {
+      /*
+       * A keyless provider (a local server, or one whose key is not stored)
+       * must not inherit the HOST's ANTHROPIC_API_KEY: the subprocess would
+       * present it to this base URL — the Anthropic key, handed to a third
+       * party. Without it the request goes out keyless, exactly as on a
+       * machine that never had the variable set.
+       */
+      if (!effectiveApiKey) {
+        const { ANTHROPIC_API_KEY: _hostKey, ...withoutHostKey } =
+          (queryOptions.env as Record<string, string>) || {};
+        queryOptions.env = withoutHostKey;
+      }
       queryOptions.env = {
         ...(queryOptions.env as Record<string, string> || {}),
         ANTHROPIC_BASE_URL: baseUrl,
         /*
-         * If that base URL is our own llm-proxy, the subprocess must present the
-         * local API credential too — we cannot add a header to a client we do
+         * If that base URL is our own llm-proxy, the subprocess must present a
+         * local credential too — the proxy-SCOPED one, never the API token — we cannot add a header to a client we do
          * not construct, so it goes in as ANTHROPIC_AUTH_TOKEN, which the SDK
          * sends as `Authorization: Bearer`. Harmless to override: the proxy
          * authenticates upstream with the provider key it already holds.
@@ -2321,11 +2580,24 @@ export class ClaudeProvider extends BaseProvider {
       console.log('[Claude] Resuming session:', existingSessionId);
     }
 
-    // Build prompt — prepend conversation history as XML when no session to resume
+    /*
+     * Build prompt — prepend conversation history as XML whenever this query
+     * is NOT resuming a session.
+     *
+     * The test used to be `!existingSessionId`, which is a different question:
+     * picking a folder mid-conversation leaves a session id on record but
+     * starts a fresh session (the old one's cwd is baked in), so the model got
+     * neither the session nor the history and the conversation began again
+     * from nothing.
+     *
+     * Escaped because the content is the user's and the model's own text, and
+     * a message containing `</msg>` or `</conversation_history>` would
+     * otherwise close the envelope and put the rest outside it.
+     */
     let queryPrompt: unknown = prompt;
-    if (!existingSessionId && history?.length) {
+    if (!queryOptions.resume && history?.length) {
       const historyXml = history
-        .map((m) => `<msg role="${m.role}">${m.content}</msg>`)
+        .map((m) => `<msg role="${m.role === 'assistant' ? 'assistant' : 'user'}">${escapeXml(m.content)}</msg>`)
         .join('\n');
       queryPrompt = `<conversation_history>\n${historyXml}\n</conversation_history>\n\n${prompt}`;
       console.log('[Claude] Prepended conversation history (' + history.length + ' messages) as XML fallback');
@@ -2429,13 +2701,96 @@ export class ClaudeProvider extends BaseProvider {
       }
     }, 5000);
 
+    /*
+     * A failed turn is reported ONCE, as a typed `error` chunk (see
+     * lib/sse/turn-error.ts), and the turn still ends with `done` so the client
+     * clears its streaming state.
+     *
+     * The SDK reports one failure up to three ways — a synthetic assistant
+     * message carrying `error`, an `is_error` result, and then a thrown "Claude
+     * Code returned an error result" — and all three used to reach the user: the
+     * first as assistant prose ("Not logged in · Please run /login", advice for
+     * a command this app does not have), the last as `**Error:** …` under it,
+     * and the turn still closed with an ordinary `done`. The first one to arrive
+     * wins; the others are recognised as the same failure.
+     */
+    let turnError: { code: TurnErrorCode; message: string } | null = null;
+    const failTurn = (code: TurnErrorCode, message: string): StreamChunk | null => {
+      if (turnError) return null;
+      turnError = { code, message };
+      console.warn(`[Claude] Turn failed (${code}):`, message);
+      return { type: 'error', message, code, provider: this.name };
+    };
+
+    /*
+     * THE SDK TAKES ITS CONTROLLER IN `options`. This was passed as a top-level
+     * `abortSignal`, a parameter `query()` does not have, so aborting stopped
+     * our own waits and nothing else: Stop, a disconnected client and the tool
+     * watchdog all left the subprocess running to completion, spending tokens
+     * on a turn nobody was reading.
+     */
+    queryOptions.abortController = abortController;
+
+    /*
+     * How a stopped query ends — the user's Stop, a client that went away, or
+     * the tool watchdog. Shared by the throw and the clean-exit paths, because
+     * the SDK does either depending on where in its loop the abort lands.
+     */
+    function* abortedTail(): Generator<StreamChunk> {
+      console.log('[Claude] Query aborted for chatId:', chatId);
+      // Before reporting the abort: whatever was already created is still
+      // created, and the model has already told the user so. See drainPending.
+      yield* drainPending();
+      const trip = watchdogTrip[0];
+      if (trip) {
+        // Surface the watchdog reason so the user sees what hung
+        // instead of a generic "aborted" — the abort here was ours. The
+        // advice differs by class: a hung remote call is worth retrying, but
+        // "try again" for a build that had been succeeding for nine minutes
+        // is exactly wrong — that advice belongs to the network class alone.
+        const advice = trip.network
+          ? 'The remote call hung. Try again or rephrase.'
+          : 'The command outlived its budget and was stopped; split long builds or test runs into smaller steps.';
+        yield {
+          type: 'error',
+          message: `Tool "${trip.name}" was stopped after ${(trip.elapsedMs / 1000).toFixed(0)}s without returning. ${advice} Work already produced above is kept.`,
+          code: 'timeout' satisfies TurnErrorCode,
+          provider: providerName,
+        };
+      }
+      yield {
+        type: 'aborted',
+        provider: providerName,
+      };
+    }
+
+    /**
+     * Which API response each streamed chunk came from, so a refusal the SDK
+     * retracts can be taken back off the screen — see response-ledger.
+     */
+    const ledger = new ResponseLedger(randomUUID().slice(0, 8));
+
+    let abortReported = false;
     try {
       // Stream responses from Claude Agent SDK - matches server.js exactly
       for await (const chunk of query({
         prompt: queryPrompt,
         options: queryOptions,
-        abortSignal: abortController.signal,
       } as Parameters<typeof query>[0])) {
+        /*
+         * Nothing after a stop. Since 0.3 the SDK gives the subprocess a 2s
+         * grace to flush its transcript before killing it, and the stream
+         * kept delivering what was in flight meanwhile — measured at ~1.5s of
+         * further text after Stop, and after the watchdog's abort too.
+         *
+         * Reported BEFORE leaving the loop, because leaving it closes the
+         * query and that waits out the same grace.
+         */
+        if (abortController.signal.aborted) {
+          yield* abortedTail();
+          abortReported = true;
+          break;
+        }
         const c = chunk as Record<string, unknown>;
 
         /**
@@ -2491,6 +2846,19 @@ export class ClaudeProvider extends BaseProvider {
                */
               limitReason: c.subtype === 'error_max_turns' ? 'max_turns' : 'hard',
             };
+          } else if (c.is_error === true) {
+            /*
+             * A result that IS the failure — auth, billing, an exhausted retry
+             * budget — rather than a ceiling the run reached. Its text is the
+             * error, so it becomes the error chunk and is never streamed as
+             * assistant content. Usually an assistant `error` got here first,
+             * in which case this is the same failure and `failTurn` drops it.
+             */
+            const errors = Array.isArray(c.errors) ? (c.errors as unknown[]).filter((e) => typeof e === 'string') : [];
+            const text = (typeof c.result === 'string' && c.result) || errors.join('; ') || `The run ended with ${String(c.subtype)}`;
+            const status = typeof c.api_error_status === 'number' ? c.api_error_status : undefined;
+            const chunk = failTurn(classifyTurnError(text, status), cleanSdkErrorText(text) || text);
+            if (chunk) yield chunk;
           }
           /*
            * Consumed here. The branch that used to swallow this — the old
@@ -2505,9 +2873,63 @@ export class ClaudeProvider extends BaseProvider {
           continue;
         }
 
-        // Debug: log all system messages to find session_id
+        /*
+         * The SDK is about to retry a failed API call (429, 529, a dropped
+         * connection). Forwarded so the user sees "retrying in 8s" instead of a
+         * spinner that has gone quiet for no stated reason.
+         */
+        if (c.type === 'system' && c.subtype === 'api_retry') {
+          const status = typeof c.error_status === 'number' ? c.error_status : null;
+          const code = codeForRetry(c.error as string | undefined, status);
+          console.warn(`[Claude] API retry ${String(c.attempt)}/${String(c.max_retries)} (${code}) in ${String(c.retry_delay_ms)}ms`);
+          yield {
+            type: 'retry',
+            attempt: typeof c.attempt === 'number' ? c.attempt : 1,
+            delayMs: typeof c.retry_delay_ms === 'number' ? c.retry_delay_ms : 0,
+            code,
+            provider: this.name,
+          };
+          continue;
+        }
+
+        /*
+         * The SDK re-ran a refused reply on a fallback model and threw the
+         * refused partial away. Its text (and any tool call it made) already
+         * reached the client, so it has to be taken back — otherwise it sits
+         * above the fallback's answer and goes back to the model as history.
+         * The same uuids may already have arrived as `supersedes` on the
+         * replacement's first frame; the ledger makes the second one a no-op.
+         */
+        if (c.type === 'system' && c.subtype === 'model_refusal_fallback') {
+          console.warn(
+            `[Claude] Reply refused by ${String(c.original_model)}; re-run on ${String(c.fallback_model)}`,
+          );
+          const retraction = ledger.retract(c.retracted_message_uuids);
+          if (retraction) {
+            for (const id of retraction.toolUseIds) activeTools.delete(id);
+            yield { type: 'retract', ...retraction, provider: this.name };
+          }
+          continue;
+        }
+
+        /*
+         * One line per system message. This used to pretty-print the whole
+         * object on every turn — the init message alone lists every tool, MCP
+         * server, skill and slash command, which buried everything else in the
+         * log.
+         */
         if (c.type === 'system') {
-          console.log('[Claude] System message:', JSON.stringify(c, null, 2));
+          if (c.subtype === 'init') {
+            const d = (c.data || c) as Record<string, unknown>;
+            const servers = Array.isArray(d.mcp_servers)
+              ? (d.mcp_servers as Array<{ name?: unknown }>).map((m) => String(m?.name ?? m)).join(', ')
+              : '';
+            console.log(
+              `[Claude] System init: model=${String(d.model ?? '?')} tools=${Array.isArray(d.tools) ? d.tools.length : 0} mcp=[${servers}]`,
+            );
+          } else {
+            console.log('[Claude] System message:', String(c.subtype ?? '(no subtype)'));
+          }
         }
 
         // Capture session ID and system:init data - matches server.js logic
@@ -2586,8 +3008,9 @@ export class ClaudeProvider extends BaseProvider {
          * The complete `assistant` message still arrives afterwards with the
          * same text in it, so the two have to be reconciled or every sentence
          * appears twice. `streamedBlocks` records how much of each content
-         * block index we have already sent; the assistant branch below emits
-         * only the remainder, which is normally nothing.
+         * block index we have already sent; the assistant branch below matches
+         * its text blocks to those in order and emits only the remainder,
+         * which is normally nothing.
          *
          * Reconciling on LENGTH rather than by suppressing the final block
          * outright, because a delta stream can be cut off mid-block (an abort,
@@ -2600,12 +3023,16 @@ export class ClaudeProvider extends BaseProvider {
 
           if (evType === 'message_start') {
             streamedBlocks.clear();
+            reconciledTextBlocks = 0;
+            ledger.begin((ev!.message as { id?: unknown } | undefined)?.id);
           } else if (evType === 'content_block_delta') {
             const delta = ev!.delta as { type?: string; text?: string } | undefined;
             if (delta?.type === 'text_delta' && delta.text) {
               const idx = (ev!.index as number) ?? 0;
               streamedBlocks.set(idx, (streamedBlocks.get(idx) ?? '') + delta.text);
-              yield { type: 'text', content: delta.text, provider: this.name };
+              const segment = ledger.segment;
+              ledger.noteText(segment, delta.text);
+              yield { type: 'text', content: delta.text, segment, provider: this.name };
             }
           }
           continue;
@@ -2618,16 +3045,62 @@ export class ClaudeProvider extends BaseProvider {
 
           const message = c.message as Record<string, unknown>;
           const content = message.content;
+          const segment = ledger.open(message.id);
+          ledger.noteFrame(c.uuid, segment);
+
+          // The first frame of a fallback reply names the refused messages it
+          // replaces. Evicted before this frame's own content is shown.
+          const superseded = ledger.retract(c.supersedes, segment);
+          if (superseded) {
+            for (const id of superseded.toolUseIds) activeTools.delete(id);
+            yield { type: 'retract', ...superseded, provider: this.name };
+          }
+
+          /*
+           * The CLI reporting a failure in the shape of an assistant message.
+           * Its text is the error ("Not logged in · Please run /login"), not
+           * something the model said, so it becomes the error chunk and none of
+           * it is streamed as content — otherwise it lands in the transcript
+           * and goes back to the model next turn as its own words.
+           */
+          const messageText = Array.isArray(content)
+            ? (content as Array<Record<string, unknown>>)
+                .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+                .map((b) => b.text as string)
+                .join('\n')
+            : '';
+          const sdkErrorKind = sdkErrorKindOf(c as { error?: unknown; message?: { model?: unknown } }, messageText);
+          if (sdkErrorKind) {
+            const chunk = failTurn(
+              codeForSdkError(sdkErrorKind, messageText),
+              cleanSdkErrorText(messageText) || sdkErrorKind,
+            );
+            if (chunk) yield chunk;
+          }
+
           if (Array.isArray(content)) {
-            for (const [blockIndex, block] of content.entries()) {
+            for (const block of content) {
               if (block.type === 'text' && block.text) {
-                // Whatever the deltas did not already carry — usually nothing
-                // when streaming is on, and the whole block when it is off.
-                const already = streamedBlocks.get(blockIndex) ?? '';
+                if (sdkErrorKind) continue;
+                /*
+                 * Whatever the deltas did not already carry — usually nothing
+                 * when streaming is on, and the whole block when it is off.
+                 *
+                 * Matched by ORDER among the message's text blocks, not by
+                 * position in `content`. The CLI sends one assistant message
+                 * per finished block, so `content` is `[thisBlock]` and its
+                 * position is always 0 — while the deltas carry the API's own
+                 * block index, which is 1 whenever a thinking block came first.
+                 * Adaptive thinking is the SDK default, so keyed by position
+                 * every such reply was sent twice.
+                 */
+                const streamedIndex = [...streamedBlocks.keys()].sort((a, b) => a - b)[reconciledTextBlocks++];
+                const already = streamedIndex === undefined ? '' : streamedBlocks.get(streamedIndex) ?? '';
                 const full = block.text as string;
                 const remainder = full.startsWith(already) ? full.slice(already.length) : full;
                 if (remainder) {
-                  yield { type: 'text', content: remainder, provider: this.name };
+                  ledger.noteText(segment, remainder);
+                  yield { type: 'text', content: remainder, segment, provider: this.name };
                 }
               } else if (block.type === 'tool_use') {
                 const toolName = block.name as string;
@@ -2636,7 +3109,7 @@ export class ClaudeProvider extends BaseProvider {
                 // Intercept canvas tool — emit canvas SSE event instead of regular tool_use.
                 // If the agent passed { templateId, input }, expand via the template registry
                 // so downstream consumers always see a fully-rendered A2UIDocument.
-                // The tool may arrive as bare `canvas` or MCP-prefixed `mcp__quarry__canvas`.
+                // The tool may arrive as bare `canvas` or MCP-prefixed `mcp__aime__canvas`.
                 if (toolName === CANVAS_TOOL_NAME || toolName === 'mcp__aime__canvas') {
                   const expanded = expandCanvasTemplate(toolInput);
                   const doc = expanded ?? toolInput;
@@ -2663,7 +3136,12 @@ export class ClaudeProvider extends BaseProvider {
                    * Reported as "it created 2 crons for 1 reminder".
                    */
                   const key = cronKey(toolInput);
-                  if (emittedEffects.has(key)) {
+                  const invalid = validateCronToolInput(toolInput);
+                  if (invalid) {
+                    // The handler refuses it and tells the model why; emitting
+                    // it here would save the very schedule it refused.
+                    console.log('[Claude] CronCreate with an invalid schedule — not emitting:', invalid);
+                  } else if (emittedEffects.has(key)) {
                     console.log('[Claude] CronCreate repeated with identical input — not emitting again');
                   } else {
                     emittedEffects.add(key);
@@ -2698,7 +3176,13 @@ export class ClaudeProvider extends BaseProvider {
                    * a guard that was already here, not a second mechanism.
                    */
                   const key = effectKey(type, toolInput);
-                  if (emittedEffects.has(key)) {
+                  const invalid =
+                    type === 'standing_order_create' ? validateStandingOrderInput(toolInput) : null;
+                  if (invalid) {
+                    // Refused by the handler, which tells the model why — see
+                    // lib/schedule/tool-input. Not emitted, so not saved.
+                    console.log(`[Claude] ${toolName} with an invalid schedule — not emitting:`, invalid);
+                  } else if (emittedEffects.has(key)) {
                     console.log(`[Claude] ${toolName} repeated with identical input — not emitting again`);
                   } else {
                     emittedEffects.add(key);
@@ -2711,11 +3195,13 @@ export class ClaudeProvider extends BaseProvider {
                     };
                   }
                 } else {
+                  ledger.noteTool(segment, block.id as string);
                   yield {
                     type: 'tool_use',
                     name: toolName,
                     input: toolInput,
                     id: block.id as string,
+                    segment,
                     provider: this.name,
                   };
                   console.log('[Claude] Tool use:', toolName);
@@ -2748,6 +3234,14 @@ export class ClaudeProvider extends BaseProvider {
           const content = (c.message as { content?: unknown } | undefined)?.content;
           const blocks = Array.isArray(content) ? content : [];
           let sawToolResult = false;
+          // A refused leg's tool calls get tombstoned results; a retraction can
+          // name those by uuid.
+          ledger.noteToolResults(
+            c.uuid,
+            (blocks as Array<Record<string, unknown>>)
+              .filter((b) => b?.type === 'tool_result' && typeof b.tool_use_id === 'string')
+              .map((b) => b.tool_use_id as string),
+          );
           for (const block of blocks as Array<Record<string, unknown>>) {
             if (block?.type !== 'tool_result') continue;
             sawToolResult = true;
@@ -2801,48 +3295,62 @@ export class ClaudeProvider extends BaseProvider {
         }
       }
 
-      yield* drainPending();
-
-      // Signal completion
-      yield {
-        type: 'done',
-        provider: this.name,
-      };
-
-      console.log('[Claude] Stream completed');
-    } catch (error: unknown) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.log('[Claude] Query aborted for chatId:', chatId);
-        // Before reporting the abort: whatever was already created is still
-        // created, and the model has already told the user so. See drainPending.
-        yield* drainPending();
-        const trip = watchdogTrip[0];
-        if (trip) {
-          // Surface the watchdog reason so the user sees what hung
-          // instead of a generic "aborted" — the abort here was ours. The
-          // advice differs by class: a hung remote call is worth retrying, but
-          // "try again" for a build that had been succeeding for nine minutes
-          // is exactly wrong — that advice belongs to the network class alone.
-          const advice = trip.network
-            ? 'The remote call hung. Try again or rephrase.'
-            : 'The command outlived its budget and was stopped; split long builds or test runs into smaller steps.';
-          yield {
-            type: 'error',
-            message: `Tool "${trip.name}" was stopped after ${(trip.elapsedMs / 1000).toFixed(0)}s without returning. ${advice} Work already produced above is kept.`,
-            provider: this.name,
-          };
-        }
-        yield {
-          type: 'aborted',
-          provider: this.name,
-        };
+      if (abortController.signal.aborted) {
+        if (!abortReported) yield* abortedTail();
       } else {
+        yield* drainPending();
+
+        // Signal completion. A failed turn still ends with `done` — it is what
+        // clears the client's streaming state — flagged so nothing downstream
+        // treats it as a finished answer.
+        yield {
+          type: 'done',
+          provider: this.name,
+          ...(turnError ? { error: true } : {}),
+        };
+
+        console.log('[Claude] Stream completed');
+      }
+    } catch (error: unknown) {
+      // The SDK's own abort error is a plain `Error` subclass whose name is
+      // "Error", so the name alone does not identify one — the signal does.
+      if (abortController.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+        if (!abortReported) yield* abortedTail();
+      } else if (turnError) {
+        /*
+         * The SDK throws "Claude Code returned an error result: …" after an
+         * `is_error` result. That failure has already been reported as a typed
+         * error chunk; relaying the throw as well is how the user got the same
+         * failure twice, once as `**Error:** …` prose.
+         */
+        console.warn('[Claude] SDK threw after the turn had already failed:', error instanceof Error ? error.message : error);
+        yield* drainPending();
+        yield { type: 'done', provider: this.name, error: true };
+      } else {
+        /*
+         * Rethrown, not turned into a chunk: several callers only collect text
+         * and would report an empty success. The classification rides along on
+         * the error so the chat route does not have to re-derive it from the
+         * message alone.
+         */
+        if (error && typeof error === 'object') {
+          try {
+            (error as { turnErrorCode?: TurnErrorCode }).turnErrorCode = classifyThrownTurnError(error).code;
+          } catch { /* a frozen error still propagates; the route classifies it */ }
+        }
         throw error;
       }
     } finally {
       clearInterval(watchdog);
-      // Clean up abort controller using composite key
-      if (chatId) {
+      /*
+       * Unregister only if the slot is still OURS.
+       *
+       * Stop deletes this entry at once, and the SDK takes a moment to wind
+       * down — long enough for the user to send again, which registers the new
+       * run under the same key. Deleting unconditionally here then removed the
+       * NEW run's controller, and its Stop button did nothing.
+       */
+      if (chatId && this.abortControllers.get(abortKey) === abortController) {
         this.abortControllers.delete(abortKey);
       }
     }

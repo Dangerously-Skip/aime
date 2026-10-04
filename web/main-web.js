@@ -10,6 +10,26 @@ const net = require("net");
 const { pathToFileURL } = require("url");
 const setupHandler = require("./setup-handler");
 const ptyManager = require("./src/lib/code-workspace/pty-manager");
+const navPolicy = require("./electron/nav-policy");
+const { createIpcGuard } = require("./electron/ipc-guard");
+const { createPermissionGate } = require("./electron/permission-policy");
+const { pushArgs } = require("./electron/git-args");
+const { postInternal } = require("./electron/internal-api");
+const { agentSdkBinaryPath } = require("./electron/agent-sdk-binary");
+const { createRotatingLog } = require("./electron/rotating-log");
+const { createServerSupervisor, loadingPageUrl } = require("./electron/server-supervisor");
+const { migrateMcpConfigFile } = require("./electron/mcp-config-migration");
+const { resolveOpenPath } = require("./electron/open-path-policy");
+
+// Product name, from package.json — this file is plain CJS and cannot import
+// src/config/branding.ts, and package.json is the other place it is defined.
+const APP_NAME = (() => {
+  try {
+    return require("./package.json").productName || "AIME";
+  } catch {
+    return "AIME";
+  }
+})();
 
 // Bash-produced artifact paths often contain a literal `~` (e.g. the nib-ppt
 // generate_presentation.sh script writes to `~/foo.pptx`). Node fs APIs do not
@@ -41,7 +61,7 @@ try {
 
 const LOG_DIR = path.join(app.getPath("userData"), "logs");
 const LOG_FILE = path.join(LOG_DIR, "aime.log");
-const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB — rotate when exceeded
+const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB — rotate when exceeded, while running
 
 // Master key for the server's BYOK credential store (AES-256-GCM). The 32-byte
 // key is kept in the OS keychain via Electron safeStorage and injected into the
@@ -86,25 +106,16 @@ function getCredentialKeyHex() {
   return cachedCredentialKeyHex;
 }
 
-function ensureLogDir() {
-  try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
-}
-
-function rotateLogIfNeeded() {
-  try {
-    const stat = fs.statSync(LOG_FILE);
-    if (stat.size > MAX_LOG_SIZE) {
-      const rotated = path.join(LOG_DIR, "aime.log.1");
-      fs.renameSync(LOG_FILE, rotated);
-    }
-  } catch {}
-}
-
 let logStream = null;
 function initLogger() {
-  ensureLogDir();
-  rotateLogIfNeeded();
-  logStream = fs.createWriteStream(LOG_FILE, { flags: "a" });
+  // Rotated by size as it is written, not only at launch — see rotating-log.js.
+  try {
+    logStream = createRotatingLog({ file: LOG_FILE, maxBytes: MAX_LOG_SIZE });
+  } catch (err) {
+    // No writable log dir: keep console output, lose the file.
+    logStream = { write() {} };
+    console.warn(`[AIME] File logging disabled: ${err.message}`);
+  }
 
   const timestamp = () => new Date().toISOString();
   const origLog = console.log;
@@ -196,8 +207,6 @@ if (!isDev) {
 // Update menu state — mirrors Claude Desktop UX
 let updateMenuState = "idle"; // idle | checking | available | downloading | ready | error
 let updateStatusLabel = null; // e.g. "Last checked: 2 minutes ago" or error message
-let updateCheckMenuItem = null;
-let updateStatusMenuItem = null;
 
 function buildAppMenu() {
   const isMac = process.platform === "darwin";
@@ -412,13 +421,71 @@ if (!gotSingleInstanceLock) {
   });
 }
 
+// --- The trust boundary: the app's origin ---
+//
+// `appPort` is the Next server's port, set once it is chosen. Until then no
+// origin is the app's, so every IPC from a page is refused — no page should be
+// talking to main yet. See electron/nav-policy.js.
+let appPort = null;
+let serverReady = false;
+
+const ipc = createIpcGuard({
+  ipcMain,
+  isTrustedSender: (event) => navPolicy.isTrustedSenderUrl(event.senderFrame && event.senderFrame.url, appPort),
+});
+
+function appUrl(port) {
+  // `?t=` is exchanged by the proxy for an HttpOnly cookie and then redirected
+  // away, so the token does not linger in window.location.
+  return `http://localhost:${port}/?t=${API_TOKEN}`;
+}
+
+/**
+ * Keep the main window on the app.
+ *
+ * The window holds the preload bridge (file read/write, PTY, the API token), so
+ * whatever it shows is trusted with all of that. A link in a model reply used to
+ * navigate it to an external site — which then had the bridge. Now a top-frame
+ * navigation off the app origin is cancelled: http(s)/mailto go to the OS, and
+ * anything else (javascript:, file:, data:, custom schemes) is dropped.
+ */
+function guardMainWindowNavigation(win, port) {
+  const onNavigate = (event, url, _isInPlace, isMainFrame) => {
+    const target = event.url || url;
+    const mainFrame = event.isMainFrame ?? isMainFrame;
+    // `will-redirect` also fires for subframes; only the top frame has the bridge.
+    if (mainFrame === false) return;
+    const verdict = navPolicy.classifyNavigation(target, port);
+    if (verdict === "allow") return;
+    event.preventDefault();
+    if (verdict === "external") {
+      shell.openExternal(target);
+    } else {
+      console.warn("[AIME] Blocked main-window navigation to", String(target).slice(0, 200));
+    }
+  };
+  win.webContents.on("will-navigate", onNavigate);
+  win.webContents.on("will-redirect", onNavigate);
+
+  // target=_blank / window.open. Never "allow": a child window inherits this
+  // window's webPreferences, preload included, so allowing anything would hand
+  // the bridge to whatever it loaded — which is exactly what the old fallthrough
+  // for non-http urls did. External links open in the user's default browser,
+  // where they are almost always already signed in (Jira/GitHub/Confluence/etc.).
+  // Webview contents in preview-panel / browser-surface have their own handler.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (navPolicy.windowOpenAction(url) === "external") shell.openExternal(url);
+    return { action: "deny" };
+  });
+}
+
 function createWindow(port) {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: "AIME",
+    title: APP_NAME,
     titleBarStyle: "hiddenInset",
     icon: path.join(__dirname, "public", "app-icon.png"),
     webPreferences: {
@@ -430,22 +497,12 @@ function createWindow(port) {
     },
   });
 
-  // `?t=` is exchanged by the middleware for an HttpOnly cookie and then
-  // redirected away, so the token does not linger in window.location.
-  mainWindow.loadURL(`http://localhost:${port}/?t=${API_TOKEN}`);
+  guardMainWindowNavigation(mainWindow, port);
 
-  // External http(s) links (target=_blank, window.open, shell.openExternal) open
-  // in the user's default browser rather than a detached Electron BrowserWindow.
-  // The user is almost always already signed in there (Jira/GitHub/Confluence/etc.),
-  // and detached Electron windows don't share their session. Webview contents
-  // inside preview-panel / browser-surface keep their own handler set elsewhere.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      shell.openExternal(url);
-      return { action: "deny" };
-    }
-    return { action: "allow" };
-  });
+  // Shown at once, on a loading page until the server answers — the window used
+  // to appear only once the server was up, up to a minute of nothing on a cold
+  // start. The loading page is a script-free data: URL, needing no server.
+  mainWindow.loadURL(serverReady ? appUrl(port) : loadingPageUrl(APP_NAME));
 
   if (process.env.NODE_ENV === "development") {
     mainWindow.webContents.openDevTools({ mode: "detach" });
@@ -522,79 +579,35 @@ function sendLifecycleEvent(action) {
     }],
     flush: action === 'close',
   };
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => { if (!settled) { settled = true; resolve(); } };
-    // 2s budget — long enough for a healthy ingest, short enough that quitting
-    // never feels stuck if the API or the local Next.js server is unreachable.
-    const timer = setTimeout(finish, 2000);
-    try {
-      const http = require('http');
-      const body = JSON.stringify(payload);
-      const req = http.request({
-        hostname: '127.0.0.1',
-        port: parseInt(process.env.PORT || '3000', 10),
-        path: '/api/telemetry/events',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-      }, (res) => {
-        res.resume();
-        res.on('end', () => { clearTimeout(timer); finish(); });
-      });
-      req.on('error', () => { clearTimeout(timer); finish(); });
-      req.write(body);
-      req.end();
-    } catch {
-      clearTimeout(timer);
-      finish();
-    }
+  // Bearer-authenticated: this call had no credential and got a 401 on every
+  // launch and quit, unnoticed because the response was never looked at. 2s
+  // budget — long enough for a healthy ingest, short enough that quitting never
+  // feels stuck if the local server is unreachable.
+  return postInternal({
+    port: appPort || parseInt(process.env.PORT || '3000', 10),
+    path: '/api/telemetry/events',
+    token: API_TOKEN,
+    body: payload,
+    timeoutMs: 2000,
+    label: `Lifecycle event (${action})`,
   });
 }
 
 /**
- * Patch known-broken MCP URLs in ~/.claude/.quarry-mcp.json so users don't
- * have to manually reconnect when we find and fix URL bugs in the registry.
+ * Patch known-broken MCP URLs in the provisioned MCP config so users don't have
+ * to manually reconnect when we find and fix URL bugs in the registry. Both the
+ * current name and the pre-rename one: the server migrates .quarry-mcp.json to
+ * .aime-mcp.json on first touch (lib/app-paths.ts), after which patching only
+ * the legacy name patched nothing.
  */
 function migrateMcpConfig() {
-  try {
-    const fs = require("fs");
-    const path = require("path");
-    const configPath = path.join(os.homedir(), ".claude", ".quarry-mcp.json");
-    if (!fs.existsSync(configPath)) return;
-
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const config = JSON.parse(raw);
-    if (!config.mcpServers) return;
-
-    let changed = false;
-    const servers = config.mcpServers;
-
-    // Fix Miro — the actual MCP JSON-RPC endpoint is at / not /mcp
-    if (servers["nib-mcp-miro"]?.url === "https://mcp.miro.com/mcp") {
-      servers["nib-mcp-miro"].url = "https://mcp.miro.com/";
-      changed = true;
-      console.log("[AIME] Migrated Miro MCP URL (/mcp -> /)");
-    }
-
-    // Fix AWS — switch from non-existent npm package to AWS Labs' Python MCP via uvx
-    const aws = servers["nib-connector-aws"];
-    if (aws && Array.isArray(aws.args) && aws.args.some((a) => typeof a === "string" && a.includes("@aws/mcp-server-aws"))) {
-      aws.command = "uvx";
-      aws.args = ["awslabs.core-mcp-server@latest"];
-      changed = true;
-      console.log("[AIME] Migrated AWS MCP to awslabs.core-mcp-server via uvx");
-    }
-
-    if (changed) {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
-    }
-  } catch (err) {
-    console.warn("[AIME] MCP config migration failed:", err.message);
+  for (const name of [".aime-mcp.json", ".quarry-mcp.json"]) {
+    migrateMcpConfigFile(path.join(os.homedir(), ".claude", name));
   }
 }
 
 /**
- * Copy the bundled AIME skills plugin to ~/.claude/plugins/quarry-skills so the
+ * Copy the bundled AIME skills plugin to ~/.claude/plugins/aime-skills so the
  * Agent SDK picks them up. Runs on every app start so updates ship with releases.
  * Skipped silently if the source doesn't exist (e.g. local dev without bundled resources).
  */
@@ -729,8 +742,15 @@ async function ensureSetup() {
       minimizable: false,
       maximizable: false,
       fullscreenable: false,
-      title: "Setting up AIME",
-      webPreferences: { nodeIntegration: true, contextIsolation: false },
+      title: `Setting up ${APP_NAME}`,
+      // It used to run with Node in the page. It needs four calls, which the
+      // preload exposes; nothing else crosses. See electron/setup-preload.js.
+      webPreferences: {
+        preload: path.join(__dirname, "electron", "setup-preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
     });
     win.loadFile(path.join(__dirname, "setup-window.html"));
 
@@ -762,8 +782,11 @@ async function ensureSetup() {
         });
     };
 
-    ipcMain.on("setup:retry", start);
-    ipcMain.on("setup:skip", () => finish(false));
+    // The setup window is a local file, not the app origin, so these two
+    // channels trust that one window instead.
+    const fromSetupWindow = { trust: (event) => !win.isDestroyed() && event.sender === win.webContents };
+    ipc.on("setup:retry", start, fromSetupWindow);
+    ipc.on("setup:skip", () => finish(false), fromSetupWindow);
     // X-button / Cmd+W on the setup window: treat the same as Skip.
     win.on("closed", () => finish(false));
 
@@ -774,155 +797,304 @@ async function ensureSetup() {
 /**
  * After the Next.js server is up, fire the System 2 install endpoint that
  * copies SKILL.md files from web/public/bundled-skills/ → ~/.claude/skills/.
- * Fire-and-forget; failure just means nib-pdf / nib-ppt skills won't load
+ * Fire-and-forget; failure just means the bundled pdf / ppt skills won't load
  * this session. Idempotent server-side, so retried on next launch.
+ *
+ * It used to send no credential and log the resulting 401 as though it were an
+ * outcome ("Bundled-skills install: 401"), so the install had never run in a
+ * packaged build since the API gained authentication.
  */
 function triggerBundledSkillInstall(port) {
-  const http = require("http");
-  const req = http.request(
-    {
-      hostname: "127.0.0.1",
-      port,
-      path: "/api/customize/skills/install-bundled",
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Content-Length": "0" },
-    },
-    (res) => {
-      res.resume();
-      res.on("end", () => console.log("[AIME] Bundled-skills install:", res.statusCode));
-    }
-  );
-  req.on("error", (err) => console.warn("[AIME] Bundled-skills install failed:", err.message));
-  req.end();
+  postInternal({
+    port,
+    path: "/api/customize/skills/install-bundled",
+    token: API_TOKEN,
+    timeoutMs: 30_000,
+    label: "Bundled-skills install",
+  }).then((r) => {
+    if (r.ok) console.log("[AIME] Bundled-skills install:", r.status);
+  });
 }
 
-app.whenReady().then(async () => {
-  migrateMcpConfig();
+/** The bundled-plugin syncs: plain file copies, none needed before the server starts. */
+function installBundledPlugins() {
   installBundledSkills();
   installPptPlugin();
   installHtmlDeck();
   installWebTemplates();
-  await ensureSetup();
+}
 
-  // Determine the port: dev-with-port.js sets PORT in env; for packaged builds we find one here.
-  let port = parseInt(process.env.PORT || '0', 10);
-  if (!port) {
-    // Use a fixed port for packaged builds so localStorage persists across launches.
-    // Fall back to a random port if the preferred one is in use.
-    if (app.isPackaged) {
-      const preferred = 19532;
-      try {
-        await new Promise((resolve, reject) => {
-          const s = net.createServer().listen(preferred, '127.0.0.1', () => {
-            s.close(() => resolve(undefined));
-          });
-          s.on('error', reject);
+/**
+ * Tell the user the server is gone, and where to look — instead of leaving a
+ * window whose every request fails, which reads as the app having frozen.
+ */
+function showServerFatal(reason) {
+  console.error(`[AIME] Server failed: ${reason}`);
+  const opts = {
+    type: "error",
+    title: `${APP_NAME} could not start`,
+    message: `${APP_NAME}'s local server stopped working`,
+    detail: `Reason: ${reason}.\n\nThe log is at:\n${LOG_FILE}`,
+    buttons: ["Show Log", "Quit"],
+    defaultId: 0,
+    cancelId: 1,
+  };
+  const shown = mainWindow && !mainWindow.isDestroyed()
+    ? dialog.showMessageBox(mainWindow, opts)
+    : dialog.showMessageBox(opts);
+  shown
+    .then(({ response }) => {
+      if (response === 0) shell.showItemInFolder(LOG_FILE);
+    })
+    .finally(() => app.quit());
+}
+
+/** Point the window at the app once the server answers (first time or after a restart). */
+function onServerReady(port, { restarted }) {
+  serverReady = true;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(appUrl(port));
+  if (restarted) return;
+  // Kick off the System 2 bundled-skill install so the pdf and ppt SKILL.md
+  // files land in ~/.claude/skills/. Idempotent; safe to fire on every launch.
+  if (app.isPackaged) triggerBundledSkillInstall(port);
+  sendLifecycleEvent("open");
+}
+
+/**
+ * Run `fn` once the window has painted its first page, so a slow synchronous
+ * task does not hold the window blank. Bounded, in case the page never loads.
+ */
+function afterFirstPaint(win, fn) {
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    fn();
+  };
+  if (win && !win.isDestroyed()) win.webContents.once("did-finish-load", () => setImmediate(run));
+  setTimeout(run, 3000);
+}
+
+let serverSupervisor = null;
+
+/**
+ * Configure every session and every new webContents. Runs before the first
+ * window exists, so no page is ever loaded without these in place.
+ */
+function configureSessions() {
+  const { session } = require("electron");
+  const CHROME_UA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+
+  // Permissions. Sites in the browser surface, preview webviews and auth windows
+  // used to be granted everything — camera, microphone, location — with no
+  // prompt. See electron/permission-policy.js.
+  const promptForPermission = ({ origin, description }) => {
+    const opts = {
+      type: "question",
+      title: "Permission request",
+      message: `${origin} wants to ${description}.`,
+      detail: `Your answer applies to this site until you quit ${APP_NAME}.`,
+      buttons: ["Allow", "Deny"],
+      defaultId: 1,
+      cancelId: 1,
+    };
+    const shown = mainWindow && !mainWindow.isDestroyed()
+      ? dialog.showMessageBox(mainWindow, opts)
+      : dialog.showMessageBox(opts);
+    return shown.then(({ response }) => response === 0);
+  };
+  const installGate = (sess, gate) => {
+    sess.setPermissionRequestHandler((wc, permission, callback, details) => {
+      const url = (details && details.requestingUrl) || (wc && !wc.isDestroyed() ? wc.getURL() : "");
+      gate.request(permission, url, details).then(callback, () => callback(false));
+    });
+    sess.setPermissionCheckHandler((wc, permission, requestingOrigin, details) =>
+      gate.check(permission, requestingOrigin || (details && details.requestingUrl) || ""),
+    );
+  };
+  // Pages the app did not write: one gate, so an answer given in a popup holds
+  // for the same site in the browser surface.
+  const guestGate = createPermissionGate({ prompt: promptForPermission });
+  // The app's own window: the app itself is trusted (it asks for the microphone
+  // for voice input); anything else framed inside it is a guest.
+  const appGate = createPermissionGate({
+    prompt: promptForPermission,
+    isTrusted: (origin) => navPolicy.isAppUrl(origin, appPort),
+  });
+
+  // Create a persistent partition for the browser webview so it behaves like a real browser
+  const browserSession = session.fromPartition("persist:browser");
+  browserSession.setUserAgent(CHROME_UA);
+  installGate(browserSession, guestGate);
+  // Spoof client hints so Google OAuth doesn't reject us as an embedded browser
+  browserSession.webRequest.onBeforeSendHeaders({ urls: ["*://*.google.com/*", "*://*.googleapis.com/*", "*://*.gstatic.com/*"] }, (details, callback) => {
+    details.requestHeaders["sec-ch-ua"] = '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"';
+    details.requestHeaders["sec-ch-ua-mobile"] = "?0";
+    details.requestHeaders["sec-ch-ua-platform"] = '"macOS"';
+    callback({ requestHeaders: details.requestHeaders });
+  });
+
+  // The default session hosts preview-panel webviews and the auth windows.
+  installGate(session.defaultSession, guestGate);
+  installGate(session.fromPartition("persist:quarry"), appGate);
+
+  app.on("web-contents-created", (_event, contents) => {
+    // A <webview> is a guest page with its own renderer. Whatever the embedding
+    // markup asked for, it gets no preload (no bridge), no Node, and a sandbox —
+    // the only safe settings for pages from the open web.
+    contents.on("will-attach-webview", (_attachEvent, webPreferences) => {
+      delete webPreferences.preload;
+      delete webPreferences.preloadURL;
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+    });
+
+    if (contents.getType() === "webview") {
+      contents.setUserAgent(CHROME_UA);
+
+      // Suppress navigation errors (e.g. redirects, cancelled navigations) — let the page handle them
+      contents.on("did-fail-load", (_failEvent, errorCode, _errorDescription, _validatedURL) => {
+        // -3 = ERR_ABORTED (redirects, captchas, cancelled navigations)
+        // -2 = ERR_FAILED (generic, often from blocked resources)
+        if (errorCode === -3 || errorCode === -2) return;
+      });
+      // Handle new-window requests (target=_blank, window.open, OAuth popups).
+      // Open in a real BrowserWindow so multi-window flows (training modules,
+      // OAuth) work properly. Use the same persistent session for cookie sharing.
+      // No preload, sandboxed — the popup is as untrusted as the page that opened it.
+      contents.setWindowOpenHandler(({ url }) => {
+        if (!/^https?:/i.test(url)) return { action: "deny" };
+        const { BrowserWindow: BW } = require("electron");
+        const popup = new BW({
+          width: 1024,
+          height: 768,
+          parent: mainWindow,
+          webPreferences: {
+            partition: "persist:browser",
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+          },
         });
-        port = preferred;
-      } catch {
-        port = await findFreePort();
-      }
+        popup.loadURL(url);
+        popup.webContents.setUserAgent(CHROME_UA);
+        return { action: "deny" };
+      });
+    }
+  });
+}
+
+/** The port the app's server listens on: dev-with-port.js sets PORT; packaged builds choose here. */
+async function choosePort() {
+  const fromEnv = parseInt(process.env.PORT || '0', 10);
+  if (fromEnv) return fromEnv;
+  if (!app.isPackaged) return findFreePort();
+  // Use a fixed port for packaged builds so localStorage persists across launches.
+  // Fall back to a random port if the preferred one is in use.
+  const preferred = 19532;
+  try {
+    await new Promise((resolve, reject) => {
+      const s = net.createServer().listen(preferred, '127.0.0.1', () => {
+        s.close(() => resolve(undefined));
+      });
+      s.on('error', reject);
+    });
+    return preferred;
+  } catch {
+    return findFreePort();
+  }
+}
+
+/**
+ * Everything the packaged server needs to start, or null (after telling the
+ * user) when the bundle is broken.
+ */
+function packagedServerLaunchSpec(port) {
+  const standaloneDir = path.join(process.resourcesPath, '.next', 'standalone', 'web');
+  const serverScript = path.join(standaloneDir, 'server.js');
+
+  console.log('[AIME] resourcesPath:', process.resourcesPath);
+  console.log('[AIME] serverScript:', serverScript, 'exists:', fs.existsSync(serverScript));
+  console.log('[AIME] starting server on port:', port);
+
+  if (!fs.existsSync(serverScript)) {
+    // Try to find server.js anywhere in resources
+    const findServer = (dir, depth = 0) => {
+      if (depth > 3) return [];
+      const results = [];
+      try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (entry.name === 'server.js' && entry.isFile()) results.push(path.join(dir, entry.name));
+          if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+            results.push(...findServer(path.join(dir, entry.name), depth + 1));
+          }
+        }
+      } catch {}
+      return results;
+    };
+    console.log('[AIME] standaloneDir contents:', fs.existsSync(standaloneDir) ? fs.readdirSync(standaloneDir).slice(0, 20) : 'DIR NOT FOUND');
+    console.log('[AIME] server.js NOT FOUND at expected path. Found:', findServer(process.resourcesPath));
+    dialog.showErrorBox(`${APP_NAME} - Server Not Found`, `Could not find server.js at:\n${serverScript}\n\nresourcesPath: ${process.resourcesPath}\n\nThe log is at:\n${LOG_FILE}`);
+    return null;
+  }
+
+  // Point the Claude Agent SDK at its native CLI binary where the standalone
+  // bundle has it (next.config.ts traces the platform packages in). Left in
+  // place: copying the CLI out to userData once broke its resolution on macOS
+  // and Windows. See electron/agent-sdk-binary.js.
+  const sdkNodeModules = path.join(standaloneDir, 'node_modules');
+  const sdkCliPath = agentSdkBinaryPath({
+    nodeModulesDir: sdkNodeModules,
+    platform: process.platform,
+    arch: process.arch,
+    exists: fs.existsSync,
+  }) || '';
+  if (!sdkCliPath) {
+    console.warn(`[AIME] Agent SDK binary for ${process.platform}-${process.arch} not found under:`, sdkNodeModules);
+  }
+
+  // The Claude Agent SDK on Windows shells out to bash for tool execution
+  // and refuses to start without it. We bundle PortableGit in extraResources
+  // (resources/portablegit/bin/bash.exe — MinGit explicitly omits bash) so
+  // users don't have to install Git for Windows themselves. If the bundle
+  // went missing (e.g. AV quarantined it), fall back to letting cli.js
+  // search PATH — which produces a clear error pointing to the installer.
+  let gitBashPath = '';
+  if (process.platform === 'win32') {
+    const candidate = path.join(process.resourcesPath, 'portablegit', 'bin', 'bash.exe');
+    if (fs.existsSync(candidate)) {
+      gitBashPath = candidate;
     } else {
-      port = await findFreePort();
+      console.warn('[AIME] Bundled PortableGit bash.exe not found at:', candidate);
     }
   }
-  // Make PORT available to child processes and sendLifecycleEvent
-  process.env.PORT = String(port);
 
-  // In packaged builds, spawn the Next.js standalone server ourselves.
-  if (app.isPackaged) {
-    const fs = require("fs");
-    const { utilityProcess } = require("electron");
-    const standaloneDir = path.join(process.resourcesPath, '.next', 'standalone', 'web');
-    const serverScript = path.join(standaloneDir, 'server.js');
+  // First-launch-installed Python + Playwright. If setup was skipped,
+  // these paths simply don't exist and skill scripts fall through to
+  // whatever's on the user's PATH (or fail gracefully).
+  const managedPython = setupHandler.pythonExe();
+  const managedPythonAvailable = fs.existsSync(managedPython);
+  const pythonDir = setupHandler.pythonDir();
+  const pythonBinDir = process.platform === 'win32' ? pythonDir : path.join(pythonDir, 'bin');
+  const pythonScriptsDir = process.platform === 'win32' ? path.join(pythonDir, 'Scripts') : null;
 
-    // Debug: verify paths exist
-    console.log('[Quarry] resourcesPath:', process.resourcesPath);
-    console.log('[Quarry] standaloneDir:', standaloneDir);
-    console.log('[Quarry] serverScript:', serverScript);
-    console.log('[Quarry] serverScript exists:', fs.existsSync(serverScript));
-    console.log('[Quarry] standaloneDir contents:', fs.existsSync(standaloneDir) ? fs.readdirSync(standaloneDir).slice(0, 20) : 'DIR NOT FOUND');
-    console.log('[Quarry] .next dir exists:', fs.existsSync(path.join(standaloneDir, '.next')));
-    console.log('[Quarry] starting server on port:', port);
+  // Resolve analytics endpoint with precedence:
+  //   1. ~/.claude/analytics.conf `endpoint=` (per-user override)
+  //   2. ANALYTICS_API_URL from the process env
+  // No built-in default — telemetry is opt-in and off otherwise.
+  const analyticsConf = readAnalyticsConf();
+  // Normalise: managed confs may bake the full path in (`…/v1/events`),
+  // but analytics-client appends `/v1/events` itself. Strip a trailing
+  // `/v1/events` so we don't end up POSTing to `…/v1/events/v1/events` (404).
+  const rawEndpoint = (analyticsConf.endpoint || process.env.ANALYTICS_API_URL || '').replace(/\/+$/, '');
+  const normalisedEndpoint = rawEndpoint.replace(/\/v1\/events$/, '');
 
-    if (!fs.existsSync(serverScript)) {
-      // Try to find server.js anywhere in resources
-      const findServer = (dir, depth = 0) => {
-        if (depth > 3) return [];
-        const results = [];
-        try {
-          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-            if (entry.name === 'server.js' && entry.isFile()) results.push(path.join(dir, entry.name));
-            if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
-              results.push(...findServer(path.join(dir, entry.name), depth + 1));
-            }
-          }
-        } catch {}
-        return results;
-      };
-      console.log('[Quarry] server.js NOT FOUND at expected path. Searching...');
-      console.log('[Quarry] found:', findServer(process.resourcesPath));
-      dialog.showErrorBox('Quarry - Server Not Found', `Could not find server.js at:\n${serverScript}\n\nresourcesPath: ${process.resourcesPath}`);
-      app.quit();
-      return;
-    }
-
-    // Point the Claude Agent SDK at the in-bundle cli.js. Earlier versions
-    // copied cli.js to userData/claude-sdk/cli.js to dodge a hypothetical
-    // Gatekeeper/SIP issue on macOS, but that broke native-binary resolution:
-    // cli.js does Node's normal `node_modules` walk-up to load its platform-
-    // specific sibling (e.g. @anthropic-ai/claude-agent-sdk-darwin-arm64).
-    // When run from userData the sibling isn't on any walk-up path, hence
-    // "Native CLI binary for darwin-arm64 not found". Keeping cli.js inside
-    // its own npm package directory fixes both macOS and Windows in one go.
-    const sdkSrcPath = path.join(standaloneDir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js');
-    const sdkMarkerPath = path.join(app.getPath('userData'), '.aime-sdk-path');
-    const sdkCliPath = fs.existsSync(sdkSrcPath) ? sdkSrcPath : '';
-    if (!sdkCliPath) {
-      console.warn('[Quarry] Claude SDK cli.js not found at:', sdkSrcPath);
-    }
-    fs.writeFileSync(sdkMarkerPath, sdkCliPath || sdkSrcPath, 'utf-8');
-
-    // The Claude Agent SDK on Windows shells out to bash for tool execution
-    // and refuses to start without it. We bundle PortableGit in extraResources
-    // (resources/portablegit/bin/bash.exe — MinGit explicitly omits bash) so
-    // users don't have to install Git for Windows themselves. If the bundle
-    // went missing (e.g. AV quarantined it), fall back to letting cli.js
-    // search PATH — which produces a clear error pointing to the installer.
-    let gitBashPath = '';
-    if (process.platform === 'win32') {
-      const candidate = path.join(process.resourcesPath, 'portablegit', 'bin', 'bash.exe');
-      if (fs.existsSync(candidate)) {
-        gitBashPath = candidate;
-      } else {
-        console.warn('[Quarry] Bundled PortableGit bash.exe not found at:', candidate);
-      }
-    }
-
-    // First-launch-installed Python + Playwright. If setup was skipped,
-    // these paths simply don't exist and skill scripts fall through to
-    // whatever's on the user's PATH (or fail gracefully).
-    const managedPython = setupHandler.pythonExe();
-    const managedPythonAvailable = fs.existsSync(managedPython);
-    const pythonBinDir = process.platform === 'win32'
-      ? setupHandler.PYTHON_DIR
-      : path.join(setupHandler.PYTHON_DIR, 'bin');
-    const pythonScriptsDir = process.platform === 'win32'
-      ? path.join(setupHandler.PYTHON_DIR, 'Scripts')
-      : null;
-
-    // Resolve analytics endpoint with precedence:
-    //   1. ~/.claude/analytics.conf `endpoint=` (per-user override)
-    //   2. ANALYTICS_API_URL from the process env
-    // No built-in default — telemetry is opt-in and off otherwise.
-    const analyticsConf = readAnalyticsConf();
-    // Normalise: managed confs may bake the full path in (`…/v1/events`),
-    // but analytics-client appends `/v1/events` itself. Strip a trailing
-    // `/v1/events` so we don't end up POSTing to `…/v1/events/v1/events` (404).
-    const rawEndpoint = (analyticsConf.endpoint || process.env.ANALYTICS_API_URL || '').replace(/\/+$/, '');
-    const normalisedEndpoint = rawEndpoint.replace(/\/v1\/events$/, '');
-
-    const child = utilityProcess.fork(serverScript, [], {
+  return {
+    serverScript,
+    options: {
       cwd: standaloneDir,
       env: {
         ...process.env,
@@ -941,14 +1113,15 @@ app.whenReady().then(async () => {
         ...(gitBashPath ? { CLAUDE_CODE_GIT_BASH_PATH: gitBashPath } : {}),
         ...(managedPythonAvailable ? {
           AIME_PYTHON: managedPython,
-          PLAYWRIGHT_BROWSERS_PATH: setupHandler.PLAYWRIGHT_DIR,
+          PLAYWRIGHT_BROWSERS_PATH: setupHandler.playwrightDir(),
         } : {}),
-        // Point the SDK's config dir to Quarry's own directory so it doesn't
-        // write to ~/.claude/settings.json (which belongs to Claude Code).
-        CLAUDE_CONFIG_DIR: path.join(os.homedir(), '.quarry'),
+        // Point the SDK's config dir at the app's own data directory so it
+        // doesn't write to ~/.claude/settings.json (which belongs to Claude
+        // Code). The provider pins the same directory per query.
+        CLAUDE_CONFIG_DIR: setupHandler.DATA_DIR,
         // Use platform-correct PATH separator (`:` on Unix, `;` on Windows)
-        // and prepend Quarry's bundled Python (so skill scripts can call
-        // `python` / `python3` / `pip` without knowing about ~/.quarry/) and
+        // and prepend the managed Python (so skill scripts can call
+        // `python` / `python3` / `pip` without knowing where it lives) and
         // PortableGit's bash dir (Windows only) before the user's PATH.
         PATH: (process.platform === 'win32'
           ? [
@@ -964,25 +1137,13 @@ app.whenReady().then(async () => {
         ).filter(Boolean).join(path.delimiter),
       },
       stdio: 'pipe',
-    });
+    },
+  };
+}
 
-    child.stderr.on('data', (data) => console.error('[Next.js server]', data.toString()));
-    child.stdout.on('data', (data) => console.log('[Next.js server]', data.toString()));
-    child.on('exit', (code) => console.error('[Quarry] Next.js server exited with code:', code));
-
-    try {
-      await waitForPort(port);
-      // Server is up — kick off the System 2 bundled-skill install so
-      // nib-pdf's and nib-ppt's SKILL.md land in ~/.claude/skills/. Idempotent;
-      // safe to fire on every launch.
-      triggerBundledSkillInstall(port);
-    } catch (err) {
-      console.error('Failed to start production server:', err.message);
-      dialog.showErrorBox('Quarry - Server Failed', `The Next.js server failed to start on port ${port}.\n\nCheck Console.app for logs.`);
-      app.quit();
-      return;
-    }
-  }
+app.whenReady().then(async () => {
+  // Before the server starts: it reads the MCP config on its first request.
+  migrateMcpConfig();
 
   // Build the app menu (includes "Check for Updates…")
   buildAppMenu();
@@ -992,61 +1153,7 @@ app.whenReady().then(async () => {
     app.dock.setIcon(path.join(__dirname, "public", "app-icon.png"));
   }
 
-  // Configure webview sessions
-  const { session } = require("electron");
-  const CHROME_UA =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
-
-  // Create a persistent partition for the browser webview so it behaves like a real browser
-  const browserSession = session.fromPartition("persist:browser");
-  browserSession.setUserAgent(CHROME_UA);
-  browserSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(true));
-  browserSession.setPermissionCheckHandler(() => true);
-  // Spoof client hints so Google OAuth doesn't reject us as an embedded browser
-  browserSession.webRequest.onBeforeSendHeaders({ urls: ["*://*.google.com/*", "*://*.googleapis.com/*", "*://*.gstatic.com/*"] }, (details, callback) => {
-    details.requestHeaders["sec-ch-ua"] = '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"';
-    details.requestHeaders["sec-ch-ua-mobile"] = "?0";
-    details.requestHeaders["sec-ch-ua-platform"] = '"macOS"';
-    callback({ requestHeaders: details.requestHeaders });
-  });
-
-  // Also configure the default session and the main window partition
-  session.defaultSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(true));
-  const mainSession = session.fromPartition("persist:quarry");
-  mainSession.setPermissionRequestHandler((_wc, _perm, callback) => callback(true));
-
-  // Configure webview contents on creation
-  app.on("web-contents-created", (_event, contents) => {
-    if (contents.getType() === "webview") {
-      contents.setUserAgent(CHROME_UA);
-
-      // Suppress navigation errors (e.g. redirects, cancelled navigations) — let the page handle them
-      contents.on("did-fail-load", (_failEvent, errorCode, _errorDescription, _validatedURL) => {
-        // -3 = ERR_ABORTED (redirects, captchas, cancelled navigations)
-        // -2 = ERR_FAILED (generic, often from blocked resources)
-        if (errorCode === -3 || errorCode === -2) return;
-      });
-      // Handle new-window requests (target=_blank, window.open, OAuth popups).
-      // Open in a real BrowserWindow so multi-window flows (training modules,
-      // OAuth) work properly. Use the same persistent session for cookie sharing.
-      contents.setWindowOpenHandler(({ url }) => {
-        const { BrowserWindow: BW } = require("electron");
-        const popup = new BW({
-          width: 1024,
-          height: 768,
-          parent: mainWindow,
-          webPreferences: {
-            partition: "persist:browser",
-            contextIsolation: true,
-            nodeIntegration: false,
-          },
-        });
-        popup.loadURL(url);
-        popup.webContents.setUserAgent(CHROME_UA);
-        return { action: "deny" };
-      });
-    }
-  });
+  configureSessions();
 
   // Suppress GUEST_VIEW_MANAGER_CALL errors (benign Electron internal webview warnings)
   process.on("uncaughtException", (err) => {
@@ -1061,10 +1168,52 @@ app.whenReady().then(async () => {
     console.error("Unhandled rejection:", reason);
   });
 
+  // First launch only: its own window, with progress, before the app's.
+  await ensureSetup();
+
+  const port = await choosePort();
+  appPort = port;
+  // Make PORT available to child processes and sendLifecycleEvent
+  process.env.PORT = String(port);
+
+  // The window first, on a loading page; the server and the plugin syncs after.
   createWindow(port);
 
-  // Fire app_lifecycle open event after window is ready (slight delay so Next.js is up)
-  setTimeout(() => sendLifecycleEvent('open'), 5000);
+  // The bundled-plugin syncs are synchronous file copies that used to run before
+  // anything was on screen. Nothing needs them until the first query, so they
+  // run once the loading page has painted, while the server boots.
+  afterFirstPaint(mainWindow, installBundledPlugins);
+
+  if (app.isPackaged) {
+    // In packaged builds, spawn the Next.js standalone server ourselves, and
+    // restart it once if it dies.
+    const spec = packagedServerLaunchSpec(port);
+    if (!spec) {
+      app.quit();
+      return;
+    }
+    const { utilityProcess } = require("electron");
+    serverSupervisor = createServerSupervisor({
+      spawn: () => {
+        const child = utilityProcess.fork(spec.serverScript, [], spec.options);
+        child.stderr.on('data', (data) => console.error('[Next.js server]', data.toString()));
+        child.stdout.on('data', (data) => console.log('[Next.js server]', data.toString()));
+        return child;
+      },
+      waitReady: () => waitForPort(port),
+      onReady: (info) => onServerReady(port, info),
+      onFatal: showServerFatal,
+      maxRestarts: 1,
+    });
+    serverSupervisor.start();
+  } else {
+    // Development: dev-with-port.js owns the server (and closes this window if
+    // it dies). Wait for it the same way.
+    waitForPort(port).then(
+      () => onServerReady(port, { restarted: false }),
+      (err) => showServerFatal(`the dev server did not answer on port ${port} (${err.message})`),
+    );
+  }
 
   // Check for updates 3s after launch (gives window time to finish loading)
   setTimeout(() => checkForUpdates(false), 3000);
@@ -1085,7 +1234,7 @@ app.on("before-quit", async (event) => {
   // finishes, dropping the queued events with it.
   event.preventDefault();
   isQuitting = true;
-  // Tear down any live PTYs so child shells don't linger after Quarry exits.
+  // Tear down any live PTYs so child shells don't linger after the app exits.
   try {
     ptyManager.closeAll();
   } catch (err) {
@@ -1094,6 +1243,9 @@ app.on("before-quit", async (event) => {
   try {
     await sendLifecycleEvent('close');
   } catch {}
+  // After the last request, and before quitting: the server's exit is now
+  // expected, and must not be mistaken for a crash and restarted.
+  if (serverSupervisor) serverSupervisor.stop();
   app.quit();
 });
 
@@ -1105,8 +1257,10 @@ app.on("window-all-closed", () => {
 
 app.on("activate", async () => {
   await app.whenReady();
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow(parseInt(process.env.PORT || '3000', 10));
+  // appPort is unset only while launch is still choosing it, and launch's own
+  // createWindow is about to run in that case.
+  if (BrowserWindow.getAllWindows().length === 0 && appPort) {
+    createWindow(appPort);
   }
 });
 
@@ -1124,7 +1278,7 @@ app.on("activate", async () => {
 //
 // Takes the PATH the document was written to, not the markup — see the note on
 // loadURL below for why that is both cheaper and no less safe.
-ipcMain.handle("documents:print-pdf", async (_event, { htmlPath, outputPath, printOptions } = {}) => {
+ipc.handle("documents:print-pdf", async (_event, { htmlPath, outputPath, printOptions } = {}) => {
   if (typeof htmlPath !== "string" || typeof outputPath !== "string") {
     return { ok: false, error: "htmlPath and outputPath are required" };
   }
@@ -1209,7 +1363,7 @@ function releasePushToTalk() {
   heldBy = null;
 }
 
-ipcMain.handle("voice:set-push-to-talk", (_event, { enabled, accelerator, ownerId } = {}) => {
+ipc.handle("voice:set-push-to-talk", (_event, { enabled, accelerator, ownerId } = {}) => {
   const wanted = typeof accelerator === "string" && accelerator ? accelerator : DEFAULT_PUSH_TO_TALK;
   const owner = typeof ownerId === "string" && ownerId ? ownerId : null;
   const notOwner = heldAccelerator && heldBy && owner && heldBy !== owner;
@@ -1276,14 +1430,14 @@ app.on("will-quit", () => {
   heldBy = null;
 });
 
-ipcMain.handle("select-folder", async () => {
+ipc.handle("select-folder", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openDirectory", "createDirectory"],
   });
   return result.canceled ? null : result.filePaths[0];
 });
 
-ipcMain.handle("get-user-name", () => {
+ipc.handle("get-user-name", () => {
   return os.userInfo().username;
 });
 
@@ -1299,25 +1453,50 @@ ipcMain.handle("get-user-name", () => {
  * launch, the preload bridge is the app's own code, and without this the only
  * recovery was a full restart the user had to discover for themselves.
  */
-ipcMain.handle("get-api-token", () => {
+ipc.handle("get-api-token", () => {
   return API_TOKEN;
 });
 
-ipcMain.handle("get-home-dir", () => os.homedir());
+ipc.handle("get-home-dir", () => os.homedir());
 
-ipcMain.on("get-app-version", (event) => {
+ipc.on("get-app-version", (event) => {
   event.returnValue = app.getVersion();
 });
 
-ipcMain.on("get-analytics-config", (event) => {
+ipc.on("get-analytics-config", (event) => {
   event.returnValue = readAnalyticsConf();
 });
 
-ipcMain.handle("open-path", async (_event, filePath) => {
-  return shell.openPath(expandHome(filePath));
+/**
+ * Open a local file or folder with its default app. Returns "" on success or
+ * the reason it did not (shell.openPath's own contract). Validated first —
+ * absolute, existing, not something the OS would run — see
+ * electron/open-path-policy.js. Accepts a file:// URL, which is how the
+ * preview panel holds a local page.
+ */
+ipc.handle("open-path", async (_event, filePath) => {
+  const target = resolveOpenPath(filePath, {
+    homedir: os.homedir(),
+    platform: process.platform,
+    exists: (p) => fs.existsSync(p),
+    isExecutableFile: (p) => {
+      if (process.platform === "win32") return false;
+      try {
+        const st = fs.statSync(p);
+        return st.isFile() && (st.mode & 0o111) !== 0;
+      } catch {
+        return false;
+      }
+    },
+  });
+  if (!target.ok) {
+    console.warn("[AIME] open-path refused:", target.reason, String(filePath).slice(0, 200));
+    return target.reason;
+  }
+  return shell.openPath(target.path);
 });
 
-ipcMain.handle("read-file", async (_event, filePath) => {
+ipc.handle("read-file", async (_event, filePath) => {
   const resolved = expandHome(filePath);
   const stats = fs.statSync(resolved);
   const ext = path.extname(resolved).toLowerCase();
@@ -1337,14 +1516,14 @@ ipcMain.handle("read-file", async (_event, filePath) => {
   };
 });
 
-ipcMain.handle("write-file", async (_event, filePath, content) => {
+ipc.handle("write-file", async (_event, filePath, content) => {
   const resolved = expandHome(filePath);
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
   fs.writeFileSync(resolved, content, "utf-8");
   return { success: true, path: resolved };
 });
 
-ipcMain.handle("save-file-dialog", async (_event, defaultName, filters) => {
+ipc.handle("save-file-dialog", async (_event, defaultName, filters) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     defaultPath: defaultName,
     filters: filters || [{ name: "All Files", extensions: ["*"] }],
@@ -1352,21 +1531,21 @@ ipcMain.handle("save-file-dialog", async (_event, defaultName, filters) => {
   return result.canceled ? null : result.filePath;
 });
 
-ipcMain.handle("ensure-dir", async (_event, dirPath) => {
+ipc.handle("ensure-dir", async (_event, dirPath) => {
   fs.mkdirSync(expandHome(dirPath), { recursive: true });
   return { success: true };
 });
 
-ipcMain.handle("file-exists", async (_event, filePath) => {
+ipc.handle("file-exists", async (_event, filePath) => {
   return fs.existsSync(expandHome(filePath));
 });
 
-ipcMain.on("check-for-updates", () => checkForUpdates(true));
-ipcMain.on("install-update", () => {
+ipc.on("check-for-updates", () => checkForUpdates(true));
+ipc.on("install-update", () => {
   if (autoUpdater) autoUpdater.quitAndInstall();
 });
 
-ipcMain.handle("show-notification", async (_event, title, body) => {
+ipc.handle("show-notification", async (_event, title, body) => {
   const { Notification } = require("electron");
   if (Notification.isSupported()) {
     const notif = new Notification({ title, body });
@@ -1380,7 +1559,7 @@ ipcMain.handle("show-notification", async (_event, title, body) => {
   }
 });
 
-ipcMain.handle("open-auth-window", async (_event, url) => {
+ipc.handle("open-auth-window", async (_event, url) => {
   const authWindow = new BrowserWindow({
     width: 600,
     height: 700,
@@ -1422,8 +1601,8 @@ ipcMain.handle("open-auth-window", async (_event, url) => {
 // Generic OAuth connector auth window — intercepts the callback redirect,
 // extracts the code/state/error from the URL, and returns them directly
 // to the renderer without needing a running localhost server.
-ipcMain.handle("open-connector-auth-window", async (_event, url, callbackPath) => {
-  return new Promise((resolve, reject) => {
+ipc.handle("open-connector-auth-window", async (_event, url, callbackPath) => {
+  return new Promise((resolve) => {
     // Use a unique partition per auth attempt so each connect starts with a clean
     // session (no cached cookies from previous logins). This ensures the user can
     // pick a different account or site when reconnecting.
@@ -1497,7 +1676,7 @@ ipcMain.handle("open-connector-auth-window", async (_event, url, callbackPath) =
 // renderer subscribers can listen in.
 const codeWorkspaceFs = require("./lib/code-workspace-fs");
 
-ipcMain.handle("fs:walk", async (_event, dirPath, opts) => {
+ipc.handle("fs:walk", async (_event, dirPath, opts) => {
   if (!dirPath || typeof dirPath !== "string") return [];
   const expanded = expandHome(dirPath);
   // The first call from the renderer is always at the workspace root, so
@@ -1517,7 +1696,7 @@ ipcMain.handle("fs:walk", async (_event, dirPath, opts) => {
   return result.nodes;
 });
 
-ipcMain.handle("fs:read", async (_event, filePath) => {
+ipc.handle("fs:read", async (_event, filePath) => {
   if (!filePath || typeof filePath !== "string") return null;
   const expanded = expandHome(filePath);
   const result = codeWorkspaceFs.readFileSafe(expanded);
@@ -1531,7 +1710,7 @@ ipcMain.handle("fs:read", async (_event, filePath) => {
   return { content: result.content, encoding: result.encoding, size: result.size };
 });
 
-ipcMain.handle("fs:write", async (_event, filePath, content) => {
+ipc.handle("fs:write", async (_event, filePath, content) => {
   if (!filePath || typeof filePath !== "string") {
     return { ok: false, error: "Invalid path." };
   }
@@ -1561,7 +1740,7 @@ function broadcastFsChange(payload) {
   }
 }
 
-ipcMain.handle("fs:watch-start", async (_event, watchPath) => {
+ipc.handle("fs:watch-start", async (_event, watchPath) => {
   if (!watchPath || typeof watchPath !== "string") return null;
   const expanded = expandHome(watchPath);
   let chokidar;
@@ -1614,7 +1793,7 @@ ipcMain.handle("fs:watch-start", async (_event, watchPath) => {
   return watchId;
 });
 
-ipcMain.handle("fs:watch-stop", async (_event, watchId) => {
+ipc.handle("fs:watch-stop", async (_event, watchId) => {
   const watcher = fsWatchers.get(watchId);
   if (!watcher) return;
   fsWatchers.delete(watchId);
@@ -1774,7 +1953,7 @@ function statusFromPorcelain(x, y) {
 // thrash git on every event.
 const _gitStatusCache = new Map(); // cwd → { result, expiresAt, inflight }
 
-ipcMain.handle("git:status", async (_event, cwd) => {
+ipc.handle("git:status", async (_event, cwd) => {
   if (!cwd) return null;
   const now = Date.now();
   const cached = _gitStatusCache.get(cwd);
@@ -1902,7 +2081,7 @@ ipcMain.handle("git:status", async (_event, cwd) => {
 //     defaults to working-tree vs HEAD.
 //   - opts.path: scope to a single file.
 // Returns the raw unified diff string. Empty string when there's no diff.
-ipcMain.handle("git:diff", async (_event, cwd, opts) => {
+ipc.handle("git:diff", async (_event, cwd, opts) => {
   if (!cwd) return "";
   const o = opts || {};
   const args = ["diff", "--no-color"];
@@ -1936,7 +2115,7 @@ ipcMain.handle("git:diff", async (_event, cwd, opts) => {
 // Uses runGitSafe (the tolerant wrapper above) so "not a repo" / "no commits"
 // degrade gracefully without try/catch.
 
-ipcMain.handle("git:branches", async (_event, cwd) => {
+ipc.handle("git:branches", async (_event, cwd) => {
   if (!cwd) return [];
   const { ok, stdout } = await runGitSafe(cwd, [
     "for-each-ref",
@@ -1960,7 +2139,7 @@ ipcMain.handle("git:branches", async (_event, cwd) => {
   return out;
 });
 
-ipcMain.handle("git:log", async (_event, cwd, opts) => {
+ipc.handle("git:log", async (_event, cwd, opts) => {
   if (!cwd) return [];
   const limit = Math.max(1, Math.min(opts?.limit ?? 50, 500));
   const SEP = "\x1f"; // ASCII US — separates fields
@@ -1994,7 +2173,7 @@ ipcMain.handle("git:log", async (_event, cwd, opts) => {
   return commits;
 });
 
-ipcMain.handle("git:blame", async (_event, cwd, filePath) => {
+ipc.handle("git:blame", async (_event, cwd, filePath) => {
   if (!cwd || !filePath) return [];
   const { ok, stdout } = await runGitSafe(cwd, [
     "blame",
@@ -2048,9 +2227,17 @@ ipcMain.handle("git:blame", async (_event, cwd, filePath) => {
   return out;
 });
 
-ipcMain.handle("git:push", async (_event, cwd, branch) => {
+ipc.handle("git:push", async (_event, cwd, branch) => {
   if (!cwd || !branch) return { ok: false, message: "cwd + branch required" };
-  const { ok, stderr, stdout } = await runGitSafe(cwd, ["push", "-u", "origin", branch], {
+  // Validated, with `--` before the ref: a "branch" of `--receive-pack=<cmd>` or
+  // `--mirror` is an option to git, not a name. See electron/git-args.js.
+  let args;
+  try {
+    args = pushArgs(branch);
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
+  const { ok, stderr, stdout } = await runGitSafe(cwd, args, {
     timeoutMs: 60000,
   });
   return {
@@ -2062,7 +2249,7 @@ ipcMain.handle("git:push", async (_event, cwd, branch) => {
 // Open an external URL in the user's default browser. The renderer needs this
 // for the "Create PR" flow → open the PR URL after creation. Tightly scoped to
 // http(s) only; anything else is rejected.
-ipcMain.handle("open-external", async (_event, url) => {
+ipc.handle("open-external", async (_event, url) => {
   if (typeof url !== "string") return { ok: false };
   if (!/^https?:\/\//i.test(url)) return { ok: false };
   await shell.openExternal(url);
@@ -2072,7 +2259,7 @@ ipcMain.handle("open-external", async (_event, url) => {
 // PTY — backed by src/lib/code-workspace/pty-manager.js (node-pty + xterm.js).
 // pty-manager broadcasts pty:output / pty:exit events to every BrowserWindow
 // itself; the handlers below just plumb the renderer-initiated lifecycle calls.
-ipcMain.handle("pty:open", async (_event, opts) => {
+ipc.handle("pty:open", async (_event, opts) => {
   try {
     return ptyManager.open(opts || {});
   } catch (err) {
@@ -2080,12 +2267,12 @@ ipcMain.handle("pty:open", async (_event, opts) => {
     return null;
   }
 });
-ipcMain.handle("pty:input", async (_event, id, data) => {
+ipc.handle("pty:input", async (_event, id, data) => {
   ptyManager.write(id, data);
 });
-ipcMain.handle("pty:resize", async (_event, id, cols, rows) => {
+ipc.handle("pty:resize", async (_event, id, cols, rows) => {
   ptyManager.resize(id, cols, rows);
 });
-ipcMain.handle("pty:close", async (_event, id) => {
+ipc.handle("pty:close", async (_event, id) => {
   ptyManager.close(id);
 });

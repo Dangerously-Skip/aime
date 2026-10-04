@@ -7,6 +7,9 @@ import {
   summarizeRuns,
   isIntervalDue,
   applyRunToGoal,
+  collectRefusals,
+  MAX_RECORDED_REFUSALS,
+  MAX_REFUSAL_REASON_CHARS,
 } from './runs';
 import { isTerminal, type Goal, type Run } from './types';
 
@@ -235,3 +238,28 @@ describe('applyRunToGoal', () => {
 });
 
 // needsVerification now lives in ./verification, tested in verification.test.ts
+
+describe('refusals on a run', () => {
+  const started = () => startRun({ id: 'r', now: 0, trigger: 'cron' });
+
+  it('finishRun records them, and leaves the field off when there were none', () => {
+    const refusals = [{ tool: 'Write', reason: 'Unattended run: has effects outside the app', at: 5 }];
+    expect(finishRun(started(), { now: 10, status: 'succeeded', refusals }).refusals).toEqual(refusals);
+    // Absent, not [], so a log line from a clean run is unchanged.
+    expect('refusals' in finishRun(started(), { now: 10, status: 'succeeded', refusals: [] })).toBe(false);
+  });
+
+  it('the collector keeps the run log line bounded — a loop of refusals must not bloat it', () => {
+    const c = collectRefusals();
+    for (let i = 0; i < MAX_RECORDED_REFUSALS + 5; i++) c.record({ tool: 'Write', reason: 'x', at: i });
+    expect(c.list).toHaveLength(MAX_RECORDED_REFUSALS);
+    expect(c.list[0].at).toBe(0);
+  });
+
+  it('trims a long reason to a label', () => {
+    const c = collectRefusals();
+    c.record({ tool: 'Bash', reason: 'y'.repeat(500), at: 1 });
+    expect(c.list[0].reason.length).toBe(MAX_REFUSAL_REASON_CHARS);
+    expect(c.list[0].reason.endsWith('…')).toBe(true);
+  });
+});

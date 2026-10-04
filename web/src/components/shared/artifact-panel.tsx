@@ -84,9 +84,20 @@ export function ArtifactPanel({
     window.addEventListener("mouseup", onUp);
   }, []);
   const autoSavedRef = useRef<string | null>(null);
+  /*
+   * Auto-save is keyed on the artifact's id, not its object: the parent hands
+   * a fresh object on every render, and depending on it would cancel an
+   * in-flight save's status updates on each one. The effect reads the latest
+   * object through this ref instead.
+   */
+  const latestArtifactRef = useRef(artifact);
+  useEffect(() => {
+    latestArtifactRef.current = artifact;
+  });
 
   // Auto-save when panel opens with a project folder
   useEffect(() => {
+    const artifact = latestArtifactRef.current;
     if (!open || !artifact || !projectFolder || !conversationId) return;
     // Skip if already auto-saved this artifact
     if (autoSavedRef.current === artifact.id) return;

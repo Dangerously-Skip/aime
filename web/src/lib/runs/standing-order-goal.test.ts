@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  attendedJobToGoal,
+  ATTENDED_JOB_POLICY,
+  STANDING_ORDER_POLICY,
   parseIntervalSeconds,
   standingOrderToGoal,
   standingOrdersToGoals,
@@ -19,7 +22,6 @@ const order = (over: Partial<StandingOrderLike> = {}): StandingOrderLike => ({
 
 describe('parseIntervalSeconds', () => {
   it('reads the units standing orders actually use', () => {
-    expect(parseIntervalSeconds('90')).toBe(90); // bare number ⇒ seconds
     expect(parseIntervalSeconds('45s')).toBe(45);
     expect(parseIntervalSeconds('30m')).toBe(1_800);
     expect(parseIntervalSeconds('30 minutes')).toBe(1_800);
@@ -35,6 +37,8 @@ describe('parseIntervalSeconds', () => {
     expect(parseIntervalSeconds('')).toBeNull();
     expect(parseIntervalSeconds('whenever')).toBeNull();
     expect(parseIntervalSeconds('0')).toBeNull();
+    // Ambiguous — seconds or minutes? — so refused rather than guessed.
+    expect(parseIntervalSeconds('90')).toBeNull();
     expect(parseIntervalSeconds('-5m')).toBeNull();
     expect(parseIntervalSeconds('1 month')).toBeNull(); // 'mo' is not minutes
   });
@@ -117,5 +121,29 @@ describe('standingOrdersToGoals', () => {
     const first = standingOrdersToGoals([order()]);
     const second = standingOrdersToGoals([order({ lastRun: 999 })]);
     expect(first[0].id).toBe(second[0].id);
+  });
+});
+
+/*
+ * The policy a schedule is LABELLED with must be the one it runs under. An
+ * attended job carried 'consequential' while it ran as an ordinary chat turn.
+ */
+describe('the policy each kind of schedule carries', () => {
+  it('a standing order is consequential — it runs with nobody watching', () => {
+    expect(STANDING_ORDER_POLICY).toBe('consequential');
+    expect(standingOrderToGoal(order()).approvalPolicy).toBe(STANDING_ORDER_POLICY);
+  });
+
+  it('an attended job is never — it runs as a chat turn', () => {
+    expect(ATTENDED_JOB_POLICY).toBe('never');
+    const goal = attendedJobToGoal({
+      id: 'j1',
+      prompt: 'p',
+      surfaceId: 'chat',
+      status: 'active',
+      trigger: { type: 'cron', expression: '0 9 * * *' },
+      runCount: 0,
+    });
+    expect(goal.approvalPolicy).toBe(ATTENDED_JOB_POLICY);
   });
 });

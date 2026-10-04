@@ -16,6 +16,8 @@ import {
   type WebviewRef,
 } from '@/lib/browser-tools';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
+import { classifyTurnError, isTurnErrorCode } from '@/lib/sse/turn-error';
+import { httpTurnError, StreamTurnError } from '@/hooks/use-sse-stream';
 import type { ProviderExecConfig } from '@/lib/models/execution';
 
 /**
@@ -31,7 +33,9 @@ export interface BrowserTurnRoute {
 import { getBrowserConfig } from '@/lib/surfaces/browser-config';
 import type { PendingContextItem } from '@/lib/browser-interactions';
 
-const MAX_ITERATIONS = 25;
+/** Steps per block before the user is asked whether to continue. */
+export const BROWSER_AGENT_STEP_LIMIT = 25;
+const MAX_ITERATIONS = BROWSER_AGENT_STEP_LIMIT;
 const DOM_EXTRACT_TIMEOUT = 5000; // 5s timeout for page state extraction
 
 /** Execute JS on webview with a timeout to prevent hanging during navigation */
@@ -59,14 +63,22 @@ interface SSEEvent {
   [key: string]: unknown;
 }
 
+/*
+ * Every transcript callback is handed the chat THE RUN WAS STARTED FOR — the
+ * `chatId` passed to `runAgentLoop`. They used to read the conversation on
+ * screen when each event arrived, so switching conversation mid-run moved the
+ * rest of the answer, its tool calls and its error into the chat just opened.
+ * Same contract as `useSSEStream`.
+ */
 interface UseBrowserAgentOptions {
-  onText: (text: string) => void;
-  onToolUse: (id: string, name: string, input: Record<string, unknown>) => void;
-  onToolResult: (id: string, result: string, isError: boolean) => void;
-  onDone: () => void;
-  onError: (error: Error) => void;
+  onText: (text: string, chatId: string) => void;
+  onToolUse: (id: string, name: string, input: Record<string, unknown>, chatId: string) => void;
+  onToolResult: (id: string, result: string, isError: boolean, chatId: string) => void;
+  /** The run ended, however it ended — called after `onError` too. */
+  onDone: (chatId: string) => void;
+  /** Already classified: a `StreamTurnError` the surface can show as a banner. */
+  onError: (error: Error, chatId: string) => void;
   onPhaseChange: (phase: 'idle' | 'observing' | 'thinking' | 'acting') => void;
-  apiKey?: string | null;
   memories?: string;
   consoleBuffer?: ConsoleLogBuffer;
   /** Current tabs for multi-tab awareness */
@@ -77,6 +89,11 @@ interface UseBrowserAgentOptions {
   onNewTab?: (url: string) => Promise<number | null>;
   /** Close a tab by id. */
   onCloseTab?: (tabId: string) => Promise<boolean>;
+  /**
+   * The run used its step budget and still wants to act. Resolve true to grant
+   * another MAX_ITERATIONS steps; false (or no handler) ends the run.
+   */
+  onStepLimit?: (stepsTaken: number) => Promise<boolean>;
 }
 
 export function useBrowserAgent(options: UseBrowserAgentOptions) {
@@ -102,8 +119,21 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
   }, []);
 
   const runAgentLoop = useCallback(
-    async (userMessage: string, route: BrowserTurnRoute, initialWebview: WebviewRef, pendingContext?: PendingContextItem[]) => {
+    async (
+      userMessage: string,
+      route: BrowserTurnRoute,
+      initialWebview: WebviewRef,
+      pendingContext?: PendingContextItem[],
+      /** The conversation this run writes to — see the note on the options. */
+      chatId = '',
+    ) => {
       let webview = initialWebview;
+      const say = (text: string) => optionsRef.current.onText(text, chatId);
+      const turnCallbacks = {
+        onText: say,
+        onToolUse: (id: string, name: string, input: Record<string, unknown>) =>
+          optionsRef.current.onToolUse(id, name, input, chatId),
+      };
       // Abort any previous run
       if (abortRef.current) abortRef.current.abort();
       const controller = new AbortController();
@@ -177,9 +207,26 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
 
         messages.push({ role: 'user', content: userContent });
 
-        // Agent loop
-        for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+        /*
+         * Agent loop, in blocks of MAX_ITERATIONS steps.
+         *
+         * Hitting the limit used to end the run SILENTLY: the loop fell out of
+         * its `for`, the phase went idle, and a task that needed step 26 just
+         * stopped with no message. Now the surface is asked; "Continue" grants
+         * another block, anything else ends the run with a line saying why.
+         */
+        let budget = MAX_ITERATIONS;
+        for (let iteration = 0; ; iteration++) {
           if (controller.signal.aborted) break;
+          if (iteration >= budget) {
+            const more = (await optionsRef.current.onStepLimit?.(iteration)) ?? false;
+            if (controller.signal.aborted) break;
+            if (!more) {
+              say(`\n\n_Stopped after ${iteration} steps — the step limit. Ask again to pick up from here._`);
+              break;
+            }
+            budget += MAX_ITERATIONS;
+          }
 
           // 2. Think — send to API
           optionsRef.current.onPhaseChange('thinking');
@@ -189,8 +236,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
             route,
             systemPrompt,
             controller.signal,
-            optionsRef.current,
-            optionsRef.current.apiKey,
+            turnCallbacks,
           );
 
           if (controller.signal.aborted) break;
@@ -242,7 +288,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
                 content: loop.message,
                 is_error: true,
               });
-              optionsRef.current.onToolResult(toolBlock.id, loop.message, true);
+              optionsRef.current.onToolResult(toolBlock.id, loop.message, true, chatId);
               continue;
             }
             if (loop.action === 'warn') {
@@ -260,11 +306,7 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
               result = await executeToolInWebview(webview, toolBlock.name, toolBlock.input, optionsRef.current.consoleBuffer);
             }
 
-            optionsRef.current.onToolResult(
-              toolBlock.id,
-              result.message,
-              !result.success,
-            );
+            optionsRef.current.onToolResult(toolBlock.id, result.message, !result.success, chatId);
 
             toolResults.push({
               type: 'tool_result',
@@ -322,15 +364,17 @@ export function useBrowserAgent(options: UseBrowserAgentOptions) {
           messages.push({ role: 'user', content: userBlocks });
         }
       } catch (error: unknown) {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
+        // A Stop is not a failure. Checked on our own signal: an AbortError
+        // from another realm is not `instanceof DOMException` here.
+        if (controller.signal.aborted) return;
         const err = error instanceof Error ? error : new Error(String(error));
-        optionsRef.current.onError(err);
+        optionsRef.current.onError(err, chatId);
       } finally {
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
         optionsRef.current.onPhaseChange('idle');
-        optionsRef.current.onDone();
+        optionsRef.current.onDone(chatId);
       }
     },
     [],
@@ -380,8 +424,10 @@ async function sendTurn(
   route: BrowserTurnRoute,
   system: string,
   signal: AbortSignal,
-  callbacks: Pick<UseBrowserAgentOptions, 'onText' | 'onToolUse'>,
-  apiKey?: string | null,
+  callbacks: {
+    onText: (text: string) => void;
+    onToolUse: (id: string, name: string, input: Record<string, unknown>) => void;
+  },
 ): Promise<{
   assistantBlocks: Array<{ type: string; [key: string]: unknown }>;
   stopReason: string;
@@ -399,16 +445,17 @@ async function sendTurn(
       ...(route.providerConfig ? { providerConfig: route.providerConfig } : {}),
       system,
       tools: BROWSER_TOOL_SCHEMAS,
-      // Still sent when the user has a BYOK key in settings, but no longer
-      // required — the server falls back to its own credential store and env.
-      ...(apiKey ? { apiKey } : {}),
+      // No API key: the server reads the one saved in Settings from its
+      // encrypted credential store (or env), so it never leaves the server.
     }),
     signal,
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => 'Unknown error');
-    throw new Error(`HTTP ${response.status}: ${text}`);
+    // Classified, and never the raw body — it can be a stack trace or an HTML
+    // error page, and it used to be shown verbatim in the reply.
+    const text = await response.text().catch(() => '');
+    throw httpTurnError(response.status, text);
   }
 
   if (!response.body) throw new Error('Response body is null');
@@ -421,6 +468,7 @@ async function sendTurn(
   // Collect content blocks for conversation history
   const assistantBlocks: Array<{ type: string; [key: string]: unknown }> = [];
   let currentText = '';
+  let streamError: StreamTurnError | null = null;
 
   const processEvent = (event: SSEEvent) => {
     switch (event.type) {
@@ -449,8 +497,17 @@ async function sendTurn(
       case 'turn_complete':
         stopReason = (event.stop_reason as string) || 'end_turn';
         break;
-      case 'error':
-        throw new Error(event.message as string);
+      case 'error': {
+        /*
+         * Kept, then thrown once the frame is parsed. Thrown from here it was
+         * swallowed: the parser deliberately survives a callback that throws (a
+         * malformed line must not kill the stream), so a failed turn ended as
+         * an empty "success".
+         */
+        const message = (event.message as string) || 'An error occurred';
+        streamError ??= new StreamTurnError(isTurnErrorCode(event.code) ? event.code : classifyTurnError(message), message);
+        break;
+      }
     }
   };
 
@@ -466,6 +523,11 @@ async function sendTurn(
 
     buffer += decoder.decode(value, { stream: true });
     buffer = parseSSELines<SSEEvent>(buffer, processEvent);
+    if (streamError) break;
+  }
+  if (streamError) {
+    void reader.cancel().catch(() => {});
+    throw streamError;
   }
 
   // Flush any remaining text

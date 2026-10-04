@@ -1,65 +1,30 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ModelSelector } from "@/components/shared/model-selector";
 import { FolderPicker } from "@/components/shared/folder-picker";
 import { CloneFromGitHub } from "@/components/shared/clone-from-github";
 import { useConnectorStore } from "@/stores/connector-store";
-import { ToolCallCard } from "@/components/shared/tool-call-card";
-import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
-import { StreamingCursor } from "@/components/shared/streaming-cursor";
-import { QuestionCard } from "@/components/shared/question-card";
-import { AttachmentMenu } from "@/components/shared/attachment-menu";
+import { MessageList } from "@/components/shared/message-list";
+import { ModelSelector } from "@/components/shared/model-selector";
 import type { AttachmentFile } from "@/components/shared/attachment-menu";
+import { Composer } from "@/components/shared/composer/composer";
+import { addComposerAttachment } from "@/components/shared/composer/draft-store";
 import { DropOverlay } from "@/components/shared/drop-overlay";
 import { useFileDrop } from "@/hooks/use-file-drop";
-import { useCodeStore, type PermissionMode } from "@/stores/code-store";
-import { useConversationStore } from "@/stores/conversation-store";
-import { useSearchSettings } from '@/hooks/use-search-settings'
-import { useDeckTheme } from '@/hooks/use-deck-theme'
+import { useCodeStore } from "@/stores/code-store";
+import { useConversationStore, isUntitled } from "@/stores/conversation-store";
 import { useSettingsStore } from "@/stores/settings-store";
-import { useSSEStream, stripMessagesForHistory } from "@/hooks/use-sse-stream";
-import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
-import { handleCoreChunk } from "@/lib/sse/core-chunks";
 import { handleBrowserToolChunk } from "@/lib/sse/browser-tool-chunk";
-import { useDocumentPrint } from "@/hooks/use-document-print";
 import { useCanvasSseHandler } from "@/hooks/use-canvas-sse-handler";
-import { useMemoryStore } from "@/stores/memory-store";
-import { formatMemoriesForPrompt } from "@/lib/memory/retriever";
-import { handleMemoryExtractEvent } from "@/lib/memory/handle-extract-event";
 import { useProjectStore } from "@/stores/project-store";
 import { useAppStore } from "@/stores/app-store";
 import { useProjectContext } from "@/hooks/use-project-context";
-import { useElectron } from "@/hooks/use-electron";
 import { ContinueInSurface } from "@/components/shared/continue-in-surface";
-import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from "@/components/ui/dropdown-menu";
 import { ConnectionSelector } from "@/components/shared/connection-selector";
-import {
-  ArrowUp,
-  Square,
-  Shield,
-  Code2,
-  FileText,
-  AlertTriangle,
-  X,
-  ImageIcon,
-  File,
-  Folder,
-  Globe,
-  Github,
-} from "lucide-react";
+import { Folder, Github, ListChecks } from "lucide-react";
 import { PreviewPanel } from "@/components/shared/preview-panel";
 import { PlanSheet } from "@/components/shared/plan-sheet";
-import { ThinkingSection } from "@/components/shared/thinking-section";
-import { VoiceButton } from "@/components/shared/voice-button";
 import { EditorPicker } from "@/components/shared/editor-picker";
 import { detectServerUrl, isWebAsset, findHtmlEntryPoint } from "@/lib/artifacts/server-detector";
 import { previewUrlFor } from "@/lib/preview/client";
@@ -72,54 +37,23 @@ import { useStartGoal } from "@/components/harness/use-start-goal";
 import { GoalRunStatus } from "@/components/harness/goal-run-status";
 import { GoalQuestion } from "@/components/harness/goal-question";
 import { useGoalTranscript } from "@/components/harness/use-goal-transcript";
-import { executeToolInWebview, ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
-import type { Message } from "@/stores/chat-store";
-import { ListChecks } from "lucide-react";
-import { CommandPicker, type CommandSuggestion } from "@/components/shared/command-picker";
-import { getSlashSuggestions, parseSlashCommand, applySlashCommand, DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
-import { useAtSuggestions, getAtQuery, removeAtQuery } from "@/hooks/use-at-suggestions";
+import { ConsoleLogBuffer, type WebviewRef } from "@/lib/browser-tools";
+import { DEFAULT_SESSION_CONTROLS } from "@/lib/slash-commands";
 import { WorkspaceLayout } from "./workspace/workspace-layout";
-import { useProviderStore } from "@/stores/provider-store";
-import { resolveSendRoute } from "@/lib/models/client-options";
+import { tagSecurityWarning } from "./security-warning";
+import { PermissionModeMenu } from "./permission-mode-menu";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
-import { useTurnWiring } from "@/hooks/use-turn-wiring";
-import { useBuiltinAccess } from "@/hooks/use-builtin-access";
-import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
+import { useSurfaceTurn, type SessionControlsAccess } from "@/hooks/use-surface-turn";
+import { useTurnSettings, memoriesFor, drainContextBus } from "@/hooks/use-turn-settings";
 
 /** This surface's routing capability — a fixed property of the surface. */
 const CAPABILITY = getSurfaceRoute("code").capability;
 
-const EMPTY_MESSAGES: Message[] = [];
-
-const THINKING_WORDS = [
-  "Pondering",
-  "Wibbling",
-  "Puzzling",
-  "Noodling",
-  "Mulling",
-  "Conjuring",
-  "Ruminating",
-  "Percolating",
-  "Brainstorming",
-  "Scheming",
-  "Tinkering",
-  "Contemplating",
-];
-
-const DANGEROUS_PATTERNS = [
-  /\brm\s+(-[rRf]+\s+|.*\/)/,
-  /\bsudo\b/,
-  /\bmkfs\b/,
-  /\bdd\s+if=/,
-  /\bchmod\s+777\b/,
-  /curl.*\|\s*(sh|bash)/,
-  /wget.*\|\s*(sh|bash)/,
-  /\bnc\s+-/,
-];
-
-function isDangerousCommand(command: string): boolean {
-  return DANGEROUS_PATTERNS.some((p) => p.test(command));
-}
+/** Slash-command settings live per conversation in the code store. */
+const SESSION_CONTROLS: SessionControlsAccess = {
+  get: (id) => useCodeStore.getState().sessionControls[id] ?? DEFAULT_SESSION_CONTROLS,
+  set: (id, controls) => useCodeStore.getState().setSessionControls(id, controls),
+};
 
 /* ── Pixel mascot (jiggling character) ── */
 function Mascot() {
@@ -131,480 +65,6 @@ function Mascot() {
       height={80}
       className="mb-4 mascot-jiggle"
     />
-  );
-}
-
-/* ── Permission mode config ── */
-const PERMISSION_MODES: {
-  value: PermissionMode;
-  label: string;
-  description: string;
-  icon: React.ComponentType<{ className?: string }>;
-}[] = [
-  {
-    value: "default",
-    icon: Shield,
-    label: "Ask permissions",
-    description: "Always ask before making changes",
-  },
-  {
-    value: "acceptEdits",
-    icon: Code2,
-    label: "Auto accept edits",
-    description: "Automatically accept all file edits",
-  },
-  {
-    value: "plan",
-    icon: FileText,
-    label: "Plan mode",
-    description: "Create a plan before making changes",
-  },
-  {
-    value: "bypass",
-    icon: AlertTriangle,
-    label: "Bypass permissions",
-    description: "Accepts all permissions",
-  },
-];
-
-/** PERMISSION_MODES[0] is the "default" (ask) mode, so it doubles as the fallback. */
-function getPermissionMode(mode: PermissionMode) {
-  return PERMISSION_MODES.find((m) => m.value === mode) ?? PERMISSION_MODES[0];
-}
-
-/* ── Attachment chip icon ── */
-function AttachmentIcon({ category }: { category: AttachmentFile["category"] }) {
-  switch (category) {
-    case "image":
-      return <ImageIcon className="h-3 w-3" />;
-    case "document":
-      return <File className="h-3 w-3" />;
-    default:
-      return <FileText className="h-3 w-3" />;
-  }
-}
-
-/* ── Terminal message output ── */
-interface TerminalMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  toolCalls?: Array<{
-    id: string;
-    name: string;
-    input: Record<string, unknown>;
-    output?: string;
-    status: "running" | "complete" | "error";
-    startTime: number;
-    endTime?: number;
-  }>;
-  thinking?: string;
-  isStreaming?: boolean;
-  isLoading?: boolean;
-  questionData?: unknown;
-  questionToolUseId?: string;
-  questionAnswered?: boolean;
-  attachments?: Array<{ name: string; category: string }>;
-}
-
-function TerminalOutput({
-  messages,
-  onQuestionAnswered,
-  onPreviewUrl,
-  endRef,
-}: {
-  messages: TerminalMessage[];
-  onQuestionAnswered?: (toolUseId: string, answers: Record<string, string>) => void;
-  onPreviewUrl?: (url: string) => void;
-  endRef?: React.RefObject<HTMLDivElement | null>;
-}) {
-  const [thinkingWordIndex, setThinkingWordIndex] = useState(() =>
-    Math.floor(Math.random() * THINKING_WORDS.length)
-  );
-  const hasLoading = messages.some((m) => m.isLoading && !m.content);
-
-  useEffect(() => {
-    if (!hasLoading) return;
-    const interval = setInterval(() => {
-      setThinkingWordIndex((i) => (i + 1) % THINKING_WORDS.length);
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [hasLoading]);
-
-  return (
-    <div className="space-y-3 text-sm">
-      {messages.map((msg) => {
-        if (msg.questionData) {
-          return (
-            <QuestionCard
-              key={msg.id}
-              toolUseId={msg.questionToolUseId || msg.id}
-              questions={msg.questionData as Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>}
-              answered={msg.questionAnswered}
-              onAnswer={onQuestionAnswered}
-            />
-          );
-        }
-        if (msg.role === "user") {
-          return (
-            <div key={msg.id} className="font-mono text-foreground">
-              {msg.attachments && msg.attachments.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-1 ml-4">
-                  {msg.attachments.map((att: { name: string; category: string }, i: number) => (
-                    <span key={i} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground font-sans">
-                      {att.name}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <span className="text-muted-foreground select-none">&gt; </span>
-              <span>{msg.content}</span>
-            </div>
-          );
-        }
-        return (
-          <div key={msg.id} className="space-y-2">
-            {msg.thinking && (
-              <ThinkingSection content={msg.thinking} isComplete={!msg.isStreaming} />
-            )}
-            {msg.toolCalls?.map((tool) => (
-              <ToolCallCard
-                key={tool.id}
-                name={tool.name}
-                input={tool.input}
-                output={tool.output}
-                status={tool.status}
-                startTime={tool.startTime}
-                endTime={tool.endTime}
-                onPreviewUrl={onPreviewUrl}
-              />
-            ))}
-            {msg.content ? (
-              <div className="pl-1">
-                <MarkdownRenderer content={msg.content} />
-                {msg.isStreaming && <StreamingCursor />}
-              </div>
-            ) : msg.isStreaming && !msg.isLoading ? (
-              <div className="pl-1"><StreamingCursor /></div>
-            ) : null}
-            {msg.isLoading && !msg.content && (
-              <div className="flex items-center gap-2 py-2 pl-1">
-                <img
-                  src="/starburst-logo.png"
-                  alt="Loading"
-                  width={22}
-                  height={22}
-                  className="loading-pulse"
-                />
-                <span className="text-sm text-muted-foreground thinking-word-fade">
-                  {THINKING_WORDS[thinkingWordIndex]}...
-                </span>
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <div ref={endRef} />
-    </div>
-  );
-}
-
-/* ── Input card (shared between empty & active states) ── */
-function CodeInput({
-  value,
-  onChange,
-  onSubmit,
-  onAbort,
-  isStreaming,
-  permissionMode,
-  onPermissionModeChange,
-  model,
-  onSelectModel,
-  placeholder,
-  rows,
-  minHeight,
-  attachments,
-  onAttachmentAdd,
-  onAttachmentRemove,
-  currentProjectId,
-  onAddToProject,
-  onNewProject,
-  projects,
-  onVoiceTranscript,
-  planButton,
-  goalToggle,
-  goalBar,
-  goalStatus,
-  goalQuestion,
-  cwd,
-  onSlashCommand,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: (v: string) => void;
-  onAbort?: () => void;
-  isStreaming: boolean;
-  cwd?: string | null;
-  onSlashCommand?: (text: string) => boolean;
-  permissionMode: PermissionMode;
-  onPermissionModeChange: (mode: PermissionMode) => void;
-  model: string;
-  /** Legacy built-in enum setter; selections are recorded as routes now. */
-  onModelChange?: (model: string) => void;
-  onSelectModel?: (opt: import('@/lib/models/client-options').ModelOption) => void;
-  placeholder: string;
-  rows: number;
-  minHeight: string;
-  attachments: AttachmentFile[];
-  onAttachmentAdd: (file: AttachmentFile) => void;
-  onAttachmentRemove: (index: number) => void;
-  currentProjectId?: string | null;
-  onAddToProject?: (projectId: string) => void;
-  onNewProject?: () => void;
-  projects?: { id: string; name: string; icon: string }[];
-  onVoiceTranscript?: (text: string) => void;
-  planButton?: React.ReactNode;
-  /** Goal-mode controls, following the planButton slot pattern. */
-  goalToggle?: React.ReactNode;
-  goalBar?: React.ReactNode;
-  /**
-   * Run status, under the composer.
-   *
-   * Not in the dockview panel, because that panel can fail to open — it threw
-   * `invalid location` on a real run and took the surface down with it. Feedback
-   * that a goal has started must not depend on a panel being placeable.
-   */
-  goalStatus?: React.ReactNode;
-  /** The run's parked question, above the composer where the user is. */
-  goalQuestion?: React.ReactNode;
-}) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // Held as the config object (not a bare component) so the icon renders through
-  // a stable module-level reference rather than a locally-created component.
-  const permMode = getPermissionMode(permissionMode);
-  const [cmdSuggestions, setCmdSuggestions] = useState<CommandSuggestion[]>([]);
-  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(0);
-  const { fileSuggestions, fetchAtSuggestions, clearAtSuggestions, resolveFileAsAttachment } =
-    useAtSuggestions();
-
-  const activeSuggestions: CommandSuggestion[] = cmdSuggestions.length > 0
-    ? cmdSuggestions
-    : fileSuggestions.map((f) => ({
-        type: 'at' as const,
-        value: f.path,
-        label: '@' + f.name,
-        description: undefined,
-        meta: f.relative,
-      }));
-
-  function handleSelectSuggestion(s: CommandSuggestion) {
-    if (s.type === 'slash') {
-      onChange(s.value + ' ');
-      setCmdSuggestions([]);
-    } else {
-      const newVal = removeAtQuery(value);
-      onChange(newVal);
-      clearAtSuggestions();
-      resolveFileAsAttachment(s.value).then((att) => {
-        if (att) onAttachmentAdd(att);
-      });
-    }
-    setSelectedSuggestionIdx(0);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (activeSuggestions.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.min(i + 1, activeSuggestions.length - 1));
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedSuggestionIdx((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === 'Tab' || (e.key === 'Enter' && activeSuggestions.length > 0)) {
-        e.preventDefault();
-        handleSelectSuggestion(activeSuggestions[selectedSuggestionIdx]);
-        return;
-      }
-      if (e.key === 'Escape') {
-        setCmdSuggestions([]);
-        clearAtSuggestions();
-        return;
-      }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (isStreaming) {
-        onAbort?.();
-      } else if (value.trim()) {
-        // Let parent handle slash commands
-        if (onSlashCommand && onSlashCommand(value.trim())) return;
-        onSubmit(value.trim());
-      }
-    }
-  }
-
-  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const val = e.target.value;
-    onChange(val);
-    const textarea = e.target;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-
-    // Slash suggestions
-    setCmdSuggestions(
-      getSlashSuggestions(val).map((cmd) => ({
-        type: 'slash' as const,
-        value: cmd.name,
-        label: cmd.name,
-        description: cmd.args,
-        meta: cmd.description,
-      }))
-    );
-
-    // @ suggestions
-    const atQ = getAtQuery(val);
-    if (atQ !== null && cwd) {
-      fetchAtSuggestions(atQ, cwd);
-    } else {
-      clearAtSuggestions();
-    }
-
-    setSelectedSuggestionIdx(0);
-  }
-
-  function handleButtonClick() {
-    if (isStreaming) {
-      onAbort?.();
-    } else if (value.trim()) {
-      if (onSlashCommand && onSlashCommand(value.trim())) return;
-      onSubmit(value.trim());
-    }
-  }
-
-  return (
-    <div>
-    <CommandPicker
-      suggestions={activeSuggestions}
-      selectedIndex={selectedSuggestionIdx}
-      onSelect={handleSelectSuggestion}
-      onSelectedIndexChange={setSelectedSuggestionIdx}
-    />
-    {goalQuestion}
-    <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-      {goalBar}
-      <Textarea
-        ref={textareaRef}
-        value={value}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        rows={rows}
-        className={`${minHeight} max-h-[200px] resize-none border-0 bg-transparent dark:bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0`}
-        style={{ opacity: isStreaming ? 0.6 : 1 }}
-      />
-
-      {/* Attachment chips */}
-      {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 pt-2">
-          {attachments.map((att, i) => (
-            <span
-              key={`${att.name}-${i}`}
-              className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-            >
-              <AttachmentIcon category={att.category} />
-              <span className="max-w-[120px] truncate">{att.name}</span>
-              <button
-                onClick={() => onAttachmentRemove(i)}
-                className="ml-0.5 hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="flex items-center justify-between px-3 py-2.5">
-        {/* Left: attachment menu and permission mode */}
-        <div className="flex items-center gap-1">
-          <AttachmentMenu
-            onFileSelect={onAttachmentAdd}
-            onWebSearchToggle={() => {}}
-            webSearchEnabled={false}
-            currentProjectId={currentProjectId}
-            onAddToProject={onAddToProject}
-            onNewProject={onNewProject}
-            projects={projects}
-          />
-          {onVoiceTranscript && <VoiceButton onTranscript={onVoiceTranscript} />}
-          {planButton}
-          {goalToggle}
-
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <button className="inline-flex items-center gap-1.5 rounded-md px-2 h-7 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-                  <permMode.icon className="h-3.5 w-3.5" />
-                  <span>{permMode.label}</span>
-                </button>
-              }
-            />
-            <DropdownMenuContent side="top" align="start" sideOffset={8} className="w-64">
-              <DropdownMenuRadioGroup
-                value={permissionMode}
-                onValueChange={(v) => onPermissionModeChange(v as PermissionMode)}
-              >
-                {PERMISSION_MODES.map((mode) => (
-                  <DropdownMenuRadioItem
-                    key={mode.value}
-                    value={mode.value}
-                    className="flex items-start gap-2 py-2"
-                  >
-                    <mode.icon className="h-4 w-4 mt-0.5 shrink-0" />
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-sm font-medium">{mode.label}</span>
-                      <span className="text-xs text-muted-foreground">{mode.description}</span>
-                    </div>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        {/* Right: model selector and send */}
-        <div className="flex items-center gap-2">
-          <ModelSelector
-            value={model}
-            onSelectModel={onSelectModel}
-            capability={CAPABILITY}
-            className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
-          />
-          <Button
-            size="icon"
-            className={`h-8 w-8 shrink-0 rounded-full ${
-              isStreaming
-                ? "bg-destructive hover:bg-destructive/80"
-                : "bg-primary hover:bg-primary/80"
-            }`}
-            onClick={handleButtonClick}
-            disabled={!isStreaming && !value.trim()}
-          >
-            {isStreaming ? (
-              <Square className="h-3.5 w-3.5" />
-            ) : (
-              <ArrowUp className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
-      </div>
-    </div>
-    {goalStatus}
-    </div>
   );
 }
 
@@ -633,34 +93,10 @@ function BottomBar({
 
 /* ── Main surface ── */
 export function CodeSurface() {
-  const [inputValue, setInputValue] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [pendingFolder, setPendingFolder] = useState<string | null>(null);
-  const currentChatId = useCodeStore((s) => s.currentChatId);
-  const chatId = currentChatId ?? "";
-  // Both were absent entirely; see the relay note in the onChunk handler.
-  const printDocument = useDocumentPrint();
-  const onCanvasEvent = useCanvasSseHandler("code", chatId);
-  const messages = useCodeStore(
-    (s) =>
-      (s.currentChatId ? s.messages[s.currentChatId] : undefined) ??
-      EMPTY_MESSAGES
-  );
+  const chatId = useCodeStore((s) => s.currentChatId) ?? "";
+  const onCanvas = useCanvasSseHandler("code");
   const modelRoute = useCodeStore((s) => s.modelRoute);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
-  /** Sent with every turn; without it the server never learns search exists. */
-  const searchSettings = useSearchSettings();
-  const deckTheme = useDeckTheme(chatId);
-  // Built-in (Claude) reachability, which is the user's key OR the server's env
-  // key OR Bedrock — `anthropicApiKey` alone only knows about the first.
-  const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
-  const tierModels = useSettingsStore((s) => s.tierModels);
-  const providers = useProviderStore((s) => s.providers);
-  const blockDangerousCommands = useSettingsStore((s) => s.blockDangerousCommands);
-  const blockNetworkCommands = useSettingsStore((s) => s.blockNetworkCommands);
-  const restrictToProjectFolder = useSettingsStore((s) => s.restrictToProjectFolder);
-  const disableBashTool = useSettingsStore((s) => s.disableBashTool);
-  const isStreaming = useCodeStore((s) => s.isStreaming);
   const storeFolder = useCodeStore((s) => chatId ? s.folderByChat[chatId] ?? null : null);
   const folder = storeFolder || pendingFolder;
   const permissionMode = useCodeStore((s) => s.permissionMode);
@@ -671,26 +107,11 @@ export function CodeSurface() {
   const sessionControls = useCodeStore(
     (s) => (chatId ? s.sessionControls[chatId] : undefined) ?? DEFAULT_SESSION_CONTROLS
   );
-  const setSessionControls = useCodeStore((s) => s.setSessionControls);
   const setModelRoute = useCodeStore((s) => s.setModelRoute);
   const setFolder = useCodeStore((s) => s.setFolder);
   const setPermissionMode = useCodeStore((s) => s.setPermissionMode);
   const addMessage = useCodeStore((s) => s.addMessage);
-  const appendToLastAssistant = useCodeStore((s) => s.appendToLastAssistant);
-  const addToolCall = useCodeStore((s) => s.addToolCall);
-  const updateMessage = useCodeStore((s) => s.updateMessage);
-  const updateToolResult = useCodeStore((s) => s.updateToolResult);
-  const completeRunningTools = useCodeStore((s) => s.completeRunningTools);
-  const startStreaming = useCodeStore((s) => s.startStreaming);
-  const stopStreaming = useCodeStore((s) => s.stopStreaming);
-  const setCurrentChat = useCodeStore((s) => s.setCurrentChat);
-  const setIsStreaming = useCodeStore((s) => s.setIsStreaming);
-  const setSessionStatus = useCodeStore((s) => s.setSessionStatus);
   const updateConversation = useConversationStore((s) => s.updateConversation);
-  const addConversation = useConversationStore((s) => s.addConversation);
-  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
-  const activeConvId = useConversationStore((s) => s.activeId);
-  const allConversations = useConversationStore((s) => s.conversations);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   /*
@@ -702,7 +123,7 @@ export function CodeSurface() {
    * stale. Track the path we opened instead of re-deriving it from the URL.
    */
   const previewPathRef = useRef<string | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
+  const [, setPreviewOpen] = useState(false);
 
   /*
    * Let the USER open the preview.
@@ -803,14 +224,11 @@ export function CodeSurface() {
   // dockview tab that may not even be open.
   useGoalTranscript(chatId, folder, addMessage);
 
-
-  const { projectId: currentProjectId } = useProjectContext(chatId, "code");
+  const { projectId: currentProjectId, projectInstructions, projectKnowledge, crossSurfaceContext } = useProjectContext(chatId, "code");
+  const settings = useTurnSettings(chatId, { projectInstructions, projectKnowledge, crossSurfaceContext });
   const allProjects = useProjectStore((s) => s.projects);
   const assignToProject = useConversationStore((s) => s.assignToProject);
   const setSidebarMode = useAppStore((s) => s.setSidebarMode);
-  // Auto-project creation disabled — users create projects manually
-  const { showNotification } = useElectron();
-  const isEmpty = messages.length === 0;
 
   const handleFolderChange = useCallback(
     (f: string | null) => {
@@ -823,222 +241,121 @@ export function CodeSurface() {
     [setFolder, chatId]
   );
 
-  // Auto-scroll
-  const endRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const [userScrolledUp, setUserScrolledUp] = useState(false);
-  const userScrolledUpRef = useRef(false);
-
-  // Auto-scroll via ResizeObserver — fires on any content size change
-  useEffect(() => {
-    const content = contentRef.current;
-    if (!content) return;
-    const observer = new ResizeObserver(() => {
-      if (!userScrolledUpRef.current) {
-        requestAnimationFrame(() => {
-          endRef.current?.scrollIntoView({ behavior: "instant" });
-        });
-      }
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, []);
-
-  // Scroll to bottom on conversation switch
-  useEffect(() => {
-    if (messages.length > 0) {
-      userScrolledUpRef.current = false;
-      setUserScrolledUp(false);
-      requestAnimationFrame(() => {
-        endRef.current?.scrollIntoView({ behavior: "instant" });
-      });
-    }
-  }, [messages.length === 0]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleAttachmentAdd = useCallback(
-    (file: AttachmentFile) => setAttachments((prev) => [...prev, file]),
-    []
+  // Dropped files join the draft of the conversation on screen.
+  const { isDragging, dropZoneProps } = useFileDrop(
+    useCallback(
+      (file: AttachmentFile) => addComposerAttachment("code", useCodeStore.getState().currentChatId ?? "", file),
+      [],
+    ),
   );
 
-  const handleAttachmentRemove = useCallback(
-    (index: number) => setAttachments((prev) => prev.filter((_, i) => i !== index)),
-    []
-  );
-
-  const { isDragging, dropZoneProps } = useFileDrop(handleAttachmentAdd);
-
-  useEffect(() => {
-    if (!activeConvId) return;
-    const conv = allConversations.find((c) => c.id === activeConvId);
-    if (conv?.surface === "code") setCurrentChat(activeConvId);
-  }, [activeConvId, allConversations, setCurrentChat]);
-
-  const ownsChat = useCallback(
-    (id: string) => !!useCodeStore.getState().messages[id]?.length,
-    [],
-  );
-  // Run recording + the card-answer persisters, shared with the other three
-  // surfaces (see use-turn-wiring). This surface renders no connect card, so
-  // `onConnectorSettled` goes unused rather than being a fourth copy waiting to
-  // be needed.
-  const { runRecorder, onQuestionAnswered } = useTurnWiring({
-    surfaceId: "code",
-    chatId,
-    ownsChat,
-    updateMessage,
-  });
-
-  const { sendMessage, abort } = useSSEStream({
-    chatId,
-    setIsStreaming,
-    onUsage: runRecorder.onUsage,
-    onChunk(event) {
-      // Chunks whose handling is the same on every surface — cron jobs,
-      // standing orders, widgets, memory. Handled in ONE place
-      // (lib/sse/agnostic-chunks) because each surface having its own case
-      // meant three of them were silently dropped on most surfaces.
-      if (handleAgnosticChunk(event, { chatId: chatId, surface: 'Code' })) return;
-
+  const turn = useSurfaceTurn({
+    surface: "code",
+    label: "Code",
+    store: useCodeStore,
+    capability: CAPABILITY,
+    modelRoute,
+    sessionControls: SESSION_CONTROLS,
+    onCanvas,
+    // The folder picked before any conversation existed belongs to this one.
+    onConversationCreated: (id) => {
+      if (!pendingFolder) return;
+      setFolder(id, pendingFolder);
+      setPendingFolder(null);
+    },
+    request: async ({ text }) => ({
+      ...settings,
+      cwd: folder || undefined,
       /*
-       * THE SHARED RELAY, which Code was supposed to be using already.
-       *
-       * `lib/sse/browser-tool-chunk` exists because copying forty lines is how
-       * two implementations of one idea drift apart — and Code kept its inline
-       * copy anyway, so the shared module's own comment ("shared with Code
-       * rather than copied") was aspirational.
-       *
-       * The drift was already real: the shared path grew tab handling and this
-       * one never did, while `browserMcpToolNames()` mounts new_tab/switch_tab/
-       * close_tab for EVERY surface with a webview. Code therefore offered three
-       * tools whose only possible answer was "Unknown tool" — DR-21's retry loop,
-       * reintroduced by the change that was meant to end it.
-       *
-       * Code has ONE preview view, so its tab callbacks say so actionably rather
-       * than pretending: the shared module turns an absent `tabs` into "this
-       * surface shows a single page, not tabs — use navigate".
+       * The mode in the composer's menu. It used to stay in the browser while
+       * the server hard-coded "auto accept edits", so "Ask permissions" asked
+       * nothing. Read at send time so a change made mid-conversation applies
+       * to the very next turn.
        */
-      if (
+      permissionMode: useCodeStore.getState().permissionMode,
+      /*
+       * Only when the preview panel is actually open. The webview ref is null
+       * when it is closed, and offering `navigate` with nothing to navigate is
+       * DR-21's loop: the agent cannot discover that a step is impossible, so
+       * it repeats it until the turn dies.
+       */
+      browserToolsAvailable: !!previewWebviewRef.current,
+      // Scoped to the conversation's project, so memories from other folders
+      // don't leak into this one.
+      memories: memoriesFor(text, currentProjectId),
+      contextBusEvents: await drainContextBus("code"),
+    }),
+    chunks: {
+      /*
+       * THE SHARED BROWSER RELAY. Code has ONE preview view, so its tab
+       * callbacks are absent and the shared module answers new_tab/switch_tab
+       * with "this surface shows a single page, not tabs — use navigate" rather
+       * than "Unknown tool", which the agent would retry until the turn died.
+       */
+      before: (event, cid) =>
         handleBrowserToolChunk(event, {
-          chatId,
+          chatId: cid,
           webview: previewWebviewRef.current,
           consoleBuffer: consoleBufferRef.current,
-          addToolCall,
-          updateToolResult,
+          addToolCall: useCodeStore.getState().addToolCall,
+          updateToolResult: useCodeStore.getState().updateToolResult,
           noWebviewMessage:
             'The preview panel is not open, so there is no page to act on. Write an HTML file or start a dev server first, or use WebFetch to read a URL.',
           surface: 'CodeSurface',
-        })
-      ) {
-        return;
-      }
-
-      // The chunks whose handling is identical across surfaces, recorded once in
-      // lib/sse/core-chunks. `skip` names what this surface still owns — see the
-      // note there; it is a visible migration step, not a permanent carve-out.
-      if (
-        handleCoreChunk(event, {
-          chatId: chatId,
-          store: { addMessage, appendToLastAssistant, addToolCall, updateToolResult, completeRunningTools },
-          // Code had NONE of the three relay handlers. Each one pauses the turn
-          // server-side, so their absence was not a missing feature — a connector
-          // request stalled for 300s and a document print for 60s before timing
-          // out, with nothing on screen to explain it.
-          printDocument,
-          onCanvas: onCanvasEvent,
-          notify: (title, body) => {
-            if (!document.hasFocus()) showNotification(title, body);
-          },
-          // The watchdog cowork has had all along. Code runs the longest tools of
-          // any surface and had no protection from one that stops progressing.
-          skip: ['tool_use', 'tool_result'],
-        })
-      ) {
-        return;
-      }
-
-      switch (event.type) {
-        case "tool_use": {
-          const toolName = (event.name as string) || "Unknown";
-          const toolInput = (event.input as Record<string, unknown>) || {};
-          const toolCallData: {
-            id: string;
-            name: string;
-            input: Record<string, unknown>;
-            status: "running";
-            startTime: number;
-          } = {
-            id: (event.id as string) || `tool_${Date.now()}`,
-            name: toolName,
-            input: toolInput,
-            status: "running",
-            startTime: Date.now(),
-          };
-          // Tag dangerous Bash commands with a warning
-          if (
-            toolName === "Bash" &&
-            typeof toolInput.command === "string" &&
-            isDangerousCommand(toolInput.command) &&
-            (useSettingsStore.getState().blockDangerousCommands || useSettingsStore.getState().blockNetworkCommands)
-          ) {
-            toolCallData.input = { ...toolInput, __securityWarning: true };
-          }
-          addToolCall(chatId, toolCallData);
-          // Register Write/Edit artifacts with project and track HTML/web asset files
+        }),
+      core: (cid) => ({
+        // Tag risky Bash commands — the same classifier as the server's gate.
+        normaliseToolInput: (name, input) => tagSecurityWarning(name, input, useSettingsStore.getState()),
+        onToolStarted: (_toolId, toolName, toolInput) => {
           if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
             const filePath = (toolInput.file_path || toolInput.notebook_path) as string | undefined;
             if (filePath) {
+              // HTML opens in the preview when the turn ends; other web assets
+              // refresh a preview that is already showing.
               if (/\.html?$/i.test(filePath)) {
                 pendingHtmlFiles.current.push(filePath);
               } else if (isWebAsset(filePath)) {
                 pendingWebAssets.current.push(filePath);
-                // Auto-refresh if we already have a file:// preview open
                 triggerPreviewRefresh(filePath);
               }
               if (currentProjectId) {
-                const fileName = filePath.split("/").pop() || filePath;
                 useProjectStore.getState().addArtifact(currentProjectId, {
                   id: crypto.randomUUID(),
-                  name: fileName,
+                  name: filePath.split("/").pop() || filePath,
                   path: filePath,
                   type: "file",
                   surface: "code",
-                  conversationId: chatId,
+                  conversationId: cid,
                   createdAt: Date.now(),
                   updatedAt: Date.now(),
                 });
               }
             }
           }
+          // Plan mode ends with the plan handed to ExitPlanMode — which the
+          // server refuses, since only the user leaves plan mode. The plan
+          // itself is still the deliverable, so it goes to the plan sheet.
+          if (toolName === "ExitPlanMode" && typeof toolInput.plan === "string" && toolInput.plan) {
+            setPlanContent(cid, toolInput.plan);
+          }
           // Detect plan file writes
-          if (toolName === "Write" && chatId) {
+          if (toolName === "Write") {
             const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : "";
-            if (filePath.includes(".claude/plans/")) {
-              const content = typeof toolInput.content === "string" ? toolInput.content : "";
-              if (content) setPlanContent(chatId, content);
-            }
+            const content = typeof toolInput.content === "string" ? toolInput.content : "";
+            // `<CLAUDE_CONFIG_DIR>/plans/<slug>.md` — the app's data dir, not
+            // `~/.claude`, since the provider points CLAUDE_CONFIG_DIR there.
+            if (/\/\.[^/]+\/plans\/[^/]+\.md$/.test(filePath) && content) setPlanContent(cid, content);
           }
-          break;
-        }
-        case "tool_result": {
-          const toolResultId = (event.tool_use_id as string) || (event.id as string) || "";
-          const toolResult =
-            typeof event.result === "string"
-              ? event.result
-              : JSON.stringify(event.result);
-          updateToolResult(chatId, toolResultId, toolResult, event.is_error as boolean | undefined);
-          if (toolResult && !event.is_error) {
-            const detected = detectServerUrl(toolResult);
-            if (detected) { previewPathRef.current = null; setPreviewUrl(detected.url); }
-          }
-          break;
-        }
-      }
+        },
+        onToolResult: (_toolId, output, isError) => {
+          if (!output || isError) return;
+          const detected = detectServerUrl(output);
+          if (detected) { previewPathRef.current = null; setPreviewUrl(detected.url); }
+        },
+      }),
     },
-    onDone: () => {
-      runRecorder.succeed();
-      // Mark any remaining running tools as complete
-      completeRunningTools(chatId);
-      // Set preview URL for any HTML files written in the last turn and auto-open preview
+    onDone: (cid) => {
+      // Open the preview on any HTML written in this turn.
       if (pendingHtmlFiles.current.length > 0) {
         const lastHtml = pendingHtmlFiles.current[pendingHtmlFiles.current.length - 1];
         // Served over http, not file:// — a null origin breaks embeds, ES
@@ -1049,266 +366,71 @@ export function CodeSurface() {
         pendingHtmlFiles.current = [];
         pendingWebAssets.current = [];
       } else if (pendingWebAssets.current.length > 0) {
-        resolveWebAssetEntryPoint();
+        void resolveWebAssetEntryPoint();
       }
-      stopStreaming(chatId);
-      setSessionStatus("idle");
       // Inline plan detection: check last assistant message for plan heading
-      const allMsgs = useCodeStore.getState().messages[chatId];
-      const lastMsg = allMsgs?.at(-1);
+      const lastMsg = useCodeStore.getState().messages[cid]?.at(-1);
       if (lastMsg?.role === "assistant" && lastMsg.content && /^#{1,2}\s+plan\b/im.test(lastMsg.content.slice(0, 500))) {
-        setPlanContent(chatId, lastMsg.content);
+        setPlanContent(cid, lastMsg.content);
       }
-      if (!document.hasFocus()) {
-        showNotification("Task complete", "Claude has finished working on your request.");
-      }
-    },
-    onError: (error) => {
-      runRecorder.fail(error.message);
-      stopStreaming(chatId);
-      setSessionStatus("idle");
-      appendToLastAssistant(chatId, `\n\n**Error:** ${error.message}`);
     },
   });
-
-  // Returns true if handled as slash command (caller should not submit)
-  const handleSlashCommand = useCallback(
-    (text: string): boolean => {
-      const parsed = parseSlashCommand(text);
-      if (!parsed) return false;
-      const result = applySlashCommand(parsed, sessionControls);
-      if (!result) return false;
-      const effectiveId = chatId || (() => {
-        const id = crypto.randomUUID();
-        addConversation({ id, title: text.substring(0, 50), surface: 'code', lastMessage: text, createdAt: Date.now(), updatedAt: Date.now() });
-        setActiveConversation(id);
-        setCurrentChat(id);
-        return id;
-      })();
-      setSessionControls(effectiveId, result.controls);
-      addMessage(effectiveId, { id: crypto.randomUUID(), role: 'user', content: text, timestamp: Date.now() });
-      addMessage(effectiveId, { id: crypto.randomUUID(), role: 'assistant', content: result.message, timestamp: Date.now() });
-      setInputValue('');
-      return true;
-    },
-    [chatId, sessionControls, setSessionControls, addMessage, addConversation, setActiveConversation, setCurrentChat]
-  );
-
-  const handleSubmit = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return;
-      const trimmed = text.trim();
-
-      // Goal mode is a property of the send, not a second composer.
-      if (goalMode) {
-        const settings = goalSettingsFrom(goalBudget, goalCap);
-        if (typeof settings === "string") return setGoalError(settings);
-        if (!folder) return setGoalError("Pick a folder first — the plan and progress live there.");
-        // A goal needs a conversation; the branch returns before the auto-create
-        // below, so a brand new chat would post conversationId: "" and 400.
-        if (!chatId) {
-          setGoalError("Send a message first, or pick an existing chat — a goal needs a conversation to live in.");
-          return;
-        }
-        setGoalPending(trimmed);
-        const ok = await startGoal({
-          conversationId: chatId,
-          workingDir: folder,
-          objective: trimmed,
-          ...settings,
-        });
-        setGoalPending(null);
-        if (ok) {
-          setGoalNudge((n) => n + 1);
-          setInputValue("");
-          setGoalMode(false);
-          if (chatId) {
-            const existing = allConversations.find((c) => c.id === chatId);
-            const untitled = !existing?.title || /^new chat$/i.test(existing.title);
-            if (untitled) {
-              updateConversation(chatId, {
-                title: trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed,
-              });
-            }
-          }
-          // Best effort. The run lives on the server and is unaffected if the
-          // panel cannot be placed; the inline status below the composer is the
-          // feedback that must not depend on dockview.
-          try {
-            // `true` — the user just pressed send on a goal, so moving them to
-            // the panel is what they asked for. The status poll passes nothing.
-            const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
-            if (typeof open === "function") (open as (focus?: boolean) => void)(true);
-          } catch {
-            /* the panel is a convenience, not the run */
-          }
-        }
-        return;
-      }
-
-      // Auto-create conversation if none active
-      let id = chatId;
-      if (!id) {
-        id = crypto.randomUUID();
-        addConversation({
-          id,
-          title: trimmed.substring(0, 50),
-          surface: "code",
-          lastMessage: trimmed,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-        setActiveConversation(id);
-        setCurrentChat(id);
-        // Apply pending folder selection from before conversation was created
-        if (pendingFolder) {
-          setFolder(id, pendingFolder);
-          setPendingFolder(null);
-        }
-      }
-
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        timestamp: Date.now(),
-        attachments: attachments.length > 0 ? attachments.map(a => ({ name: a.name, content: '', type: a.type, category: a.category as 'image' | 'document' | 'text' })) : undefined,
-      });
-      updateConversation(id, {
-        title: trimmed.substring(0, 50),
-        lastMessage: trimmed,
-        updatedAt: Date.now(),
-      });
-      addMessage(id, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        timestamp: Date.now(),
-        isLoading: true,
-        isStreaming: true,
-      });
-      startStreaming(id);
-      setSessionStatus("streaming");
-      setInputValue("");
-      setAttachments([]);
-      // Grab prior messages for history fallback (exclude just-added user + assistant placeholder)
-      const priorMessages = useCodeStore.getState().messages[id] || [];
-      const history = stripMessagesForHistory(priorMessages.slice(0, -2));
-
-      // Retrieve relevant memories — scope to current project so memories from
-      // other folders don't leak into the conversation context.
-      const relevantMemories = useMemoryStore.getState().getMemoriesForContext({
-        query: trimmed,
-        projectId: useConversationStore.getState().conversations.find((c) => c.id === id)?.projectId ?? null,
-      });
-      const memoriesStr = formatMemoriesForPrompt(relevantMemories);
-      relevantMemories.forEach((m) => useMemoryStore.getState().touchMemory(m.id));
-
-      const currentControls = useCodeStore.getState().sessionControls[id] ?? sessionControls;
-      const currentAttachments = [...attachments];
-      setAttachments([]);
-
-      // Drain context bus events for this surface
-      const { useContextBusStore } = await import('@/stores/context-bus-store');
-      const busEvents = useContextBusStore.getState().getUnconsumed('code')
-        .filter(e => e.priority === 'p0' || e.priority === 'p1')
-        .map(e => ({ summary: e.summary, source: e.source, priority: e.priority }));
-      if (busEvents.length > 0) {
-        useContextBusStore.getState().consumeAll('code');
-      }
-
-      // A tier route resolves here (it can land on a user provider's model); a
-      // pinned model passes through. Null ⇒ nothing resolved, so fall back to
-      // the surface's built-in model rather than send an empty one.
-      const route = resolveSendRoute(modelRoute, providers, {
-        capability: CAPABILITY,
-        tierModels,
-        hasAnthropicKey,
-        hasBedrock,
-        known: builtinAccessKnown,
-      });
-
-      // Open the run record before the turn starts so an immediate failure is
-      // still attributed rather than lost.
-      runRecorder.begin({ trigger: "manual", model: route?.model ?? undefined });
-      await sendMessage(trimmed, id, "code", route?.model ?? null, {
-        /*
-         * Only when the preview panel is actually open. The webview ref is null
-         * when it is closed, and offering `navigate` with nothing to navigate is
-         * DR-21's loop: the agent cannot discover that a step is impossible, so
-         * it repeats it until the turn dies.
-         */
-        browserToolsAvailable: !!previewWebviewRef.current,
-        apiKey: anthropicApiKey || undefined,
-        providerConfig: route?.providerConfig,
-        cwd: folder || undefined,
-        history: history.length > 0 ? history : undefined,
-        memories: memoriesStr || undefined,
-        attachments: currentAttachments.length > 0 ? currentAttachments : undefined,
-        contextBusEvents: busEvents.length > 0 ? busEvents : undefined,
-        sessionControls: currentControls,
-        securitySettings: {
-          blockDangerousCommands,
-          blockNetworkCommands,
-          restrictToProjectFolder,
-          disableBashTool,
-        },
-        searchSettings,
-        deckTheme,
-      });
-    },
-    [
-      chatId,
-      runRecorder,
-      modelRoute,
-      providers,
-      tierModels,
-      anthropicApiKey,
-      hasAnthropicKey,
-      hasBedrock,
-      builtinAccessKnown,
-      folder,
-      attachments,
-      addMessage,
-      addConversation,
-      setActiveConversation,
-      setCurrentChat,
-      startStreaming,
-      sendMessage,
-      setSessionStatus,
-      updateConversation,
-      // Read inside the callback and previously missing, so a slash command or a
-      // security-setting change did not take effect until another dep changed.
-      // All are primitives or stable store references.
-      sessionControls,
-      pendingFolder,
-      setFolder,
-      blockDangerousCommands,
-      blockNetworkCommands,
-      restrictToProjectFolder,
-      disableBashTool,
-    ]
-  );
+  const { messages, isStreaming } = turn;
+  const isEmpty = messages.length === 0;
 
   /*
-   * A due cron job runs HERE, through this surface's own submit — not through a
-   * scheduler with a send path of its own, which would be a fourth place that
-   * starts a turn. Before this, a job published to the bus, switched surface,
-   * and nothing ran it.
-   *
-   * The busy guard is load-bearing here in a way it is not elsewhere: without
-   * it, a job firing mid-turn called sendMessage, whose registry aborts the
-   * previous stream as 'superseded' — tearing down the user's running turn
-   * (mid-build, mid-refactor) silently, because 'superseded' deliberately
-   * reports nothing. A long-running task and a standing order on overlapping
-   * schedules is the normal case, not an edge case.
+   * The ONE submit — Enter and the button both land here. Goal mode is a
+   * property of the send, not a second composer; a scheduled prompt goes
+   * straight to the turn and never starts a goal because a toggle was left on.
    */
-  useScheduledPrompt('code', handleSubmit, () => useCodeStore.getState().isStreaming);
+  function submitFromComposer(text: string, attachments: AttachmentFile[]): boolean {
+    if (!turn.guardModel(text)) return false;
+    if (goalMode) return startGoalFrom(text);
+    void turn.submit(text, attachments);
+    return true;
+  }
 
-  const handleVoiceTranscript = useCallback(
-    (text: string) => setInputValue((prev) => (prev ? `${prev} ${text}` : text)),
-    []
-  );
+  /** Goal mode: plan and start a run. Returns false — the draft stays until it has started. */
+  function startGoalFrom(text: string): boolean {
+    const settings = goalSettingsFrom(goalBudget, goalCap);
+    if (typeof settings === "string") {
+      setGoalError(settings);
+      return false;
+    }
+    if (!folder) {
+      setGoalError("Pick a folder first — the plan and progress live there.");
+      return false;
+    }
+    // A goal needs a conversation; a brand new chat would post conversationId: "" and 400.
+    if (!chatId) {
+      setGoalError("Send a message first, or pick an existing chat — a goal needs a conversation to live in.");
+      return false;
+    }
+    setGoalPending(text);
+    void startGoal({ conversationId: chatId, workingDir: folder, objective: text, ...settings }).then((ok) => {
+      setGoalPending(null);
+      if (!ok) return;
+      setGoalNudge((n) => n + 1);
+      setGoalMode(false);
+      const existing = useConversationStore.getState().conversations.find((c) => c.id === chatId);
+      if (isUntitled(existing?.title)) {
+        updateConversation(chatId, { title: text.length > 60 ? `${text.slice(0, 57)}…` : text });
+      }
+      // Best effort. The run lives on the server and is unaffected if the
+      // panel cannot be placed; the inline status below the composer is the
+      // feedback that must not depend on dockview.
+      try {
+        // `true` — the user just pressed send on a goal, so moving them to
+        // the panel is what they asked for. The status poll passes nothing.
+        const open = (window as unknown as Record<string, unknown>).__ideOpenGoal;
+        if (typeof open === "function") (open as (focus?: boolean) => void)(true);
+      } catch {
+        /* the panel is a convenience, not the run */
+      }
+    });
+    // Kept until the goal has actually started — planning can still fail.
+    return false;
+  }
 
   const planButton = planContent ? (
     <Button
@@ -1326,131 +448,63 @@ export function CodeSurface() {
     <div className="relative flex h-full flex-col bg-background" {...dropZoneProps}>
       <DropOverlay visible={isDragging} />
 
-      {isEmpty ? (
-        /* ── Empty state: centered mascot + input (or folder prompt) ── */
+      {!folder ? (
+        /* ── Welcome: no folder yet, so there is no workspace to show ── */
         <div className="flex flex-1 flex-col items-center justify-center px-6 animate-in fade-in duration-300">
           <Mascot />
           <div className="w-full max-w-2xl">
-            {folder ? (
-              <>
-                <CodeInput
-                  value={inputValue}
-                  onChange={setInputValue}
-                  onSubmit={handleSubmit}
-                  goalToggle={
-                    <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
-                  }
-                  goalQuestion={
-                    <GoalQuestion chatId={chatId} folder={folder} surfaceId="code" />
-                  }
-                  goalStatus={
-                    <GoalRunStatus
-                      chatId={chatId} folder={folder} surfaceId="code"
-                      nudge={goalNudge}
-                      starting={
-                        goalPending && goalPhase !== "idle"
-                          ? { objective: goalPending, phase: goalPhase }
-                          : null
-                      }
-                    />
-                  }
-                  goalBar={
-                    goalMode ? (
-                      <GoalModeBar
-                        budget={goalBudget} cap={goalCap}
-                        onBudget={setGoalBudget} onCap={setGoalCap}
-                        disabled={goalBusy} error={goalStartError}
-                      />
-                    ) : null
-                  }
-                  onAbort={abort}
-                  isStreaming={isStreaming}
-                  permissionMode={permissionMode}
-                  onPermissionModeChange={setPermissionMode}
-                  model={modelRoute?.id ?? ''}
-                  onSelectModel={setModelRoute}
-                  placeholder="Find a small todo in the codebase and do it"
-                  rows={2}
-                  minHeight="min-h-[72px]"
-                  attachments={attachments}
-                  onAttachmentAdd={handleAttachmentAdd}
-                  onAttachmentRemove={handleAttachmentRemove}
-                  currentProjectId={currentProjectId}
-                  onAddToProject={(pid) => assignToProject(chatId, pid)}
-                  onNewProject={() => setSidebarMode("projects")}
-                  projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                  onVoiceTranscript={handleVoiceTranscript}
-                  planButton={planButton}
-                  cwd={folder}
-                  onSlashCommand={handleSlashCommand}
+            <div className="rounded-2xl border border-border bg-card shadow-sm p-8 text-center">
+              <Folder className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+              <h2 className="text-lg font-medium mb-1">Start coding</h2>
+              <p className="text-sm text-muted-foreground mb-5">
+                Pick a folder to work in — or clone a GitHub repo.
+              </p>
+              <div className="flex flex-col items-center gap-2">
+                <FolderPicker
+                  folder={folder}
+                  onFolderChange={handleFolderChange}
+                  className="mx-auto"
                 />
-                <BottomBar folder={folder} onFolderChange={handleFolderChange} />
-              </>
-            ) : (
-              <>
-                <div className="rounded-2xl border border-border bg-card shadow-sm p-8 text-center">
-                  <Folder className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
-                  <h2 className="text-lg font-medium mb-1">Start coding</h2>
-                  <p className="text-sm text-muted-foreground mb-5">
-                    Pick a folder to work in — or clone a GitHub repo.
+                {githubConnected ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCloneDialogOpen(true)}
+                  >
+                    <Github className="h-3.5 w-3.5 mr-1.5" />
+                    Clone from GitHub
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Connect GitHub in <span className="font-medium">Customize → Connectors</span> to enable repo cloning.
                   </p>
-                  <div className="flex flex-col items-center gap-2">
-                    <FolderPicker
-                      folder={folder}
-                      onFolderChange={handleFolderChange}
-                      className="mx-auto"
-                    />
-                    {githubConnected ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCloneDialogOpen(true)}
-                      >
-                        <Github className="h-3.5 w-3.5 mr-1.5" />
-                        Clone from GitHub
-                      </Button>
-                    ) : (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Connect GitHub in <span className="font-medium">Customize → Connectors</span> to enable repo cloning.
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <CloneFromGitHub
-                  open={cloneDialogOpen}
-                  onOpenChange={setCloneDialogOpen}
-                  onCloned={(path) => handleFolderChange(path)}
-                />
-              </>
-            )}
+                )}
+              </div>
+            </div>
+            <CloneFromGitHub
+              open={cloneDialogOpen}
+              onOpenChange={setCloneDialogOpen}
+              onCloned={(path) => handleFolderChange(path)}
+            />
           </div>
         </div>
       ) : (
-        /* ── Active state: workspace layout (tree + viewer + chat slot) ── */
+        /*
+         * ── Workspace: tree + editor + terminal + chat, as soon as a folder is
+         * chosen. It used to wait for the first MESSAGE, so the file tree,
+         * editor and terminal of the folder you had just picked were hidden
+         * until you had asked the agent for something.
+         */
         <WorkspaceLayout
           workspace={folder}
           chatId={chatId}
           /*
-           * The preview is a DOCKVIEW PANEL now, not an overlay.
-           *
-           * It used to render here as a sibling of the dock — floating over the
-           * chat panel with no tab, so it could not be docked, dragged or
-           * placed like every other region. The content still belongs to the
-           * surface, which owns the webview's lifecycle and hands its ref to
-           * the agent; only the framing moved.
+           * The preview is a DOCKVIEW PANEL, and mounted UNCONDITIONALLY: its
+           * address bar is the only way for a user to SET a url, so a panel that
+           * mounted only once a url was set could never be given one. The
+           * content still belongs to the surface, which owns the webview's
+           * lifecycle and hands its ref to the agent.
            */
-          /*
-             UNCONDITIONAL. It used to be `previewUrl ? <PreviewPanel/> : null`,
-             which is the same defect as the last two rounds, one layer up: the
-             panel's address bar is the only way for a user to SET a url, and it
-             lived inside a component that only mounted once a url was already
-             set. You needed a URL to reach the box that lets you type a URL, so
-             the panel opened as an empty dark rectangle and stayed that way.
-             
-             The panel existing IS the user asking for it. What goes in it is
-             `about:blank` until somebody — the agent or the user — says
-             otherwise.
-          */
           previewSlot={
             <PreviewPanel
               url={previewUrl ?? ''}
@@ -1477,89 +531,91 @@ export function CodeSurface() {
                 )}
 
                 {/*
-                  The "Preview about:blank" chip lived here — the overlay's
-                  show/hide toggle, sitting inside the CHAT panel because that
-                  is where the overlay was anchored. The panel has its own tab
-                  now, so the chip was a second control for the same thing in
-                  the wrong place.
+                  The same transcript as Chat and Cowork: error banners with
+                  Try again, edit & resend, question AND connect cards. Code
+                  had its own terminal-styled copy, which rendered no connect
+                  card at all — a connector request here parked the turn for
+                  300s with nothing on screen.
                 */}
-
-                <div className="flex flex-1 min-h-0">
-                  {/* Messages + input column */}
-                  <div className="flex flex-1 flex-col min-w-0">
-                    <div
-                      className="flex-1 min-h-0 overflow-y-auto px-4 py-4"
-                      onScroll={(e) => {
-                        const el = e.currentTarget;
-                        const scrolledUp = el.scrollHeight - el.scrollTop - el.clientHeight >= 50;
-                        setUserScrolledUp(scrolledUp);
-                        userScrolledUpRef.current = scrolledUp;
-                      }}
-                    >
-                      <div ref={contentRef} className="max-w-3xl mx-auto relative">
-                        <TerminalOutput
-                          messages={messages as TerminalMessage[]}
-                          onQuestionAnswered={onQuestionAnswered}
-                          onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }}
-                          endRef={endRef}
-                        />
-                      </div>
-                      {userScrolledUp && (
-                        <button
-                          onClick={() => {
-                            setUserScrolledUp(false);
-                            userScrolledUpRef.current = false;
-                            endRef.current?.scrollIntoView({ behavior: "smooth" });
-                          }}
-                          className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-full bg-primary/90 text-primary-foreground px-3 py-1.5 text-xs shadow-lg hover:bg-primary transition-colors"
-                        >
-                          Scroll to bottom
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="px-4 pb-3 pt-2 shrink-0">
-                      <div className="max-w-3xl mx-auto">
-                        <CodeInput
-                          value={inputValue}
-                          onChange={setInputValue}
-                          onSubmit={handleSubmit}
-                          goalToggle={
-                            <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
-                          }
-                          goalBar={
-                            goalMode ? (
-                              <GoalModeBar
-                                budget={goalBudget} cap={goalCap}
-                                onBudget={setGoalBudget} onCap={setGoalCap}
-                                disabled={goalBusy} error={goalStartError}
-                              />
-                            ) : null
-                          }
-                          onAbort={abort}
-                          isStreaming={isStreaming}
-                          permissionMode={permissionMode}
-                          onPermissionModeChange={setPermissionMode}
-                          model={modelRoute?.id ?? ''}
-                          onSelectModel={setModelRoute}
-                          placeholder="Describe a task..."
-                          rows={1}
-                          minHeight="min-h-[36px]"
-                          attachments={attachments}
-                          onAttachmentAdd={handleAttachmentAdd}
-                          onAttachmentRemove={handleAttachmentRemove}
-                          currentProjectId={currentProjectId}
-                          onAddToProject={(pid) => assignToProject(chatId, pid)}
-                          onNewProject={() => setSidebarMode("projects")}
-                          projects={allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon }))}
-                          onVoiceTranscript={handleVoiceTranscript}
-                          planButton={planButton}
-                        />
-                        <BottomBar folder={folder} onFolderChange={handleFolderChange} />
-                      </div>
-                    </div>
+                {isEmpty ? (
+                  <div
+                    className="flex flex-1 flex-col items-center justify-center text-center text-muted-foreground animate-in fade-in duration-300"
+                    data-testid="code-chat-empty"
+                  >
+                    <Mascot />
+                    <p className="text-sm">What should we work on in this folder?</p>
                   </div>
+                ) : (
+                  <MessageList
+                    {...turn.transcript}
+                    surfaceId="code"
+                    onPreviewUrl={(url) => { setPreviewUrl(url); setPreviewOpen(true); }}
+                    showReasoning={sessionControls.reasoningVisible}
+                    expandToolCalls={sessionControls.verboseMode}
+                  />
+                )}
 
+                <div className="px-4 pb-3 pt-2 shrink-0">
+                  <div className="max-w-3xl mx-auto">
+                    <Composer
+                      {...turn.composer}
+                      onSubmit={submitFromComposer}
+                      placeholder={isEmpty ? "Find a small todo in the codebase and do it" : "Describe a task..."}
+                      submitDisabled={goalBusy}
+                      submitLabel={goalMode ? "Plan and start the goal" : "Send message"}
+                      mentionCwd={folder}
+                      attachmentMenu={{
+                        currentProjectId,
+                        onAddToProject: (pid) => assignToProject(chatId, pid),
+                        onNewProject: () => setSidebarMode("projects"),
+                        projects: allProjects.map((p) => ({ id: p.id, name: p.name, icon: p.icon })),
+                      }}
+                      header={
+                        <>
+                          {turn.noModelCard}
+                          {/* The run's parked question, above the composer where the user is. */}
+                          <GoalQuestion chatId={chatId} folder={folder} surfaceId="code" />
+                        </>
+                      }
+                      belowInput={goalMode ? (
+                        <GoalModeBar
+                          budget={goalBudget} cap={goalCap}
+                          onBudget={setGoalBudget} onCap={setGoalCap}
+                          disabled={goalBusy} error={goalStartError}
+                        />
+                      ) : null}
+                      toolbarStart={
+                        <>
+                          {planButton}
+                          <GoalModeToggle on={goalMode} onChange={setGoalMode} disabled={goalBusy} />
+                          <PermissionModeMenu value={permissionMode} onChange={setPermissionMode} />
+                        </>
+                      }
+                      toolbarEnd={
+                        <ModelSelector
+                          value={modelRoute?.id ?? ""}
+                          onSelectModel={setModelRoute}
+                          capability={CAPABILITY}
+                          className="border-0 bg-transparent shadow-none h-6 w-auto text-muted-foreground"
+                        />
+                      }
+                    />
+                    {/*
+                      Run status, under the composer — not in the dockview panel,
+                      which can fail to open. Feedback that a goal has started
+                      must not depend on a panel being placeable.
+                    */}
+                    <GoalRunStatus
+                      chatId={chatId} folder={folder} surfaceId="code"
+                      nudge={goalNudge}
+                      starting={
+                        goalPending && goalPhase !== "idle"
+                          ? { objective: goalPending, phase: goalPhase }
+                          : null
+                      }
+                    />
+                    <BottomBar folder={folder} onFolderChange={handleFolderChange} />
+                  </div>
                 </div>
               </div>
             ),

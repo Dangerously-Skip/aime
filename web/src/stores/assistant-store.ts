@@ -4,6 +4,8 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import type { A2UIDocument } from '@/lib/a2ui/types';
+import type { TurnErrorCode } from '@/lib/sse/turn-error';
+import { validateTrigger } from '@/lib/schedule/schedule';
 
 // ── Standing Order ───────────────────────────────────────────────────────────
 
@@ -44,6 +46,14 @@ export interface AssistantCard {
   timestamp: number;
   unread: boolean;
   pinned: boolean;
+  /** `error` for a failed or error-paused run — rendered as a failure, not a result. */
+  tone?: 'error';
+  /** What the Assistant surface asked for this card — what Try again re-runs. */
+  prompt?: string;
+  /** The card's turn failed: a banner beside the text, never written into it. */
+  error?: { code: TurnErrorCode; message: string };
+  /** The provider is backing off; the turn is waiting, not stuck. */
+  retrying?: { attempt: number; delayMs: number };
   /*
    * The `widget:` block is GONE. A card carried one so a stock ticker could
    * live in the event feed and refresh itself — state wearing an event's
@@ -114,6 +124,14 @@ export const useAssistantStore = create<AssistantStore>()(
       addOrder: (order) => {
         const id = crypto.randomUUID();
         const now = Date.now();
+        /*
+         * VALIDATED AT SAVE. An order whose schedule cannot be read used to be
+         * saved as active and then simply never fire — listed, counted, and
+         * dead. It is still saved (the agent already told the user it was, and
+         * dropping it would be a silent loss of a different kind), but PAUSED,
+         * with the reason in the activity log where the health panel finds it.
+         */
+        const scheduleError = validateTrigger(order.trigger);
         set((state) => ({
           orders: [
             ...state.orders,
@@ -121,7 +139,7 @@ export const useAssistantStore = create<AssistantStore>()(
               ...order,
               id,
               state: {},
-              status: 'active' as const,
+              status: scheduleError ? ('paused' as const) : ('active' as const),
               runCount: 0,
               errorCount: 0,
               createdAt: now,
@@ -130,6 +148,13 @@ export const useAssistantStore = create<AssistantStore>()(
           ],
         }));
         get().addActivity({ type: 'order-created', label: `Created: ${order.instruction.slice(0, 60)}`, orderId: id });
+        if (scheduleError) {
+          get().addActivity({
+            type: 'order-error',
+            label: `Paused — schedule not valid: ${scheduleError}`.slice(0, 160),
+            orderId: id,
+          });
+        }
         import('@/lib/telemetry/events').then(({ sendFeatureAdoptionEvent }) => {
           sendFeatureAdoptionEvent({ feature: 'standing_order', surface: 'assistant' });
         }).catch(() => {});

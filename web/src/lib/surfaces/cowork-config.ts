@@ -10,7 +10,7 @@ export function getCoworkConfig(overrides: Partial<SurfaceConfig> = {}): Surface
     allowedTools: [
       'mcp__aime__FetchUrl', 'mcp__aime__CreateImage', 'mcp__aime__MailSearch', 'mcp__aime__MailRead', 'mcp__aime__MailDraft', 'mcp__aime__CalendarEvents', 'mcp__aime__ContactsSearch',
       'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash',
-      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'mcp__aime__SearchWeb', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'mcp__aime__SkillCreate', 'mcp__aime__VoiceProfileSave', 'mcp__aime__DocumentCreate', 'spawn_agent',
+      'WebFetch', 'Agent', 'TodoWrite', 'AskUserQuestion', 'Skill', 'mcp__aime__SearchWeb', 'mcp__aime__canvas', 'mcp__aime__RequestConnector', 'mcp__aime__SkillCreate', 'mcp__aime__VoiceProfileSave', 'mcp__aime__DocumentCreate',
       'mcp__aime__ExcelRead', 'mcp__aime__ExcelWrite', 'mcp__aime__ExcelEdit',
       'mcp__web-search__web_search',
     ],

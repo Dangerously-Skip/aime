@@ -57,14 +57,40 @@ function refreshCouldBeDue(meta: Record<string, unknown>): boolean {
   return true;
 }
 
-async function refreshTokenIfNeeded(
+/**
+ * Refresh one server's token if it is due. SINGLE-FLIGHT per config + server
+ * key: two chats starting together both saw the token as expiring and both
+ * POSTed the refresh token, and a provider that rotates refresh tokens honours
+ * the first and rejects — or revokes the grant on — the second. Concurrent
+ * callers now share one refresh; a caller that arrives just after one finished
+ * re-reads the entry and finds nothing due.
+ *
+ * Exported for the single-flight test; `loadProvisionedMcpServers` is the caller.
+ */
+export async function refreshTokenIfNeeded(
+  serverKey: string,
+  meta: Record<string, unknown>,
+  configPath: string,
+): Promise<string | null> {
+  if (!meta.refreshToken) return null;
+  if (!refreshCouldBeDue(meta)) return null;
+  const { singleFlight, readMcpConfig } = await import('./config-store');
+  return singleFlight(`${configPath}\0${serverKey}`, async () => {
+    // The caller's view of the config may predate a refresh that just landed.
+    const current = (await readMcpConfig(configPath)).mcpServers?.[serverKey]?._meta;
+    if (current && typeof current === 'object' && !refreshCouldBeDue(current as Record<string, unknown>)) {
+      return null;
+    }
+    return performRefresh(serverKey, meta, configPath);
+  });
+}
+
+async function performRefresh(
   serverKey: string,
   meta: Record<string, unknown>,
   configPath: string,
 ): Promise<string | null> {
   const { refreshToken, connectorId, mcpName, tokenEndpoint, clientId, clientSecret } = meta;
-  if (!refreshToken) return null;
-  if (!refreshCouldBeDue(meta)) return null;
 
   const label = (connectorId || mcpName) as string;
   console.log(`[Token Refresh] Token for ${label} is expired or near expiry, refreshing...`);
@@ -111,11 +137,12 @@ async function refreshTokenIfNeeded(
     const newAccessToken = data.access_token;
     if (!newAccessToken) return null;
 
-    const { readFile, writeFile } = await import('fs/promises');
-    const raw = await readFile(configPath, 'utf-8');
-    const config = JSON.parse(raw) as { mcpServers?: Record<string, Record<string, unknown>> };
-    const entry = config.mcpServers?.[serverKey];
-    if (entry) {
+    // Applied to a fresh read under the config lock, so a Connect that landed
+    // while the token request was in flight is not written over.
+    const { updateMcpConfig, SKIP_WRITE } = await import('./config-store');
+    await updateMcpConfig(async (config) => {
+      const entry = config.mcpServers?.[serverKey];
+      if (!entry) return SKIP_WRITE;
       if (entry.env && typeof entry.env === 'object') {
         const envObj = entry.env as Record<string, string>;
         // Replace only the variable this connector declares as its token.
@@ -167,9 +194,8 @@ async function refreshTokenIfNeeded(
         config.mcpServers![serverKey] = publicEntry as Record<string, unknown>;
       }
 
-      await writeFile(configPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
       console.log(`[Token Refresh] Updated ${label} token`);
-    }
+    }, configPath);
     return newAccessToken;
   } catch (err) {
     console.error(`[Token Refresh] Error refreshing ${label}:`, err);
@@ -194,22 +220,28 @@ async function migrateInlineSecrets(
   if (store.mode !== 'encrypted') return;
 
   const { extractSecrets, isEmptySecrets } = await import('./secrets');
-  let changed = false;
-  for (const [key, entry] of Object.entries(config.mcpServers)) {
-    const { entry: publicEntry, secrets } = extractSecrets(entry);
-    if (isEmptySecrets(secrets)) continue;
-    const existing = (await store.get(key)) ?? {};
-    await store.set(key, { ...existing, ...secrets });
-    config.mcpServers[key] = publicEntry as Record<string, unknown>;
-    changed = true;
-  }
+  // Screen the unlocked view first: this runs on every message and is a no-op
+  // after the first pass, so only take the lock when there is work.
+  const hasInline = Object.values(config.mcpServers).some(
+    (entry) => !isEmptySecrets(extractSecrets(entry).secrets),
+  );
+  if (!hasInline) return;
 
-  if (changed) {
-    const { writeFile, chmod } = await import('fs/promises');
-    await writeFile(configPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
-    await chmod(configPath, 0o600).catch(() => {});
+  const { updateMcpConfig, SKIP_WRITE } = await import('./config-store');
+  await updateMcpConfig(async (fresh) => {
+    if (!fresh.mcpServers) return SKIP_WRITE;
+    let changed = false;
+    for (const [key, entry] of Object.entries(fresh.mcpServers)) {
+      const { entry: publicEntry, secrets } = extractSecrets(entry);
+      if (isEmptySecrets(secrets)) continue;
+      const existing = (await store.get(key)) ?? {};
+      await store.set(key, { ...existing, ...secrets });
+      fresh.mcpServers[key] = publicEntry as Record<string, unknown>;
+      changed = true;
+    }
+    if (!changed) return SKIP_WRITE;
     console.log('[MCP] Migrated connector secrets into the encrypted store');
-  }
+  }, configPath);
 }
 
 export async function loadProvisionedMcpServers(): Promise<Record<string, unknown>> {

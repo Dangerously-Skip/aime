@@ -151,10 +151,6 @@ const DESCRIBERS: Record<string, Describer> = {
   excelread: () => 'Reading a spreadsheet',
   excelwrite: () => 'Writing a spreadsheet',
   exceledit: () => 'Editing a spreadsheet',
-  spawn_agent: (i) => {
-    const a = short(i.agentName, 24);
-    return a ? `Handing off to the ${a} agent` : 'Handing off to a subagent';
-  },
 };
 
 /**

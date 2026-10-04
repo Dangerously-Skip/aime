@@ -4,7 +4,6 @@ import { useState } from "react";
 import { CanvasPanel } from "./canvas-panel";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useAppStore } from "@/stores/app-store";
-import { useSettingsStore } from "@/stores/settings-store";
 import { dispatchCanvasToolCall } from "@/lib/canvas/dispatch";
 import { refreshCanvasDoc } from "@/lib/canvas/dispatch";
 import type { A2UIAction, A2UIDocument } from "@/lib/a2ui/types";
@@ -19,7 +18,7 @@ interface CanvasOverlayProps {
 /**
  * Single overlay that owns all canvas presentation + lifecycle for a surface.
  * Surfaces just render `<CanvasOverlay surfaceId={...} conversationId={chatId} />`
- * and call `useCanvasSseHandler` from their SSE switch.
+ * and hand `useCanvasSseHandler` to the shared turn as its `onCanvas`.
  */
 export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps) {
   // Per-surface state. The store also stamps each canvas with the conversation
@@ -39,7 +38,6 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
   const clearStore = useCanvasStore((s) => s.clearCanvas);
   const setOpenStore = useCanvasStore((s) => s.setOpen);
   const pushCanvas = useCanvasStore((s) => s.pushCanvas);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   const [isRefreshing, setIsRefreshing] = useState(false);
   // Subscribe to activeSurface so we re-render when switching back.
   const activeSurface = useAppStore((s) => s.activeSurface);
@@ -63,14 +61,14 @@ export function CanvasOverlay({ surfaceId, conversationId }: CanvasOverlayProps)
           // Snapshot the refreshPrompt before dispatching — `canvasDoc` is
           // closed over here, so this stays correct even if state changes.
           const refreshPrompt = canvasDoc?.refreshPrompt;
-          console.log("[canvas-overlay] tool-call fired", { tool: action.tool, hasRefreshPrompt: !!refreshPrompt, refreshPrompt, hasApiKey: !!anthropicApiKey, docHasRefreshPrompt: !!(canvasDoc as A2UIDocument | null)?.refreshPrompt });
-          dispatchCanvasToolCall(action, { surfaceId, apiKey: anthropicApiKey })
+          console.log("[canvas-overlay] tool-call fired", { tool: action.tool, hasRefreshPrompt: !!refreshPrompt, refreshPrompt, docHasRefreshPrompt: !!(canvasDoc as A2UIDocument | null)?.refreshPrompt });
+          dispatchCanvasToolCall(action, { surfaceId })
             .then(async (result) => {
               console.log("[canvas-overlay] dispatch resolved", { resultPreview: String(result).slice(0, 120), willRefresh: !!refreshPrompt });
               if (!refreshPrompt) return;
               setIsRefreshing(true);
               try {
-                const fresh = await refreshCanvasDoc(refreshPrompt, { surfaceId, apiKey: anthropicApiKey });
+                const fresh = await refreshCanvasDoc(refreshPrompt, { surfaceId });
                 console.log("[canvas-overlay] refresh returned", { hasFresh: !!fresh, components: fresh?.components?.length });
                 if (fresh) {
                   // Preserve refreshPrompt on the new doc so the next action

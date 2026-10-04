@@ -96,7 +96,15 @@ export function widgetToGoal(widget: Widget): Goal {
     objective: widget.recipe,
     // The tile rendering IS the success criterion; verification is structural
     // (did we get a valid node?) rather than semantic, so no successCriteria.
-    approvalPolicy: 'never', // read-only generation, nothing consequential
+    /*
+     * Unattended, so `consequential`: reads and in-app actions run, anything
+     * with a side effect outside the app is refused. A refresh renders a tile
+     * and needs nothing more. It was `never` on the assumption that a widget
+     * would not try; once the permission gate ran in background runs, that
+     * label would have ALLOWED Write and Bash in web-grounded refreshes nobody
+     * watches.
+     */
+    approvalPolicy: 'consequential',
     schedule: widget.refreshEverySeconds ? { everySeconds: widget.refreshEverySeconds } : undefined,
     enabled: widget.enabled,
     createdAt: widget.createdAt,

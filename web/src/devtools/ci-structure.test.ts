@@ -83,6 +83,14 @@ describe('the hook can actually run', () => {
     expect(hook).toMatch(/cd "\$repo_root\/web"/);
   });
 
+  it('drops the repo-local git variables before running anything', () => {
+    // Git exports GIT_DIR to hooks; a test spawning git inherited it and
+    // re-initialised the real repo as bare. See electron/git-args.test.js.
+    const clear = hook.indexOf('git rev-parse --local-env-vars');
+    expect(clear, 'the hook no longer clears GIT_DIR and friends').toBeGreaterThan(-1);
+    expect(clear).toBeLessThan(hook.indexOf('npm run --silent verify'));
+  });
+
   it('fails the push when verify fails', () => {
     // `set -e` plus an `if !` that exits non-zero. A hook that reports a failure
     // and exits 0 is decoration.

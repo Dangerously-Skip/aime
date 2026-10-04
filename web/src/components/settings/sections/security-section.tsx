@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { useSettingsStore, type SettingsStore } from '@/stores/settings-store'
+import { Switch } from '@/components/ui/switch'
 
 export type SecurityKey =
   | 'blockDangerousCommands'
@@ -50,7 +51,7 @@ export const SECURITY_TOGGLES: SecurityToggle[] = [
     setter: 'setBlockDangerousCommands',
     label: 'Ask before destructive commands',
     description:
-      'Pauses and asks you before running rm -rf, sudo, mkfs, dd, chmod 777, force pushes and the like. Errs towards asking. Unattended runs refuse them instead, since nobody is there to ask.',
+      'Pauses and asks you before running rm -rf, sudo, mkfs, dd, chmod 777, force pushes and the like. Errs towards asking. Runs with no chat to ask in — standing orders, widget refreshes, subagents — refuse them instead.',
   },
   {
     key: 'blockNetworkCommands',
@@ -58,7 +59,7 @@ export const SECURITY_TOGGLES: SecurityToggle[] = [
     setter: 'setBlockNetworkCommands',
     label: 'Ask before commands that reach the network',
     description:
-      'Pauses and asks you before netcat, socat, SSH tunnels, curl uploads, scp/rsync to a remote host, and piping a download into an interpreter. npm install, pip install, git push and brew are unaffected. Unattended runs refuse them instead, since nobody is there to ask.',
+      'Pauses and asks you before netcat, socat, SSH tunnels, curl uploads, scp/rsync to a remote host, and piping a download into an interpreter. npm install, pip install, git push and brew are unaffected. Runs with no chat to ask in — standing orders, widget refreshes, subagents — refuse them instead.',
   },
   {
     key: 'restrictToProjectFolder',
@@ -75,7 +76,7 @@ export const SECURITY_TOGGLES: SecurityToggle[] = [
     label: 'Disable Bash tool',
     description:
       'Removes Bash, BashOutput and KillShell from the session entirely.',
-    warning: 'Prevents Claude from running any terminal commands',
+    warning: 'The agent cannot run any terminal commands while this is on',
   },
 ]
 
@@ -111,76 +112,96 @@ export function SecuritySection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one sync per mount; per-change syncing happens in the onChange below
   }, [])
 
+  const setToggle = (toggle: SecurityToggle, checked: boolean) => {
+    store[toggle.setter](checked)
+    void persistToServer({
+      blockDangerousCommands: store.blockDangerousCommands,
+      blockNetworkCommands: store.blockNetworkCommands,
+      restrictToProjectFolder: store.restrictToProjectFolder,
+      disableBashTool: store.disableBashTool,
+      [toggle.key]: checked,
+    })
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-sm font-medium mb-1">Safety controls</h3>
         <p className="text-xs text-muted-foreground mb-4">
-          These settings inject safety rules into Claude&apos;s system prompt and control which tools are available.
+          Each control says whether the server enforces it or only asks the model to comply.
         </p>
       </div>
 
       <div className="space-y-3">
-        {SECURITY_TOGGLES.map((toggle) => (
-          <label
-            key={toggle.key}
-            className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-              store[toggle.key]
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:border-muted-foreground/25'
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={store[toggle.key]}
-              onChange={(e) => {
-                store[toggle.setter](e.target.checked)
-                void persistToServer({
-                  blockDangerousCommands: store.blockDangerousCommands,
-                  blockNetworkCommands: store.blockNetworkCommands,
-                  restrictToProjectFolder: store.restrictToProjectFolder,
-                  disableBashTool: store.disableBashTool,
-                  [toggle.key]: e.target.checked,
-                })
-              }}
-              className="mt-0.5"
-            />
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">{toggle.label}</span>
-                {/*
-                  Shown, not just declared. The point of the field is that a user
-                  can tell at a glance which of these is a boundary and which is
-                  a polite request — the distinction they had no way to see, and
-                  that three of these four toggles got wrong.
-                */}
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                    toggle.enforcement === 'enforced'
-                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-muted text-muted-foreground'
-                  }`}
-                  title={
-                    toggle.enforcement === 'enforced'
-                      ? 'The server refuses this — not just a request to the model'
-                      : 'Guidance in the system prompt; the model can still do it'
-                  }
-                >
-                  {toggle.enforcement}
-                </span>
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {toggle.description}
-              </div>
-              {toggle.warning && store[toggle.key] && (
-                <div className="text-xs text-orange-500 mt-1">
-                  {toggle.warning}
+        {SECURITY_TOGGLES.map((toggle) => {
+          const on = store[toggle.key]
+          const id = `security-${toggle.key}`
+          return (
+            <div
+              key={toggle.key}
+              className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${
+                on ? 'border-primary/40 bg-primary/5' : 'border-border'
+              }`}
+            >
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <label htmlFor={id} className="cursor-pointer text-sm font-medium">
+                    {toggle.label}
+                  </label>
+                  {/*
+                    Shown, not just declared. The point of the field is that a user
+                    can tell at a glance which of these is a boundary and which is
+                    a polite request — the distinction they had no way to see, and
+                    that three of these four toggles got wrong. It is a property
+                    of the control, not of its state, so it reads "when on" and is
+                    only coloured while it is actually on — a green ENFORCED badge
+                    on a switch that is off claimed protection that was not there.
+                  */}
+                  <EnforcementBadge enforcement={toggle.enforcement} on={on} />
                 </div>
-              )}
+                <div className="text-xs text-muted-foreground">
+                  {toggle.description}
+                </div>
+                {toggle.warning && on && (
+                  <div className="text-xs text-orange-500 mt-1">
+                    {toggle.warning}
+                  </div>
+                )}
+              </div>
+              <Switch
+                id={id}
+                aria-label={toggle.label}
+                checked={on}
+                onCheckedChange={(checked) => setToggle(toggle, checked)}
+                className="mt-0.5"
+              />
             </div>
-          </label>
-        ))}
+          )
+        })}
       </div>
     </div>
+  )
+}
+
+/** "Enforced when on" / "Guidance only" — coloured only while it is in force. */
+export function EnforcementBadge({ enforcement, on }: { enforcement: Enforcement; on: boolean }) {
+  const enforced = enforcement === 'enforced'
+  return (
+    <span
+      data-testid="enforcement-badge"
+      data-active={enforced && on ? 'true' : 'false'}
+      className={`rounded px-1.5 py-0.5 text-[10px] ${
+        enforced && on
+          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+          : 'bg-muted text-muted-foreground'
+      }`}
+      title={
+        enforced
+          ? 'While on, the server refuses this — not just a request to the model'
+          : 'Guidance in the system prompt; the model can still do it'
+      }
+    >
+      {enforced ? 'Enforced when on' : 'Guidance only'}
+    </span>
   )
 }

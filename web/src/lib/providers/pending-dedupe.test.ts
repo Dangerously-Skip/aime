@@ -59,11 +59,15 @@ describe('the creation tools use it', () => {
     'utf-8',
   );
 
-  /** The handler body for a given tool name. */
+  /**
+   * The handler body for a given tool name: up to the next tool definition.
+   * A fixed-length window broke as soon as a handler grew a validation step.
+   */
   const handler = (name: string) => {
     const i = provider.indexOf(`'${name}'`);
     expect(i, `${name} is gone`).toBeGreaterThan(-1);
-    return provider.slice(i, i + 2600);
+    const next = provider.indexOf('(tool as any)(', i);
+    return provider.slice(i, next === -1 ? undefined : next);
   };
 
   it('a standing order is keyed on what makes it distinct', () => {

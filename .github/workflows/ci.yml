@@ -71,7 +71,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -83,10 +83,10 @@ jobs:
         working-directory: web
         run: npm run typecheck
 
-      # Errors are a hard gate. They were driven from 62 to 0 on 2026-07-26 and
-      # this keeps them there — without a gate the count silently re-rots.
-      # Warnings are still allowed; `npm run lint:strict` is the local ratchet
-      # for tightening that allowance as the remaining ones get cleared.
+      # Errors AND warnings are a hard gate. Errors were driven from 62 to 0 on
+      # 2026-07-26, warnings from 71 to 0 on 2026-10-01; without a gate the
+      # count silently re-rots. A warning that is genuinely wrong for this code
+      # gets a rule change in eslint.config.mjs with the reason, not a pass.
       - name: Lint
         working-directory: web
         run: npm run lint
@@ -114,7 +114,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -183,7 +183,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 

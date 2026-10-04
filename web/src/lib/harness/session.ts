@@ -2,7 +2,7 @@ import { parseQuestionFields, type QuestionField } from './question-fields';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { PROGRESS_FILE, type Goal, type Task } from './ledger';
-import { parseRevision, REVISION_MARKER, type Revision } from './revision';
+import { parseRevision, REVISION_MARKER } from './revision';
 import type { SessionInput, SessionOutcome, SessionRunner } from './goal-loop';
 
 /**

@@ -10,6 +10,17 @@ export type Surface = 'chat' | 'cowork' | 'code' | 'browser' | 'assistant';
 export type Theme = ThemeId;
 
 export type SidebarMode = 'history' | 'projects' | 'customize';
+/**
+ * Settings sections that can be deep-linked. The ids are the keys of
+ * `sectionComponents` in settings-dialog.tsx; `openSettings('connectors')` from
+ * an error card is how "go fix your API key" lands on the right page instead of
+ * on Profile.
+ */
+export type SettingsSectionId =
+  | 'profile' | 'appearance' | 'capabilities' | 'identity' | 'connectors'
+  | 'search' | 'sharing' | 'security' | 'memory'
+  | 'notifications' | 'roi' | 'data';
+
 export type CustomizeSection = 'landing' | 'skills' | 'connectors' | 'browse-connectors' | 'browse-marketplace' | 'automation' | 'agents' | 'design';
 
 interface AppState {
@@ -17,6 +28,8 @@ interface AppState {
   sidebarVisible: boolean;
   theme: Theme;
   settingsOpen: boolean;
+  /** Which section the Settings dialog shows. Transient: never persisted. */
+  settingsSection: SettingsSectionId;
   sidebarMode: SidebarMode;
   viewingProjectId: string | null;
   customizeSection: CustomizeSection;
@@ -32,6 +45,9 @@ interface AppActions {
   setSidebarVisible: (visible: boolean) => void;
   setTheme: (theme: Theme) => void;
   setSettingsOpen: (open: boolean) => void;
+  /** Open Settings, optionally on a specific section. */
+  openSettings: (section?: SettingsSectionId) => void;
+  setSettingsSection: (section: SettingsSectionId) => void;
   setSidebarMode: (mode: SidebarMode) => void;
   setViewingProjectId: (id: string | null) => void;
   navigateToProject: (projectId: string) => void;
@@ -52,6 +68,7 @@ export const useAppStore = create<AppStore>()(
       sidebarVisible: true,
       theme: 'light',
       settingsOpen: false,
+      settingsSection: 'profile',
       sidebarMode: 'history',
       viewingProjectId: null,
       customizeSection: 'landing',
@@ -66,6 +83,9 @@ export const useAppStore = create<AppStore>()(
       setSidebarVisible: (visible) => set({ sidebarVisible: visible }),
       setTheme: (theme) => set({ theme }),
       setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+      openSettings: (section) =>
+        set((state) => ({ settingsOpen: true, settingsSection: section ?? state.settingsSection })),
+      setSettingsSection: (settingsSection) => set({ settingsSection }),
       setSidebarMode: (mode) => set({ sidebarMode: mode }),
       setViewingProjectId: (id) => set({ viewingProjectId: id }),
       navigateToProject: (projectId) => set({ sidebarMode: 'projects', viewingProjectId: projectId }),
@@ -95,8 +115,8 @@ export const useAppStore = create<AppStore>()(
         return { ...state, theme: migrateThemeId(state.theme) } as never;
       },
       partialize: (state) => {
-        // These four are transient view state — dropped from the persisted slice.
-        const { viewingProjectId, selectedSkillId, selectedConnectorId, selectedAgentName, ...rest } = state;
+        // Transient view state — dropped from the persisted slice.
+        const { viewingProjectId, selectedSkillId, selectedConnectorId, selectedAgentName, settingsSection, ...rest } = state;
         return rest;
       },
     }

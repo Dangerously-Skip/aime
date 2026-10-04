@@ -235,7 +235,6 @@ describe('createVerifier', () => {
 
   it('a thrown provider is a failure, not a pass', async () => {
     const verify = createVerifier({
-      // eslint-disable-next-line require-yield
       query: async function* () { throw new Error('network down'); },
       treeFingerprint: clean,
       nowIso: () => AT,

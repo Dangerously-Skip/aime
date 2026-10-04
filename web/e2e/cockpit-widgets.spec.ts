@@ -248,14 +248,14 @@ test.describe('runs are on the Activity tab, not the Cockpit', () => {
     await openCockpit(page);
   });
 
-  test('the Cockpit has widgets and scheduled work, and no Recent activity', async ({ page }) => {
+  test('the Cockpit has widgets and schedules, and no Recent activity', async ({ page }) => {
     await expect(page.getByRole('heading', { name: 'Widgets' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Scheduled work' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Schedules', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Recent activity' })).toHaveCount(0);
   });
 
   test('the Activity tab has Recent activity, and no widget grid', async ({ page }) => {
-    await page.getByRole('button', { name: 'Activity', exact: true }).click();
+    await page.getByRole('button', { name: /^Activity\b/ }).click();
     await expect(page.getByRole('heading', { name: 'Recent activity' })).toBeVisible();
     // The other half of the split — the two tabs must not be the same screen.
     await expect(page.getByRole('heading', { name: 'Widgets' })).toHaveCount(0);

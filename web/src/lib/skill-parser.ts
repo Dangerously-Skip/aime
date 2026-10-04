@@ -25,6 +25,8 @@
  *   - a nested mapping is read to MAX_NESTING levels deep; `requires:` is one
  */
 
+import { executableCandidates } from './executable-lookup';
+
 export interface SkillRequires {
   env?: string[];
   bins?: string[];
@@ -70,22 +72,35 @@ export function evaluateSkillRequires(requires: SkillRequires | undefined): Skil
   }
 
   if (requires.bins) {
-    // Synchronously check for binary availability via PATH.
+    // Resolve each name against PATH by probing the filesystem — never a
+    // shell. `bins` is read from a SKILL.md, which is a file the user may have
+    // downloaded; `which ${bin}` made `jq; curl … | sh` a command.
     // Lazy require so this module stays importable from client bundles — a
-    // static `import 'child_process'` would pull a node builtin into every
-    // consumer of parseSkillMd/serializeSkillMd.
+    // static `import 'fs'` would pull a node builtin into every consumer of
+    // parseSkillMd/serializeSkillMd.
+    let fs: typeof import('fs') | undefined;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { execSync } = require('child_process');
-      for (const bin of requires.bins) {
+      fs = require('fs');
+    } catch {
+      // fs unavailable (browser context) — skip bin check
+    }
+    if (fs && typeof fs.statSync === 'function') {
+      const isExecutableFile = (p: string): boolean => {
         try {
-          execSync(`which ${bin}`, { stdio: 'ignore' });
+          if (!fs!.statSync(p).isFile()) return false;
+          if (process.platform !== 'win32') fs!.accessSync(p, fs!.constants.X_OK);
+          return true;
         } catch {
+          return false;
+        }
+      };
+      for (const bin of requires.bins) {
+        const candidates = executableCandidates(String(bin), process.env, process.platform);
+        if (!candidates.some(isExecutableFile)) {
           return { disabled: true, reason: `Missing binary: ${bin}` };
         }
       }
-    } catch {
-      // execSync unavailable (browser context) — skip bin check
     }
   }
 

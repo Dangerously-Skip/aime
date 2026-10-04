@@ -38,7 +38,7 @@ import { base, ratchet } from './stryker.base.mjs';
  *   tool-names.ts            69%  — one small regex, so few mutants that the
  *                                   percentage moves a long way per mutant
  */
-export default {
+const config = {
   ...base,
   htmlReporter: { fileName: 'reports/mutation/security/index.html' },
   mutate: [
@@ -49,3 +49,5 @@ export default {
   ],
   thresholds: ratchet(82),
 };
+
+export default config;

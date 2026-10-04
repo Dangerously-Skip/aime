@@ -3,9 +3,7 @@ import { BaseProvider, type ProviderConfig } from './base-provider';
 
 // Extend globalThis for singleton caching to survive Next.js hot reload
 declare global {
-  // eslint-disable-next-line no-var
   var __providerRegistry: Record<string, typeof BaseProvider> | undefined;
-  // eslint-disable-next-line no-var
   var __providerInstances: Map<string, BaseProvider> | undefined;
 }
 

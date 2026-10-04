@@ -3,6 +3,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor, cleanup } from '@testing-library/react';
 import { useScheduledPrompt } from './use-scheduled-prompt';
 import { useContextBusStore } from '@/stores/context-bus-store';
+import { useCallback } from 'react';
+import { useChatStore } from '@/stores/chat-store';
+import { useConversationStore } from '@/stores/conversation-store';
+import { useProjectStore } from '@/stores/project-store';
+import { useAppStore } from '@/stores/app-store';
+import { streamRegistry } from '@/lib/stream-registry';
+import { restoreView } from '@/lib/schedule/job-conversation';
 
 /**
  * A DUE CRON JOB HAS TO ACTUALLY RUN.
@@ -153,5 +160,121 @@ describe('a busy surface defers the job instead of dropping it', () => {
     renderHook(() => useScheduledPrompt('browser', submit));
     act(() => { fireCron('browser', 'no guard'); });
     await waitFor(() => expect(submit).toHaveBeenCalledWith('no guard'));
+  });
+});
+
+/**
+ * A surface in miniature: its submit is bound to whatever conversation it had
+ * open WHEN IT RENDERED, exactly like the real ones (`handleSubmit` closes over
+ * `chatId`). That binding is the point of the test — a submit from the render
+ * before the switch would send the job into the user's conversation.
+ */
+function useFakeChatSurface(sent: Array<{ prompt: string; chatId: string | null }>) {
+  const chatId = useChatStore((s) => s.currentChatId);
+  const submit = useCallback((prompt: string) => { sent.push({ prompt, chatId }); }, [chatId, sent]);
+  useScheduledPrompt('chat', submit);
+}
+
+/** The same, but its send registers a stream the way `useSSEStream` does, and keeps it open. */
+function useFakeStreamingChatSurface(sent: Array<{ prompt: string; chatId: string | null }>) {
+  const chatId = useChatStore((s) => s.currentChatId);
+  const submit = useCallback(
+    async (prompt: string) => {
+      await Promise.resolve(); // a surface does some work before it sends
+      sent.push({ prompt, chatId });
+      if (chatId) {
+        streams.push(chatId);
+        streamRegistry.set(chatId, new AbortController());
+      }
+      await new Promise(() => {}); // the turn is still running
+    },
+    [chatId, sent],
+  );
+  useScheduledPrompt('chat', submit);
+}
+
+const streams: string[] = [];
+afterEach(() => {
+  for (const id of streams.splice(0)) streamRegistry.abort(id);
+});
+
+describe('a job runs in its own conversation, filed under its project', () => {
+  beforeEach(() => {
+    useChatStore.setState({ currentChatId: 'user-conv' } as never);
+    useConversationStore.setState({ conversations: [], activeId: 'user-conv' } as never);
+    useProjectStore.setState({
+      projects: [{ id: 'p1', name: 'Launch', conversationIds: {} } as never],
+    } as never);
+    useAppStore.setState({ activeSurface: 'code' } as never);
+  });
+
+  it('opens a new project conversation and submits from it — not the one the user had open', async () => {
+    const sent: Array<{ prompt: string; chatId: string | null }> = [];
+    renderHook(() => useFakeChatSurface(sent));
+    act(() => {
+      useContextBusStore.getState().publish({
+        summary: 'weekly summary', source: 'cron:j1', priority: 'p0', targetSurface: 'chat',
+        payload: { prompt: 'weekly summary', cronJobId: 'j1', projectId: 'p1' },
+      });
+    });
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    const conv = useConversationStore.getState().conversations[0];
+    expect(sent[0]).toEqual({ prompt: 'weekly summary', chatId: conv.id });
+    expect(sent[0].chatId).not.toBe('user-conv');
+    // Filed under the project, so the surface's project context (instructions,
+    // knowledge) is derived for it.
+    expect(conv).toMatchObject({ surface: 'chat', projectId: 'p1', title: 'Scheduled: weekly summary' });
+    expect(useProjectStore.getState().projects[0].conversationIds.chat).toEqual([conv.id]);
+    // The user's SURFACE is left alone.
+    expect(useAppStore.getState().activeSurface).toBe('code');
+  });
+
+  it('hands the user’s conversation back once the job’s turn is in flight', async () => {
+    /*
+     * The bug: a job firing on the surface you were LOOKING AT made its new
+     * conversation the active one, replacing yours mid-sentence. The switch is
+     * only needed until the surface's send has pinned its stream to the job's
+     * conversation — this fake registers the stream exactly as sendMessage does.
+     */
+    useAppStore.setState({ activeSurface: 'chat' } as never);
+    const sent: Array<{ prompt: string; chatId: string | null }> = [];
+    renderHook(() => useFakeStreamingChatSurface(sent));
+    act(() => { fireCron('chat', 'morning digest'); });
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    const jobConv = useConversationStore.getState().conversations[0].id;
+    expect(sent[0].chatId).toBe(jobConv);
+    await waitFor(() => expect(useChatStore.getState().currentChatId).toBe('user-conv'));
+    expect(useConversationStore.getState().activeId).toBe('user-conv');
+    expect(useAppStore.getState().activeSurface).toBe('chat');
+    // The job's turn is still running, in its own conversation.
+    expect(streamRegistry.has(jobConv)).toBe(true);
+  });
+
+  it('hands back even when the submit never streams (it settled)', async () => {
+    const sent: Array<{ prompt: string; chatId: string | null }> = [];
+    renderHook(() => useFakeChatSurface(sent));
+    act(() => { fireCron('chat', '/help'); });
+    await waitFor(() => expect(sent).toHaveLength(1));
+    await waitFor(() => expect(useChatStore.getState().currentChatId).toBe('user-conv'));
+    expect(useConversationStore.getState().activeId).toBe('user-conv');
+  });
+
+  it('does not undo a conversation the user picked in the meantime', () => {
+    const jobConv = 'job-conv';
+    useConversationStore.setState({ activeId: 'picked-by-user' } as never);
+    useChatStore.setState({ currentChatId: 'picked-by-user' } as never);
+    restoreView('chat', jobConv, { activeId: 'user-conv', currentChat: 'user-conv' });
+    expect(useConversationStore.getState().activeId).toBe('picked-by-user');
+    expect(useChatStore.getState().currentChatId).toBe('picked-by-user');
+  });
+
+  it('a surface without conversations still runs the job directly', async () => {
+    const submit = vi.fn();
+    renderHook(() => useScheduledPrompt('browser', submit));
+    act(() => { fireCron('browser', 'check prices'); });
+    await waitFor(() => expect(submit).toHaveBeenCalledWith('check prices'));
+    expect(useConversationStore.getState().conversations).toHaveLength(0);
   });
 });

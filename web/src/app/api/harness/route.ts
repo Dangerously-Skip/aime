@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import path from 'node:path';
-import os from 'node:os';
 import { isCrossOriginRequest } from '@/lib/security/same-origin';
 import { isAllowedWorkspaceRoot } from '@/lib/security/workspace-root';
 import { resolveHarnessExecution } from '@/lib/harness/execution';
@@ -194,6 +193,13 @@ export async function POST(request: NextRequest) {
          * boundary it exists to prove.
          */
         maxBudgetUsd: maxBudgetUsd ?? undefined,
+        /*
+         * ATTENDED, stated: the user started this goal with a click, in a folder
+         * they chose, and watches it in the goal panel — and writing in that
+         * folder is the whole job. So no policy refusals; the Security settings
+         * and connector blocks still apply (the gate runs for every run).
+         */
+        approvalPolicy: 'never',
         userId: `harness_${conversationId}`,
         mcpServers,
         model: exec.model,

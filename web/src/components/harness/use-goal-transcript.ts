@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { Message } from '@/stores/chat-store';
+import { useHarnessStatus } from '@/hooks/use-harness-status';
 
 /**
  * Let a goal run narrate itself into the chat transcript.
@@ -153,49 +154,30 @@ export function useGoalTranscript(
    */
   const seen = useRef<Set<string>>(new Set());
   const lastChat = useRef<string>('');
+  // The shared status poll (hooks/use-harness-status) — not a 3s poll of its own.
+  const { status } = useHarnessStatus(chatId, folder);
 
   useEffect(() => {
-    if (!chatId || !folder) return;
+    if (!chatId || !folder || !status) return;
     // A different conversation is a different transcript.
     if (lastChat.current !== chatId) {
       seen.current = new Set();
       lastChat.current = chatId;
     }
-    let cancelled = false;
-
-    const tick = async () => {
-      try {
-        const res = await fetch(
-          `/api/harness?conversationId=${encodeURIComponent(chatId)}&workingDir=${encodeURIComponent(folder)}`,
-        );
-        if (!res.ok || cancelled) return;
-        const status = (await res.json()) as TranscriptStatus;
-        if (cancelled) return;
-        /*
-         * No pre-check against a store here — and there was one, against the
-         * WRONG store. This hook is called from Cowork and Code, each of which
-         * passes its OWN store's `addMessage`; the check read `useChatStore`,
-         * which never holds their messages, so it always saw "not present".
-         * Three fixes went into chat-store while the duplicates lived in
-         * cowork-store. Every message store's `addMessage` is now idempotent
-         * by id, which is the only place the guard can be both correct for
-         * all callers and atomic.
-         */
-        for (const l of transcriptLines(status)) {
-          if (seen.current.has(l.key)) continue;
-          seen.current.add(l.key);
-          addMessage(chatId, line(l.key, l.content));
-        }
-      } catch {
-        // A failed poll is not worth a message; the next one is 3s away.
-      }
-    };
-
-    void tick();
-    const id = setInterval(tick, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [chatId, folder, addMessage]);
+    /*
+     * No pre-check against a store here — and there was one, against the
+     * WRONG store. This hook is called from Cowork and Code, each of which
+     * passes its OWN store's `addMessage`; the check read `useChatStore`,
+     * which never holds their messages, so it always saw "not present".
+     * Three fixes went into chat-store while the duplicates lived in
+     * cowork-store. Every message store's `addMessage` is now idempotent
+     * by id, which is the only place the guard can be both correct for
+     * all callers and atomic.
+     */
+    for (const l of transcriptLines(status as unknown as TranscriptStatus)) {
+      if (seen.current.has(l.key)) continue;
+      seen.current.add(l.key);
+      addMessage(chatId, line(l.key, l.content));
+    }
+  }, [chatId, folder, addMessage, status]);
 }

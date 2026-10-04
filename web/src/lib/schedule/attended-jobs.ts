@@ -41,6 +41,7 @@ export interface ManifestOrderLike {
   trigger: { type: 'cron' | 'interval' | 'event'; expression?: string };
   status: string;
   lastRun?: number;
+  createdAt?: number;
   runCount: number;
   maxExecutions?: number;
   expiresAt?: number;
@@ -56,6 +57,7 @@ export function fromManifestOrder(order: ManifestOrderLike): AttendedJob {
     status: order.status,
     trigger: order.trigger,
     lastRun: order.lastRun,
+    createdAt: order.createdAt,
     runCount: order.runCount,
     maxExecutions: order.maxExecutions,
     expiresAt: order.expiresAt,

@@ -44,6 +44,9 @@ interface Message {
   isAutoContinue?: boolean;
   attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' }>;
   inlineCanvases?: Array<{ id: string; title: string; doc: import("@/lib/a2ui/types").A2UIDocument }>;
+  error?: { code: import("@/lib/sse/turn-error").TurnErrorCode; message: string };
+  retrying?: { attempt: number; delayMs: number };
+  isCommandEcho?: boolean;
 }
 
 interface MessageListProps {
@@ -59,14 +62,19 @@ interface MessageListProps {
   onArtifactClick?: (pathOrArtifact: string | ParsedArtifact) => void;
   onPreviewUrl?: (url: string) => void;
   onRetry?: () => void;
+  /** Replace a question with an edited one and ask again. Omit while a turn runs. */
+  onEditMessage?: (messageId: string, text: string) => void;
   /** Cancels the active stream — wired to streamRegistry.abort by the surface. */
   onCancel?: () => void;
   conversationId?: string;
   /** Surface this list is rendered in — passed to inline canvas chips. */
-  surfaceId?: 'chat' | 'cowork';
+  surfaceId?: 'chat' | 'cowork' | 'code';
+  /** Session display controls: `/reasoning` and `/verbose`. */
+  showReasoning?: boolean;
+  expandToolCalls?: boolean;
 }
 
-export function MessageList({ messages, className = "", onQuestionAnswered, onConnectorSettled, onArtifactClick, onPreviewUrl, onRetry, onCancel, conversationId, surfaceId }: MessageListProps) {
+export function MessageList({ messages, className = "", onQuestionAnswered, onConnectorSettled, onArtifactClick, onPreviewUrl, onRetry, onEditMessage, onCancel, conversationId, surfaceId, showReasoning = true, expandToolCalls = false }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -90,17 +98,45 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
     return () => observer.disconnect();
   }, []);
 
-  // Scroll to bottom on conversation switch (messages go from 0 to >0)
-  useEffect(() => {
-    if (messages.length > 0) {
-      userScrolledUpRef.current = false;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- must run after mount: paired with the scrollIntoView DOM effect below
-      setUserScrolledUp(false);
-      requestAnimationFrame(() => {
-        endRef.current?.scrollIntoView({ behavior: "instant" });
-      });
+  /*
+   * Back to the bottom when the conversation changes, and when the user sends.
+   *
+   * It used to key on "messages went from none to some", so switching between
+   * two chats that both had messages left you wherever the previous one was
+   * scrolled — often mid-transcript — and once you had scrolled up to read,
+   * sending a new message did not follow it down: the reply streamed in out of
+   * sight. The newest user message is what "the user sent" looks like here.
+   */
+  let lastUserId: string | undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      lastUserId = messages[i].id;
+      break;
     }
-  }, [messages.length === 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
+  const hasMessages = messages.length > 0;
+  useEffect(() => {
+    if (!hasMessages) return;
+    userScrolledUpRef.current = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- must run after mount: paired with the scrollIntoView DOM effect below
+    setUserScrolledUp(false);
+    requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView({ behavior: "instant" });
+    });
+  }, [conversationId, lastUserId, hasMessages]);
+
+  /*
+   * The reply that gets Retry and the rating buttons: the last assistant
+   * message that is not a question card. Found once — it was a
+   * `slice().every()` per row, O(n²) on every token of a long conversation.
+   */
+  let lastAssistantIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "assistant" && !messages[i].questionData) {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
 
   // Track user scroll position
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
@@ -119,16 +155,28 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
+  /*
+   * A live log, so a screen reader hears new messages without hunting for
+   * them — but busy while a reply streams, which tells assistive tech to hold
+   * the announcement until the reply is complete rather than read it out a
+   * token at a time.
+   */
+  const replyInProgress = messages.some((m) => m.isStreaming || m.isLoading);
+
   return (
     <div
       ref={scrollRef}
       onScroll={handleScroll}
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions"
+      aria-busy={replyInProgress}
+      aria-label="Conversation"
       className={`relative flex-1 overflow-y-auto px-6 py-6 ${fontClass} ${className}`}
     >
       <div ref={contentRef} className="max-w-3xl mx-auto">
       {messages.map((msg, idx) => {
-        const isLastAssistant = msg.role === "assistant" && !msg.isStreaming && !msg.isLoading &&
-          messages.slice(idx + 1).every((m) => m.role !== "assistant" || !!m.questionData);
+        const isLastAssistant = idx === lastAssistantIdx && !msg.isStreaming && !msg.isLoading;
         return msg.connectorRequest ? (
           <div key={msg.id} className="mb-4 max-w-2xl">
             <ConnectorRequestCard
@@ -150,6 +198,8 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
         ) : msg.role === "user" ? (
           <UserMessage
             key={msg.id}
+            id={msg.id}
+            onEdit={msg.isCommandEcho ? undefined : onEditMessage}
             content={msg.content}
             timestamp={msg.timestamp}
             attachments={msg.attachments}
@@ -171,6 +221,10 @@ export function MessageList({ messages, className = "", onQuestionAnswered, onCo
             conversationId={conversationId}
             inlineCanvases={msg.inlineCanvases}
             surfaceId={surfaceId}
+            error={msg.error}
+            retrying={msg.retrying}
+            showThinking={showReasoning}
+            expandToolCalls={expandToolCalls}
           />
         ) : null;
       })}

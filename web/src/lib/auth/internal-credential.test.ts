@@ -6,8 +6,9 @@ import {
   internalToken,
   internalAuthHeaders,
   internalAuthEnv,
+  proxyToken,
 } from './internal-credential';
-import { decide, SESSION_COOKIE } from './local-token';
+import { decide, deriveProxyToken, SESSION_COOKIE, TOKEN_PARAM } from './local-token';
 
 /*
  * The regression this file exists for shipped through a green suite and a merge.
@@ -27,6 +28,7 @@ import { decide, SESSION_COOKIE } from './local-token';
 const src = (...p: string[]) => readFileSync(resolve(__dirname, '../..', ...p), 'utf8');
 const TOKEN = 'a'.repeat(48);
 const SELF = 'http://127.0.0.1:19533/api/llm-proxy/openrouter/aHR0cHM6Ly8';
+const SCOPED = proxyToken({ AIME_API_TOKEN: TOKEN })!;
 
 describe('isSelfProxy', () => {
   it('recognises our own proxy', () => {
@@ -69,9 +71,9 @@ describe('internalToken', () => {
 });
 
 describe('the in-process client carries the credential', () => {
-  it('sends Bearer to our own proxy', () => {
+  it('sends the proxy-scoped Bearer to our own proxy — not the API token', () => {
     expect(internalAuthHeaders(SELF, { AIME_API_TOKEN: TOKEN })).toEqual({
-      Authorization: `Bearer ${TOKEN}`,
+      Authorization: `Bearer ${SCOPED}`,
     });
   });
 
@@ -89,10 +91,11 @@ describe('the Agent SDK subprocess carries the credential', () => {
    * The subprocess is why this is not just a header at one call site: we do not
    * construct its HTTP client and can only reach it through environment.
    */
-  it('gets ANTHROPIC_AUTH_TOKEN for our own proxy', () => {
-    expect(internalAuthEnv(SELF, { AIME_API_TOKEN: TOKEN })).toEqual({
-      ANTHROPIC_AUTH_TOKEN: TOKEN,
-    });
+  it('gets the proxy-scoped ANTHROPIC_AUTH_TOKEN for our own proxy — never the API token', () => {
+    // The agent's Bash inherits this environment, so whatever is here, it can read.
+    const env = internalAuthEnv(SELF, { AIME_API_TOKEN: TOKEN });
+    expect(env).toEqual({ ANTHROPIC_AUTH_TOKEN: SCOPED });
+    expect(JSON.stringify(env)).not.toContain(TOKEN);
   });
 
   it('gets nothing for a real provider', () => {
@@ -119,13 +122,13 @@ describe('THE REGRESSION: a proxy request with these credentials is accepted', (
 
   it('the header the in-process client sends is accepted', () => {
     const headers = internalAuthHeaders(SELF, { AIME_API_TOKEN: TOKEN });
-    const verdict = decide(facts({ authorization: headers.Authorization }), TOKEN);
+    const verdict = decide(facts({ authorization: headers.Authorization }), TOKEN, SCOPED);
     expect(verdict.ok, 'the proxy refuses our own inference client').toBe(true);
   });
 
   it('the subprocess token, sent as Bearer by the SDK, is accepted', () => {
     const env = internalAuthEnv(SELF, { AIME_API_TOKEN: TOKEN });
-    const verdict = decide(facts({ authorization: `Bearer ${env.ANTHROPIC_AUTH_TOKEN}` }), TOKEN);
+    const verdict = decide(facts({ authorization: `Bearer ${env.ANTHROPIC_AUTH_TOKEN}` }), TOKEN, SCOPED);
     expect(verdict.ok).toBe(true);
   });
 
@@ -153,5 +156,57 @@ describe('both call sites actually use it', () => {
     // Beside ANTHROPIC_BASE_URL, not somewhere it never runs.
     const block = provider.slice(provider.indexOf('ANTHROPIC_BASE_URL: baseUrl'));
     expect(block.slice(0, 600)).toContain('internalAuthEnv');
+  });
+});
+
+describe('the proxy-scoped token opens the LLM proxy and nothing else', () => {
+  /*
+   * The subprocess's environment is readable by the agent's Bash. If this token
+   * opened any other route, a turn could call /api/subagent claiming to be
+   * attended, rewrite identity files, or reconfigure connectors.
+   */
+  const at = (pathname: string, over: Record<string, unknown> = {}) => ({
+    pathname,
+    origin: null,
+    host: '127.0.0.1:19533',
+    cookie: null,
+    authorization: `Bearer ${SCOPED}`,
+    tokenParam: null,
+    ...over,
+  });
+
+  it('the Node and Web Crypto derivations agree, and differ from the API token', async () => {
+    expect(await deriveProxyToken(TOKEN)).toBe(SCOPED);
+    expect(SCOPED).not.toBe(TOKEN);
+    expect(SCOPED).toMatch(/^[0-9a-f]{64}$/);
+    expect(proxyToken({ AIME_API_TOKEN: 'b'.repeat(48) })).not.toBe(SCOPED);
+  });
+
+  it.each(['/api/subagent', '/api/identity/user-md', '/api/customize/connectors', '/api/llm-proxy', '/api/llm-proxyx/a'])(
+    'is refused on %s',
+    (pathname) => {
+      expect(decide(at(pathname), TOKEN, SCOPED)).toMatchObject({ ok: false, status: 401 });
+    },
+  );
+
+  it('is refused as the session cookie and as the ?t= exchange', () => {
+    const p = '/api/llm-proxy/openrouter/x';
+    expect(decide(at(p, { authorization: null, cookie: `${SESSION_COOKIE}=${SCOPED}` }), TOKEN, SCOPED).ok).toBe(false);
+    expect(decide(at('/', { authorization: null, tokenParam: SCOPED }), TOKEN, SCOPED)).not.toMatchObject({
+      setCookie: true,
+    });
+    void TOKEN_PARAM;
+  });
+
+  it('dot segments cannot walk it out of the proxy prefix', async () => {
+    const { NextRequest } = await import('next/server');
+    for (const raw of ['/api/llm-proxy/../subagent', '/api/llm-proxy/%2e%2e/subagent', '/api/llm-proxy/x/../../subagent']) {
+      const pathname = new NextRequest(new Request(`http://127.0.0.1:19533${raw}`)).nextUrl.pathname;
+      expect(decide(at(pathname), TOKEN, SCOPED).ok, `${raw} → ${pathname}`).toBe(false);
+    }
+  });
+
+  it('the full API token still works everywhere, so the app itself is unaffected', () => {
+    expect(decide(at('/api/subagent', { authorization: `Bearer ${TOKEN}` }), TOKEN, SCOPED).ok).toBe(true);
   });
 });

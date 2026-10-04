@@ -1,17 +1,22 @@
 /**
- * Approval policy — C3. What may an unattended run do without asking?
+ * Approval policy — C3. What may an unattended run do with nobody watching?
  *
- * The mechanism (canUseTool interception) has existed all along; this supplies
- * the missing POLICY. It replaces a hardcoded ten-name tool list with a
- * classifier, because MCP tools have arbitrary names and a fixed list is wrong
- * the day a new connector is added.
+ * The provider's `canUseTool` applies this to every tool call of a run whose
+ * policy is not 'never' — and since the PreToolUse hook went on for background
+ * runs too, that is every call, not only the ones the CLI did not auto-approve.
+ * For a long time it was not: the hook was interactive-only, so this classifier
+ * judged nothing in the runs it was written for. It replaces a hardcoded
+ * ten-name tool list, because MCP tools have arbitrary names and a fixed list is
+ * wrong the day a new connector is added.
  *
  * The classification question is narrow: does this call have side effects on
  * the world OUTSIDE the app? Reading is free. Acting inside the app (creating a
  * card, scheduling a reminder, asking the user) is visible in the UI and
  * reversible there, so it is not gated. Sending, deleting, publishing, paying,
  * writing files and running arbitrary shell commands are the calls a human
- * would want to see before an unattended agent makes them.
+ * would want to see before an unattended agent makes them — and since there is
+ * nobody to show them to, a gated call is REFUSED. Not paused: nothing queues it
+ * or resumes it later.
  *
  * Pure and heavily tested — this is a security-relevant classifier, so unknown
  * inputs FAIL CLOSED under a gating policy.
@@ -40,13 +45,63 @@ const BUILTIN: Record<string, ToolClass> = {
   Skill: 'app',
   AskUserQuestion: 'app',
   canvas: 'app',
-  spawn_agent: 'app',
   CronCreate: 'app',
   StandingOrderCreate: 'app',
   NotebookEdit: 'consequential',
   Write: 'consequential',
   Edit: 'consequential',
   // Bash is classified by its command, not its name — see classifyBash.
+};
+
+/**
+ * The app's OWN in-process tools (the `aime` MCP server in claude-provider),
+ * by exact full name.
+ *
+ * Their names are nouns as often as verbs, so the verb rules misjudged them in
+ * both directions: `MailSearch` and `CalendarEvents` were unknowns — refusing
+ * the Morning Briefing template everything it exists to read — while
+ * `WidgetCreate` read as a world-side create. They are ours, so they are not
+ * guessed at.
+ *
+ * Keyed on the full `mcp__aime__` name rather than the bare one: a remote
+ * connector that happens to ship a tool called `MailRead` is not vouched for by
+ * this table and is classified like any other connector.
+ */
+const AIME_TOOLS: Record<string, ToolClass> = {
+  MailSearch: 'read',
+  MailRead: 'read',
+  CalendarEvents: 'read',
+  ContactsSearch: 'read',
+  ExcelRead: 'read',
+  FetchUrl: 'read',
+  SearchWeb: 'read',
+  // Pins a tile to the user's own Cockpit — visible, and removable there.
+  WidgetCreate: 'app',
+  // Asks the user to connect a service; nothing happens without them.
+  RequestConnector: 'app',
+  // A DRAFT, never sent — but it lands in the user's real mailbox, outside the
+  // app, from a run that may have read a prompt injection. Gated.
+  MailDraft: 'consequential',
+};
+const AIME_PREFIX = 'mcp__aime__';
+
+/**
+ * The Agent SDK's own plumbing, matched only when the name is BARE — a remote
+ * connector's `mcp__x__Agent` is a connector tool, not the SDK's.
+ *
+ * None of these touches anything outside the run: ToolSearch loads deferred
+ * tool schemas, the MCP resource tools read, BashOutput reads a shell the run
+ * already started, Agent starts a subagent whose own calls pass through the
+ * same gate. Left to the verb rules they were unknowns, so an unattended run
+ * could not even look up its own connector tools.
+ */
+const SDK_PLUMBING: Record<string, ToolClass> = {
+  ToolSearch: 'read',
+  ListMcpResourcesTool: 'read',
+  ReadMcpResourceTool: 'read',
+  BashOutput: 'read',
+  Agent: 'app',
+  ExitPlanMode: 'app',
 };
 
 /** Verb prefixes that read. Matched against the tool name's last segment. */
@@ -82,7 +137,7 @@ export function baseToolName(toolName: string): string {
  * tools in camelCase — Atlassian ships `searchJiraIssuesUsingJql` and
  * `transitionJiraIssue` — that made the classifier blind to the majority of tool
  * names it exists to classify. Reads were gated as unknowns (so unattended runs
- * paused on ordinary lookups) and genuine write verbs were only caught by the
+ * were refused ordinary lookups) and genuine write verbs were only caught by the
  * fail-closed default rather than being recognised for what they are.
  *
  * A boundary is a lower-case letter or digit followed by an upper-case one, so
@@ -523,6 +578,11 @@ export function classifyBash(command: unknown): ToolClass {
 // ── Classification ────────────────────────────────────────────────────────
 
 export function classifyToolCall(toolName: string, input?: Record<string, unknown>): ToolClass {
+  if (toolName.startsWith(AIME_PREFIX)) {
+    const own = toolName.slice(AIME_PREFIX.length);
+    if (Object.hasOwn(AIME_TOOLS, own)) return AIME_TOOLS[own];
+  }
+  if (Object.hasOwn(SDK_PLUMBING, toolName)) return SDK_PLUMBING[toolName];
   const name = baseToolName(toolName);
 
   if (name === 'Bash') return classifyBash(input?.command);
@@ -565,8 +625,10 @@ export function classifyToolCall(toolName: string, input?: Record<string, unknow
 
 export interface ApprovalOutcome {
   allow: boolean;
-  /** User-facing when denied. Honest: nothing is auto-created on their behalf. */
+  /** Told to the model when denied. Honest: nothing is queued on their behalf. */
   reason?: string;
+  /** A few words for the run log when denied — what the user reads. */
+  summary?: string;
   class: ToolClass;
 }
 
@@ -576,9 +638,9 @@ export interface ApprovalOutcome {
  * - 'never'         → everything is allowed (interactive sessions, where the
  *                      human is watching the stream and can abort).
  * - 'consequential' → reads and in-app actions run; world-side effects and
- *                      unknowns pause. Unknown fails closed: a gating policy
- *                      that guesses "probably fine" is not a gate.
- * - 'always'        → only reads run; even in-app actions pause.
+ *                      unknowns are refused. Unknown fails closed: a gating
+ *                      policy that guesses "probably fine" is not a gate.
+ * - 'always'        → only reads run; even in-app actions are refused.
  */
 export function evaluateApproval(
   policy: ApprovalPolicy,
@@ -593,13 +655,25 @@ export function evaluateApproval(
 
   if (!gated) return { allow: true, class: cls };
 
+  const why =
+    cls === 'unknown'
+      ? 'could not be classified as safe'
+      : cls === 'app'
+        ? 'acts on the app, and this run may only read'
+        : 'has effects outside the app';
   return {
     allow: false,
     class: cls,
     reason:
-      `${baseToolName(toolName)} was not run: this is an unattended execution and the tool ` +
-      `${cls === 'unknown' ? 'could not be classified as safe' : 'has effects outside the app'}. ` +
-      `Describe what you would have done instead. The user can run this goal interactively, ` +
-      `or set its approval policy to allow it unattended.`,
+      `${baseToolName(toolName)} was refused: this is an unattended run and the tool ${why}. ` +
+      `It has not been queued and will not run later. Do not retry it or look for another ` +
+      `way to do the same thing. Finish what you can, and say exactly what you would have ` +
+      `done so the user can do it themselves or run the task from a chat.`,
+    summary:
+      cls === 'unknown'
+        ? 'Unattended run: could not be classified as safe'
+        : cls === 'app'
+          ? 'Unattended run: this run may only read'
+          : 'Unattended run: has effects outside the app',
   };
 }

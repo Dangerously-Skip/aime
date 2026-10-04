@@ -11,7 +11,7 @@ import {
 /**
  * The inputs for whatever fields a preset declares.
  *
- * Shared by Settings → API Access and onboarding, because they had separate
+ * Shared by Settings → Models & API keys and onboarding, because they had separate
  * implementations and only one of them was ever taught about Bedrock, Vertex
  * and Azure. A preset added later gets its inputs in both places for free.
  */
@@ -71,8 +71,14 @@ export function providerHint(preset: ProviderPreset): string | null {
       } credentials.`,
     );
   }
+  if (preset.id === 'anthropic') {
+    // The exception to "encrypted only", stated where the key is typed.
+    parts.push("The Anthropic key is also kept in this app's storage, because each request carries it.");
+  }
   if (!preset.scan) {
-    parts.push('This provider cannot list its models — add them by name after saving.');
+    parts.push(
+      "This provider can't be checked and cannot list its models — it is saved without a test; add models by name after saving.",
+    );
   }
   return parts.length ? parts.join(' ') : null;
 }

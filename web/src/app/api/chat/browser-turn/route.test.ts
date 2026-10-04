@@ -176,7 +176,8 @@ describe('credentials are resolved server-side', () => {
     delete process.env.ANTHROPIC_API_KEY;
     const res = await post({ messages });
     expect(res.status).toBe(400);
-    expect(JSON.stringify(await res.json())).toMatch(/Settings|ANTHROPIC_API_KEY/);
+    // Names the section as the Settings nav does ("API Access" was renamed).
+    expect(JSON.stringify(await res.json())).toMatch(/Settings → Models & API keys/);
     expect(streamMock).not.toHaveBeenCalled();
   });
 
@@ -187,6 +188,19 @@ describe('credentials are resolved server-side', () => {
       providerConfig: { providerId: 'openrouter', baseUrl: 'https://openrouter.ai/api' },
     });
     expect(anthropicCtor.mock.calls[0][0].baseURL).toContain('openrouter.ai');
+  });
+
+  it('never sends the Anthropic key to a user-added provider', async () => {
+    // Regression: a request key beat the provider's own, and callers send the
+    // Anthropic key — so it went to openrouter.ai as the credential.
+    await post({
+      messages,
+      apiKey: 'sk-env-key',
+      providerConfig: { providerId: 'openrouter', baseUrl: 'https://openrouter.ai/api' },
+    });
+    for (const [opts] of anthropicCtor.mock.calls) {
+      if (String(opts.baseURL ?? '').includes('openrouter.ai')) expect(opts.apiKey).not.toBe('sk-env-key');
+    }
   });
 });
 
@@ -258,5 +272,40 @@ describe('the turn itself', () => {
   it('omits tools entirely when none are supplied', async () => {
     await post({ messages });
     expect(streamMock.mock.calls[0][0].tools).toBeUndefined();
+  });
+
+  it('ties the model stream to the request, so a client that goes away stops it', async () => {
+    const controller = new AbortController();
+    const res = await POST(
+      new NextRequest('http://localhost/api/chat/browser-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+        signal: controller.signal,
+      }),
+    );
+    await res.text();
+    const signal = (streamMock.mock.calls[0][1] as { signal?: AbortSignal } | undefined)?.signal;
+    expect(signal, 'the stream was started without the request signal').toBeInstanceOf(AbortSignal);
+    controller.abort();
+    expect(signal!.aborted).toBe(true);
+  });
+
+  it('classifies a provider failure for the client', async () => {
+    streamMock.mockImplementation(() => ({
+      on: vi.fn(),
+      finalMessage: async () => {
+        throw Object.assign(new Error('Overloaded'), { status: 529 });
+      },
+    }));
+    const res = await POST(
+      new NextRequest('http://localhost/api/chat/browser-turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      }),
+    );
+    const text = await res.text();
+    expect(text).toContain('"code":"overloaded"');
   });
 });

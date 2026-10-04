@@ -1,12 +1,14 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import { getGatedStorage } from '@/lib/gated-storage';
+import { persist } from 'zustand/middleware';
+import { surfaceTranscriptStorage } from '@/lib/transcripts/transcript-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import { type SessionControls, DEFAULT_SESSION_CONTROLS } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
+import type { TurnErrorCode } from '@/lib/sse/turn-error';
+import { createTranscriptSlice, type TranscriptSlice } from '@/stores/slices/transcript-slice';
 
 export type ModelId = 'sonnet' | 'opus' | 'haiku';
 export type { SessionControls };
@@ -18,7 +20,6 @@ export interface CanvasArtifact {
   createdAt: number;
 }
 
-const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
 export interface ToolCall {
   id: string;
@@ -28,6 +29,12 @@ export interface ToolCall {
   status: 'running' | 'complete' | 'error';
   startTime: number;
   endTime?: number;
+  /**
+   * How much of the reply's text had arrived when this call was made — where it
+   * sits in the reply. Absent on transcripts recorded before it existed, which
+   * render their tool calls in one group above the text, as they always did.
+   */
+  textOffset?: number;
 }
 
 export interface Message {
@@ -54,7 +61,35 @@ export interface Message {
   isAutoContinue?: boolean;
   /** Inline canvas chips — A2UI docs the agent rendered during this turn */
   inlineCanvases?: Array<{ id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }>;
+  /**
+   * The turn failed. Rendered as a banner beside the reply, never appended to
+   * `content` — content goes back to the model as history, and "**Error:** …"
+   * then read as something the assistant had said.
+   */
+  error?: TurnError;
+  /** The provider is retrying; shown as a quiet status while the turn waits. */
+  retrying?: { attempt: number; delayMs: number };
+  /**
+   * A slash command and its confirmation. Shown in the transcript, never sent
+   * to the model: "/verbose" and "Verbose mode on" are not conversation.
+   */
+  isCommandEcho?: boolean;
+  /**
+   * Where each API response's output starts in `content`, while the turn is
+   * streaming: segment id → offset. What lets a response the SDK retracts (a
+   * refused reply re-run on a fallback model) be cut back out by position. Only
+   * meaningful mid-turn; cleared when the turn stops.
+   */
+  segmentMarks?: Record<string, number>;
 }
+
+export interface TurnError {
+  code: TurnErrorCode;
+  message: string;
+}
+
+// Shared by every store with this Message shape; they live with the slice now.
+export { withTurnError, withRetryStatus } from '@/stores/slices/transcript-slice';
 
 /** Clean stale streaming/loading flags from persisted messages (no active stream on rehydration). */
 export function cleanStaleStreamingFlags(messages: Record<string, Message[]>): Record<string, Message[]> {
@@ -162,9 +197,8 @@ export function dedupeLegacyTranscriptRows(
   return changed ? cleaned : messages;
 }
 
+/** Chat's own state; the transcript half comes from `createTranscriptSlice`. */
 interface ChatState {
-  messages: Record<string, Message[]>;
-  currentChatId: string | null;
   /**
    * The route selected in the model picker: either a tier (resolved through the
    * effective registry at send time) or a pinned model (built-in or on a
@@ -172,7 +206,6 @@ interface ChatState {
    * (the provider list itself persists in provider-store).
    */
   modelRoute: ModelOption | null;
-  isStreaming: boolean;
   sessionControls: Record<string, SessionControls>;
   lastActivityAt: Record<string, number>;
   suggestions: Record<string, string[]>;
@@ -180,203 +213,31 @@ interface ChatState {
 }
 
 interface ChatActions {
-  addMessage: (chatId: string, message: Message) => void;
-  updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
-  appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
-  attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: import('@/lib/a2ui/types').A2UIDocument }) => void;
   setModelRoute: (opt: ModelOption | null) => void;
-  startStreaming: (chatId: string) => void;
-  stopStreaming: (chatId: string) => void;
-  setCurrentChat: (chatId: string) => void;
-  clearMessages: (chatId: string) => void;
-  addToolCall: (chatId: string, toolCall: ToolCall) => void;
-  updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
-  updateMessageContent: (chatId: string, messageId: string, content: string) => void;
-  completeRunningTools: (chatId: string) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   getSessionControls: (chatId: string) => SessionControls;
   touchActivity: (chatId: string) => void;
-  setIsStreaming: (v: boolean) => void;
   addSuggestion: (chatId: string, suggestion: string) => void;
   clearSuggestions: (chatId: string) => void;
   addCanvasArtifact: (chatId: string, artifact: CanvasArtifact) => void;
   removeCanvasArtifact: (chatId: string, artifactId: string) => void;
 }
 
-export type ChatStore = ChatState & ChatActions;
+export type ChatStore = TranscriptSlice & ChatState & ChatActions;
 
 export const useChatStore = create<ChatStore>()(
   persist(
     (set) => ({
-      messages: {},
-      currentChatId: null,
+      // Project detail starts a turn from outside the surface and relies on
+      // startStreaming to land the surface on it.
+      ...createTranscriptSlice(set, { selectOnStart: true, finishingToolsEndsReply: true }),
       modelRoute: null,
-      isStreaming: false,
       sessionControls: {},
       lastActivityAt: {},
       suggestions: {},
       canvasArtifacts: {},
 
-      /*
-       * IDEMPOTENT BY ID, and the check has to happen INSIDE `set`.
-       *
-       * `updateMessage` exists for changing a message, so adding one whose id
-       * is already present is always a bug — and it produced a real one: React
-       * "Encountered two children with the same key, goal:r1:question:…".
-       *
-       * The goal transcript posts lines with ids derived from their content so
-       * a restart cannot re-narrate a run. It checked the store first, but a
-       * read-then-write from a caller is not atomic: two polls in flight at
-       * once — or the Cowork and Code surfaces both mounted, which this app
-       * does deliberately — can each read "not present" and both append.
-       *
-       * Doing it here closes that for every caller rather than asking each one
-       * to remember, which is the same trade the local-API cookie makes.
-       */
-      addMessage: (chatId, message) =>
-        set((state) => {
-          const existing = state.messages[chatId] ?? [];
-          if (existing.some((m) => m.id === message.id)) return state;
-          return {
-            messages: { ...state.messages, [chatId]: [...existing, message] },
-          };
-        }),
-
-      updateMessage: (chatId, messageId, updates) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs) return state;
-          return {
-            messages: {
-              ...state.messages,
-              [chatId]: msgs.map((m) => (m.id === messageId ? { ...m, ...updates } : m)),
-            },
-          };
-        }),
-
-      appendToLastAssistant: (chatId, content, thinking) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            content: last.content + content,
-            isLoading: false,
-            ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      attachCanvasToLastAssistant: (chatId, canvas) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            inlineCanvases: [...(last.inlineCanvases ?? []), canvas],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
       setModelRoute: (opt) => set({ modelRoute: opt }),
-
-      startStreaming: (chatId) => set((state) => ({
-        isStreaming: true,
-        // Also mark by chatId so callers can check which chat is streaming
-        currentChatId: chatId || state.currentChatId,
-      })),
-
-      stopStreaming: (chatId) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return { isStreaming: false };
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          const updated = [...msgs];
-          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false };
-          return { isStreaming: false, messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      setCurrentChat: (chatId) => set({ currentChatId: chatId }),
-
-      clearMessages: (chatId) =>
-        set((state) => {
-          const { [chatId]: _, ...rest } = state.messages;
-          return { messages: rest };
-        }),
-
-      addToolCall: (chatId, toolCall) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: [...(last.toolCalls ?? []), toolCall],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      updateToolResult: (chatId, toolCallId, output, isError) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.id === toolCallId
-                ? { ...tc, output, status: (isError ? 'error' : 'complete') as ToolCall['status'], endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      updateMessageContent: (chatId, messageId, content) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const updated = msgs.map((m) => m.id === messageId ? { ...m, content } : m);
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      completeRunningTools: (chatId) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const hasRunning = last.toolCalls.some((tc) => tc.status === 'running');
-          if (!hasRunning) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            isLoading: false,
-            isStreaming: false,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.status === 'running'
-                ? { ...tc, status: 'complete' as const, endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
 
       setSessionControls: (chatId, controls) =>
         set((state) => ({
@@ -391,8 +252,6 @@ export const useChatStore = create<ChatStore>()(
         set((state) => ({
           lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
         })),
-
-      setIsStreaming: (v) => set({ isStreaming: v }),
 
       addSuggestion: (chatId, suggestion) =>
         set((state) => ({
@@ -425,7 +284,9 @@ export const useChatStore = create<ChatStore>()(
     }),
     {
       name: 'aime:chat',
-      storage: createJSONStorage(() => getGatedStorage()),
+      // Transcripts to IndexedDB per conversation, the rest to localStorage;
+      // see lib/transcripts/transcript-storage.
+      storage: surfaceTranscriptStorage('chat', (): Record<string, true> => useChatStore.getState().streamingChats),
       partialize: (state) => ({
         messages: state.messages,
         currentChatId: state.currentChatId,
@@ -433,6 +294,21 @@ export const useChatStore = create<ChatStore>()(
         canvasArtifacts: state.canvasArtifacts,
       }),
       skipHydration: true,
+      /*
+       * v1: `verboseMode` now expands tool calls. Every persisted `true` is the
+       * old default, which meant nothing — carrying it over would open every
+       * tool card in those conversations. See DEFAULT_SESSION_CONTROLS.
+       */
+      version: 1,
+      migrate: (persisted, version) => {
+        const state = persisted as { sessionControls?: Record<string, SessionControls> };
+        if (version < 1 && state?.sessionControls) {
+          for (const ctrl of Object.values(state.sessionControls)) {
+            if (ctrl) ctrl.verboseMode = false;
+          }
+        }
+        return state as never;
+      },
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));

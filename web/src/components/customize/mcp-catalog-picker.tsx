@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { APP_NAME } from "@/config/branding";
 import { Button } from "@/components/ui/button";
 import { Check, Loader2, ShieldAlert, Sparkles } from "lucide-react";
 import { catalogByCategory, CATALOG_EXCLUSIONS, type CatalogServer } from "@/lib/mcp/catalog";
@@ -57,7 +58,7 @@ export function McpCatalogPicker({ connectedIds, onConnected }: McpCatalogPicker
       <div className="flex items-start gap-2">
         <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
         <p className="text-xs text-muted-foreground">
-          These services register {`AIME`} automatically — there is nothing to set up first. Click
+          These services register {APP_NAME} automatically — there is nothing to set up first. Click
           one, sign in, and its tools are available.
         </p>
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal as XTerm, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { WebLinksAddon } from "xterm-addon-web-links";
@@ -8,6 +8,7 @@ import "xterm/css/xterm.css";
 
 import { PanelShell } from "./panel-shell";
 import { usePty } from "@/hooks/use-pty";
+import { TerminalContextMenu, runTerminalAction, type TerminalAction } from "./terminal-context-menu";
 
 /**
  * IDE-mode terminal panel. Phase 4 (Agent D).
@@ -20,8 +21,7 @@ import { usePty } from "@/hooks/use-pty";
  * follows the rest of the app. We re-read the theme on `class` mutations of
  * `documentElement` so toggling the theme repaints the terminal.
  *
- * Right-click context menu (Copy / Paste / Clear / New Terminal) is wired up
- * with a TODO marker for `New Terminal` — multi-tab support is deferred.
+ * Right-click opens a Copy / Paste / Clear menu (terminal-context-menu.tsx).
  */
 
 interface TerminalPanelProps {
@@ -268,29 +268,28 @@ export function TerminalPanel({ workspace, visible = true, sessionKey }: Termina
     }
   }, [session]);
 
-  // Right-click context menu — Copy / Paste / Clear / (TODO) New Terminal.
-  const contextMenu = useMemo(
-    () => async (evt: React.MouseEvent<HTMLDivElement>) => {
-      evt.preventDefault();
-      const term = xtermRef.current;
-      if (!term) return;
-      // Bare-bones: if there's a selection, copy; otherwise paste.
-      // A real popover menu would be nicer; defer to v2.
-      const sel = term.getSelection();
-      if (sel) {
-        try { await navigator.clipboard.writeText(sel); } catch { /* ignore */ }
-        return;
-      }
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text) writeRef.current?.(text).catch(() => {});
-      } catch {
-        /* clipboard not available */
-      }
-      // TODO(v2): proper context menu with Copy / Paste / Clear / New Terminal.
-    },
-    [],
-  );
+  // Right-click opens a menu (Copy / Paste / Clear). It used to paste the
+  // clipboard straight into the shell whenever nothing was selected, so a
+  // copied command ending in a newline ran on a stray right-click.
+  const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
+  const openMenu = (evt: React.MouseEvent<HTMLDivElement>) => {
+    evt.preventDefault();
+    const term = xtermRef.current;
+    const box = evt.currentTarget.getBoundingClientRect();
+    setMenu({
+      x: evt.clientX - box.left,
+      y: evt.clientY - box.top,
+      hasSelection: !!term?.hasSelection(),
+    });
+  };
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const onMenuAction = (action: TerminalAction) => {
+    const term = xtermRef.current;
+    if (!term || typeof navigator === "undefined" || !navigator.clipboard) return;
+    runTerminalAction(action, term, navigator.clipboard).catch(() => {
+      /* clipboard permission denied / unavailable */
+    });
+  };
 
   const handleKeyDown = (evt: React.KeyboardEvent<HTMLDivElement>) => {
     // Cmd+K / Ctrl+K — clear screen (keeps scrollback). Common terminal-app default.
@@ -302,14 +301,25 @@ export function TerminalPanel({ workspace, visible = true, sessionKey }: Termina
 
   return (
     <PanelShell>
-      <div
-        ref={hostRef}
-        onContextMenu={contextMenu}
-        onKeyDown={handleKeyDown}
-        className="h-full w-full bg-[var(--background)]"
-        style={{ padding: 4 }}
-        data-testid="terminal-host"
-      />
+      <div className="relative h-full w-full">
+        <div
+          ref={hostRef}
+          onContextMenu={openMenu}
+          onKeyDown={handleKeyDown}
+          className="h-full w-full bg-[var(--background)]"
+          style={{ padding: 4 }}
+          data-testid="terminal-host"
+        />
+        {menu && (
+          <TerminalContextMenu
+            x={menu.x}
+            y={menu.y}
+            hasSelection={menu.hasSelection}
+            onAction={onMenuAction}
+            onClose={closeMenu}
+          />
+        )}
+      </div>
     </PanelShell>
   );
 }

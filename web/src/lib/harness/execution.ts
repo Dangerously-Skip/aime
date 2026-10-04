@@ -50,10 +50,12 @@ export async function resolveHarnessExecution(
 ): Promise<HarnessExecution> {
   const { resolveExecution } = await import('@/lib/models/execution');
   const { getCredentialStore } = await import('@/lib/models/credentials');
+  const { providerSafeRequestKey } = await import('@/lib/models/server-turn');
 
   const exec = await resolveExecution({
     providerConfig: route.providerConfig ?? null,
-    requestApiKey: route.apiKey ?? null,
+    // Never the Anthropic key to a user-added provider (see server-turn.ts).
+    requestApiKey: (await providerSafeRequestKey(route.providerConfig, route.apiKey)) ?? null,
     shimOrigin,
     // Every stored field, not just the key: Bedrock and Vertex are driven by an
     // environment built from region/project/credentials.

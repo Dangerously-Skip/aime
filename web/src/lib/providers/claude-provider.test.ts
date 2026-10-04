@@ -182,6 +182,27 @@ describe('option assembly', () => {
     expect(env.CLAUDE_CONFIG_DIR).toBe(path.join(os.homedir(), '.aime'));
   });
 
+  it('never hands the local API token to the subprocess the agent runs Bash in', async () => {
+    vi.stubEnv('AIME_API_TOKEN', 'local-api-token-0123456789abcdef');
+    for (const params of [
+      {},
+      { apiKey: 'sk-ant-x' },
+      // Our own llm-proxy is the case that needs SOME local credential — and
+      // gets the proxy-scoped one, which opens /api/llm-proxy/* and nothing else.
+      { baseUrl: 'http://127.0.0.1:3100/api/llm-proxy/openrouter/x' },
+    ]) {
+      const { options } = await captureOptions(new ClaudeProvider(), params);
+      const env = options.env as Record<string, string>;
+      expect(env.AIME_API_TOKEN).toBeUndefined();
+      expect(JSON.stringify(env)).not.toContain('local-api-token-0123456789abcdef');
+    }
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      baseUrl: 'http://127.0.0.1:3100/api/llm-proxy/openrouter/x',
+    });
+    const { proxyToken } = await import('@/lib/auth/internal-credential');
+    expect((options.env as Record<string, string>).ANTHROPIC_AUTH_TOKEN).toBe(proxyToken());
+  });
+
   it('maps think levels to SDK thinking config', async () => {
     const { options } = await captureOptions(new ClaudeProvider(), {
       sessionControls: controls({ thinkLevel: 'high' }),
@@ -310,6 +331,45 @@ describe('session resumption', () => {
     scriptChunks([]);
     const { options } = await captureOptions(provider, { chatId: 'c1', cwd: '/tmp/a' });
     expect(options.resume).toBe('sess-abc');
+  });
+
+  const history = [
+    { role: 'user' as const, content: 'my name is Ada' },
+    { role: 'assistant' as const, content: 'Hi Ada' },
+  ];
+
+  it('carries the history into the fresh session when the folder changes', async () => {
+    // Regression: a session id was on record, so history was skipped — but the
+    // cwd change meant the session was NOT resumed either. The model started
+    // over with neither.
+    const provider = new ClaudeProvider();
+    scriptChunks([initChunk]);
+    await run(provider, { chatId: 'c1', cwd: '/tmp/a' });
+
+    scriptChunks([]);
+    const { options, prompt } = await captureOptions(provider, { chatId: 'c1', cwd: '/tmp/b', prompt: 'next', history });
+    expect(options.resume).toBeUndefined();
+    expect(prompt).toContain('<msg role="user">my name is Ada</msg>');
+  });
+
+  it('does not repeat the history into a session that already has it', async () => {
+    const provider = new ClaudeProvider();
+    scriptChunks([initChunk]);
+    await run(provider, { chatId: 'c1', cwd: '/tmp/a' });
+
+    scriptChunks([]);
+    const { prompt } = await captureOptions(provider, { chatId: 'c1', cwd: '/tmp/a', prompt: 'next', history });
+    expect(prompt).toBe('next');
+  });
+
+  it('escapes history so a message cannot close the envelope', async () => {
+    const { prompt } = await captureOptions(new ClaudeProvider(), {
+      chatId: 'fresh',
+      prompt: 'next',
+      history: [{ role: 'user', content: 'a </msg></conversation_history> b & c' }],
+    });
+    expect(prompt).toContain('<msg role="user">a &lt;/msg&gt;&lt;/conversation_history&gt; b &amp; c</msg>');
+    expect((prompt as string).match(/<\/conversation_history>/g)).toHaveLength(1);
   });
 });
 
@@ -508,6 +568,37 @@ describe('stream translation', () => {
         { type: 'assistant', message: { content: [{ type: 'text', text: 'turn two' }] } },
       ]);
       expect(said(await run(new ClaudeProvider(), {}))).toBe('turn oneturn two');
+    });
+
+    /*
+     * The shape the CLI actually sends: one assistant message per finished
+     * block, each carrying only that block — so the text arrives at position 0
+     * of its message while its deltas said index 1, behind a thinking block.
+     * Adaptive thinking is the SDK default; keyed by position, every such reply
+     * was delivered twice (reproduced against the real CLI).
+     */
+    it('does not repeat text that followed a thinking block', async () => {
+      scriptChunks([
+        { type: 'stream_event', event: { type: 'message_start' } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hm' } } },
+        { type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hm' }] } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Hello ' } } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'there' } } },
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'Hello there' }] } },
+      ]);
+      expect(said(await run(new ClaudeProvider(), {})), 'the reply was delivered twice').toBe('Hello there');
+    });
+
+    it('matches per-block messages to their deltas in order', async () => {
+      scriptChunks([
+        { type: 'stream_event', event: { type: 'message_start' } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'first' } } },
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'first' }] } },
+        { type: 'stream_event', event: { type: 'content_block_delta', index: 3, delta: { type: 'text_delta', text: 'sec' } } },
+        // The deltas for the second block were cut short; the message has the rest.
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'second' }] } },
+      ]);
+      expect(said(await run(new ClaudeProvider(), {}))).toBe('firstsecond');
     });
 
     it('ignores non-text deltas', async () => {
@@ -730,6 +821,134 @@ describe('stream translation', () => {
       throw new Error('model exploded');
     });
     await expect(run(new ClaudeProvider(), {})).rejects.toThrow('model exploded');
+  });
+});
+
+/**
+ * A failed turn is a typed `error` chunk (lib/sse/turn-error.ts), never
+ * assistant prose, and the stream still ends in `done` — flagged `error: true`.
+ *
+ * Driven with the message shapes the SDK actually sends for a revoked key: a
+ * synthetic assistant message carrying `error: 'authentication_failed'` whose
+ * text is the CLI's login advice, then an `is_error` result, then a throw.
+ */
+describe('typed turn errors', () => {
+  const authMessage = {
+    type: 'assistant',
+    error: 'authentication_failed',
+    message: { model: '<synthetic>', content: [{ type: 'text', text: 'Not logged in · Please run /login' }] },
+  };
+  const authResult = {
+    type: 'result',
+    subtype: 'success',
+    is_error: true,
+    result: 'Not logged in · Please run /login',
+    usage: {},
+  };
+
+  it('turns an assistant-message auth error into an error chunk, not text', async () => {
+    scriptChunks([authMessage, authResult]);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    const errors = chunks.filter((c) => c.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ code: 'auth', message: 'Not logged in' });
+    // The CLI's advice never reaches the transcript.
+    expect(chunks.filter((c) => c.type === 'text')).toEqual([]);
+    expect(JSON.stringify(chunks)).not.toContain('/login');
+    expect(chunks.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('reports once when the SDK also throws after the error result', async () => {
+    queryMock.mockImplementation(async function* () {
+      yield authMessage;
+      yield authResult;
+      throw new Error('Claude Code returned an error result: Not logged in · Please run /login');
+    });
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.filter((c) => c.type === 'error')).toHaveLength(1);
+    expect(chunks.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('classifies an is_error result that arrives without an assistant error', async () => {
+    scriptChunks([
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        api_error_status: 402,
+        result: 'Your credit balance is too low to access the Anthropic API.',
+        usage: {},
+      },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.find((c) => c.type === 'error')).toMatchObject({ code: 'billing' });
+    expect(chunks.filter((c) => c.type === 'text')).toEqual([]);
+    expect(chunks.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('uses error_during_execution’s `errors` when there is no result text', async () => {
+    scriptChunks([
+      { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['prompt is too long'], usage: {} },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.find((c) => c.type === 'error')).toMatchObject({ code: 'context_length' });
+  });
+
+  it('does not treat a turn or budget ceiling as a failure', async () => {
+    scriptChunks([{ type: 'result', subtype: 'error_max_turns', is_error: true, usage: {} }]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.some((c) => c.type === 'error')).toBe(false);
+    expect(chunks.at(-1)).toEqual({ type: 'done', provider: 'claude' });
+  });
+
+  it('catches the login advice on a synthetic message even without the typed field', async () => {
+    scriptChunks([
+      {
+        type: 'assistant',
+        message: { model: '<synthetic>', content: [{ type: 'text', text: 'Invalid API key · Please run /login' }] },
+      },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.find((c) => c.type === 'error')).toMatchObject({ code: 'auth' });
+    expect(chunks.filter((c) => c.type === 'text')).toEqual([]);
+  });
+
+  it('leaves an ordinary reply that mentions /login alone', async () => {
+    scriptChunks([
+      { type: 'assistant', message: { model: 'claude-sonnet-5', content: [{ type: 'text', text: 'Please run /login in your CLI.' }] } },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+    expect(chunks.some((c) => c.type === 'error')).toBe(false);
+    expect(chunks.find((c) => c.type === 'text')).toMatchObject({ content: 'Please run /login in your CLI.' });
+  });
+
+  it('forwards api_retry as a retry chunk', async () => {
+    scriptChunks([
+      { type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 8000, error_status: 429, error: 'rate_limit' },
+      { type: 'system', subtype: 'api_retry', attempt: 3, max_retries: 10, retry_delay_ms: 16000, error_status: 529, error: 'unknown' },
+      { type: 'system', subtype: 'api_retry', attempt: 4, max_retries: 10, retry_delay_ms: 1000, error_status: null, error: 'unknown' },
+    ]);
+    const chunks = await run(new ClaudeProvider(), {});
+
+    expect(chunks.filter((c) => c.type === 'retry')).toEqual([
+      { type: 'retry', attempt: 2, delayMs: 8000, code: 'rate_limit', provider: 'claude' },
+      { type: 'retry', attempt: 3, delayMs: 16000, code: 'overloaded', provider: 'claude' },
+      { type: 'retry', attempt: 4, delayMs: 1000, code: 'network', provider: 'claude' },
+    ]);
+    // A retry is not a failure.
+    expect(chunks.at(-1)).toEqual({ type: 'done', provider: 'claude' });
+  });
+
+  it('tags a thrown 429 with its code and still rethrows it', async () => {
+    const err = Object.assign(new Error('Too Many Requests'), { status: 429 });
+    queryMock.mockImplementation(async function* () {
+      throw err;
+    });
+    await expect(run(new ClaudeProvider(), {})).rejects.toBe(err);
+    expect((err as { turnErrorCode?: string }).turnErrorCode).toBe('rate_limit');
   });
 });
 
@@ -1321,7 +1540,7 @@ describe('canUseTool interception', () => {
     expect((await canUseTool('Write', { file_path: '/x' }, { toolUseID: 't1' })).behavior).toBe('allow');
   });
 
-  it('background runs allow read-only bash but pause acting bash (C3)', async () => {
+  it('background runs allow read-only bash but refuse acting bash (C3)', async () => {
     const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42' });
     expect((await canUseTool('Bash', { command: 'git status' }, { toolUseID: 't1' })).behavior).toBe('allow');
     expect((await canUseTool('Bash', { command: 'rm -rf /tmp/x' }, { toolUseID: 't2' })).behavior).toBe('deny');
@@ -1345,7 +1564,7 @@ describe('canUseTool interception', () => {
     const relaxed = await captureOptions(new ClaudeProvider(), { chatId: 'standing-order-42', approvalPolicy: 'never' });
     expect((await relaxed.canUseTool('Write', { file_path: '/x' }, { toolUseID: 't1' })).behavior).toBe('allow');
 
-    // 'always' on an interactive chatId: even in-app actions pause.
+    // 'always' on an interactive chatId: even in-app actions are refused.
     const strict = await captureOptions(new ClaudeProvider(), { chatId: 'regular-chat', approvalPolicy: 'always' });
     expect((await strict.canUseTool('TodoWrite', { todos: [] }, { toolUseID: 't2' })).behavior).toBe('deny');
     expect((await strict.canUseTool('Read', { file_path: '/x' }, { toolUseID: 't3' })).behavior).toBe('allow');
@@ -1489,29 +1708,17 @@ describe('canUseTool interception', () => {
     expect(result.updatedInput?.answers).toEqual({ choice: 'A' });
   });
 
-  it('injects sub-agent output for spawn_agent via the subagent API', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, output: 'sub-agent said hi' })),
-    );
+  it('no longer relays a `spawn_agent` call anywhere, least of all with the user’s key', async () => {
+    // It intercepted a tool nothing defined and POSTed the request's API key to
+    // a hardcoded http://localhost:3000. Subagents are the SDK's `Agent` tool.
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
+    const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'p1', apiKey: 'sk-ant-secret' });
 
-    const { canUseTool } = await captureOptions(new ClaudeProvider(), { chatId: 'parent1' });
     const result = await canUseTool('spawn_agent', { task: 'research things' }, { toolUseID: 's1' });
 
-    expect(result.behavior).toBe('allow');
-    expect(result.updatedInput?.__spawn_agent_output).toBe('sub-agent said hi');
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-    expect(body).toMatchObject({ parentChatId: 'parent1', task: 'research things' });
-  });
-
-  it('reports spawn_agent transport failures in the tool input instead of crashing', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
-
-    const { canUseTool } = await captureOptions(new ClaudeProvider(), {});
-    const result = await canUseTool('spawn_agent', { task: 'x' }, { toolUseID: 's1' });
-
-    expect(result.behavior).toBe('allow');
-    expect(result.updatedInput?.__spawn_agent_output).toContain('Failed to spawn');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.updatedInput).toBeUndefined();
   });
 });
 
@@ -2337,8 +2544,7 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
       let aborted: boolean | undefined;
       const issued: string[] = [];
       queryMock.mockImplementation(async function* (args: {
-        options: { canUseTool: CanUseTool };
-        abortSignal: AbortSignal;
+        options: { canUseTool: CanUseTool; abortController: AbortController };
       }) {
         yield {
           type: 'assistant',
@@ -2354,7 +2560,7 @@ describe('MCP per-tool approval gate — interactive surfaces', () => {
           { toolUseID: 'w-1' },
         );
         await vi.advanceTimersByTimeAsync(150_000);
-        aborted = args.abortSignal.aborted;
+        aborted = args.options.abortController.signal.aborted;
         // No vi.waitFor here (fake timers, inside the SDK generator): the 150s
         // advance above has already flushed the relay and parked the wait, and
         // asserting the answer LANDED proves that rather than assuming it.
@@ -2872,6 +3078,96 @@ describe('DocumentCreate — a PDF is only reported if it exists (regression)', 
  * the only place that holds both the query's AbortSignal and the waits, so it has
  * to thread one into the other.
  */
+describe('abort reaches the SDK, and only the run it belongs to', () => {
+  it('hands the SDK the controller that abort() fires', async () => {
+    const provider = new ClaudeProvider();
+    let signal: AbortSignal | undefined;
+    queryMock.mockImplementation(async function* (args: { options: { abortController: AbortController } }) {
+      signal = args.options.abortController.signal;
+      expect(provider.abort('wired')).toBe(true);
+    });
+    const chunks = await run(provider, { chatId: 'wired' });
+
+    expect(signal?.aborted).toBe(true);
+    // A clean exit after an abort is still an abort, not a finished turn.
+    expect(chunks.at(-1)?.type).toBe('aborted');
+  });
+
+  /*
+   * Since Agent SDK 0.3 an abort does not cut the stream: the subprocess gets a
+   * 2s grace to flush its transcript and the messages in flight keep arriving.
+   * Against the real CLI that was ~1.5s of further text after Stop.
+   */
+  it('emits nothing from the SDK after the stop, and reports the stop once', async () => {
+    const provider = new ClaudeProvider();
+    let closed = false;
+    queryMock.mockImplementation(async function* () {
+      try {
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'before' }] } };
+        provider.abort('in-flight');
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'after' }] } };
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'still after' }] } };
+      } finally {
+        closed = true;
+      }
+    });
+    const chunks = await run(provider, { chatId: 'in-flight' });
+
+    const said = chunks.filter((c) => c.type === 'text').map((c) => c.content).join('');
+    expect(said).toBe('before');
+    expect(chunks.filter((c) => c.type === 'aborted')).toHaveLength(1);
+    expect(chunks.at(-1)?.type).toBe('aborted');
+    // Leaving the loop closed the query — that is what ends the subprocess.
+    expect(closed).toBe(true);
+  });
+
+  it('treats the SDK’s own abort error (named "Error") as an abort', async () => {
+    const provider = new ClaudeProvider();
+    queryMock.mockImplementation(async function* () {
+      provider.abort('sdk-abort');
+      throw new Error('Claude Code process aborted by user');
+    });
+    const chunks = await run(provider, { chatId: 'sdk-abort' });
+    expect(chunks.map((c) => c.type)).toEqual(['aborted']);
+  });
+
+  it('a stopped run winding down does not unregister the run that replaced it', async () => {
+    // Regression: Stop → resend. The first run's `finally` deleted the map
+    // entry by key, which by then held the SECOND run's controller, so Stop on
+    // the new run found nothing to abort.
+    const provider = new ClaudeProvider();
+    let releaseA!: () => void;
+    const aGate = new Promise<void>((r) => { releaseA = r; });
+    let releaseB!: () => void;
+    const bGate = new Promise<void>((r) => { releaseB = r; });
+    let bSignal: AbortSignal | undefined;
+
+    queryMock
+      .mockImplementationOnce(async function* () {
+        await aGate;
+      })
+      .mockImplementationOnce(async function* (args: { options: { abortController: AbortController } }) {
+        bSignal = args.options.abortController.signal;
+        await bGate;
+      });
+
+    const a = run(provider, { chatId: 'race' });
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledTimes(1));
+    expect(provider.abort('race')).toBe(true); // Stop on the first run
+
+    const b = run(provider, { chatId: 'race' });
+    await vi.waitFor(() => expect(bSignal).toBeDefined());
+
+    releaseA();
+    await a; // the first run's cleanup happens now
+
+    expect(provider.abort('race'), 'Stop on the second run found no controller').toBe(true);
+    expect(bSignal!.aborted).toBe(true);
+    releaseB();
+    await b;
+  });
+});
+
 describe('aborting a query cancels its outstanding rendezvous', () => {
   it('frees a pending connector card the moment the user presses Stop', async () => {
     const { pendingConnectorCount } = await import('../pending-connectors');
@@ -2907,9 +3203,9 @@ describe('aborting a query cancels its outstanding rendezvous', () => {
     const provider = new ClaudeProvider();
     let result: { ok: boolean } | undefined;
 
-    queryMock.mockImplementation(async function* (args: { abortSignal: AbortSignal }) {
+    queryMock.mockImplementation(async function* (args: { options: { abortController: AbortController } }) {
       const baseline = pendingDocumentCount();
-      const pending = waitForDocumentPrint('stop-doc-1', { signal: args.abortSignal });
+      const pending = waitForDocumentPrint('stop-doc-1', { signal: args.options.abortController.signal });
       expect(pendingDocumentCount()).toBe(baseline + 1);
       provider.abort('stop-chat-2');
       result = await pending;
@@ -3256,5 +3552,73 @@ describe('a single CronCreate makes a single reminder', () => {
     ] as never);
     const chunks = await run(new ClaudeProvider(), {});
     expect(chunks.filter((c) => c.type === 'cron_create')).toHaveLength(2);
+  });
+});
+
+/**
+ * A schedule the tickers cannot run is refused at save time, with the reason,
+ * instead of being saved as an order that never fires while the model tells
+ * the user it will. BOTH emitters are exercised — the handler (which answers
+ * the model) and the mid-stream tool_use block (which the client saves from):
+ * refusing in one and emitting from the other would still save the order.
+ */
+describe('model-created schedules are validated at save time', () => {
+  async function turnCalling(toolName: 'StandingOrderCreate' | 'CronCreate', input: Record<string, unknown>) {
+    let result: unknown;
+    queryMock.mockImplementation(async function* (args: { options: Record<string, unknown> }) {
+      const servers = (args.options.mcpServers ?? {}) as Record<
+        string,
+        { tools?: Array<{ name: string; handler: (i: unknown) => Promise<unknown> }> }
+      >;
+      const handler = Object.values(servers)
+        .flatMap((s) => s.tools ?? [])
+        .find((t) => t.name === toolName)?.handler;
+      expect(handler, `${toolName} is not registered`).toBeTruthy();
+      result = await handler!(input);
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: `mcp__aime__${toolName}`, input, id: 'tu1' }] },
+      };
+    });
+    const chunks = await run(new ClaudeProvider(), {});
+    return { chunks, result: result as { isError?: boolean; content: Array<{ text: string }> } };
+  }
+
+  it('refuses an unparseable standing-order cron and emits nothing', async () => {
+    const { chunks, result } = await turnCalling('StandingOrderCreate', {
+      instruction: 'Remind me to stretch', trigger_type: 'cron', expression: '0 9 * * MON-FRY',
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/NOT saved[\s\S]*Invalid cron schedule/);
+    expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(0);
+  });
+
+  it('refuses an interval written as prose', async () => {
+    const { chunks, result } = await turnCalling('StandingOrderCreate', {
+      instruction: 'Check the queue', trigger_type: 'interval', expression: 'every couple of hours',
+    });
+    expect(result.isError).toBe(true);
+    expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(0);
+  });
+
+  it('still saves a valid order exactly once', async () => {
+    const { chunks, result } = await turnCalling('StandingOrderCreate', {
+      instruction: 'Check the queue', trigger_type: 'interval', expression: '2h',
+    });
+    expect(result.isError).toBeFalsy();
+    expect(chunks.filter((c) => c.type === 'standing_order_create')).toHaveLength(1);
+  });
+
+  it('CronCreate refuses an impossible minute the same way', async () => {
+    const { chunks, result } = await turnCalling('CronCreate', { expression: '61 9 * * *', prompt: 'stand-up' });
+    expect(result.isError).toBe(true);
+    expect(chunks.filter((c) => c.type === 'cron_create')).toHaveLength(0);
+  });
+
+  it('offers only the trigger types the scheduler fires', async () => {
+    const { options } = await captureOptions(new ClaudeProvider());
+    const aime = (options.mcpServers as Record<string, { tools: Array<{ name: string; schema: Record<string, { options?: unknown }> }> }>).aime;
+    const schema = aime.tools.find((t) => t.name === 'StandingOrderCreate')!.schema;
+    expect(schema.trigger_type.options).toEqual(['cron', 'interval']);
   });
 });

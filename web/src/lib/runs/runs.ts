@@ -9,6 +9,7 @@ import {
   type Goal,
   type Run,
   type RunCost,
+  type RunRefusal,
   type RunStatus,
   type RunSummary,
   type RunTrigger,
@@ -50,6 +51,7 @@ export function finishRun(
     toolCalls?: number;
     deliverables?: Deliverable[];
     verification?: Run['verification'];
+    refusals?: RunRefusal[];
   },
 ): Run {
   if (isTerminal(run.status)) return run;
@@ -64,7 +66,39 @@ export function finishRun(
     ...(params.cost ? { cost: params.cost } : {}),
     ...(params.toolCalls != null ? { toolCalls: params.toolCalls } : {}),
     ...(params.verification ? { verification: params.verification } : {}),
+    ...(params.refusals?.length ? { refusals: params.refusals } : {}),
     deliverables: params.deliverables ?? run.deliverables,
+  };
+}
+
+/** Refusals kept per run. A loop of refused calls must not bloat the log line. */
+export const MAX_RECORDED_REFUSALS = 20;
+/** Characters kept of a refusal reason — it is a label, not a transcript. */
+export const MAX_REFUSAL_REASON_CHARS = 160;
+
+/**
+ * Accumulate the refusals a run's gate reports (`QueryParams.onToolRefused`),
+ * bounded, for `finishRun`.
+ */
+export function collectRefusals(): {
+  record: (refusal: RunRefusal) => void;
+  list: RunRefusal[];
+} {
+  const list: RunRefusal[] = [];
+  return {
+    list,
+    record(refusal) {
+      if (list.length >= MAX_RECORDED_REFUSALS) return;
+      const reason = refusal.reason.trim();
+      list.push({
+        tool: refusal.tool.slice(0, 120),
+        reason:
+          reason.length > MAX_REFUSAL_REASON_CHARS
+            ? `${reason.slice(0, MAX_REFUSAL_REASON_CHARS - 1)}…`
+            : reason,
+        at: refusal.at,
+      });
+    },
   };
 }
 

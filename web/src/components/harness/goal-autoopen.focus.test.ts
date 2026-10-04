@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { renderHook, cleanup } from '@testing-library/react';
+import { resetHarnessStatusForTests } from '@/hooks/use-harness-status';
 import * as fs from 'fs';
 import * as path from 'path';
 import { useGoalAutoOpen } from './use-goal-autoopen';
@@ -35,6 +36,7 @@ const settle = async () => {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  resetHarnessStatusForTests();
   openSpy = vi.fn();
   (window as unknown as Record<string, unknown>).__ideOpenGoal = openSpy;
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
@@ -44,6 +46,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   delete (window as unknown as Record<string, unknown>).__ideOpenGoal;

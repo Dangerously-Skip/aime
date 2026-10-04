@@ -1,16 +1,20 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
-import { getGatedStorage } from '@/lib/gated-storage';
+import { persist } from 'zustand/middleware';
+import { surfaceTranscriptStorage } from '@/lib/transcripts/transcript-storage';
 import { onStreamAborted } from '@/lib/stream-registry';
 import {
   findUnregisteredArtifacts,
   markTurnStart,
   turnStartedAt,
 } from '@/lib/artifact-reconcile';
-import type { Message, ToolCall, ModelId } from '@/stores/chat-store';
-import { cleanStaleStreamingFlags, dedupeMessageIds, dedupeLegacyTranscriptRows } from '@/stores/chat-store';
+import {
+  cleanStaleStreamingFlags,
+  dedupeMessageIds,
+  dedupeLegacyTranscriptRows,
+} from '@/stores/chat-store';
+import { createTranscriptSlice, type TranscriptSlice } from '@/stores/slices/transcript-slice';
 import { type SessionControls } from '@/lib/slash-commands';
 import type { A2UIDocument } from '@/lib/a2ui/types';
 import type { ModelOption } from '@/lib/models/client-options';
@@ -24,17 +28,14 @@ export interface CanvasArtifact {
   createdAt: number;
 }
 
-const VALID_MODELS: Set<string> = new Set<string>(['sonnet', 'opus', 'haiku']);
 
+/** Cowork's own state; the transcript half comes from `createTranscriptSlice`. */
 interface CoworkState {
-  messages: Record<string, Message[]>;
-  currentChatId: string | null;
   /**
    * Selected route — a tier or a pinned model (in-memory); null ⇒ use the
    * built-in `model` enum.
    */
   modelRoute: ModelOption | null;
-  isStreaming: boolean;
   folderByChat: Record<string, string | null>;
   contextFiles: Record<string, string[]>;
   artifactFiles: Record<string, string[]>;
@@ -47,18 +48,7 @@ interface CoworkState {
 }
 
 interface CoworkActions {
-  addMessage: (chatId: string, message: Message) => void;
-  updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => void;
-  appendToLastAssistant: (chatId: string, content: string, thinking?: string) => void;
-  attachCanvasToLastAssistant: (chatId: string, canvas: { id: string; title: string; doc: A2UIDocument }) => void;
   setModelRoute: (opt: ModelOption | null) => void;
-  startStreaming: (chatId: string) => void;
-  stopStreaming: (chatId: string) => void;
-  setCurrentChat: (chatId: string | null) => void;
-  clearMessages: (chatId: string) => void;
-  addToolCall: (chatId: string, toolCall: ToolCall) => void;
-  updateToolResult: (chatId: string, toolCallId: string, output: string, isError?: boolean) => void;
-  completeRunningTools: (chatId: string) => void;
   setFolder: (chatId: string, folder: string | null) => void;
   addContextFile: (chatId: string, path: string) => void;
   addArtifactFile: (chatId: string, path: string) => void;
@@ -71,20 +61,27 @@ interface CoworkActions {
   setPlanOpen: (open: boolean) => void;
   setSessionControls: (chatId: string, controls: SessionControls) => void;
   touchActivity: (chatId: string) => void;
-  setIsStreaming: (v: boolean) => void;
   addSearchGroup: (chatId: string, group: { query: string; results: { title: string; url: string; snippet: string }[] }) => void;
   clearSearchGroups: (chatId: string) => void;
 }
 
-export type CoworkStore = CoworkState & CoworkActions;
+export type CoworkStore = TranscriptSlice & CoworkState & CoworkActions;
 
 export const useCoworkStore = create<CoworkStore>()(
   persist(
     (set) => ({
-      messages: {},
-      currentChatId: null,
+      ...createTranscriptSlice(set, {
+        // Stamped here so an aborted turn can tell its own files from every
+        // previous turn's when it reconciles the scratch directory.
+        onStart: markTurnStart,
+        /*
+         * No selectOnStart. It used to switch the screen to whichever chat
+         * started a turn — so an auto-continue firing in chat A yanked a user
+         * who had moved on to B back to A. The composer selects a new
+         * conversation itself before it sends.
+         */
+      }),
       modelRoute: null,
-      isStreaming: false,
       folderByChat: {},
       contextFiles: {},
       artifactFiles: {},
@@ -95,147 +92,7 @@ export const useCoworkStore = create<CoworkStore>()(
       lastActivityAt: {},
       searchGroups: {},
 
-      // Idempotent by id, inside `set` — see chat-store's addMessage for why.
-      // Every message store carries this: the goal transcript posts through
-      // whichever store owns the surface, and the guard was on only one of them.
-      addMessage: (chatId, message) =>
-        set((state) => {
-          const existing = state.messages[chatId] ?? [];
-          if (existing.some((m) => m.id === message.id)) return state;
-          return {
-            messages: { ...state.messages, [chatId]: [...existing, message] },
-          };
-        }),
-
-      updateMessage: (chatId, messageId, updates) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs) return state;
-          return {
-            messages: {
-              ...state.messages,
-              [chatId]: msgs.map((m) => (m.id === messageId ? { ...m, ...updates } : m)),
-            },
-          };
-        }),
-
-      appendToLastAssistant: (chatId, content, thinking) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            content: last.content + content,
-            isLoading: false,
-            ...(thinking ? { thinking: (last.thinking || '') + thinking } : {}),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      attachCanvasToLastAssistant: (chatId, canvas) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            inlineCanvases: [...(last.inlineCanvases ?? []), canvas],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
       setModelRoute: (opt) => set({ modelRoute: opt }),
-
-      startStreaming: (chatId) => {
-        // Stamped here so an aborted turn can tell its own files from every
-        // previous turn's when it reconciles the scratch directory.
-        if (chatId) markTurnStart(chatId);
-        set((state) => ({
-          isStreaming: true,
-          currentChatId: chatId || state.currentChatId,
-        }));
-      },
-
-      stopStreaming: (chatId) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return { isStreaming: false };
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          const updated = [...msgs];
-          updated[lastIdx] = { ...last, isStreaming: false, isLoading: false };
-          return { isStreaming: false, messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      setCurrentChat: (chatId) => set({ currentChatId: chatId }),
-
-      clearMessages: (chatId) =>
-        set((state) => {
-          const { [chatId]: _, ...rest } = state.messages;
-          return { messages: rest };
-        }),
-
-      addToolCall: (chatId, toolCall) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant') return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: [...(last.toolCalls ?? []), toolCall],
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      updateToolResult: (chatId, toolCallId, output, isError) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.id === toolCallId
-                ? { ...tc, output, status: (isError ? 'error' : 'complete') as ToolCall['status'], endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
-
-      completeRunningTools: (chatId) =>
-        set((state) => {
-          const msgs = state.messages[chatId];
-          if (!msgs?.length) return state;
-          const lastIdx = msgs.length - 1;
-          const last = msgs[lastIdx];
-          if (last.role !== 'assistant' || !last.toolCalls) return state;
-          const hasRunning = last.toolCalls.some((tc) => tc.status === 'running');
-          if (!hasRunning) return state;
-          const updated = [...msgs];
-          updated[lastIdx] = {
-            ...last,
-            toolCalls: last.toolCalls.map((tc) =>
-              tc.status === 'running'
-                ? { ...tc, status: 'complete' as const, endTime: Date.now() }
-                : tc
-            ),
-          };
-          return { messages: { ...state.messages, [chatId]: updated } };
-        }),
 
       setFolder: (chatId, folder) => set((state) => ({
         folderByChat: { ...state.folderByChat, [chatId]: folder },
@@ -304,7 +161,6 @@ export const useCoworkStore = create<CoworkStore>()(
           lastActivityAt: { ...state.lastActivityAt, [chatId]: Date.now() },
         })),
 
-      setIsStreaming: (v) => set({ isStreaming: v }),
       addSearchGroup: (chatId, group) =>
         set((state) => ({
           searchGroups: {
@@ -319,7 +175,9 @@ export const useCoworkStore = create<CoworkStore>()(
     }),
     {
       name: 'aime:cowork',
-      storage: createJSONStorage(() => getGatedStorage()),
+      // Transcripts to IndexedDB per conversation, the rest to localStorage;
+      // see lib/transcripts/transcript-storage.
+      storage: surfaceTranscriptStorage('cowork', (): Record<string, true> => useCoworkStore.getState().streamingChats),
       partialize: (state) => ({
         messages: state.messages,
         currentChatId: state.currentChatId,
@@ -332,6 +190,21 @@ export const useCoworkStore = create<CoworkStore>()(
         searchGroups: state.searchGroups,
       }),
       skipHydration: true,
+      /*
+       * v1: `verboseMode` now expands tool calls. Every persisted `true` is the
+       * old default, which meant nothing — carrying it over would open every
+       * tool card in those conversations. See DEFAULT_SESSION_CONTROLS.
+       */
+      version: 1,
+      migrate: (persisted, version) => {
+        const state = persisted as { sessionControls?: Record<string, SessionControls> };
+        if (version < 1 && state?.sessionControls) {
+          for (const ctrl of Object.values(state.sessionControls)) {
+            if (ctrl) ctrl.verboseMode = false;
+          }
+        }
+        return state as never;
+      },
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.messages = dedupeLegacyTranscriptRows(dedupeMessageIds(cleanStaleStreamingFlags(state.messages)));

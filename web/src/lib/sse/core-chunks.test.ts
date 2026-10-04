@@ -52,6 +52,10 @@ describe('all three stores satisfy the contract', () => {
       'addToolCall',
       'updateToolResult',
       'completeRunningTools',
+      // Optional in the contract, but every store has them: a store without
+      // them would leave a retracted refusal on screen.
+      'markSegment',
+      'retractSegments',
     ]) {
       expect(typeof s[action], action).toBe('function');
     }
@@ -65,7 +69,7 @@ describe('handleCoreChunk', () => {
   it('claims exactly the core types', () => {
     for (const t of [
       'turn_start', 'text', 'thinking', 'tool_use', 'tool_result', 'error',
-      'input_request', 'connector_request', 'document_print', 'canvas',
+      'input_request', 'connector_request', 'document_print', 'canvas', 'retry', 'retract',
     ]) {
       expect(isCoreChunk(t)).toBe(true);
     }
@@ -150,10 +154,41 @@ describe('handleCoreChunk', () => {
     expect(s.updateToolResult).toHaveBeenCalledWith('c1', 't2', 'out', true);
   });
 
-  it('appends an error into the transcript with a default message', () => {
+  it('a store without setTurnError keeps the old inline text rather than losing the error', () => {
     const s = fakeStore();
     handleCoreChunk({ type: 'error' }, ctx(s));
     expect(s.appendToLastAssistant).toHaveBeenCalledWith('c1', '\n\n**Error:** An error occurred');
+  });
+
+  it('records an error on the reply instead of writing it into the reply text', () => {
+    const s = { ...fakeStore(), setTurnError: vi.fn() };
+    handleCoreChunk({ type: 'error', message: 'Please run /login', code: 'auth' }, ctx(s));
+    expect(s.setTurnError).toHaveBeenCalledWith('c1', { code: 'auth', message: 'Please run /login' });
+    expect(s.appendToLastAssistant).not.toHaveBeenCalled();
+  });
+
+  it('classifies an error the server sent without a code', () => {
+    const s = { ...fakeStore(), setTurnError: vi.fn() };
+    handleCoreChunk({ type: 'error', message: '429 Too Many Requests' }, ctx(s));
+    expect(s.setTurnError).toHaveBeenCalledWith('c1', { code: 'rate_limit', message: '429 Too Many Requests' });
+  });
+
+  it('shows a provider retry on the streaming reply', () => {
+    const s = { ...fakeStore(), setRetryStatus: vi.fn() };
+    expect(handleCoreChunk({ type: 'retry', attempt: 2, delayMs: 4000, code: 'overloaded' }, ctx(s))).toBe(true);
+    expect(s.setRetryStatus).toHaveBeenCalledWith('c1', { attempt: 2, delayMs: 4000 });
+  });
+
+  it('against the real chat store: the error is on the message, and the content is untouched', () => {
+    useChatStore.setState({ messages: {} });
+    const st = useChatStore.getState();
+    st.addMessage('c1', { id: 'u', role: 'user', content: 'hi', timestamp: 1 });
+    st.addMessage('c1', { id: 'a', role: 'assistant', content: 'Partial answer', timestamp: 2, isStreaming: true });
+    handleCoreChunk({ type: 'error', message: 'overloaded_error', code: 'overloaded' }, ctx(useChatStore.getState() as never));
+    const last = useChatStore.getState().messages.c1.at(-1)!;
+    expect(last.content).toBe('Partial answer');
+    expect(last.error).toEqual({ code: 'overloaded', message: 'overloaded_error' });
+    expect(last.isStreaming).toBe(false);
   });
 
   it('declines a chunk the surface has opted out of', () => {
@@ -166,40 +201,46 @@ describe('handleCoreChunk', () => {
 });
 
 /**
- * What each surface still owns, recorded so shrinking the list is deliberate and
- * growing it is a conversation. Chat is fully migrated; cowork and code keep
- * tool_use/tool_result because theirs carry real surface work (a stuck-tool
- * watchdog, artifact categorisation, a QUARRY_CRON sniffer) that a one-line
- * callback would misrepresent.
+ * Where the shared handling runs, recorded so a surface cannot quietly grow its
+ * own switch again. It runs in ONE place — the shared turn every conversation
+ * surface uses — with nothing skipped: Cowork's and Code's tool work (artifact
+ * rail, cron-marker sniffer, preview detection, the risky-command tag) are the
+ * `onToolStarted` / `onToolResult` / `normaliseToolInput` callbacks now, not
+ * private copies of `tool_use` and `tool_result`.
  */
 describe('migration status is explicit, not accidental', () => {
   const SRC = path.resolve(__dirname, '../..');
-  const EXPECTED: Record<string, string[]> = {
-    'components/surfaces/chat/chat-surface.tsx': [],
-    'components/surfaces/cowork/cowork-surface.tsx': ['tool_use', 'tool_result'],
-    'components/surfaces/code/code-surface.tsx': ['tool_use', 'tool_result'],
-    // Fully delegated: its switch is gone entirely.
-    'components/projects/project-detail.tsx': [],
-  };
+  const SHARED_TURN = 'hooks/use-surface-turn.tsx';
+  const SURFACES = [
+    'components/surfaces/chat/chat-surface.tsx',
+    'components/surfaces/cowork/cowork-surface.tsx',
+    'components/surfaces/code/code-surface.tsx',
+    'components/surfaces/browser/browser-surface.tsx',
+  ];
+  const read = (rel: string) => fs.readFileSync(path.join(SRC, rel), 'utf8');
 
-  it.each(Object.entries(EXPECTED))('%s skips exactly %j', (rel, expected) => {
-    const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
-    expect(src, `${rel} does not call handleCoreChunk`).toContain('handleCoreChunk(');
-    const m = /skip:\s*\[([^\]]*)\]/.exec(src);
-    const actual = m ? m[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean) : [];
-    expect(actual.sort()).toEqual([...expected].sort());
+  it('the shared turn calls it, and skips nothing', () => {
+    const src = read(SHARED_TURN);
+    expect(src).toContain('handleCoreChunk(');
+    expect(src).not.toMatch(/skip:\s*\[/);
+  });
+
+  it.each(SURFACES)('%s goes through the shared turn and skips nothing', (rel) => {
+    const src = read(rel);
+    expect(src, `${rel} does not use the shared turn`).toContain('useSurfaceTurn(');
+    expect(src, `${rel} calls the core handler itself`).not.toContain('handleCoreChunk(');
+    expect(src, `${rel} opts out of shared chunks`).not.toMatch(/skip:\s*\[/);
   });
 
   it('no surface still handles a chunk it has delegated', () => {
-    for (const [rel, skipped] of Object.entries(EXPECTED)) {
-      const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
+    for (const rel of [SHARED_TURN, ...SURFACES, 'components/projects/project-detail.tsx']) {
+      const src = read(rel);
       for (const t of [
-        'turn_start', 'text', 'thinking', 'error',
-        'input_request', 'connector_request', 'document_print', 'canvas',
+        'turn_start', 'text', 'thinking', 'tool_use', 'tool_result', 'error',
+        'input_request', 'connector_request', 'document_print', 'canvas', 'retry',
       ]) {
-        if (skipped.includes(t)) continue;
-        expect(src, `${rel} still cases on delegated '${t}'`).not.toMatch(
-          new RegExp(`case\\s+["']${t}["']`),
+        expect(src, `${rel} still handles delegated '${t}'`).not.toMatch(
+          new RegExp(`case\\s+["']${t}["']|event\\.type\\s*===\\s*["']${t}["']`),
         );
       }
     }
@@ -268,15 +309,22 @@ describe('relay chunks — the ones that hang when unhandled', () => {
 /** The relay deps are required, so "forgot one" cannot reach runtime. */
 describe('no surface can forget a relay handler', () => {
   const SRC = path.resolve(__dirname, '../..');
+  it('the shared turn supplies the required relay deps', () => {
+    const src = fs.readFileSync(path.join(SRC, 'hooks/use-surface-turn.tsx'), 'utf8');
+    expect(src).toMatch(/printDocument,/);
+    expect(src).toMatch(/onCanvas:/);
+    // Required of every surface, as the relay deps are of the handler.
+    expect(src).toMatch(/\n\s{2}onCanvas: \(event/);
+  });
+
   it.each([
     'components/surfaces/chat/chat-surface.tsx',
     'components/surfaces/cowork/cowork-surface.tsx',
     'components/surfaces/code/code-surface.tsx',
-    'components/projects/project-detail.tsx',
-  ])('%s supplies the required relay deps', (rel) => {
+    'components/surfaces/browser/browser-surface.tsx',
+  ])('%s says what happens to a canvas', (rel) => {
     const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
-    expect(src).toMatch(/printDocument,?/);
-    expect(src).toMatch(/onCanvas:/);
+    expect(src).toMatch(/\bonCanvas[,:]/);
   });
 
   /**

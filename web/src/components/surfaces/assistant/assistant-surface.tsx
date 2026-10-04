@@ -1,18 +1,22 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useAssistantStore, type StandingOrder, type AssistantCard } from "@/stores/assistant-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useHydrated } from "@/components/store-hydration";
 import { useStandingOrders } from "@/hooks/use-standing-orders";
-import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { A2UIDocumentRenderer } from "@/lib/a2ui/renderer";
 import type { A2UIAction } from "@/lib/a2ui/types";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
+import { Composer } from "@/components/shared/composer/composer";
+import { setComposerText } from "@/components/shared/composer/draft-store";
+import type { AttachmentFile } from "@/components/shared/attachment-menu";
+import { NoModelCard } from "@/components/shared/no-model-card";
+import { TurnErrorBanner } from "@/components/shared/turn-error-banner";
 import {
-  ArrowUp,
+  RefreshCw,
   Square,
   Play,
   Pause,
@@ -32,7 +36,6 @@ import {
   Hammer,
   BookOpen,
   GitPullRequest,
-  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 
@@ -43,19 +46,30 @@ const TEMPLATE_ICONS: Record<string, LucideIcon> = {
 
 import { STANDING_ORDER_TEMPLATES, type StandingOrderTemplate } from "@/lib/standing-order-templates";
 import { TemplateDialog } from "./template-dialog";
-import { OrderEditor } from "./order-editor";
+import { OrderEditor, confirmDeleteOrder } from "./order-editor";
+import { ScheduleHealth } from "./schedule-health";
+import { scheduleHealth } from "@/lib/schedule/health";
+import { useAttendedJobs } from "@/hooks/use-attended-jobs";
+import { APP_NAME } from "@/config/branding";
+import { describeTrigger, validateTrigger } from "@/lib/schedule/schedule";
 import { exportOrdersToJson } from "@/lib/standing-order-yaml";
 import { Cockpit } from "./cockpit";
 import { RunLog } from "@/components/runs/run-log";
 import { useRunLog } from "@/components/runs/use-run-log";
 import { useWidgetRefresh } from "@/hooks/use-widget-refresh";
 import { handleAgnosticChunk } from "@/lib/sse/agnostic-chunks";
-import { readTurnEvents } from "@/lib/sse/turn-events";
+import { classifyTurnError, isTurnErrorCode } from "@/lib/sse/turn-error";
+import { streamRegistry } from "@/lib/stream-registry";
 import { useScheduledPrompt } from "@/hooks/use-scheduled-prompt";
+import { useSSEStream, turnErrorOf } from "@/hooks/use-sse-stream";
+import { useTurnWiring } from "@/hooks/use-turn-wiring";
+import { useModelReady } from "@/hooks/use-model-ready";
 import { resolveSendRoute } from "@/lib/models/client-options";
 import { getSurfaceRoute } from "@/lib/models/surface-routes";
 import { useProviderStore } from "@/stores/provider-store";
 import { useBuiltinAccess } from "@/hooks/use-builtin-access";
+import { summarizeRuns } from "@/lib/runs/runs";
+import type { Run, RunTrigger } from "@/lib/runs/types";
 
 // ── Orders Sidebar ───────────────────────────────────────────────────────────
 
@@ -92,17 +106,13 @@ function OrdersSidebar({
     }
   };
 
-  const triggerLabel = (order: StandingOrder) => {
-    if (order.trigger.type === 'cron' && order.trigger.expression) return order.trigger.expression;
-    if (order.trigger.type === 'interval' && order.trigger.expression) return `every ${order.trigger.expression}`;
-    if (order.trigger.type === 'event' && order.trigger.event) return `on ${order.trigger.event}`;
-    return order.trigger.type;
-  };
+  // In words, from the same module the tickers use — never raw cron.
+  const triggerLabel = (order: StandingOrder) => describeTrigger(order.trigger);
 
   if (collapsed) {
     return (
       <div className="w-12 p-2 flex flex-col items-center">
-        <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Expand sidebar">
+        <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Expand sidebar" aria-label="Expand sidebar">
           <PanelLeft className="h-4 w-4" />
         </Button>
       </div>
@@ -147,13 +157,19 @@ function OrdersSidebar({
             {statusIcon(order.status)}
             <div className="flex-1 min-w-0">
               <div className="truncate text-xs" title={order.instruction}>{order.instruction}</div>
-              <div className="text-xs text-muted-foreground truncate">{triggerLabel(order)}</div>
+              <div
+                className={`text-xs truncate ${validateTrigger(order.trigger) ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}
+                title={order.trigger.expression ?? order.trigger.event}
+              >
+                {triggerLabel(order)}
+              </div>
             </div>
-            <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+            <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
               {order.status === 'active' && (
                 <button
                   onClick={(e) => { e.stopPropagation(); pauseOrder(order.id); }}
                   title="Pause"
+                  aria-label="Pause schedule"
                 >
                   <Pause className="h-3 w-3 text-muted-foreground hover:text-yellow-500" />
                 </button>
@@ -162,13 +178,18 @@ function OrdersSidebar({
                 <button
                   onClick={(e) => { e.stopPropagation(); resumeOrder(order.id); }}
                   title="Resume"
+                  aria-label="Resume schedule"
                 >
                   <Play className="h-3 w-3 text-muted-foreground hover:text-green-500" />
                 </button>
               )}
               <button
-                onClick={(e) => { e.stopPropagation(); removeOrder(order.id); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirmDeleteOrder(order)) removeOrder(order.id);
+                }}
                 title="Delete"
+                aria-label="Delete schedule"
               >
                 <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
               </button>
@@ -182,18 +203,19 @@ function OrdersSidebar({
   return (
     <div className="w-[220px] p-2 flex flex-col shrink-0">
       <div className="surface-well flex flex-1 min-h-0 flex-col">
-      <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Standing Orders</span>
+      <div className="flex items-center justify-between gap-1 px-3 py-2">
+        <span className="min-w-0 truncate whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-muted-foreground">Schedules</span>
         <div className="flex items-center gap-0.5">
           <Button
             variant="ghost" size="icon-sm"
             onClick={() => exportOrdersToJson(orders)}
-            title="Export orders"
+            title="Export schedules"
+            aria-label="Export schedules"
             disabled={orders.length === 0}
           >
             <Download className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Collapse sidebar">
+          <Button variant="ghost" size="icon-sm" onClick={onToggleCollapsed} title="Collapse sidebar" aria-label="Collapse sidebar">
             <PanelLeftClose className="h-4 w-4" />
           </Button>
         </div>
@@ -203,7 +225,7 @@ function OrdersSidebar({
           {orders.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">
               <Clock className="h-5 w-5 mx-auto mb-1.5 opacity-40" />
-              No standing orders yet
+              No schedules yet
             </div>
           ) : (
             <>
@@ -249,18 +271,69 @@ function OrdersSidebar({
 
 // ── Single Card Widget ───────────────────────────────────────────────────────
 
+/**
+ * Does this card end by asking the user something?
+ *
+ * Only a sentence that ENDS in "?" counts. The old test also matched
+ * `what|when|how|which` ANYWHERE, unbounded — so "somewhat", "however",
+ * "showing" and "whenever" all put a Reply button on the card, which was nearly
+ * every card. A question word alone is not a question either: "Here is how to
+ * fix it." asks nothing.
+ */
+export function cardAsksQuestion(summary?: string): boolean {
+  if (!summary) return false;
+  // The last sentence, ignoring trailing markdown emphasis and whitespace.
+  const text = summary.trim().replace(/[*_`\s]+$/, '');
+  if (!text.endsWith('?')) return false;
+  const last = text.split(/(?<=[.!?])\s+/).pop() ?? '';
+  return /\?$/.test(last);
+}
+
+/** A time for today's cards; a date too for anything older, so "09:12" is never ambiguous. */
+export function formatCardTime(ts: number, now: number = Date.now()): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === new Date(now).toDateString()) return time;
+  const sameYear = d.getFullYear() === new Date(now).getFullYear();
+  const date = d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
+  return `${date}, ${time}`;
+}
+
+/**
+ * What a reply to a card sends: the card itself as context, then the reply.
+ *
+ * A reply starts a fresh turn, and it used to carry only the card's TITLE — so
+ * answering "Which of these three should I book?" sent the model the question's
+ * heading and none of the three options.
+ */
+export function buildCardReply(card: Pick<AssistantCard, 'title' | 'summary'> | undefined, text: string): string {
+  if (!card) return text;
+  const body = (card.summary ?? '').trim();
+  const excerpt = body.length > 2000 ? `${body.slice(0, 2000)}…` : body;
+  const quoted = excerpt ? `\n${excerpt.split('\n').map((l) => `> ${l}`).join('\n')}\n` : '';
+  return `Replying to your earlier message "${card.title}":${quoted}\n${text}`;
+}
+
 function CardWidget({
   card,
   onAction,
   onReply,
   expanded,
   onToggleExpand,
+  streaming = false,
+  onStop,
+  onRetry,
 }: {
   card: AssistantCard;
   onAction?: (action: A2UIAction) => void;
   onReply: (cardId: string, text: string) => void;
   expanded: boolean;
   onToggleExpand: () => void;
+  /** This card's turn is running — it gets its own Stop. */
+  streaming?: boolean;
+  onStop?: (cardId: string) => void;
+  /** Run the card's prompt again, into this card. */
+  onRetry?: (cardId: string) => void;
 }) {
   const dismissCard = useAssistantStore((s) => s.dismissCard);
   const pinCard = useAssistantStore((s) => s.pinCard);
@@ -270,21 +343,29 @@ function CardWidget({
 
   const hasA2UIDoc = !!card.doc;
   const isLong = (card.summary?.length || 0) > 300;
-  const hasQuestion = card.summary && (/\?[\s]*$/.test(card.summary.trim()) || /would you|could you|do you|what|when|how|which/i.test(card.summary));
+  const hasQuestion = cardAsksQuestion(card.summary);
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card shadow-sm hover:shadow-md transition-all overflow-hidden">
+    <div
+      className={`group rounded-xl border bg-card shadow-sm hover:shadow-md transition-all overflow-hidden ${
+        card.tone === 'error' ? 'border-red-500/40' : 'border-border/50'
+      }`}
+      data-tone={card.tone}
+    >
       {/* Header — clean, no colored strips */}
       <div className="flex items-start justify-between px-5 pt-4 pb-1">
         <div className="flex-1 min-w-0 pr-2">
-          <p className="text-sm font-semibold text-foreground leading-snug">{card.title}</p>
+          <p className="text-sm font-semibold text-foreground leading-snug flex items-center gap-1.5">
+            {card.tone === 'error' && <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-500" aria-label="Failed" />}
+            {card.title}
+          </p>
           <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
-            {new Date(card.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {formatCardTime(card.timestamp)}
             {card.pinned && ' · Pinned'}
             {card.unread && <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary ml-1.5 align-middle" />}
           </p>
         </div>
-        <Button variant="ghost" size="icon-sm" onClick={() => dismissCard(card.id)} className="shrink-0 -mt-1 -mr-2 opacity-0 group-hover:opacity-100 hover:opacity-100" title="Dismiss">
+        <Button variant="ghost" size="icon-sm" onClick={() => dismissCard(card.id)} className="shrink-0 -mt-1 -mr-2 opacity-0 group-hover:opacity-100 hover:opacity-100 focus-visible:opacity-100" title="Dismiss" aria-label="Dismiss card">
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -302,6 +383,33 @@ function CardWidget({
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-card to-transparent" />
         )}
       </div>
+
+      {card.retrying && streaming && (
+        <div className="flex items-center gap-1.5 px-5 pb-2 text-xs text-muted-foreground" role="status">
+          <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
+          Retrying (attempt {card.retrying.attempt})…
+        </div>
+      )}
+
+      {/* A failed turn, as on every other surface — not text in the card. */}
+      {card.error && (
+        <div className="px-5 pb-3">
+          <TurnErrorBanner
+            code={card.error.code}
+            message={card.error.message}
+            onRetry={card.prompt && onRetry && !streaming ? () => onRetry(card.id) : undefined}
+          />
+        </div>
+      )}
+
+      {streaming && onStop && (
+        <div className="px-5 pb-2">
+          <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={() => onStop(card.id)} aria-label="Stop this reply">
+            <Square className="h-3 w-3" aria-hidden="true" />
+            Stop
+          </Button>
+        </div>
+      )}
 
       {/* Footer actions */}
       <div className="flex items-center justify-between px-5 pb-3 pt-1">
@@ -357,6 +465,7 @@ function CardWidget({
                 }
               }}
               placeholder="Type a reply..."
+              aria-label="Reply"
               className="flex-1 text-sm rounded-lg border border-border bg-background px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
               autoFocus
             />
@@ -370,6 +479,7 @@ function CardWidget({
                 }
               }}
               disabled={!replyText.trim()}
+              aria-label="Send reply"
             >
               Send
             </Button>
@@ -386,10 +496,17 @@ function CardFeed({
   cards,
   onAction,
   onReply,
+  streaming,
+  onStop,
+  onRetry,
 }: {
   cards: AssistantCard[];
   onAction?: (action: A2UIAction) => void;
   onReply: (cardId: string, text: string) => void;
+  /** Cards whose turn is running. */
+  streaming?: ReadonlySet<string>;
+  onStop?: (cardId: string) => void;
+  onRetry?: (cardId: string) => void;
 }) {
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
 
@@ -430,6 +547,9 @@ function CardFeed({
       onReply={onReply}
       expanded={expandedCards.has(card.id)}
       onToggleExpand={() => toggleExpand(card.id)}
+      streaming={streaming?.has(card.id)}
+      onStop={onStop}
+      onRetry={onRetry}
     />
   );
 
@@ -443,16 +563,27 @@ function CardFeed({
 
 // ── Status Bar ───────────────────────────────────────────────────────────────
 
-function StatusBar({ orders }: { orders: StandingOrder[] }) {
+/**
+ * The footer's numbers come from the SAME run log the rows above it render.
+ *
+ * It used to sum `order.runCount` — standing-order executions only — under the
+ * label "total runs", directly beneath a Recent Activity list of chat turns. So
+ * the list showed a run and the footer said "0 total runs", and neither was
+ * wrong about what it counted; they just were not counting the same thing.
+ */
+export function StatusBar({ orders, runs }: { orders: StandingOrder[]; runs: Run[] }) {
   const activeCount = orders.filter((o) => o.status === 'active').length;
   const unreadCount = useAssistantStore((s) => s.cards.filter((c) => c.unread).length);
-  const totalRuns = orders.reduce((sum, o) => sum + o.runCount, 0);
+  const summary = summarizeRuns(runs);
 
   return (
     <div className="flex items-center gap-4 px-4 py-1.5 border-t border-border text-xs text-muted-foreground">
-      <span>{activeCount} active order{activeCount !== 1 ? 's' : ''}</span>
+      <span>{activeCount} active schedule{activeCount !== 1 ? 's' : ''}</span>
       {unreadCount > 0 && <span className="text-primary">{unreadCount} unread</span>}
-      <span>{totalRuns} total run{totalRuns !== 1 ? 's' : ''}</span>
+      <span>{summary.total} run{summary.total !== 1 ? 's' : ''} recorded</span>
+      {summary.failed > 0 && (
+        <span className="text-red-600 dark:text-red-400">{summary.failed} failed</span>
+      )}
     </div>
   );
 }
@@ -461,39 +592,21 @@ function StatusBar({ orders }: { orders: StandingOrder[] }) {
 
 const CAPABILITY = getSurfaceRoute("assistant").capability;
 
-/**
- * Same budget, same reasoning as use-sse-stream: the server heartbeats every
- * ~15s, so 120s without a byte means the connection is dead.
- */
-const STREAM_INACTIVITY_TIMEOUT_MS = 120_000;
-
 export function AssistantSurface() {
   const hydrated = useHydrated();
-  const [inputValue, setInputValue] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   /** Assistant feed vs. Cockpit (scheduled work + run outcomes). */
   const [view, setView] = useState<"feed" | "cockpit">("feed");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [activeTemplate, setActiveTemplate] = useState<StandingOrderTemplate | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  /**
-   * Mirrored for callbacks that must read it without re-subscribing — the
-   * scheduled-prompt hook holds its guard in a ref, so a stale closure here
-   * would let a job fire mid-turn.
-   */
-  const isStreamingRef = useRef(false);
 
   const orders = useAssistantStore((s) => s.orders);
   const cards = useAssistantStore((s) => s.cards);
   const addCard = useAssistantStore((s) => s.addCard);
   const updateCard = useAssistantStore((s) => s.updateCard);
 
-
-  const addOrder = useAssistantStore((s) => s.addOrder);
-  const anthropicApiKey = useSettingsStore((s) => s.anthropicApiKey);
   // The route comes from the SAME `resolveSendRoute` chokepoint every other
-  // surface uses — see the comment at the fetch below.
+  // surface uses — see `runCard`.
   const providers = useProviderStore((s) => s.providers);
   const tierModels = useSettingsStore((s) => s.tierModels);
   const { hasAnthropicKey, hasBedrock, known: builtinAccessKnown } = useBuiltinAccess();
@@ -517,14 +630,42 @@ export function AssistantSurface() {
    */
   const { runs, now: runsNow, loading: runsLoading } = useRunLog();
 
-  // Auto-refresh dashboard widgets on the heartbeat
+  /*
+   * HEALTH, on the tab people actually look at. Failing, error-paused,
+   * unreadable and overdue schedules — standing orders and attended jobs alike —
+   * lead the Activity tab, so noticing a broken automation does not depend on
+   * remembering to open the Cockpit.
+   */
+  const activityLog = useAssistantStore((s) => s.activity);
+  const { jobs: attendedJobs } = useAttendedJobs();
+  const health = useMemo(
+    () =>
+      scheduleHealth({
+        orders: [
+          ...orders,
+          ...attendedJobs.map((j) => ({
+            id: j.id,
+            instruction: j.prompt,
+            trigger: j.trigger,
+            status: j.status,
+            lastRun: j.lastRun,
+            createdAt: j.createdAt,
+            runCount: j.runCount,
+            maxExecutions: j.maxExecutions,
+            expiresAt: j.expiresAt,
+            attended: true,
+          })),
+        ],
+        activity: activityLog,
+        runs,
+        now: runsNow,
+        appName: APP_NAME,
+      }),
+    [orders, attendedJobs, activityLog, runs, runsNow],
+  );
 
-  // Clear selection when the selected order is deleted
-  useEffect(() => {
-    if (selectedOrderId && !orders.find((o) => o.id === selectedOrderId)) {
-      setSelectedOrderId(null);
-    }
-  }, [orders, selectedOrderId]);
+  // A selection whose order was deleted is no selection.
+  const openOrderId = selectedOrderId && orders.some((o) => o.id === selectedOrderId) ? selectedOrderId : null;
 
   // One-time migration of existing cron jobs to standing orders
   useEffect(() => {
@@ -554,208 +695,232 @@ export function AssistantSurface() {
     }
   }, [hydrated]);
 
-  /**
-   * The prompt arrives as the ARGUMENT when a scheduled job fires —
-   * `useScheduledPrompt` dispatches it that way, and discarding the argument to
-   * read the composer instead meant a job firing with an empty composer was
-   * consumed from the bus and silently did nothing (or ran whatever stale text
-   * happened to be sitting in it). A typed submit passes nothing and reads the
-   * composer.
+  /*
+   * EVERY CARD IS ITS OWN TURN.
+   *
+   * This surface streamed through a reader of its own with one surface-wide
+   * `isStreaming`: a scheduled run locked the composer, Stop stopped whichever
+   * turn was running, and a failure was written into the card's text. It now
+   * rides the same stream hook as every other surface, one chat id per card
+   * turn, so cards stream side by side, each has its own Stop, and a failure is
+   * the same typed banner — with Try again — that a chat reply gets.
    */
-  const handleSubmit = useCallback(async (scheduledPrompt?: string) => {
-    const prompt = (scheduledPrompt ?? inputValue).trim();
-    if (!prompt || isStreaming) return;
-    setInputValue("");
-    setIsStreaming(true);
-    isStreamingRef.current = true;
+  const cardByChat = useRef(new Map<string, string>());
+  const chatByCard = useRef(new Map<string, string>());
+  /** A card turn's text so far, so a Stop can keep it. */
+  const textByChat = useRef(new Map<string, string>());
+  /** Cards whose turn is running, by card id. */
+  const [streaming, setStreaming] = useState<Record<string, true>>({});
+  /** The card the composer started last — the one its Stop and Esc stop. */
+  const [composerCard, setComposerCard] = useState("");
+  const isStreaming = !!composerCard && !!streaming[composerCard];
+  const streamingCards = useMemo(() => new Set(Object.keys(streaming)), [streaming]);
 
-    // THE chokepoint: whatever the user configured in Settings (tier grid +
-    // BYOK providers) decides where this turn runs, exactly as on every other
-    // surface. It used to post a hardcoded `model: 'sonnet'`, which skipped
-    // registry resolution server-side entirely — so the tier grid never
-    // governed this surface, and a BYOK/OpenRouter-only user had a dead
-    // surface while every other one worked. Omitted when it resolves to
-    // nothing, leaving the server's own fallback in charge.
-    const route = resolveSendRoute(null, providers, {
-      capability: CAPABILITY,
-      tierModels,
-      hasAnthropicKey,
-      hasBedrock,
-      known: builtinAccessKnown,
+  const ownsChat = useCallback((id: string) => cardByChat.current.has(id), []);
+  // Run records, the abort listener and reported failures — as every surface has.
+  const { runRecorder } = useTurnWiring({ surfaceId: "assistant", chatId: "", ownsChat });
+
+  const setChatStreaming = useCallback((chatId: string, on: boolean) => {
+    const cardId = cardByChat.current.get(chatId);
+    if (!cardId) return;
+    setStreaming((s) => {
+      if (!!s[cardId] === on) return s;
+      const next = { ...s };
+      if (on) next[cardId] = true;
+      else delete next[cardId];
+      return next;
     });
-
-    // Capture the card ID. `addCard` PREPENDS, so an index-0 update races any
-    // standing-order card landing mid-stream (`useStandingOrders` runs on this
-    // same surface): the streamed text would land on whichever card was newest.
-    const cardId = addCard({ title: prompt, summary: 'Thinking...' });
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const chatId = `assistant-${Date.now()}`;
-      // No question/connector card UI on this surface, so the turn must never
-      // be parked waiting for one. `canRelayToClient` defaults to TRUE, which
-      // meant the provider was handed onInputRequest/onConnectorRequest and
-      // would block for 300s on an approval nobody could answer. Declaring
-      // false takes the documented "cannot ask" path: canUseTool refuses and
-      // tells the agent to say what it would have done.
-      const response = await fetch('/api/chat/assistant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          canRelayToClient: false,
-          message: prompt,
-          chatId,
-          ...(route?.model ? { model: route.model } : {}),
-          ...(route?.providerConfig ? { providerConfig: route.providerConfig } : {}),
-          apiKey: anthropicApiKey || undefined,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok || !response.body) {
-        // The body carries the server's own words (auth failures, unknown
-        // surfaces); statusText is frequently empty in fetch.
-        const body = (await response.json().catch(() => ({}))) as { error?: string };
-        updateCard(cardId, {
-          summary: body.error ?? `Request failed (${response.status}).`,
-          unread: true,
-        });
-        setIsStreaming(false);
-        return;
-      }
-
-      let fullText = '';
-      /** Set by an SSE `error` event; reported once the stream ends. */
-      let streamError: string | null = null;
-
-      /*
-       * The client-side backstop every other surface gets from use-sse-stream:
-       * without it a wedged stream (sleep, black-holed TCP) left this surface
-       * streaming forever, and — because scheduled prompts defer while busy —
-       * every later standing-order run queued behind a dead connection. Safe
-       * against long tool runs: the server sends heartbeat comments ~15s, so
-       * only genuine silence trips it.
-       */
-      await readTurnEvents(
-        response.body,
-        (event) => {
-          if (event.type === 'text' && typeof event.content === 'string') {
-            fullText += event.content;
-            updateCard(cardId, { summary: fullText });
-          } else if (
-            event.type === 'error' &&
-            typeof event.message === 'string' &&
-            event.message
-          ) {
-            /*
-             * Every server-side failure arrives here — watchdog kills,
-             * silence timeouts, model/auth errors. Dropped, they left the card
-             * saying "Thinking..." forever on exactly the surface whose work
-             * runs unattended. Kept aside rather than written straight into
-             * the summary so a late text chunk cannot overwrite the error
-             * away; the final update below composes both.
-             */
-            streamError = event.message;
-          } else if (handleAgnosticChunk(event as Record<string, unknown>, {
-            chatId,
-            surface: 'Assistant',
-            // This surface owns the order feed, so a created order shows there
-            // rather than as a toast. The only genuinely surface-specific part.
-            notifyVia: 'assistant',
-          })) {
-            // handled centrally — see lib/sse/agnostic-chunks
-          }
-        },
-        { inactivityTimeoutMs: STREAM_INACTIVITY_TIMEOUT_MS },
-      );
-
-      // Final update — completed text, or the error, or both when a run failed
-      // after producing something worth keeping.
-      if (streamError) {
-        updateCard(cardId, {
-          summary: fullText ? `${fullText}\n\n_${streamError}_` : `Error: ${streamError}`,
-          unread: true,
-        });
-      } else if (fullText) {
-        updateCard(cardId, { summary: fullText, unread: true });
-      }
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return;
-      updateCard(cardId, {
-        summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
-        unread: true,
-      });
-    } finally {
-      setIsStreaming(false);
-      isStreamingRef.current = false;
-      abortRef.current = null;
-    }
-  }, [inputValue, isStreaming, anthropicApiKey, addCard, updateCard, providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown]);
-
-  const handleAbort = useCallback(() => {
-    abortRef.current?.abort();
-    setIsStreaming(false);
-    isStreamingRef.current = false;
   }, []);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        if (isStreaming) handleAbort();
-        else handleSubmit();
+  const { sendMessage } = useSSEStream({
+    // Stop goes through `stopCard`, per card, not this hook's `abort`.
+    chatId: "",
+    setIsStreaming: () => {},
+    setChatStreaming,
+    coalesceText: true,
+    onUsage: runRecorder.onUsage,
+    onChunk(event, cid) {
+      if (handleAgnosticChunk(event, {
+        chatId: cid,
+        surface: 'Assistant',
+        /*
+         * Card AND desktop notification by default. 'assistant' (card only)
+         * meant "remind me to stretch" never popped up — a reminder that lands
+         * silently in a feed you are not looking at is not a reminder.
+         */
+        notifyVia: 'toast',
+      })) return;
+      const cardId = cardByChat.current.get(cid);
+      if (!cardId) return;
+      if (event.type === 'text' && typeof event.content === 'string') {
+        const text = (textByChat.current.get(cid) ?? '') + event.content;
+        textByChat.current.set(cid, text);
+        // Output arriving means the retry it was waiting on succeeded.
+        updateCard(cardId, { summary: text, retrying: undefined });
+      } else if (event.type === 'error') {
+        /*
+         * Every server-side failure arrives here — watchdog kills, silence
+         * timeouts, model/auth errors. Dropped, they left the card saying
+         * "Thinking..." for ever on exactly the surface whose work runs
+         * unattended. Kept apart from the summary, so the text that did
+         * arrive stays and a late chunk cannot overwrite the error away.
+         */
+        const message = (event.message as string) || 'The turn failed.';
+        const code = isTurnErrorCode(event.code) ? event.code : classifyTurnError(message);
+        updateCard(cardId, { error: { code, message }, retrying: undefined });
+      } else if (event.type === 'retry') {
+        updateCard(cardId, {
+          retrying: {
+            attempt: typeof event.attempt === 'number' ? event.attempt : 1,
+            delayMs: typeof event.delayMs === 'number' ? event.delayMs : 0,
+          },
+        });
       }
     },
-    [handleSubmit, handleAbort, isStreaming]
+    onDone(cid) {
+      runRecorder.succeed(cid);
+      const cardId = cardByChat.current.get(cid);
+      if (!cardId) return;
+      updateCard(cardId, {
+        // What arrived — never a leftover "Thinking...", which reads as still running.
+        summary: textByChat.current.get(cid) ?? '',
+        retrying: undefined,
+        unread: true,
+      });
+    },
+    onError(error, cid) {
+      runRecorder.fail(error.message, cid);
+      const cardId = cardByChat.current.get(cid);
+      if (!cardId) return;
+      updateCard(cardId, {
+        summary: textByChat.current.get(cid) ?? '',
+        error: turnErrorOf(error),
+        retrying: undefined,
+        unread: true,
+      });
+    },
+  });
+
+  /*
+   * Run `prompt` into `cardId`, on a fresh chat id — a retry is a new turn, not
+   * a resumption of the one that failed.
+   *
+   * THE chokepoint: whatever the user configured in Settings (tier grid + BYOK
+   * providers) decides where this turn runs, exactly as on every other surface.
+   * It used to post a hardcoded `model: 'sonnet'`, so a BYOK-only user had a
+   * dead surface while every other one worked.
+   */
+  const runCard = useCallback(
+    async (prompt: string, cardId: string, trigger: RunTrigger, attachments: AttachmentFile[] = []) => {
+      const chatId = `assistant-${crypto.randomUUID()}`;
+      cardByChat.current.set(chatId, cardId);
+      chatByCard.current.set(cardId, chatId);
+      textByChat.current.set(chatId, '');
+      const route = resolveSendRoute(null, providers, {
+        capability: CAPABILITY,
+        tierModels,
+        hasAnthropicKey,
+        hasBedrock,
+        known: builtinAccessKnown,
+      });
+      runRecorder.begin({ trigger, model: route?.model ?? undefined, chatId });
+      const sending = sendMessage(prompt, chatId, 'assistant', route?.model ?? null, {
+        // No question or connect card UI on this surface, so the turn must never
+        // be parked waiting for one: false takes the documented "cannot ask"
+        // path — the agent says what it would have done instead.
+        canRelayToClient: false,
+        providerConfig: route?.providerConfig,
+        attachments: attachments.length > 0 ? attachments : undefined,
+      });
+      return { chatId, sending };
+    },
+    [providers, tierModels, hasAnthropicKey, hasBedrock, builtinAccessKnown, runRecorder, sendMessage],
+  );
+
+  /**
+   * A new card and its turn. The prompt arrives as the ARGUMENT when a scheduled
+   * job fires — reading the composer instead meant a job firing with an empty
+   * composer did nothing, or ran whatever stale text was sitting in it.
+   */
+  const startCard = useCallback(
+    async (prompt: string, opts: { trigger: RunTrigger; attachments?: AttachmentFile[]; fromComposer?: boolean }) => {
+      const text = prompt.trim();
+      if (!text) return;
+      // Addressed by id: `addCard` PREPENDS, so a standing-order card landing
+      // mid-stream would otherwise receive this turn's text.
+      const cardId = addCard({ title: text, prompt: text, summary: 'Thinking...' });
+      if (opts.fromComposer) setComposerCard(cardId);
+      const { sending } = await runCard(text, cardId, opts.trigger, opts.attachments);
+      await sending;
+    },
+    [addCard, runCard],
+  );
+
+  /** Stop one card's turn. What already arrived stays, marked as stopped. */
+  const stopCard = useCallback((cardId: string) => {
+    const chatId = chatByCard.current.get(cardId);
+    if (!chatId) return;
+    streamRegistry.abort(chatId, 'user');
+    const text = textByChat.current.get(chatId) ?? '';
+    // A Stop is not an error, but it IS an ending: "Thinking..." read as still running.
+    updateCard(cardId, { summary: text ? `${text}\n\n_Stopped._` : 'Stopped.', retrying: undefined, unread: false });
+  }, [updateCard]);
+
+  /** Try again: the same prompt, into the same card. */
+  const retryCard = useCallback((cardId: string) => {
+    const card = useAssistantStore.getState().cards.find((c) => c.id === cardId);
+    const prompt = card?.prompt;
+    if (!prompt) return;
+    updateCard(cardId, { summary: 'Thinking...', error: undefined, retrying: undefined });
+    void runCard(prompt, cardId, 'manual').then(({ sending }) => sending);
+  }, [runCard, updateCard]);
+
+  // "Connect a model" instead of a card that can only fail.
+  const modelReady = useModelReady(null, CAPABILITY);
+  const [noModelAttempted, setNoModelAttempted] = useState(false);
+  const submitFromComposer = useCallback(
+    (text: string, attachments: AttachmentFile[]) => {
+      if (!modelReady) {
+        setNoModelAttempted(true);
+        return false;
+      }
+      void startCard(text, { trigger: 'manual', attachments, fromComposer: true });
+    },
+    [modelReady, startCard],
   );
 
   /*
-   * A due cron job runs HERE, through this surface's own submit — not through a
-   * scheduler with a send path of its own, which would be a fourth place that
-   * starts a turn. Before this, a job published to the bus, switched surface,
-   * and nothing ran it. Busy (streaming) defers the job instead of dropping it.
+   * A due scheduled job runs HERE, through this surface's own turn — not
+   * through a scheduler with a send path of its own. Every card is its own
+   * conversation, so a job never waits behind (or supersedes) another card.
    */
-  useScheduledPrompt('assistant', handleSubmit, () => isStreamingRef.current);
+  const runScheduled = useCallback((prompt: string) => startCard(prompt, { trigger: 'cron' }), [startCard]);
+  useScheduledPrompt('assistant', runScheduled);
 
   const handleCardAction = useCallback((action: A2UIAction) => {
-    console.log('[Assistant] Card action:', action);
     if (action.type === 'button-click' && action.actionId !== 'reply' && action.actionId !== 'dismiss') {
-      setInputValue(`Perform action: ${action.actionId}`);
+      setComposerText('assistant', '', `Perform action: ${action.actionId}`);
     }
   }, []);
 
+  /** A reply is a new turn that carries the card it answers. */
   const handleCardReply = useCallback((cardId: string, text: string) => {
-    // Find the card to get context
     const card = useAssistantStore.getState().cards.find((c) => c.id === cardId);
-    const context = card ? `Regarding "${card.title}": ` : '';
-    /*
-     * Submit directly with the prompt as the argument. This used to set the
-     * composer and click `[data-assistant-submit]` after 50ms — which raced
-     * React's state flush (a disabled button swallows the reply) and, if a
-     * turn had started in between, clicked what is then the STOP button,
-     * aborting a live run.
-     */
-    void handleSubmit(context + text);
-  }, [handleSubmit]);
+    void startCard(buildCardReply(card, text), { trigger: 'manual' });
+  }, [startCard]);
 
   return (
     <div className="flex h-full bg-background">
-      {/* Left sidebar — Standing Orders */}
+      {/* Left sidebar — schedules (standing orders) */}
       <OrdersSidebar
         orders={orders}
         onSelectOrder={setSelectedOrderId}
-        selectedOrderId={selectedOrderId}
+        selectedOrderId={openOrderId}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed(!sidebarCollapsed)}
-        onActivateTemplate={(tpl) => {
-          if (tpl.parameters && tpl.parameters.length > 0) {
-            setActiveTemplate(tpl);
-          } else {
-            addOrder(tpl.buildOrder());
-          }
-        }}
+        // Always through the dialog: every template now opens on its schedule,
+        // so the user sees (and can change) when it will run before it does.
+        onActivateTemplate={setActiveTemplate}
       />
 
       {/* Main area */}
@@ -773,6 +938,14 @@ export function AssistantSurface() {
               }`}
             >
               {v === "feed" ? "Activity" : "Cockpit"}
+              {v === "feed" && health.length > 0 && (
+                <span
+                  className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white"
+                  aria-label={`${health.length} ${health.length === 1 ? "schedule needs" : "schedules need"} attention`}
+                >
+                  {health.length}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -780,96 +953,48 @@ export function AssistantSurface() {
           <Cockpit />
         ) : (
         <>
-        {/* Input area */}
+        {/* Input area — the shared Composer: Enter sends, Esc stops, IME-safe. */}
         <div className="px-4 py-3 border-b border-border">
           <div className="max-w-3xl mx-auto">
-            <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-              <Textarea
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder='Try: "Remind me every morning to check my emails" or "Watch my build and let me know if it fails"'
-                rows={2}
-                className="min-h-[56px] max-h-[120px] resize-none border-0 bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 p-4 pb-0"
-              />
-              <div className="flex items-center justify-end px-4 py-2">
-                <Button
-                  size="icon"
-                  data-assistant-submit
-                  className={`h-8 w-8 rounded-lg ${isStreaming ? 'bg-destructive hover:bg-destructive/80' : 'bg-primary hover:bg-primary/80'}`}
-                  // Wrapped: a bare handler reference would receive the click
-                  // event as `scheduledPrompt`.
-                  onClick={isStreaming ? handleAbort : () => handleSubmit()}
-                  disabled={!isStreaming && !inputValue.trim()}
-                >
-                  {isStreaming ? <Square className="h-3.5 w-3.5" /> : <ArrowUp className="h-4 w-4" />}
-                </Button>
-              </div>
-            </div>
+            <Composer
+              surface="assistant"
+              conversationId=""
+              placeholder='Try: "Remind me every morning to check my emails" or "Watch my build and let me know if it fails"'
+              onSubmit={submitFromComposer}
+              isStreaming={isStreaming}
+              onStop={() => stopCard(composerCard)}
+              header={modelReady ? undefined : <NoModelCard attempted={noModelAttempted} />}
+            />
           </div>
         </div>
 
         {/* Card feed */}
         <ScrollArea className="flex-1 overflow-hidden">
           <div className="max-w-5xl mx-auto px-4 py-4">
+            <ScheduleHealth items={health} onOpenOrder={setSelectedOrderId} />
             {cards.length === 0 && orders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <Bot className="h-12 w-12 mb-4 opacity-30" />
                 <h2 className="text-lg font-semibold text-foreground mb-2">Personal Assistant</h2>
-                <p className="text-sm text-center max-w-md mb-6">
-                  Create standing orders to monitor, schedule, and automate tasks.
+                <p className="text-sm text-center max-w-md mb-3">
+                  Create schedules to monitor, remind, and automate tasks.
                   Results appear here as interactive cards.
                 </p>
-                <div className="grid grid-cols-2 gap-3 text-xs max-w-md">
-                  <button
-                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                    onClick={() => setInputValue("Give me a morning briefing every weekday at 9am")}
-                  >
-                    <Sun className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Morning briefing</span>
-                      <br />
-                      <span className="text-muted-foreground">Daily summary at 9am</span>
-                    </div>
-                  </button>
-                  <button
-                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                    onClick={() => setInputValue("Remind me to stretch every 2 hours")}
-                  >
-                    <Timer className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Stretch reminder</span>
-                      <br />
-                      <span className="text-muted-foreground">Every 2 hours</span>
-                    </div>
-                  </button>
-                  <button
-                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                    onClick={() => setInputValue("Watch my latest Buildkite build and alert me if it fails")}
-                  >
-                    <Hammer className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Build monitor</span>
-                      <br />
-                      <span className="text-muted-foreground">Alert on failure</span>
-                    </div>
-                  </button>
-                  <button
-                    className="flex items-start gap-2.5 text-left p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
-                    onClick={() => setInputValue("Make me a to-do list for today")}
-                  >
-                    <ListChecks className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium">Daily to-do</span>
-                      <br />
-                      <span className="text-muted-foreground">Interactive checklist</span>
-                    </div>
-                  </button>
-                </div>
+                <p className="text-xs text-center max-w-md">
+                  Ask above in plain words — &ldquo;remind me to stretch every 2 hours&rdquo; — or
+                  pick a Quick Start template on the left.
+                </p>
               </div>
             ) : (
               <>
-                <CardFeed cards={cards} onAction={handleCardAction} onReply={handleCardReply} />
+                <CardFeed
+                  cards={cards}
+                  onAction={handleCardAction}
+                  onReply={handleCardReply}
+                  streaming={streamingCards}
+                  onStop={stopCard}
+                  onRetry={retryCard}
+                />
               </>
             )}
 
@@ -888,7 +1013,7 @@ export function AssistantSurface() {
         )}
 
         {/* Status bar */}
-        <StatusBar orders={orders} />
+        <StatusBar orders={orders} runs={runs} />
       </div>
 
       {/* Template customization dialog */}
@@ -900,9 +1025,9 @@ export function AssistantSurface() {
       )}
 
       {/* Order editor dialog */}
-      {selectedOrderId && (
+      {openOrderId && (
         <OrderEditor
-          orderId={selectedOrderId}
+          orderId={openOrderId}
           onClose={() => setSelectedOrderId(null)}
         />
       )}

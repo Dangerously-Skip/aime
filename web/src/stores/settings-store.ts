@@ -4,14 +4,13 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { getGatedStorage } from '@/lib/gated-storage';
 import { beginHydrationApply, endHydrationApply } from '@/lib/hydration-signal';
+import { moveSecretsToKeychain, stashSecretsForKeychain } from '@/lib/settings-secrets';
 import { DEFAULT_PUSH_TO_TALK, validateAccelerator } from '@/lib/voice/accelerator';
 import type { Tier } from '@/lib/models/types';
 import type { SearchProviderId } from '@/lib/search/providers';
 
 export type ChatFont = 'default' | 'sans' | 'mono' | 'system' | 'dyslexic';
-export type ToolAccessMode = 'onDemand' | 'alwaysLoaded';
 export type ToolProfile = 'minimal' | 'coding' | 'full';
-export type SessionResetMode = 'manual' | 'daily' | 'idle';
 
 export interface HeartbeatMode {
   enabled: boolean;
@@ -36,14 +35,12 @@ interface SettingsState {
   // Profile
   fullName: string;
   displayName: string;
-  workFunction: string;
   personalPreferences: string;
 
   // Appearance
   chatFont: ChatFont;
 
   // Capabilities
-  toolAccessMode: ToolAccessMode;
   toolProfile: ToolProfile;
   /** Push-to-talk global hotkey (P4.1). Off by default — never claim a system-wide key uninvited. */
   pushToTalkEnabled: boolean;
@@ -55,16 +52,7 @@ interface SettingsState {
   heartbeatIntervalMinutes: number;
   heartbeatModes: HeartbeatModes;
   loopDetectionThreshold: number;
-  sessionResetMode: SessionResetMode;
-  sessionResetTime: string;
-  sessionIdleMinutes: number;
 
-  // Cowork
-  coworkInstructions: string;
-
-  // Code
-  codeWorktreeLocation: string;
-  codeBranchPrefix: string;
 
   // Security
   blockDangerousCommands: boolean;
@@ -76,11 +64,15 @@ interface SettingsState {
   recentFolders: string[];
   trustedFolders: string[];
 
-  // GitHub
-  githubToken: string | null;
-  githubUser: string | null;
-
-  // API access
+  /**
+   * API access. The ONE secret still persisted with settings, and not by choice:
+   * Chat and Cowork still send it with each request. Every server path falls
+   * back to the credential store without it, and every other surface has
+   * stopped sending it (anthropic-key-not-sent.test.ts). It is always mirrored to the encrypted
+   * credential store (id `anthropic`) as well, and excluded from Export — see
+   * `SECRET_SETTINGS_KEYS`. The search key and the unused GitHub token that
+   * used to sit here moved out in v14.
+   */
   anthropicApiKey: string | null;
 
   /**
@@ -102,7 +94,6 @@ interface SettingsState {
    * has opted into yet.
    */
   quietHours: { fromHour: number; toHour: number } | null;
-  searchApiKey: string | null;
   /**
    * Where "Share" publishes a deck, when the user has configured a bucket.
    *
@@ -120,7 +111,11 @@ interface SettingsState {
     publicBaseUrl: string;
   } | null;
   searchInstanceUrl: string | null;
-  /** Model-provider id whose stored key search borrows. An id, never a secret. */
+  /**
+   * Credential-store id whose key search uses: a model provider's (borrowing
+   * the OpenRouter key) or `search` for a key entered for search itself. An id,
+   * never a secret — the key is resolved server-side.
+   */
   searchCredentialProviderId: string | null;
   /**
    * Which model generates images. `null` means the user has not chosen, which is
@@ -169,10 +164,8 @@ interface SettingsActions {
   setTierModel: (tier: Tier, modelId: string | null) => void;
   setFullName: (name: string) => void;
   setDisplayName: (name: string) => void;
-  setWorkFunction: (fn: string) => void;
   setPersonalPreferences: (prefs: string) => void;
   setChatFont: (font: ChatFont) => void;
-  setToolAccessMode: (mode: ToolAccessMode) => void;
   setToolProfile: (profile: ToolProfile) => void;
   setPushToTalkEnabled: (enabled: boolean) => void;
   setPushToTalkAccelerator: (raw: string) => import('@/lib/voice/accelerator').AcceleratorVerdict;
@@ -180,21 +173,11 @@ interface SettingsActions {
   setHeartbeatIntervalMinutes: (minutes: number) => void;
   setHeartbeatMode: (mode: keyof HeartbeatModes, config: Partial<HeartbeatMode>) => void;
   setLoopDetectionThreshold: (threshold: number) => void;
-  setSessionResetMode: (mode: SessionResetMode) => void;
-  setSessionResetTime: (time: string) => void;
-  setSessionIdleMinutes: (minutes: number) => void;
-  setCoworkInstructions: (instructions: string) => void;
-  setCodeWorktreeLocation: (location: string) => void;
-  setCodeBranchPrefix: (prefix: string) => void;
   addRecentFolder: (path: string) => void;
   addTrustedFolder: (path: string) => void;
-  setGithubToken: (token: string | null) => void;
-  setGithubUser: (user: string | null) => void;
-  clearGithubAuth: () => void;
   setAnthropicApiKey: (key: string | null) => void;
   setSearchProvider: (id: SearchProviderId | 'none' | null) => void;
   setQuietHours: (hours: { fromHour: number; toHour: number } | null) => void;
-  setSearchApiKey: (key: string | null) => void;
   setDeckStorage: (v: SettingsState['deckStorage']) => void;
   setSearchInstanceUrl: (url: string | null) => void;
   setSearchCredentialProviderId: (id: string | null) => void;
@@ -215,10 +198,8 @@ export type SettingsStore = SettingsState & SettingsActions;
 export const INITIAL_SETTINGS: SettingsState = {
   fullName: '',
   displayName: '',
-  workFunction: '',
   personalPreferences: '',
   chatFont: 'default',
-  toolAccessMode: 'onDemand',
   toolProfile: 'full',
   pushToTalkEnabled: false,
   pushToTalkAccelerator: DEFAULT_PUSH_TO_TALK,
@@ -226,20 +207,11 @@ export const INITIAL_SETTINGS: SettingsState = {
   heartbeatIntervalMinutes: 30,
   heartbeatModes: DEFAULT_HEARTBEAT_MODES,
   loopDetectionThreshold: 3,
-  sessionResetMode: 'manual',
-  sessionResetTime: '04:00',
-  sessionIdleMinutes: 60,
-  coworkInstructions: '',
-  codeWorktreeLocation: '',
-  codeBranchPrefix: '',
   recentFolders: [],
   trustedFolders: [],
-  githubToken: null,
-  githubUser: null,
   anthropicApiKey: null,
   searchProvider: null,
   quietHours: null,
-  searchApiKey: null,
   deckStorage: null,
   searchInstanceUrl: null,
   searchCredentialProviderId: null,
@@ -274,10 +246,8 @@ export const INITIAL_SETTINGS: SettingsState = {
 export const PERSISTED_SETTINGS_KEYS = [
   'fullName',
   'displayName',
-  'workFunction',
   'personalPreferences',
   'chatFont',
-  'toolAccessMode',
   'toolProfile',
   'pushToTalkEnabled',
   'pushToTalkAccelerator',
@@ -285,20 +255,11 @@ export const PERSISTED_SETTINGS_KEYS = [
   'heartbeatIntervalMinutes',
   'heartbeatModes',
   'loopDetectionThreshold',
-  'sessionResetMode',
-  'sessionResetTime',
-  'sessionIdleMinutes',
-  'coworkInstructions',
-  'codeWorktreeLocation',
-  'codeBranchPrefix',
   'recentFolders',
   'trustedFolders',
-  'githubToken',
-  'githubUser',
   'anthropicApiKey',
   'searchProvider',
   'quietHours',
-  'searchApiKey',
   'deckStorage',
   'searchInstanceUrl',
   'searchCredentialProviderId',
@@ -325,6 +286,27 @@ export const EPHEMERAL_SETTINGS_KEYS = [] as const satisfies readonly (keyof Set
 
 type PersistedSettingsKey = (typeof PERSISTED_SETTINGS_KEYS)[number];
 
+/**
+ * Persisted fields that are secrets. Never exported, never displayed back.
+ *
+ * `anthropicApiKey` is still persisted because the Chat and Cowork surfaces
+ * still send it per request (the server falls back to the credential store for
+ * everything else — see anthropic-key-not-sent.test.ts); this list keeps it out of
+ * everything ELSE — the Export file wrote the whole store, key included, to a
+ * JSON file in Downloads.
+ */
+export const SECRET_SETTINGS_KEYS = ['anthropicApiKey'] as const satisfies readonly PersistedSettingsKey[];
+
+/** The persisted settings minus secrets — what Export writes. */
+export function exportableSettings(state: SettingsState): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const secret = new Set<string>(SECRET_SETTINGS_KEYS);
+  for (const key of PERSISTED_SETTINGS_KEYS) {
+    if (!secret.has(key)) out[key] = state[key];
+  }
+  return out;
+}
+
 function pickPersisted(state: SettingsStore): Pick<SettingsState, PersistedSettingsKey> {
   const out: Record<string, unknown> = {};
   for (const key of PERSISTED_SETTINGS_KEYS) out[key] = state[key];
@@ -338,10 +320,8 @@ export const useSettingsStore = create<SettingsStore>()(
 
       setFullName: (fullName) => set({ fullName }),
       setDisplayName: (displayName) => set({ displayName }),
-      setWorkFunction: (workFunction) => set({ workFunction }),
       setPersonalPreferences: (personalPreferences) => set({ personalPreferences }),
       setChatFont: (chatFont) => set({ chatFont }),
-      setToolAccessMode: (toolAccessMode) => set({ toolAccessMode }),
       setToolProfile: (toolProfile) => set({ toolProfile }),
       setPushToTalkEnabled: (pushToTalkEnabled) => set({ pushToTalkEnabled }),
       /** Stores the CANONICAL form, so the same combination never persists two ways. */
@@ -360,12 +340,6 @@ export const useSettingsStore = create<SettingsStore>()(
           },
         })),
       setLoopDetectionThreshold: (loopDetectionThreshold) => set({ loopDetectionThreshold }),
-      setSessionResetMode: (sessionResetMode) => set({ sessionResetMode }),
-      setSessionResetTime: (sessionResetTime) => set({ sessionResetTime }),
-      setSessionIdleMinutes: (sessionIdleMinutes) => set({ sessionIdleMinutes }),
-      setCoworkInstructions: (coworkInstructions) => set({ coworkInstructions }),
-      setCodeWorktreeLocation: (codeWorktreeLocation) => set({ codeWorktreeLocation }),
-      setCodeBranchPrefix: (codeBranchPrefix) => set({ codeBranchPrefix }),
 
       addRecentFolder: (path) =>
         set((state) => {
@@ -381,14 +355,9 @@ export const useSettingsStore = create<SettingsStore>()(
           return { trustedFolders: updated.length > 100 ? updated.slice(-100) : updated };
         }),
 
-      setGithubToken: (githubToken) => set({ githubToken }),
-      setGithubUser: (githubUser) => set({ githubUser }),
-      clearGithubAuth: () => set({ githubToken: null, githubUser: null }),
-
       setAnthropicApiKey: (anthropicApiKey) => set({ anthropicApiKey }),
       setSearchProvider: (searchProvider) => set({ searchProvider }),
       setQuietHours: (quietHours) => set({ quietHours }),
-      setSearchApiKey: (searchApiKey) => set({ searchApiKey }),
       setDeckStorage: (deckStorage) => set({ deckStorage }),
       setSearchInstanceUrl: (searchInstanceUrl) => set({ searchInstanceUrl }),
       setSearchCredentialProviderId: (searchCredentialProviderId) => set({ searchCredentialProviderId }),
@@ -428,9 +397,38 @@ export const useSettingsStore = create<SettingsStore>()(
       name: 'aime:settings',
       storage: createJSONStorage(() => getGatedStorage()),
       skipHydration: true,
-      version: 12,
+      version: 15,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
+        // v15: the session-reset settings (manual / daily / idle) are dropped.
+        // The hook that read them, `useSessionReset`, was never mounted and has
+        // been deleted, so they configured nothing. Up front and by deletion,
+        // like v11/v13: the default merge would splice orphans back into live
+        // state, and the v3 branch below used to ADD them.
+        if (version < 15) {
+          delete state.sessionResetMode;
+          delete state.sessionResetTime;
+          delete state.sessionIdleMinutes;
+        }
+        // v14: secrets out of the plaintext payload. The search key is parked
+        // for the credential store (moved after hydration, deleted only once
+        // that write succeeds); the unused GitHub token/user are dropped. Up
+        // front, like v11/v13, because the per-version branches return early.
+        if (version < 14) {
+          stashSecretsForKeychain(state);
+        }
+        // v13: Settings controls that nothing read were removed — the
+        // tool-access mode, Code's worktree location and branch prefix,
+        // Profile's work function, and the Cowork "global instructions".
+        // Dropped rather than left, for the same reason as `teamId` below:
+        // the default merge would splice the orphans back into live state.
+        if (version < 13) {
+          delete state.toolAccessMode;
+          delete state.codeWorktreeLocation;
+          delete state.codeBranchPrefix;
+          delete state.workFunction;
+          delete state.coworkInstructions;
+        }
         // v12: search became a configurable provider instead of one env var.
         // Backfilled up front, not in a per-version branch, because the
         // branches below return early — same rationale as v8/v9. null is the
@@ -438,7 +436,6 @@ export const useSettingsStore = create<SettingsStore>()(
         // through the legacy path in `resolveSearchRoute`.
         if (version < 12) {
           if (state.searchProvider === undefined) state.searchProvider = null;
-          if (state.searchApiKey === undefined) state.searchApiKey = null;
           if (state.searchInstanceUrl === undefined) state.searchInstanceUrl = null;
           if (state.searchCredentialProviderId === undefined) state.searchCredentialProviderId = null;
           if (state.deckTheme === undefined) state.deckTheme = null;
@@ -488,16 +485,14 @@ export const useSettingsStore = create<SettingsStore>()(
           } as unknown as SettingsState & SettingsActions;
         }
         if (version === 3) {
-          // v3 -> v4: add tool profile, automation, session reset settings
+          // v3 -> v4: add tool profile and automation settings (the session
+          // reset settings it also added were dropped in v15)
           return {
             ...state,
             toolProfile: 'full',
             heartbeatEnabled: false,
             heartbeatIntervalMinutes: 30,
             loopDetectionThreshold: 3,
-            sessionResetMode: 'manual',
-            sessionResetTime: '04:00',
-            sessionIdleMinutes: 60,
           } as unknown as SettingsState & SettingsActions;
         }
         if (version === 4) {
@@ -523,7 +518,11 @@ export const useSettingsStore = create<SettingsStore>()(
        */
       onRehydrateStorage: () => {
         beginHydrationApply();
-        return () => endHydrationApply();
+        return () => {
+          endHydrationApply();
+          // Finishes the v14 move; a no-op when nothing is parked.
+          void moveSecretsToKeychain();
+        };
       },
       partialize: pickPersisted,
     }

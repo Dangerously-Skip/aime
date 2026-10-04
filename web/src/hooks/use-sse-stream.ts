@@ -9,7 +9,11 @@ import {
   notifyStreamAborted,
 } from '@/lib/stream-registry';
 import { parseSSELines } from '@/lib/sse/parse-sse-lines';
+import type { CodePermissionMode } from '@/lib/surfaces/code-permission-mode';
 import { resetTextBoundary } from '@/lib/sse/core-chunks';
+import { reportTurnEvent } from '@/lib/runs/turn-outcome';
+import { classifyTurnError, isTurnErrorCode, type TurnErrorCode } from '@/lib/sse/turn-error';
+import { pullPendingMemories, AFTER_TURN_WAIT_MS } from '@/lib/memory/pending-pull';
 
 /** Abort the stream if no data arrives for this long (the server heartbeats every 15s). */
 const INACTIVITY_TIMEOUT_MS = 120_000;
@@ -49,15 +53,69 @@ function isAbortError(error: unknown): boolean {
 }
 
 /**
+ * A failed turn, already classified. `message` is safe to show: an HTTP
+ * failure never carries the raw response body, which could be a stack trace
+ * or an HTML error page.
+ */
+export class StreamTurnError extends Error {
+  readonly code: TurnErrorCode;
+  constructor(code: TurnErrorCode, message: string) {
+    super(message);
+    this.name = 'StreamTurnError';
+    this.code = code;
+  }
+}
+
+/** Any error a stream can end with, as what the banner renders. */
+export function turnErrorOf(error: Error): { code: TurnErrorCode; message: string } {
+  if (error instanceof StreamTurnError) return { code: error.code, message: error.message };
+  return { code: classifyTurnError(error.message), message: error.message };
+}
+
+/**
+ * Turn a non-2xx response into a classified error without echoing the body.
+ *
+ * Our own route answers 4xx with `{ error }` — curated, user-facing text
+ * ("Message exceeds max length") — and may add a `code`. Anything else (a 500
+ * page, a proxy's HTML) is used only to classify, never displayed.
+ */
+export function httpTurnError(status: number, body: string): StreamTurnError {
+  let curated: string | undefined;
+  let code: TurnErrorCode | undefined;
+  try {
+    const json = JSON.parse(body) as { error?: unknown; code?: unknown };
+    if (isTurnErrorCode(json.code)) code = json.code;
+    if (typeof json.error === 'string' && status < 500 && json.error.length <= 200) curated = json.error;
+  } catch {
+    // Not JSON — classify the text, show none of it.
+  }
+  return new StreamTurnError(
+    code ?? classifyTurnError(body, status),
+    curated ?? `The request failed (HTTP ${status}).`,
+  );
+}
+
+/** A reply that ended in the old inline error text, before errors became banners. */
+const LEGACY_INLINE_ERROR = /\n*\*\*Error:\*\* [\s\S]*$/;
+
+/**
  * Strip store messages to a lightweight {role, content} array suitable for the history param.
- * Filters to user/assistant with non-empty content.
+ *
+ * What the MODEL said, and what the user asked — nothing else. Out: empty
+ * placeholders, slash commands and their confirmations, and error text
+ * (legacy transcripts carry it inline; re-sending it taught the model that it
+ * had said "**Error:** Please run /login").
  */
 export function stripMessagesForHistory(
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string; isCommandEcho?: boolean }>
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
   return messages
-    .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
-    .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isCommandEcho)
+    .map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.role === 'assistant' ? (m.content ?? '').replace(LEGACY_INLINE_ERROR, '') : m.content,
+    }))
+    .filter((m) => m.content);
 }
 
 export interface SSEEvent {
@@ -76,20 +134,124 @@ export interface StreamUsage {
   clarificationCount?: number;
 }
 
+/*
+ * Every callback receives the chatId THE STREAM WAS STARTED FOR.
+ *
+ * The callbacks are pinned at send time, but a pinned closure still answers
+ * "which chat is on screen" if that is what it reads — and the surfaces did:
+ * Chat routed every chunk through `useChatStore.getState().currentChatId`, so
+ * switching conversation mid-reply moved the rest of the reply into the chat
+ * you had just opened. Cowork's first turn only worked because an incidental
+ * `await import()` let React re-render before the stream started. Handing the
+ * stream's own id to every callback makes the right answer the easy one.
+ */
 interface UseSSEStreamOptions {
-  onChunk: (event: SSEEvent) => void;
+  onChunk: (event: SSEEvent, chatId: string) => void;
   /**
    * A stream failed, including an inactivity timeout. NOT called for a
-   * deliberate stop — the surfaces append this to the transcript as
-   * `**Error:** …`, and a user who pressed Stop must not be shown an error.
+   * deliberate stop — a user who pressed Stop must not be shown an error.
    */
-  onError: (error: Error) => void;
+  onError: (error: Error, chatId: string) => void;
   /** The stream finished on its own. Aborted streams never reach this. */
-  onDone: () => void;
-  onUsage?: (usage: StreamUsage) => void;
-  chatId: string;                            // needed for registry key
-  /** Store-level flag: gates the composer, NOT the per-message spinner. */
+  onDone: (chatId: string) => void;
+  onUsage?: (usage: StreamUsage, chatId: string) => void;
+  chatId: string;                            // the chat on screen — what Stop aborts
+  /** Store-level flag: true while ANY of this hook's streams runs. */
   setIsStreaming: (v: boolean) => void;
+  /**
+   * Per-conversation flag — what the composer should read. Set when a chat's
+   * stream starts, cleared when the stream that still owns the chat ends or is
+   * stopped (a superseded stream settling late leaves it alone).
+   */
+  setChatStreaming?: (chatId: string, streaming: boolean) => void;
+  /**
+   * Merge consecutive `text` (and `thinking`) chunks and deliver them at most
+   * once per animation frame. A token per chunk meant a store update, a render
+   * and a markdown re-parse per token; the eye cannot see faster than a frame.
+   * Any other event flushes what is pending first, so ordering is unchanged,
+   * and so do the end of the stream, an error and a Stop.
+   */
+  coalesceText?: boolean;
+}
+
+/** A text or thinking chunk — the only kinds whose content can be joined. */
+function isMergeable(event: SSEEvent): boolean {
+  return (event.type === 'text' || event.type === 'thinking') && typeof event.content === 'string';
+}
+
+/**
+ * Two chunks merge only when everything but `content` matches, so merging
+ * loses nothing. It used to require that nothing BUT `content` exist — and
+ * every real chunk carries `provider` (and now `segment`, which a refusal
+ * retraction cuts by), so on a live stream nothing ever merged and the
+ * per-frame batching was dead code outside its own test.
+ */
+function sameEnvelope(a: SSEEvent, b: SSEEvent): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) if (k !== 'content' && a[k] !== b[k]) return false;
+  return true;
+}
+
+const nextFrame: (cb: () => void) => unknown =
+  typeof requestAnimationFrame === 'function'
+    ? (cb) => requestAnimationFrame(cb)
+    : (cb) => setTimeout(cb, 16);
+
+/** Everything a turn's request carries besides the message, chat and model. */
+export interface SendExtra {
+  personalPreferences?: string
+  displayName?: string
+  attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string }>
+  webSearch?: boolean
+  projectInstructions?: string
+  projectKnowledge?: string
+  apiKey?: string
+  cwd?: string
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  memories?: string
+  crossSurfaceContext?: string
+  deckTheme?: { id: string; source: string } | null;
+  searchSettings?: {
+    searchProvider?: string | null;
+    searchApiKey?: string | null;
+    searchInstanceUrl?: string | null;
+    searchCredentialProviderId?: string | null;
+  };
+  securitySettings?: {
+    blockDangerousCommands?: boolean
+    blockNetworkCommands?: boolean
+    restrictToProjectFolder?: boolean
+    disableBashTool?: boolean
+  }
+  sessionControls?: {
+    thinkLevel?: string
+    verboseMode?: boolean
+    reasoningVisible?: boolean
+    modelOverride?: string | null
+  }
+  toolProfile?: string;
+  /**
+   * This client has a live webview and can execute browser tools.
+   *
+   * Client-declared because only the renderer knows: Code's preview panel
+   * can be closed, and the server builds `onBrowserToolUse` for every
+   * surface regardless. Registering tools nothing can run is DR-21's
+   * infinite loop.
+   */
+  browserToolsAvailable?: boolean;
+  /**
+   * `false` when this client renders no question or connect cards (the
+   * Assistant feed). The server defaults it to true and would otherwise park
+   * the turn for 300s on an approval nobody can answer; false takes the
+   * documented "cannot ask" path instead. Only ever sent when false.
+   */
+  canRelayToClient?: boolean;
+  contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
+  /** Code's permission mode. The server accepts it for the Code surface only. */
+  permissionMode?: CodePermissionMode
+  capability?: string
+  tier?: string
+  providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
 }
 
 interface UseSSEStreamReturn {
@@ -99,52 +261,7 @@ interface UseSSEStreamReturn {
     surfaceId: string,
     /** null ⇒ nothing pinned; the server resolves from the registry. */
     model: string | null,
-    extra?: {
-      personalPreferences?: string
-      displayName?: string
-      attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string }>
-      webSearch?: boolean
-      projectInstructions?: string
-      projectKnowledge?: string
-      apiKey?: string
-      cwd?: string
-      history?: Array<{ role: 'user' | 'assistant'; content: string }>
-      memories?: string
-      crossSurfaceContext?: string
-      deckTheme?: { id: string; source: string } | null;
-      searchSettings?: {
-        searchProvider?: string | null;
-        searchApiKey?: string | null;
-        searchInstanceUrl?: string | null;
-        searchCredentialProviderId?: string | null;
-      };
-      securitySettings?: {
-        blockDangerousCommands?: boolean
-        blockNetworkCommands?: boolean
-        restrictToProjectFolder?: boolean
-        disableBashTool?: boolean
-      }
-      sessionControls?: {
-        thinkLevel?: string
-        verboseMode?: boolean
-        reasoningVisible?: boolean
-        modelOverride?: string | null
-      }
-      toolProfile?: string;
-      /**
-       * This client has a live webview and can execute browser tools.
-       *
-       * Client-declared because only the renderer knows: Code's preview panel
-       * can be closed, and the server builds `onBrowserToolUse` for every
-       * surface regardless. Registering tools nothing can run is DR-21's
-       * infinite loop.
-       */
-      browserToolsAvailable?: boolean;
-      contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
-      capability?: string
-      tier?: string
-      providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
-    }
+    extra?: SendExtra,
   ) => Promise<void>;
   abort: () => void;
 }
@@ -197,6 +314,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
     // Deliberate: the user asked for this. The running stream reads the cause
     // off its signal and finalises the turn without reporting an error.
     streamRegistry.abort(id, 'user');
+    optionsRef.current.setChatStreaming?.(id, false);
     if (activeChatIdRef.current === id) activeChatIdRef.current = null;
     // Only when nothing else is running — another conversation's turn must not
     // have the composer unlocked out from under it.
@@ -211,44 +329,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
       chatId: string,
       surfaceId: string,
       model: string | null,
-      extra?: {
-        personalPreferences?: string
-        displayName?: string
-        attachments?: Array<{ name: string; content: string; type: string; category: 'image' | 'document' | 'text' | 'spreadsheet' | 'presentation' | 'audio' | 'video'; filePath?: string }>
-        webSearch?: boolean
-        projectInstructions?: string
-        projectKnowledge?: string
-        apiKey?: string
-        cwd?: string
-        history?: Array<{ role: 'user' | 'assistant'; content: string }>
-        memories?: string
-        crossSurfaceContext?: string
-        contextBusEvents?: Array<{ summary: string; source: string; priority: string }>
-        deckTheme?: { id: string; source: string } | null;
-      searchSettings?: {
-        searchProvider?: string | null;
-        searchApiKey?: string | null;
-        searchInstanceUrl?: string | null;
-        searchCredentialProviderId?: string | null;
-      };
-      securitySettings?: {
-          blockDangerousCommands?: boolean
-          blockNetworkCommands?: boolean
-          restrictToProjectFolder?: boolean
-          disableBashTool?: boolean
-        }
-        sessionControls?: {
-          thinkLevel?: string
-          verboseMode?: boolean
-          reasoningVisible?: boolean
-          modelOverride?: string | null
-        }
-        toolProfile?: string;
-        browserToolsAvailable?: boolean;
-        capability?: string
-        tier?: string
-        providerConfig?: { providerId: string; transport?: string; baseUrl?: string }
-      }
+      extra?: SendExtra,
     ): Promise<void> => {
       // A new turn replaces any stream still running for this chat. Tagged
       // 'superseded' so the outgoing stream knows the chat's UI state now
@@ -269,13 +350,49 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
       // Snapshot the callbacks at send time so a conversation switch
       // mid-stream doesn't redirect chunks to the wrong chatId.
-      const pinnedOnChunk = optionsRef.current.onChunk;
-      const pinnedOnDone = optionsRef.current.onDone;
-      const pinnedOnError = optionsRef.current.onError;
-      const pinnedOnUsage = optionsRef.current.onUsage;
+      const pinned = optionsRef.current;
+      const deliverChunk = (event: SSEEvent) => pinned.onChunk(event, chatId);
+
+      // Text waiting for the next frame — see `coalesceText`.
+      let pendingText: SSEEvent | null = null;
+      let frameScheduled = false;
+      const flushText = () => {
+        const event = pendingText;
+        pendingText = null;
+        if (event) deliverChunk(event);
+      };
+      const pinnedOnChunk = (event: SSEEvent) => {
+        if (!pinned.coalesceText || !isMergeable(event)) {
+          flushText();
+          deliverChunk(event);
+          return;
+        }
+        if (pendingText && sameEnvelope(pendingText, event)) {
+          pendingText = { ...pendingText, content: (pendingText.content as string) + (event.content as string) };
+        } else {
+          flushText();
+          pendingText = { ...event };
+        }
+        if (!frameScheduled) {
+          frameScheduled = true;
+          nextFrame(() => {
+            frameScheduled = false;
+            // A stream superseded or finished in the meantime has already
+            // flushed (or deliberately dropped) its text.
+            flushText();
+          });
+        }
+      };
+      const pinnedOnDone = () => pinned.onDone(chatId);
+      const pinnedOnError = (err: Error) => pinned.onError(err, chatId);
+      const pinnedOnUsage = pinned.onUsage
+        ? (usage: StreamUsage) => pinned.onUsage!(usage, chatId)
+        : undefined;
       const pinnedSetIsStreaming = optionsRef.current.setIsStreaming;
+      const pinnedSetChatStreaming = optionsRef.current.setChatStreaming;
 
       pinnedSetIsStreaming(true);
+      pinnedSetChatStreaming?.(chatId, true);
 
       let firstTokenAt: number | null = null;
       let clarificationCount = 0;
@@ -309,9 +426,11 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
             ...(extra?.sessionControls ? { sessionControls: extra.sessionControls } : {}),
             ...(extra?.toolProfile ? { toolProfile: extra.toolProfile } : {}),
             ...(extra?.browserToolsAvailable ? { browserToolsAvailable: true } : {}),
+            ...(extra?.canRelayToClient === false ? { canRelayToClient: false } : {}),
             ...(extra?.capability ? { capability: extra.capability } : {}),
             ...(extra?.tier ? { tier: extra.tier } : {}),
             ...(extra?.providerConfig ? { providerConfig: extra.providerConfig } : {}),
+            ...(extra?.permissionMode ? { permissionMode: extra.permissionMode } : {}),
             // A switched-off connector is NOT denied from here. The server stashes
             // it in `disabledMcpServers`, which `loadProvisionedMcpServers` never
             // reads — so it costs no decrypt, no token refresh and no config
@@ -322,8 +441,8 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
         });
 
         if (!response.ok) {
-          const errorText = await response.text().catch(() => 'Unknown error');
-          throw new Error(`HTTP ${response.status}: ${errorText}`);
+          const errorText = await response.text().catch(() => '');
+          throw httpTurnError(response.status, errorText);
         }
 
         if (!response.body) {
@@ -370,6 +489,9 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           buffer = parseSSELines<SSEEvent>(
             buffer,
             (event) => {
+              // A reported failure must reach the run recorder even though the
+              // stream still ends cleanly (see lib/runs/turn-outcome).
+              reportTurnEvent(chatId, event);
               // Track TTFT on first text/thinking event
               if (!firstTokenAt && (event.type === 'text' || event.type === 'thinking')) {
                 firstTokenAt = Date.now();
@@ -380,6 +502,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
               }
               // Intercept done event to extract usage metrics
               if (event.type === 'done' && event.usage && pinnedOnUsage) {
+                flushText();
                 const ttftMs = firstTokenAt ? firstTokenAt - (Date.now() - (event.usage as Record<string,number>).durationMs) : undefined;
                 pinnedOnUsage({
                   ...(event.usage as StreamUsage),
@@ -399,7 +522,16 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
           }
         }
 
+        flushText();
         pinnedOnDone();
+        /*
+         * Collect what this turn taught us. Extraction starts only after the
+         * stream has closed, so the server holds this pull until it lands. Here
+         * rather than in a surface because every /api/chat stream comes through
+         * this hook, and memory used to reach only the surfaces that remembered
+         * to handle it.
+         */
+        void pullPendingMemories({ waitMs: AFTER_TURN_WAIT_MS });
       } catch (error: unknown) {
         // WHY the stream ended comes from the explicit cause on our own signal.
         // An AbortError with no cause (an abort raised outside this hook) is
@@ -409,18 +541,23 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
 
         if (abortReason === 'superseded') {
           // The replacement stream owns this chat's messages now. Finalising
-          // here would clear the spinner off a turn that is still running.
+          // here would clear the spinner off a turn that is still running —
+          // and its unflushed text belongs to the old turn, so it is dropped.
+          pendingText = null;
           return;
         }
 
+        // Whatever arrived before the failure or the Stop is part of the reply.
+        flushText();
+
         if (abortReason === 'timeout') {
           // A timeout is a failure the user has to see, so it goes down the
-          // same path as any other stream error: `onError`, which every surface
-          // appends to the transcript as `**Error:** …`. notifyStreamAborted
+          // same path as any other stream error: `onError`, which the surfaces
+          // render as the turn's error banner. notifyStreamAborted
           // first so message state is finalised even if a surface's onError
           // resolves a different chatId than the one this stream was started for.
           notifyStreamAborted({ chatId, reason: 'timeout' });
-          pinnedOnError(new Error(timeoutMessage(abortDetailOf(controller.signal))));
+          pinnedOnError(new StreamTurnError('timeout', timeoutMessage(abortDetailOf(controller.signal))));
           return;
         }
 
@@ -458,6 +595,7 @@ export function useSSEStream(options: UseSSEStreamOptions): UseSSEStreamReturn {
            */
           resetTextBoundary(chatId);
           clearInactivityTimer();
+          pinnedSetChatStreaming?.(chatId, false);
           // Only surrender the abort target if it is still pointing at us.
           if (activeChatIdRef.current === chatId) activeChatIdRef.current = null;
           // `isStreaming` is one boolean for the whole surface and it gates the

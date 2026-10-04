@@ -3,10 +3,13 @@ import { getProvider, getAvailableProviders } from '@/lib/providers';
 import { getSurfaceConfig, getAvailableSurfaces } from '@/lib/surfaces';
 import { createSSEStream } from '@/lib/sse';
 import { extractMemories } from '@/lib/memory/extractor';
+import { stashExtractedMemories, beginExtraction } from '@/lib/memory/pending-extractions';
 import { type SessionControls } from '@/lib/slash-commands';
 import { loadAgents, matchAgentForMessage, readAgentSystemPrompt } from '@/lib/agents-parser';
 import { loadProvisionedMcpServers } from '@/lib/mcp/provisioned';
 import { baseToolName, toolMatches } from '@/lib/security/tool-names';
+import { classifyThrownTurnError } from '@/lib/providers/turn-errors';
+import { isCodePermissionMode, type CodePermissionMode } from '@/lib/surfaces/code-permission-mode';
 
 /** Tool profile → allowed tool sets (intersected with surface defaults) */
 const TOOL_PROFILES: Record<string, string[]> = {
@@ -58,7 +61,6 @@ const TOOL_PROFILES: Record<string, string[]> = {
 const PLUMBING_TOOLS = new Set([
   'AskUserQuestion',
   'Agent',
-  'spawn_agent',
   'TodoWrite',
   'mcp__aime__canvas',
   'mcp__aime__RequestConnector',
@@ -98,6 +100,9 @@ async function readDailyMemoryLog(): Promise<string> {
     return '';
   }
 }
+
+/** Budget for the post-turn memory extraction call. It is a nicety, not the turn. */
+const MEMORY_EXTRACTION_TIMEOUT_MS = 20_000;
 
 // ── Request validation limits ─────────────────────────────────────────
 const MAX_MESSAGE_LENGTH = 100_000;
@@ -214,6 +219,7 @@ export async function POST(
     tier = null,
     providerConfig = null,
     canRelayToClient = true,
+    permissionMode: requestedPermissionMode = undefined,
   } = body as {
     message?: string;
     chatId?: string;
@@ -299,6 +305,11 @@ export async function POST(
      * Code whenever its preview panel is closed. Browser tools need both.
      */
     browserToolsAvailable?: boolean;
+    /**
+     * Code's permission mode, from the composer. Accepted for the Code surface
+     * only and only from the allowlist; see the check below.
+     */
+    permissionMode?: unknown;
   };
 
   console.log('[CHAT] Surface request received:', surfaceId);
@@ -315,6 +326,25 @@ export async function POST(
       { error: `Invalid surface: ${surfaceId}. Available: ${availableSurfaces.join(', ')}` },
       { status: 400 },
     );
+  }
+
+  /*
+   * A permission mode is a security choice, so it is taken only where the user
+   * can make it — Code's composer — and only as one of the modes that menu
+   * offers. Refused rather than ignored when it is not one of them: quietly
+   * falling back to the surface default would run a turn the user asked to be
+   * asked about with edits auto-accepted. Any other surface never passes it on,
+   * whatever the body says.
+   */
+  let permissionMode: CodePermissionMode | undefined;
+  if (requestedPermissionMode !== undefined && requestedPermissionMode !== null) {
+    if (surfaceId.toLowerCase() !== 'code') {
+      console.warn('[CHAT] Ignoring a permission mode sent for surface', surfaceId);
+    } else if (!isCodePermissionMode(requestedPermissionMode)) {
+      return Response.json({ error: 'Invalid permission mode' }, { status: 400 });
+    } else {
+      permissionMode = requestedPermissionMode;
+    }
   }
 
   if (!message || typeof message !== 'string') {
@@ -358,6 +388,8 @@ export async function POST(
 
   // Stream in background
   (async () => {
+    /** Set by the turn; run once the stream has closed. */
+    let runAfterClose: (() => Promise<void>) | null = null;
     // Heartbeat interval
     const heartbeatInterval = setInterval(async () => {
       await sse.writeHeartbeat();
@@ -394,6 +426,38 @@ export async function POST(
           console.error('[CHAT] Abort on client disconnect failed:', e);
         }
       });
+
+      // ── Execution resolution ───────────────────────────────────────────
+      // For a model on a user-added provider, resolve the key (keychain by
+      // providerId, or the transient request key) and the Anthropic-compat
+      // base URL. No providerConfig ⇒ the built-in BYOK/env/Bedrock path.
+      const { resolveTurnExecution } = await import('@/lib/models/server-turn');
+      const { exec, usable } = await resolveTurnExecution({
+        providerConfig,
+        requestApiKey: apiKey,
+        // openai-compat providers route through the shim on this same server.
+        shimOrigin: new URL(req.url).origin,
+      });
+      if (providerConfig) {
+        console.log('[CHAT] Provider config:', providerConfig.providerId,
+          providerConfig.transport ?? 'anthropic-native',
+          exec.baseUrl ? '(custom base URL)' : '');
+      }
+
+      /*
+       * No model, no turn — decided before anything expensive happens.
+       *
+       * A user with nothing configured used to wait for the SDK subprocess to
+       * boot and then read "Not logged in · Please run /login" as the
+       * assistant's reply. See lib/models/credential-check.ts.
+       */
+      if (!usable) {
+        const { NO_MODEL_MESSAGE } = await import('@/lib/models/credential-check');
+        console.warn('[CHAT] No usable model credentials — refusing the turn before starting the SDK');
+        await sse.writeEvent({ type: 'error', message: NO_MODEL_MESSAGE, code: 'no_model' });
+        await sse.writeEvent({ type: 'done', error: true });
+        return;
+      }
 
       // ── Every independent read, started at once ────────────────────────
       // Nine serialized filesystem round-trips used to sit between the request
@@ -514,8 +578,7 @@ export async function POST(
       }
 
       // ── Agent routing ──────────────────────────────────────────────────
-      // Load AGENTS.md and apply routing overrides (model, tools, system prompt)
-      let agentModelOverride: string | null = null;
+      // Load AGENTS.md and apply routing overrides (tools, system prompt).
       {
         const agents = loadAgents(cwd as string | undefined);
         if (agents.length > 0) {
@@ -527,9 +590,15 @@ export async function POST(
 
           if (matched) {
             console.log('[AGENTS] Routing to agent:', matched.name, '| explicit:', !!explicitName);
-            // Override model if agent specifies one (handled later via effectiveModel fallback)
+            /*
+             * NOT the model. An agent's `model:` used to beat the route the
+             * client resolved from the tier grid — a second place to pick a
+             * model, and for a BYOK user it sent a Claude id (claude-opus-4-6)
+             * to their OpenRouter provider. Models are chosen in Settings;
+             * an agent shapes the role and the tools.
+             */
             if (matched.model) {
-              agentModelOverride = matched.model;
+              console.log('[AGENTS]', matched.name, 'pins model', matched.model, '— ignored; the model comes from Settings');
             }
             // Override allowedTools if agent specifies them
             if (matched.allowedTools && surfaceConfig.allowedTools) {
@@ -787,11 +856,10 @@ export async function POST(
       };
 
       // ── Model resolution ───────────────────────────────────────────────
-      // Priority: explicit model (sessionControls > agent > request) wins.
+      // Priority: explicit model (sessionControls > request) wins.
       // Otherwise, if the client asked by (capability, tier), resolve through
       // the model registry with tumbling. Falls back to the surface default.
       const explicitModel = sessionControls?.modelOverride
-        || agentModelOverride
         || (model as string | null)
         || null;
       let effectiveModel = explicitModel || surfaceConfig.model;
@@ -801,69 +869,22 @@ export async function POST(
         // a hardcoded name. The surface supplies the (capability, tier) intent
         // (SURFACE_ROUTES); an explicit request capability/tier overrides it —
         // that's how a user's per-surface tier preference arrives.
-        const { resolveRoute, createDefaultRegistry } = await import('@/lib/models/registry');
-        const { getSurfaceRoute } = await import('@/lib/models/surface-routes');
-        const { isBedrockConfigured } = await import('@/lib/bedrock-env');
-        // Availability for the default (Claude) registry: an API key (BYOK/env)
-        // makes the anthropic provider usable; a region makes Bedrock usable.
-        const availableIds = new Set<string>();
-        if (apiKey || process.env.ANTHROPIC_API_KEY) availableIds.add('anthropic');
-        if (isBedrockConfigured()) availableIds.add('bedrock');
-
-        const route = getSurfaceRoute(surfaceId);
-        const wantCapability = capability ?? route.capability;
-        const wantTier = tier ?? route.tier;
-
-        const resolved = resolveRoute(
-          createDefaultRegistry(),
-          wantCapability,
-          wantTier,
-          (p) => availableIds.has(p.id),
-        );
+        const { resolveBuiltinSurfaceModel } = await import('@/lib/models/server-turn');
+        const resolved = resolveBuiltinSurfaceModel({
+          surfaceId,
+          capability,
+          tier,
+          // A user-added provider's key is not an Anthropic key.
+          hasAnthropicKey: !providerConfig && !!exec.apiKey,
+        });
         if (resolved) {
-          effectiveModel = resolved.model.driverModel;
-          console.log('[CHAT] Registry resolved', wantCapability, wantTier, '→', effectiveModel,
+          effectiveModel = resolved.model;
+          console.log('[CHAT] Registry resolved', resolved.capability, resolved.tier, '→', effectiveModel,
             resolved.degraded ? '(degraded)' : '');
         }
         // else: keep surfaceConfig.model as the last-resort fallback.
       }
 
-      // ── Execution resolution (user-added providers) ────────────────────
-      // For a model on a user-added provider, resolve the key (keychain by
-      // providerId, or the transient request key) and the Anthropic-compat
-      // base URL. No providerConfig ⇒ default BYOK/env/Bedrock path unchanged.
-      const { resolveExecution } = await import('@/lib/models/execution');
-      const exec = await resolveExecution({
-        providerConfig,
-        requestApiKey: apiKey,
-        // openai-compat providers route through the shim on this same server.
-        shimOrigin: new URL(req.url).origin,
-        // Every stored field, not just the key: Bedrock and Vertex are driven by
-        // environment built from region/project/credentials.
-        loadFields: async (id) => {
-          try {
-            const { getCredentialStore } = await import('@/lib/models/credentials');
-            return await getCredentialStore().get(id);
-          } catch {
-            return undefined;
-          }
-        },
-        loadKey: async (id) => {
-          try {
-            const { getCredentialStore } = await import('@/lib/models/credentials');
-            return await getCredentialStore().getField(id, 'apiKey');
-          } catch {
-            // CredentialStoreUnavailable (no AIME_CRED_KEY) or read error →
-            // fall back to whatever the request supplied.
-            return undefined;
-          }
-        },
-      });
-      if (providerConfig) {
-        console.log('[CHAT] Provider config:', providerConfig.providerId,
-          providerConfig.transport ?? 'anthropic-native',
-          exec.baseUrl ? '(custom base URL)' : '');
-      }
 
       // Thinking and effort are now handled natively by the SDK via ClaudeProvider
       // (passed as queryOptions.thinking and queryOptions.effort)
@@ -872,10 +893,16 @@ export async function POST(
       // Run extraction on non-text/non-image attachments before sending to provider
       if (attachments && attachments.length > 0) {
         const { extractDocument } = await import('@/lib/extractors');
-        const { getScratchDir } = await import('@/lib/app-paths');
-        const { join: ej } = await import('path');
-        const { mkdirSync: eMkdir, writeFileSync: eWrite } = await import('fs');
+        const { getScratchDir, getScratchRoot, isSafeChatId } = await import('@/lib/app-paths');
+        const { join: ej, dirname: eDirname } = await import('path');
+        const { writeUniqueFile, copyIntoUnique, isRealPathWithin } = await import('@/lib/uploads/store');
         const isToolSurface = surfaceId === 'cowork' || surfaceId === 'code';
+        // Stored names are unique per conversation (`a.png`, `a-2.png`) so two
+        // same-named attachments no longer overwrite each other; `att.name`
+        // stays the display name. No valid chatId → nothing is written to disk
+        // (getScratchDir refuses `../..`), and extraction runs on the content.
+        const uploadsDir = isSafeChatId(chatId) ? ej(getScratchDir(chatId), 'uploads') : null;
+        if (!uploadsDir) console.warn('[EXTRACT] No valid chatId; attachments are not saved to scratch');
 
         for (const att of attachments) {
           // Skip plain text (already handled by claude-provider inline)
@@ -883,13 +910,9 @@ export async function POST(
 
           // Images: save to scratch so the model can use Read tool to view them
           if (att.category === 'image') {
-            if (att.content) {
-              const imgDir = ej(getScratchDir(chatId as string), 'uploads');
-              eMkdir(imgDir, { recursive: true });
-              const imgName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-              const imgPath = ej(imgDir, imgName);
+            if (att.content && uploadsDir) {
               const base64Data = att.content.includes(',') ? att.content.split(',')[1] : att.content;
-              eWrite(imgPath, Buffer.from(base64Data, 'base64'));
+              const imgPath = await writeUniqueFile(uploadsDir, att.name, Buffer.from(base64Data, 'base64'));
               att.extractedPath = imgPath;
               att.content = ''; // Free memory
               console.log('[EXTRACT] Saved image to:', imgPath);
@@ -898,21 +921,27 @@ export async function POST(
           }
 
           // Always save the raw file to scratch so the model can read it if extraction fails
-          const scratchDir = ej(getScratchDir(chatId as string), 'uploads');
-          eMkdir(scratchDir, { recursive: true });
-          const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-          const savedPath = ej(scratchDir, safeName);
-
-          if (!att.filePath && att.content) {
+          if (!att.filePath && att.content && uploadsDir) {
             // Decode base64 and write to disk
             const rawBuffer = Buffer.from(att.content, 'base64');
-            eWrite(savedPath, rawBuffer);
+            const savedPath = await writeUniqueFile(uploadsDir, att.name, rawBuffer);
             att.filePath = savedPath;
             console.log('[EXTRACT] Saved raw file to:', savedPath, '(' + rawBuffer.length + ' bytes)');
           } else if (att.filePath) {
-            // Already on disk — copy to scratch for consistent path
-            const { copyFileSync } = await import('fs');
-            try { copyFileSync(att.filePath, savedPath); att.filePath = savedPath; } catch { /* keep original path */ }
+            // `filePath` comes from the request body. Only a file this app
+            // already stored under the scratch root (an /api/upload result) may
+            // be referenced — anything else would copy, say, ~/.ssh/id_rsa into
+            // scratch and hand it to the extractor and the model.
+            const real = await isRealPathWithin(getScratchRoot(), att.filePath);
+            if (!real) {
+              console.warn('[EXTRACT] Ignoring attachment path outside the scratch directory:', att.name);
+              att.filePath = undefined;
+            } else if (uploadsDir && eDirname(real) !== uploadsDir) {
+              // Uploaded under another id (e.g. before the chat had one) — copy it here.
+              try { att.filePath = await copyIntoUnique(real, uploadsDir, att.name); } catch { att.filePath = real; }
+            } else {
+              att.filePath = real;
+            }
           }
 
           try {
@@ -932,10 +961,15 @@ export async function POST(
               att.category,
               att.filePath,
             );
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('Extraction timed out after 30 seconds')), 30000)
+            // Cleared either way: a timer left armed after a fast extraction
+            // held the handler's closure (and the attachment) for 30s per file.
+            let extractionTimer: ReturnType<typeof setTimeout> | undefined;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              extractionTimer = setTimeout(() => reject(new Error('Extraction timed out after 30 seconds')), 30000);
+            });
+            const result = await Promise.race([extractionPromise, timeoutPromise]).finally(() =>
+              clearTimeout(extractionTimer),
             );
-            const result = await Promise.race([extractionPromise, timeoutPromise]);
             console.log('[EXTRACT] Success:', att.name, 'text length:', result.text.length, 'pages:', result.pageCount || 'n/a');
 
             // Zero-text extraction is common for image-based PDFs (scanned
@@ -946,12 +980,13 @@ export async function POST(
               att.extractedPath = att.filePath;
               console.log('[EXTRACT] Empty result; falling back to Read tool path for', att.name);
             } else if (isToolSurface && result.text.length > 0) {
-              // Save to scratch dir for agent to Read/Grep
+              // Save to scratch dir for agent to Read/Grep — under a UNIQUE name,
+              // like the uploads beside it: two `report.pdf` attachments in one
+              // conversation both became documents/report.md, and the second
+              // overwrote the first while the model still held both paths.
               const scratchDir = ej(getScratchDir(chatId as string), 'documents');
-              eMkdir(scratchDir, { recursive: true });
-              const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.[^.]+$/, '.md');
-              const extractedPath = ej(scratchDir, safeName);
-              eWrite(extractedPath, result.text, 'utf-8');
+              const mdName = `${att.name.replace(/\.[^.]+$/, '')}.md`;
+              const extractedPath = await writeUniqueFile(scratchDir, mdName, Buffer.from(result.text, 'utf-8'));
               att.extractedPath = extractedPath;
               att.content = ''; // Free memory — agent will use Read tool
               console.log('[EXTRACT] Saved to scratch:', extractedPath, '(' + result.text.length + ' chars)');
@@ -1013,6 +1048,12 @@ export async function POST(
       let toolCallCount = 0;
       const streamStartMs = Date.now();
       let queryTimedOut = false;
+      /**
+       * Did the turn fail? Set from the provider's typed `error` chunk, the
+       * silence timeout, or a throw — and carried onto the final `done` so the
+       * client can tell a failed turn from a finished one.
+       */
+      let turnFailed = false;
 
       /*
        * THE TIMEOUT MEASURES SILENCE, NOT DURATION.
@@ -1061,8 +1102,10 @@ export async function POST(
          * a run that had been working the whole time, and the advice that
          * followed sent the user off to simplify a request that was fine.
          */
+        turnFailed = true;
         await sse.writeEvent({
           type: 'error',
+          code: 'timeout',
           message:
             `The run stopped producing output for ${timeoutSecs} seconds and was cancelled. ` +
             `Anything already produced above is kept.`,
@@ -1180,6 +1223,7 @@ export async function POST(
           browserToolsAvailable: browserToolsAvailable === true && canRelayToClient !== false,
           onConnectorRequest,
           onDocumentPrint,
+          permissionMode,
         };
 
         let resumes = 0;
@@ -1292,6 +1336,7 @@ export async function POST(
           if (queryTimedOut) continue;
           // A chunk is a sign of life — see `noteActivity`.
           noteActivity();
+          if (chunk.type === 'error') turnFailed = true;
           if (chunk.type === 'tool_use') {
             console.log('[SSE] Sending tool_use:', chunk.name);
             toolCallCount++;
@@ -1329,6 +1374,23 @@ export async function POST(
             }
             // Out of resumes or out of the resources that matter — fall through
             // and let the provider's note stand, since now it IS the advice.
+          }
+          /*
+           * A refused reply the SDK re-ran on a fallback model. The client
+           * removes it from the transcript; this removes it from our own copy,
+           * which memory extraction reads — a refused partial is not something
+           * the assistant said. The texts are not relayed: the client removes by
+           * position and has no use for a second copy of the refused output.
+           */
+          if (chunk.type === 'retract') {
+            const { texts, ...toClient } = chunk;
+            for (const text of Array.isArray(texts) ? texts : []) {
+              if (typeof text !== 'string' || !text) continue;
+              const at = collectedResponse.lastIndexOf(text);
+              if (at >= 0) collectedResponse = collectedResponse.slice(0, at) + collectedResponse.slice(at + text.length);
+            }
+            await sse.writeEvent(toClient);
+            continue;
           }
           await sse.writeEvent(chunk);
         }
@@ -1368,35 +1430,60 @@ export async function POST(
             if (errObj.cause) console.error('[CHAT] cause:', errObj.cause);
             if (errObj.stack) console.error('[CHAT] stack:', errObj.stack);
           }
-          await sse.writeEvent({ type: 'error', message: errMsg });
+          turnFailed = true;
+          const { code, message: shown } = classifyThrownTurnError(streamError);
+          await sse.writeEvent({ type: 'error', message: shown, code });
         }
       } finally {
         if (queryTimer) clearTimeout(queryTimer);
       }
 
-      // Auto-extract memories after stream completes
-      if (autoExtractMemories && collectedResponse.length >= 50) {
-        try {
-          const extracted = await extractMemories(
-            message as string,
-            collectedResponse,
-            (apiKey as string) || undefined,
-            // The model the TURN ran on. Extraction used to hardcode an
-            // Anthropic id, which 400s against any other provider — on every
-            // turn, invisibly, for anyone on OpenRouter.
-            effectiveModel,
-          );
-          if (extracted.length > 0) {
-            await sse.writeEvent({
-              type: 'memory_extract',
-              memories: extracted,
-            });
-            console.log('[MEMORY] Extracted', extracted.length, 'memories');
+      /*
+       * Memory extraction is QUEUED here and run after the stream closes.
+       *
+       * It used to run right here, before `done`: a whole model call on the
+       * turn's own model, holding the composer locked for however long that
+       * took — and still made after the client had gone. Now the turn ends
+       * first, and extraction only runs for a turn that succeeded, for a client
+       * that was still listening when it did. `req.signal` is read NOW: once the
+       * response closes, the request's signal can fire for a normal completion
+       * too, so it says nothing about the user after this point.
+       */
+      if (
+        autoExtractMemories &&
+        collectedResponse.length >= 50 &&
+        !turnFailed &&
+        !req.signal.aborted &&
+        chatId
+      ) {
+        const { resolveExtractionModel } = await import('@/lib/memory/extraction-model');
+        const extractionModel = resolveExtractionModel({
+          onUserProvider: !!providerConfig,
+          turnModel: effectiveModel,
+        });
+        const turnMessage = message as string;
+        const turnResponse = collectedResponse;
+        // Registered now, before `done` is written: the renderer pulls the
+        // moment `done` arrives and waits on this, rather than finding an empty
+        // queue (lib/memory/pending-extractions.ts).
+        const settle = beginExtraction();
+        runAfterClose = async () => {
+          try {
+            const extracted = await extractMemories(
+              turnMessage,
+              turnResponse,
+              exec.apiKey,
+              extractionModel,
+              { baseUrl: exec.baseUrl, signal: AbortSignal.timeout(MEMORY_EXTRACTION_TIMEOUT_MS) },
+            );
+            if (extracted.length > 0) {
+              await stashExtractedMemories(chatId as string, extracted);
+              console.log('[MEMORY] Extracted', extracted.length, 'memories — queued for the renderer');
+            }
+          } finally {
+            settle();
           }
-        } catch (extractErr) {
-          console.error('[MEMORY] Extraction error:', extractErr);
-          // Non-fatal — don't send error to client
-        }
+        };
       }
 
       /**
@@ -1427,6 +1514,7 @@ export async function POST(
 
       await sse.writeEvent({
         type: 'done',
+        ...(turnFailed ? { error: true } : {}),
         usage: {
           inputTokens,
           outputTokens,
@@ -1446,10 +1534,21 @@ export async function POST(
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.error('[CHAT] Error:', errMsg);
-      await sse.writeEvent({ type: 'error', message: errMsg });
+      const { code, message: shown } = classifyThrownTurnError(error);
+      await sse.writeEvent({ type: 'error', message: shown, code });
+      // Still a `done`: it is what clears the client's streaming state.
+      await sse.writeEvent({ type: 'done', error: true });
     } finally {
       clearInterval(heartbeatInterval);
       await sse.close();
+    }
+
+    // Background work that must not hold the stream open (see above).
+    if (runAfterClose) {
+      await runAfterClose().catch((extractErr: unknown) => {
+        // Non-fatal, and nobody is listening any more to be told.
+        console.error('[MEMORY] Extraction error:', extractErr);
+      });
     }
   })();
 

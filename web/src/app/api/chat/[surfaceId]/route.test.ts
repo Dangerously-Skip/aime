@@ -2,6 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { POST } from './route';
 import type { QueryParams, StreamChunk } from '@/lib/providers/base-provider';
+import {
+  resetPendingExtractions,
+  extractionsSettled,
+  listPendingMemories,
+} from '@/lib/memory/pending-extractions';
 
 const mocks = vi.hoisted(() => ({
   queryMock: vi.fn(),
@@ -73,6 +78,14 @@ beforeEach(() => {
   mocks.readAgentPromptMock.mockReturnValue('');
   mocks.extractMemoriesMock.mockResolvedValue([]);
   mocks.loadProvisionedMock.mockResolvedValue({});
+  resetPendingExtractions();
+  // The route refuses a turn with no model credentials before calling the
+  // provider; every test but the no-model ones has a key.
+  vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('request validation', () => {
@@ -150,7 +163,86 @@ describe('streaming', () => {
 
     const error = events.find((e) => e.type === 'error');
     expect(error?.message).toContain('SDK fell over');
+    expect(error?.code).toBe('unknown');
     expect(events.at(-1)?.type).toBe('done'); // stream still terminates cleanly
+    expect(events.at(-1)?.error).toBe(true);
+  });
+
+  it('classifies a thrown 429 so the client can offer a retry', async () => {
+    mocks.queryMock.mockImplementation(async function* () {
+      throw Object.assign(new Error('Too Many Requests'), { status: 429 });
+    });
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'rate_limit' });
+    expect(events.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('marks the final done as failed when the provider reported an error', async () => {
+    scriptProvider([
+      { type: 'error', message: 'Not logged in', code: 'auth', provider: 'claude' },
+      { type: 'done', error: true, provider: 'claude' },
+    ]);
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'auth' });
+    expect(events.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('leaves the error flag off a turn that succeeded', async () => {
+    scriptProvider([{ type: 'text', content: 'fine', provider: 'claude' }]);
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+    expect(events.at(-1)?.type).toBe('done');
+    expect(events.at(-1)?.error).toBeUndefined();
+  });
+});
+
+describe('no model configured', () => {
+  /** Nothing the SDK could authenticate with. */
+  const clearCredentials = () => {
+    for (const k of [
+      'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_VERTEX',
+      'AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_PROFILE', 'AWS_BEARER_TOKEN_BEDROCK',
+      // No credential store either (it is keyed from this).
+      'AIME_CRED_KEY',
+    ]) vi.stubEnv(k, '');
+  };
+
+  it('fails fast with no_model and never starts the SDK', async () => {
+    clearCredentials();
+    const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
+
+    expect(mocks.queryMock).not.toHaveBeenCalled();
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'no_model' });
+    expect(events.at(-1)).toMatchObject({ type: 'done', error: true });
+  });
+
+  it('lets a request key through', async () => {
+    clearCredentials();
+    await post('chat', { message: 'hi', chatId: 'c1', apiKey: 'sk-ant-user' });
+    expect(providerParams().apiKey).toBe('sk-ant-user');
+  });
+
+  it('lets a user-added provider with a base URL through', async () => {
+    clearCredentials();
+    await post('chat', {
+      message: 'hi',
+      chatId: 'c1',
+      model: 'llama3',
+      providerConfig: { providerId: 'local', transport: 'anthropic-native', baseUrl: 'http://127.0.0.1:11434' },
+    });
+    expect(mocks.queryMock).toHaveBeenCalled();
+  });
+
+  it('refuses a capability-only provider, which cannot drive a turn', async () => {
+    clearCredentials();
+    const { events } = await post('chat', {
+      message: 'hi',
+      chatId: 'c1',
+      apiKey: 'fal-key',
+      model: 'flux',
+      providerConfig: { providerId: 'fal', transport: 'native-fal' },
+    });
+    expect(mocks.queryMock).not.toHaveBeenCalled();
+    expect(events.find((e) => e.type === 'error')).toMatchObject({ code: 'no_model' });
   });
 });
 
@@ -188,7 +280,7 @@ describe('provider parameter assembly', () => {
       // plus the in-app plumbing PLUMBING_TOOLS exempts: asking, delegating,
       // todos, canvas and the connector card. None acts on the world, and
       // TOOL_PROFILES never enumerated them.
-      'AskUserQuestion', 'Agent', 'spawn_agent', 'TodoWrite',
+      'AskUserQuestion', 'Agent', 'TodoWrite',
       'mcp__aime__canvas', 'mcp__aime__RequestConnector',
     ]);
     expect(allowed.length).toBeGreaterThan(0);
@@ -476,21 +568,23 @@ describe('agent routing', () => {
     triggers: ['research'],
   };
 
-  it('routes trigger-matched agents: model override + role prompt', async () => {
+  it('routes trigger-matched agents: role prompt, and the model from Settings — not the agent’s pin', async () => {
     mocks.loadAgentsMock.mockReturnValue([researcher]);
     mocks.matchAgentMock.mockReturnValue(researcher);
     mocks.readAgentPromptMock.mockReturnValue('You are a careful researcher.');
 
-    await post('chat', { message: 'research the market', chatId: 'c1' });
+    await post('chat', { message: 'research the market', chatId: 'c1', model: 'vendor/model-x' });
 
-    expect(providerParams().model).toBe('claude-opus-4-6');
+    // The route the client resolved from the tier grid wins; `model:` in
+    // AGENTS.md used to override it — a second place to pick a model.
+    expect(providerParams().model).toBe('vendor/model-x');
     const prompt = promptText();
     expect(prompt).toContain('agent-role name=\\"researcher\\"');
     expect(prompt).toContain('You are a careful researcher.');
   });
 
   it('binds explicitly via sessionControls.agentName without trigger matching', async () => {
-    const coder = { name: 'coder', description: '', model: 'sonnet' };
+    const coder = { name: 'coder', description: '', model: 'haiku' };
     mocks.loadAgentsMock.mockReturnValue([coder]);
 
     await post('chat', {
@@ -500,7 +594,21 @@ describe('agent routing', () => {
     });
 
     expect(mocks.matchAgentMock).not.toHaveBeenCalled();
-    expect(providerParams().model).toBe('sonnet');
+    // Bound, but its pin is not a model choice: the surface default stands.
+    expect(providerParams().model).not.toBe('haiku');
+  });
+
+  it('never sends an agent’s Claude pin to a user-added provider', async () => {
+    mocks.loadAgentsMock.mockReturnValue([researcher]);
+    mocks.matchAgentMock.mockReturnValue(researcher);
+    await post('chat', {
+      message: 'research the market',
+      chatId: 'c1',
+      model: 'moonshotai/kimi-k2',
+      providerConfig: { providerId: 'or', transport: 'anthropic-native', baseUrl: 'https://openrouter.ai/api' },
+      apiKey: 'sk-or-test',
+    });
+    expect(providerParams().model).toBe('moonshotai/kimi-k2');
   });
 
   it('lets a session model override beat the agent model', async () => {
@@ -519,52 +627,219 @@ describe('agent routing', () => {
 });
 
 describe('memory extraction', () => {
-  it('emits memory_extract when the response is substantial', async () => {
-    scriptProvider([
-      { type: 'text', content: 'a'.repeat(60), provider: 'claude' },
-    ]);
-    mocks.extractMemoriesMock.mockResolvedValue([
-      { content: 'User works on Quarry', category: 'fact', tags: [], confidence: 0.8 },
-    ]);
+  const substantial = () => scriptProvider([{ type: 'text', content: 'a'.repeat(60), provider: 'claude' }]);
+
+  // The queue is a file under the data dir: keep it out of the real home.
+  let home: string;
+  beforeEach(async () => {
+    const { mkdtemp } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    home = await mkdtemp(path.join(os.tmpdir(), 'aime-route-memory-'));
+    mocks.homeRef.value = home;
+  });
+  afterEach(async () => {
+    const { rm } = await import('fs/promises');
+    mocks.homeRef.value = null;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('runs after done, on the cheap tier, and does not hold the stream open', async () => {
+    substantial();
+    // An extraction that never finishes must not delay the turn at all.
+    mocks.extractMemoriesMock.mockReturnValue(new Promise(() => {}));
 
     const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
 
+    expect(events.at(-1)?.type).toBe('done');
+    expect(events.some((e) => e.type === 'memory_extract')).toBe(false);
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalled());
     /*
-     * The fourth argument is the model the turn ran on, and it is the point.
-     * Extraction used to hardcode `claude-haiku-4-5-20251001` and build a bare
-     * Anthropic client; with ANTHROPIC_BASE_URL pointing at the llm-proxy, that
-     * id reached whatever provider the user configured and came back
-     * "not a valid model ID" — on every turn, silently, for anyone not on
-     * Anthropic.
+     * The built-in cheap tier, as an API id — not the turn's model. Extraction
+     * used to run on the turn's model, so an Opus turn paid for a second Opus
+     * call, and it sent the bare SDK alias (`sonnet`), which the Messages API
+     * rejects.
      */
-    expect(mocks.extractMemoriesMock).toHaveBeenCalledWith(
-      'hi',
-      'a'.repeat(60),
-      undefined,
-      'sonnet',
+    const [msg, response, , model, opts] = mocks.extractMemoriesMock.mock.calls[0];
+    expect([msg, response, model]).toEqual(['hi', 'a'.repeat(60), 'claude-haiku-4-5']);
+    expect((opts as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('queues what it found on disk for the renderer to pull, not on a later stream', async () => {
+    substantial();
+    let finish!: (v: unknown[]) => void;
+    mocks.extractMemoriesMock.mockReturnValue(new Promise((r) => { finish = r; }));
+
+    await post('chat', { message: 'hi', chatId: 'mem-1' });
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalledTimes(1));
+
+    /*
+     * The pull that follows `done` must be able to wait for this extraction:
+     * it is registered before `done` was written, and settles only once the
+     * result is on disk.
+     */
+    let settled = false;
+    const waiting = extractionsSettled(5_000).then(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+    finish([{ content: 'User works on AIME', category: 'fact', tags: [], confidence: 0.8 }]);
+    await waiting;
+
+    expect(await listPendingMemories()).toEqual([
+      expect.objectContaining({ chatId: 'mem-1', content: 'User works on AIME', category: 'fact', confidence: 0.8 }),
+    ]);
+
+    // Nothing rides on the next turn's stream any more.
+    scriptProvider([]);
+    const next = await post('chat', { message: 'and now', chatId: 'mem-1' });
+    expect(next.events.some((e) => e.type === 'memory_extract')).toBe(false);
+  });
+
+  it('releases a waiting pull even when extraction fails', async () => {
+    substantial();
+    mocks.extractMemoriesMock.mockRejectedValue(new Error('model down'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await post('chat', { message: 'hi', chatId: 'mem-1' });
+      await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalledTimes(1));
+      const started = Date.now();
+      await extractionsSettled(5_000);
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(await listPendingMemories()).toEqual([]);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('uses the turn’s own model on a user-added provider, whose tiers the server cannot see', async () => {
+    substantial();
+    await post('chat', {
+      message: 'hi',
+      chatId: 'c1',
+      model: 'deepseek/deepseek-v4-pro',
+      providerConfig: { providerId: 'or', transport: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1' },
+      apiKey: 'sk-or',
+    });
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalled());
+    const [, , key, model, opts] = mocks.extractMemoriesMock.mock.calls[0];
+    expect(key).toBe('sk-or');
+    expect(model).toBe('deepseek/deepseek-v4-pro');
+    expect((opts as { baseUrl?: string }).baseUrl).toContain('/api/llm-proxy/or/');
+  });
+
+  it('skips a turn that failed', async () => {
+    scriptProvider([
+      { type: 'text', content: 'a'.repeat(60), provider: 'claude' },
+      { type: 'error', message: 'overloaded', code: 'overloaded', provider: 'claude' },
+    ]);
+    await post('chat', { message: 'hi', chatId: 'c1' });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mocks.extractMemoriesMock).not.toHaveBeenCalled();
+  });
+
+  it('skips a turn whose client had already gone', async () => {
+    const controller = new AbortController();
+    mocks.queryMock.mockImplementation(async function* () {
+      yield { type: 'text', content: 'a'.repeat(60), provider: 'claude' };
+      controller.abort();
+    });
+    const res = await POST(
+      new NextRequest('http://localhost/api/chat/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'hi', chatId: 'c1' }),
+        signal: controller.signal,
+      }),
+      { params: Promise.resolve({ surfaceId: 'chat' }) },
     );
-    const memEvent = events.find((e) => e.type === 'memory_extract');
-    expect(memEvent).toBeDefined();
-    expect((memEvent!.memories as unknown[])).toHaveLength(1);
+    await res.text().catch(() => '');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mocks.extractMemoriesMock).not.toHaveBeenCalled();
   });
 
   it('skips extraction for short responses and when disabled', async () => {
     scriptProvider([{ type: 'text', content: 'short', provider: 'claude' }]);
     await post('chat', { message: 'hi', chatId: 'c1' });
+    await new Promise((r) => setTimeout(r, 10));
     expect(mocks.extractMemoriesMock).not.toHaveBeenCalled();
 
-    scriptProvider([{ type: 'text', content: 'a'.repeat(60), provider: 'claude' }]);
+    substantial();
     await post('chat', { message: 'hi', chatId: 'c1', autoExtractMemories: false });
+    await new Promise((r) => setTimeout(r, 10));
     expect(mocks.extractMemoriesMock).not.toHaveBeenCalled();
   });
 
   it('keeps the stream healthy when extraction fails', async () => {
-    scriptProvider([{ type: 'text', content: 'a'.repeat(60), provider: 'claude' }]);
+    substantial();
     mocks.extractMemoriesMock.mockRejectedValue(new Error('haiku down'));
 
     const { events } = await post('chat', { message: 'hi', chatId: 'c1' });
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(events.at(-1)?.type).toBe('done');
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalled());
+  });
+});
+
+describe('document extraction', () => {
+  it('clears its 30s timeout once extraction settles', async () => {
+    // Regression: the timer stayed armed for the full 30s after every
+    // extraction, holding the handler's closure — attachment included.
+    const { mkdtemp, rm } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    const home = await mkdtemp(path.join(os.tmpdir(), 'aime-route-extract-'));
+    mocks.homeRef.value = home;
+    const setSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout');
+    try {
+      await post('chat', {
+        message: 'read this',
+        chatId: 'extract-1',
+        attachments: [{ name: 'notes.md', content: Buffer.from('# hi').toString('base64'), type: 'text/markdown', category: 'document' }],
+      });
+      const extractionTimers = setSpy.mock.calls
+        .map((call, i) => ({ delay: call[1], handle: setSpy.mock.results[i]?.value }))
+        .filter((t) => t.delay === 30000);
+      expect(extractionTimers).toHaveLength(1);
+      expect(clearSpy.mock.calls.map((c) => c[0])).toContain(extractionTimers[0].handle);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+      mocks.homeRef.value = null;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('extracted documents get unique names', () => {
+  it('two same-named attachments no longer overwrite each other', async () => {
+    const { mkdtemp, rm, readFile } = await import('fs/promises');
+    const os = await import('os');
+    const path = await import('path');
+    const home = await mkdtemp(path.join(os.tmpdir(), 'aime-route-docs-'));
+    mocks.homeRef.value = home;
+    try {
+      const { events } = await post('cowork', {
+        message: 'compare these',
+        chatId: 'docs-1',
+        attachments: [
+          { name: 'notes.md', content: Buffer.from('# first draft').toString('base64'), type: 'text/markdown', category: 'document' },
+          { name: 'notes.md', content: Buffer.from('# second draft').toString('base64'), type: 'text/markdown', category: 'document' },
+        ],
+      });
+      const paths = events
+        .filter((e) => e.type === 'document_extracted')
+        .map((e) => e.extractedPath as string);
+      expect(paths).toHaveLength(2);
+      expect(new Set(paths).size).toBe(2);
+      expect(paths.every((p) => p.includes(`${path.sep}documents${path.sep}`))).toBe(true);
+      const bodies = await Promise.all(paths.map((p) => readFile(p, 'utf-8')));
+      expect(bodies.join('\n')).toContain('first draft');
+      expect(bodies.join('\n')).toContain('second draft');
+    } finally {
+      mocks.homeRef.value = null;
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -969,5 +1244,60 @@ describe('a disconnected client stops the resume loop', () => {
     });
     await post('chat', { message: 'build a deck', chatId: 'c1' });
     expect(call).toBe(2);
+  });
+});
+
+/*
+ * A refused reply the SDK re-ran on a fallback model. The client takes it off
+ * the transcript by segment; the route has its own copy of the reply — the one
+ * memory extraction reads — and must drop it there too.
+ */
+describe('a retracted refusal', () => {
+  it('is dropped from the reply memory extraction reads, and its text is not relayed again', async () => {
+    const kept = 'Here is the answer you asked for, in full. '.repeat(2);
+    scriptProvider([
+      { type: 'text', content: 'I will explain how to REFUSED', segment: 'x:1', provider: 'claude' },
+      { type: 'retract', segments: ['x:1'], toolUseIds: [], texts: ['I will explain how to REFUSED'], provider: 'claude' },
+      { type: 'text', content: kept, segment: 'x:2', provider: 'claude' },
+    ]);
+    const { events } = await post('chat', { message: 'hi', chatId: 'refused-1' });
+
+    const retract = events.find((e) => e.type === 'retract');
+    expect(retract).toMatchObject({ segments: ['x:1'], toolUseIds: [] });
+    expect(retract).not.toHaveProperty('texts');
+
+    await vi.waitFor(() => expect(mocks.extractMemoriesMock).toHaveBeenCalled());
+    expect(mocks.extractMemoriesMock.mock.calls[0][1]).toBe(kept);
+  });
+});
+
+/*
+ * Code's permission mode is a security choice the CLIENT makes, so the route
+ * decides where it may be made: only on Code, only from the menu's allowlist.
+ * The provider checks again (claude-provider.permission-mode.test.ts); this is
+ * the first of the two locks.
+ */
+describe('permission mode', () => {
+  it.each(['default', 'acceptEdits', 'plan', 'bypass'])('forwards "%s" for the Code surface', async (mode) => {
+    await post('code', { message: 'hi', chatId: 'c1', permissionMode: mode });
+    expect(providerParams().permissionMode).toBe(mode);
+  });
+
+  it('refuses a mode the menu does not offer, rather than falling back to a looser one', async () => {
+    for (const mode of ['bypassPermissions', 'dontAsk', 'auto', 42, { mode: 'plan' }]) {
+      const res = await post('code', { message: 'hi', chatId: 'c1', permissionMode: mode });
+      expect(res.status).toBe(400);
+    }
+    expect(mocks.queryMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['chat', 'cowork', 'browser', 'assistant'])('never passes one on for %s', async (surfaceId) => {
+    await post(surfaceId, { message: 'hi', chatId: 'c1', permissionMode: 'bypass' });
+    expect(providerParams().permissionMode).toBeUndefined();
+  });
+
+  it('leaves Code on its surface default when none is sent', async () => {
+    await post('code', { message: 'hi', chatId: 'c1' });
+    expect(providerParams().permissionMode).toBeUndefined();
   });
 });

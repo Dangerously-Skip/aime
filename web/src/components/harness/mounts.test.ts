@@ -15,6 +15,25 @@ const read = (...p: string[]) => fs.readFileSync(path.join(process.cwd(), 'src',
 const cowork = read('components', 'surfaces', 'cowork', 'cowork-surface.tsx');
 const codeSurface = read('components', 'surfaces', 'code', 'code-surface.tsx');
 const layout = read('components', 'surfaces', 'code', 'workspace', 'workspace-layout.tsx');
+const composer = read('components', 'shared', 'composer', 'composer.tsx');
+
+/**
+ * Cowork's two composer states are one `<Composer {...composerProps}>`, so a
+ * control reaches both by being in those props once — and the shared Composer
+ * must actually RENDER the slot it is handed.
+ */
+function coworkComposerCarries(tag: string, slot: 'header' | 'belowInput' | 'toolbarStart') {
+  const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
+  const active = cowork.slice(cowork.indexOf('/* ── Active state'));
+  expect(empty).toContain('<Composer {...composerProps}');
+  expect(active).toContain('<Composer {...composerProps}');
+  const props = /const composerProps = \{[\s\S]*?\n {2}\};/.exec(cowork)?.[0] ?? '';
+  expect(props, `composerProps does not pass ${slot}`).toMatch(new RegExp(`\\b${slot}:`));
+  // The slot's content is built in this file, up to and including the props.
+  const built = cowork.slice(0, cowork.indexOf('const composerProps = {') + props.length);
+  expect(built).toContain(tag);
+  expect(composer, `Composer never renders {${slot}}`).toContain(`{${slot}}`);
+}
 const slotTypes = read('lib', 'code-workspace', 'types.ts');
 
 describe('the goal panel is mounted on both surfaces', () => {
@@ -131,11 +150,7 @@ describe('the entry point is where the user actually is', () => {
      * anything mounted only there is invisible at the one moment it is wanted:
      * folder chosen, nothing typed.
      */
-    const emptyBranch = cowork.slice(
-      cowork.indexOf('{!hasMessages ? ('),
-      cowork.indexOf('/* ── Active state'),
-    );
-    expect(emptyBranch).toContain('<GoalModeToggle');
+    coworkComposerCarries('<GoalModeToggle', 'toolbarStart');
   });
 
   it('shows a run’s status without asking to start another', () => {
@@ -221,11 +236,8 @@ describe('goal mode reaches every composer', () => {
      * It was only in the empty state, so a conversation that had already said
      * something — exactly where a follow-up goal starts — could not begin one.
      */
-    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
-    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
-    expect(empty).toContain('<GoalModeToggle');
-    expect(active).toContain('<GoalModeToggle');
-    expect(active).toContain('<GoalModeBar');
+    coworkComposerCarries('<GoalModeToggle', 'toolbarStart');
+    coworkComposerCarries('<GoalModeBar', 'belowInput');
   });
 
   it('Code offers it too — it was left out of the first pass entirely', () => {
@@ -237,11 +249,14 @@ describe('goal mode reaches every composer', () => {
     /*
      * And the composer must RENDER the slots, not merely be handed them.
      * Checking the file contained the component name was satisfied by the call
-     * site alone, so deleting `{goalToggle}` from the composer body left it
-     * green — a toggle passed to a component that never renders it.
+     * site alone, so a toggle passed to a component that never renders it
+     * stayed green. Code uses the shared Composer: the toggle and the bar go
+     * into its toolbar and below-input slots, which it renders.
      */
-    expect(codeSurface).toContain('{goalToggle}');
-    expect(codeSurface).toContain('{goalBar}');
+    expect(codeSurface).toMatch(/toolbarStart=\{[\s\S]{0,300}<GoalModeToggle/);
+    expect(codeSurface).toMatch(/belowInput=\{goalMode \? \([\s\S]{0,40}<GoalModeBar/);
+    expect(composer).toContain('{toolbarStart}');
+    expect(composer).toContain('{belowInput}');
   });
 
   it('Code’s send branches on the mode rather than always chatting', () => {
@@ -250,8 +265,7 @@ describe('goal mode reaches every composer', () => {
   });
 
   it('Code names its chat from the objective too', () => {
-    const naming = /const untitled[\s\S]{0,400}?\}\)/.exec(codeSurface)?.[0] ?? '';
-    expect(naming).toMatch(/if \(untitled\)/);
+    const naming = /if \(isUntitled\(existing\?\.title\)\)[\s\S]{0,300}?\}\)/.exec(codeSurface)?.[0] ?? '';
     expect(naming).toContain('title:');
   });
 });
@@ -280,9 +294,8 @@ describe('the goal panel cannot take the surface down', () => {
   it('Code shows status under the COMPOSER, not only in the panel', () => {
     // Feedback that a goal has started must not depend on a panel being
     // placeable — that is what left the last run with no indication at all.
-    expect(codeSurface).toContain('goalStatus=');
-    expect(codeSurface).toContain('GoalRunStatus');
-    expect(codeSurface).toContain('{goalStatus}');
+    // Rendered right after the composer in the chat slot.
+    expect(codeSurface).toMatch(/<Composer[\s\S]*?\/>\s*(\{\/\*[\s\S]*?\*\/\}\s*)?<GoalRunStatus/);
   });
 });
 
@@ -307,11 +320,13 @@ describe('regressions the review found — UI', () => {
   const transcript = read('components', 'harness', 'use-goal-transcript.ts');
   const route = read('app', 'api', 'harness', 'route.ts');
 
-  it('sends the user’s BYOK key, like every other surface', () => {
-    // Without it a Settings-only key user gets "Not logged in · Please run
-    // /login" — the same failure 335e0ca fixed one layer down.
-    expect(startHook).toContain('anthropicApiKey');
-    expect(startHook).toMatch(/apiKey:\s*anthropicApiKey/);
+  it('never sends the BYOK key — the server reads the saved one', () => {
+    // A Settings-only key user once got "Not logged in · Please run /login"
+    // here because nothing supplied the key. The provider now reads it from the
+    // credential store (claude-provider.stored-key.test.ts proves that against
+    // a real store), so the browser has no reason to hold or send it.
+    expect(startHook).not.toContain('anthropicApiKey');
+    expect(startHook).not.toMatch(/\bapiKey:/);
   });
 
   it('answering RESTARTS the run, not just records the answer', () => {
@@ -374,7 +389,10 @@ describe('resuming a run carries credentials', () => {
   it('start and resume share ONE route builder, so they cannot diverge again', () => {
     const hook = read('components', 'harness', 'use-start-goal.ts');
     expect(hook).toContain('export function useHarnessRoute');
-    expect(hook).toMatch(/apiKey:\s*anthropicApiKey/);
+    // Exactly one place builds the route; the start path spreads it too.
+    expect(hook.match(/providerConfig: route\?\.providerConfig/g)).toHaveLength(1);
+    expect(hook).toMatch(/const harnessRoute = useHarnessRoute\(modelRoute\)/);
+    expect(hook).toMatch(/\.\.\.harnessRoute\(\)/);
   });
 });
 
@@ -390,15 +408,13 @@ describe('the question is answerable from the conversation', () => {
   });
 
   it('Cowork has it in BOTH composer states', () => {
-    const empty = cowork.slice(cowork.indexOf('{!hasMessages ? ('), cowork.indexOf('/* ── Active state'));
-    const active = cowork.slice(cowork.indexOf('/* ── Active state'));
-    expect(empty).toContain('<GoalQuestion');
-    expect(active).toContain('<GoalQuestion');
+    coworkComposerCarries('<GoalQuestion', 'header');
   });
 
   it('Code renders the slot, not merely receives it', () => {
     // A control handed to a component that never renders it is the recurring
     // shape of this whole feature's bugs.
-    expect(codeSurface).toContain('{goalQuestion}');
+    expect(codeSurface).toMatch(/header=\{[\s\S]{0,300}<GoalQuestion/);
+    expect(composer).toContain('{header}');
   });
 });

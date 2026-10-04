@@ -11,7 +11,8 @@ import { test, expect } from '@playwright/test';
  *
  * So this drives the whole renderer chain in a real browser:
  *
- *     minute tick → useCron → isJobDue → onFire → surface + recorded run
+ *     minute tick → useCron → isJobDue → onFire → the job's surface runs it
+ *     (in the background — the active surface is not switched) + recorded run
  *
  * Jobs live in the ORDER MANIFEST now (DR-24). The browser cron store this
  * suite used to seed no longer exists, and an attended order is what a cron job
@@ -53,8 +54,18 @@ const ORDER = {
   updatedAt: 1,
 };
 
-/** Stand in for the preload bridge, and seed a completed onboarding. */
+/**
+ * Stand in for the preload bridge, seed a completed onboarding, and report a
+ * usable built-in model. Without one, every surface now shows "Connect a
+ * model" instead of sending, which is correct and is not what this spec is
+ * about — the chat request itself is intercepted below.
+ */
 async function prepare(page: import('@playwright/test').Page) {
+  await page.route('**/api/models', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, anthropic: true } });
+  });
   await page.addInitScript(
     ([key, value]) => window.localStorage.setItem(key, value),
     ['aime:settings', JSON.stringify({ state: { onboardingComplete: true }, version: 6 })],
@@ -104,12 +115,22 @@ test.describe('a due job reaches its surface', () => {
     expect(listeners, 'nothing subscribed to the minute tick').toBeGreaterThan(0);
   });
 
-  test('a due job switches to its surface', async ({ page }) => {
+  test('a due job runs WITHOUT pulling you off the surface you are on', async ({ page }) => {
+    /*
+     * It used to switch the active surface when a job fired, so at 9:00 sharp
+     * whatever you were typing was yanked away. Every surface is mounted all
+     * the time, so the job runs in the background and a notification says so.
+     */
+    const posts: string[] = [];
+    await page.route('**/api/chat/**', async (route) => {
+      posts.push(route.request().url());
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: {"type":"done"}\n\n' });
+    });
     await page.getByRole('button', { name: 'Code', exact: true }).click().catch(() => {});
     await fireTick(page);
-    // The Browser surface's own chrome proves it is VISIBLE, not merely mounted
-    // — every surface always is.
-    await expect(page.getByPlaceholder('Enter URL or search...')).toBeVisible({ timeout: 10_000 });
+    await expect.poll(() => posts.length, { timeout: 15_000 }).toBeGreaterThan(0);
+    // The Browser surface's own chrome would prove it had been brought forward.
+    await expect(page.getByPlaceholder('Enter URL or search...')).not.toBeVisible();
   });
 
   test('THE JOB ACTUALLY RUNS — a turn starts on that surface', async ({ page }) => {
@@ -128,7 +149,10 @@ test.describe('a due job reaches its surface', () => {
       });
     });
 
-    await fireTick(page);
+    // A minute the previous test did not fire in. That test ran this same job,
+    // and a cron job deliberately never fires twice in one minute (due.ts), so
+    // ticking at "now" again tested the double-fire guard, not the job.
+    await fireTick(page, Date.now() + 5 * 60_000);
     await expect.poll(() => posts.length, { timeout: 15_000 }).toBeGreaterThan(0);
     expect(posts.join(' ')).toContain('/api/chat/browser');
   });

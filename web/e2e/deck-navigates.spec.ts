@@ -81,15 +81,28 @@ async function driveDeck(page: Page, html: string, steps: number) {
       f.setAttribute('sandbox', 'allow-scripts');
       f.srcdoc = html.replace(/(<body[^>]*>)/i, `$1${probe}`).replace('</body>', `${readback}</body>`);
       f.style.cssText = 'width:800px;height:450px';
+      /*
+       * Wait for the frame's `load` — every deck script has run by then, so its
+       * step listener exists — rather than a fixed 3 s. Under parallel e2e load
+       * the fixed wait sometimes elapsed first: the steps were posted to a deck
+       * with no listener yet and it reported slide 0, the very bug this guards.
+       */
+      const loaded = new Promise((r) => f.addEventListener('load', r, { once: true }));
       document.body.appendChild(f);
-      await new Promise((r) => setTimeout(r, 3000));
+      await loaded;
+      await new Promise((r) => setTimeout(r, 300));
 
       for (let i = 0; i < steps; i++) {
         f.contentWindow!.postMessage({ type: 'deck:step', delta: 1 }, '*');
         await new Promise((r) => setTimeout(r, 700));
       }
-      f.contentWindow!.postMessage({ type: 'deck:probe' }, '*');
-      await new Promise((r) => setTimeout(r, 400));
+      // Read back until the deck reports the expected slide or 5 s pass — a
+      // slow transition must not read as "did not move".
+      const deadline = Date.now() + 5000;
+      do {
+        f.contentWindow!.postMessage({ type: 'deck:probe' }, '*');
+        await new Promise((r) => setTimeout(r, 200));
+      } while (active !== steps && Date.now() < deadline);
 
       window.removeEventListener('message', onMsg);
       f.remove();

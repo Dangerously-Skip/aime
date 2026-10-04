@@ -31,10 +31,15 @@ interface Project {
   icon: string
 }
 
-interface AttachmentMenuProps {
+export interface AttachmentMenuProps {
   onFileSelect: (file: AttachmentFile) => void
-  onWebSearchToggle: () => void
-  webSearchEnabled: boolean
+  /**
+   * Omit it and the web-search item is not rendered. A toggle with no handler
+   * behind it (Cowork's docked composer passed a no-op) is a control that
+   * claims to do something and does nothing.
+   */
+  onWebSearchToggle?: () => void
+  webSearchEnabled?: boolean
   currentProjectId?: string | null
   onAddToProject?: (projectId: string) => void
   onNewProject?: () => void
@@ -61,7 +66,7 @@ const SIZE_LIMITS: Record<string, number> = {
   spreadsheet: 50 * 1024 * 1024,   // 50MB
   presentation: 50 * 1024 * 1024,  // 50MB
   audio: 100 * 1024 * 1024,        // 100MB
-  video: 500 * 1024 * 1024,        // 500MB
+  video: 200 * 1024 * 1024,        // 200MB — the server upload cap (lib/uploads/store MAX_UPLOAD_BYTES)
 }
 
 /** Threshold above which files are uploaded via /api/upload instead of base64 in JSON body */
@@ -204,6 +209,8 @@ export function AttachmentMenu({
               variant="ghost"
               size="icon"
               className="h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground"
+              aria-label="Attach files"
+              title="Attach files"
             />
           }
         >
@@ -249,12 +256,12 @@ export function AttachmentMenu({
             </>
           )}
 
-          {!hideWebSearch && (
+          {!hideWebSearch && onWebSearchToggle && (
             <>
               <DropdownMenuSeparator />
 
               <DropdownMenuCheckboxItem
-                checked={webSearchEnabled}
+                checked={!!webSearchEnabled}
                 onClick={onWebSearchToggle}
               >
                 <Globe className="h-4 w-4" />

@@ -162,3 +162,60 @@ describe('useRunRecorder', () => {
     expect(persisted()).toHaveLength(1);
   });
 });
+
+/*
+ * Conversations stream concurrently, so one surface has several Runs open at
+ * once. The recorder used to hold ONE: starting B overwrote A's id, A's Run was
+ * never closed, and A finishing closed B's.
+ */
+describe('useRunRecorder — one Run per conversation', () => {
+  const status = (id: string) => useRunStore.getState().getRun(id)?.status;
+
+  it('two concurrent turns each end their own Run', () => {
+    const { result } = renderHook(() => useRunRecorder('chat'));
+    const a = result.current.begin({ trigger: 'chat', chatId: 'A' });
+    const b = result.current.begin({ trigger: 'chat', chatId: 'B' });
+
+    result.current.fail('boom', 'A');
+    expect(status(a)).toBe('failed');
+    expect(status(b), "A's failure closed B's run").toBe('running');
+
+    result.current.succeed('B');
+    expect(status(b)).toBe('succeeded');
+  });
+
+  it('usage and a reported failure stay with their conversation', () => {
+    const { result } = renderHook(() => useRunRecorder('chat'));
+    const a = result.current.begin({ trigger: 'chat', chatId: 'A' });
+    const b = result.current.begin({ trigger: 'chat', chatId: 'B' });
+    result.current.onUsage(usage({ cost: 1 }), 'A');
+    result.current.onUsage(usage({ cost: 2 }), 'B');
+    result.current.noteFailure('A failed', 'A');
+
+    result.current.succeed('B');
+    result.current.succeed('A');
+
+    const run = (id: string) => useRunStore.getState().getRun(id)!;
+    expect(run(a)).toMatchObject({ status: 'failed', error: 'A failed' });
+    expect(run(a).cost?.totalUsd).toBe(1);
+    expect(run(b)).toMatchObject({ status: 'succeeded' });
+    expect(run(b).cost?.totalUsd).toBe(2);
+  });
+
+  it('a turn begun without a conversation is found by any chatId', () => {
+    // The stream hook hands every callback a chatId; a caller that began its
+    // Run without one must still have that Run closed.
+    const { result } = renderHook(() => useRunRecorder('assistant'));
+    const id = result.current.begin({ trigger: 'manual' });
+    result.current.onUsage(usage(), 'whatever');
+    result.current.succeed('whatever');
+    expect(status(id)).toBe('succeeded');
+  });
+
+  it('an end for a conversation with no Run open closes nothing', () => {
+    const { result } = renderHook(() => useRunRecorder('chat'));
+    const a = result.current.begin({ trigger: 'chat', chatId: 'A' });
+    result.current.cancel('B');
+    expect(status(a)).toBe('running');
+  });
+});

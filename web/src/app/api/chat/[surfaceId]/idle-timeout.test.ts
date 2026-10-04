@@ -90,8 +90,14 @@ beforeEach(() => {
   mocks.queryMock.mockReset();
   mocks.abortMock.mockReset();
   mocks.timeoutSecs.value = 1;
+  // The route refuses a turn with no model credentials before calling the
+  // provider (see lib/models/credential-check.ts).
+  vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe('a run that keeps producing output', () => {
   it('IS NOT KILLED for outliving the timeout — the reported bug', async () => {

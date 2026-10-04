@@ -689,12 +689,13 @@ export function WorkspaceLayout({ workspace, chatId, onFolderChange, slots = {},
       if (!panel.api.id.startsWith("diff:")) continue;
       panel.api.updateParameters({ fromRef: baseBranch ?? undefined });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     // `previewSlot` belongs here for the same reason `slots` does: dockview
     // panels keep the params they were CREATED with, so a value that changes
     // later only reaches a panel through updateParameters. Without it the
     // preview would work only if its panel happened to be created after the
     // url arrived — which is never, since the panel is how you set the url.
+    // `ctx` itself is rebuilt every render; these are the fields it carries.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyOpen, slots, previewSlot, workspace, baseBranch]);
 
   // Add / remove the terminal panel reactively

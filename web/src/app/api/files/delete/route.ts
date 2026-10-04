@@ -1,45 +1,51 @@
 export const runtime = 'nodejs';
 
-import fs from 'fs';
-import path from 'path';
+import { promises as fs } from 'fs';
+import { resolveDeletableFile } from '@/lib/security/user-file-access';
 
 /**
  * POST /api/files/delete
  * Deletes a file from disk. Used by the Artifacts sidebar to remove generated files.
  * Only allows deletion of files inside the provided cowork working directory.
+ *
+ * `cwd` arrives in the request body, so it is itself checked (home/temp only,
+ * not a credential location) and both sides are compared as real paths — the
+ * old `startsWith(cwd + '/')` accepted any `cwd` the caller cared to name.
  */
 export async function POST(request: Request) {
+  let body: { path?: unknown; cwd?: unknown };
   try {
-    const { path: filePath, cwd } = await request.json();
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  const { path: filePath, cwd } = body;
 
-    if (!filePath || typeof filePath !== 'string') {
-      return Response.json({ error: 'Missing path' }, { status: 400 });
-    }
-    if (!cwd || typeof cwd !== 'string') {
-      return Response.json({ error: 'Missing cwd (working directory)' }, { status: 400 });
-    }
+  if (!filePath || typeof filePath !== 'string') {
+    return Response.json({ error: 'Missing path' }, { status: 400 });
+  }
+  if (!cwd || typeof cwd !== 'string') {
+    return Response.json({ error: 'Missing cwd (working directory)' }, { status: 400 });
+  }
 
-    const resolvedCwd = path.resolve(cwd);
-    const resolved = path.resolve(filePath);
+  const access = await resolveDeletableFile(filePath, cwd);
+  if (!access.ok) {
+    return access.reason === 'not-found'
+      ? Response.json({ error: 'File not found' }, { status: 404 })
+      : Response.json({ error: 'File is outside the working directory' }, { status: 403 });
+  }
 
-    // Only allow deletion of files within the cowork working directory
-    if (!resolved.startsWith(resolvedCwd + '/')) {
-      return Response.json({ error: 'File is outside the working directory' }, { status: 403 });
-    }
-
-    if (!fs.existsSync(resolved)) {
-      return Response.json({ error: 'File not found' }, { status: 404 });
-    }
-
-    const stat = fs.statSync(resolved);
+  try {
+    const stat = await fs.lstat(access.path);
     if (stat.isDirectory()) {
       return Response.json({ error: 'Cannot delete directories' }, { status: 400 });
     }
-
-    fs.unlinkSync(resolved);
+    await fs.unlink(access.path);
     return Response.json({ ok: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return Response.json({ error: message }, { status: 500 });
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return Response.json({ error: 'File not found' }, { status: 404 });
+    }
+    return Response.json({ error: 'Could not delete file' }, { status: 500 });
   }
 }

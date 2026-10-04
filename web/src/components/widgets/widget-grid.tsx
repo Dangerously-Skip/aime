@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useWidgetStore } from "@/stores/widget-store";
 import { parseIntervalSeconds } from "@/lib/runs/standing-order-goal";
+import { parseIntervalMs, describeIntervalMs } from "@/lib/schedule/interval";
 import type { Widget } from "@/lib/widgets/widget";
 import { WidgetTile } from "./widget-tile";
 import { Button } from "@/components/ui/button";
@@ -37,8 +38,16 @@ export function WidgetGrid({ onViewRuns }: { onViewRuns?: (goalId: string) => vo
   const [every, setEvery] = useState("");
   const [allowWeb, setAllowWeb] = useState(false);
 
+  /*
+   * VALIDATED, with the same parser the scheduler uses. An unreadable interval
+   * used to become "manual" without a word, so "every 30 mins" typed as
+   * "30 mns" produced a widget that never refreshed.
+   */
+  const everyMs = every.trim() ? parseIntervalMs(every) : null;
+  const everyError = every.trim() && everyMs === null ? `"${every.trim()}" is not an interval — try 30m, 2h or 1d` : null;
+
   const create = () => {
-    if (!recipe.trim()) return;
+    if (!recipe.trim() || everyError) return;
     const widget: Widget = {
       id: globalThis.crypto.randomUUID(),
       title: title.trim() || recipe.trim().slice(0, 40),
@@ -127,6 +136,8 @@ export function WidgetGrid({ onViewRuns }: { onViewRuns?: (goalId: string) => vo
               value={every}
               onChange={(e) => setEvery(e.target.value)}
               placeholder="Refresh every (e.g. 30m, 2h) — blank = manual"
+              aria-label="Refresh every"
+              aria-invalid={Boolean(everyError)}
               className="h-7 flex-1 text-xs"
             />
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -134,8 +145,13 @@ export function WidgetGrid({ onViewRuns }: { onViewRuns?: (goalId: string) => vo
               allow web
             </label>
           </div>
+          {everyError ? (
+            <p role="alert" className="text-[11px] text-red-600 dark:text-red-400">{everyError}</p>
+          ) : everyMs !== null ? (
+            <p className="text-[11px] text-muted-foreground">Refreshes: {describeIntervalMs(everyMs).toLowerCase()}</p>
+          ) : null}
           <div className="flex gap-2">
-            <Button size="sm" className="h-6 text-xs" onClick={create} disabled={!recipe.trim()}>
+            <Button size="sm" className="h-6 text-xs" onClick={create} disabled={!recipe.trim() || Boolean(everyError)}>
               Create
             </Button>
             <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setAdding(false)}>

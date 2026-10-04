@@ -1,11 +1,12 @@
 import { NextRequest } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { getMcpConfigPath } from '@/lib/app-paths';
+import {
+  readMcpConfig,
+  updateMcpConfig,
+  SKIP_WRITE,
+  McpConfigCorruptError,
+} from '@/lib/mcp/config-store';
 
 export const runtime = 'nodejs';
-
-const MCP_JSON_PATH = getMcpConfigPath();
 
 interface McpServerConfig {
   type: 'stdio' | 'http' | 'sse';
@@ -21,24 +22,18 @@ interface McpJson {
   mcpServers?: Record<string, McpServerConfig>;
 }
 
-function readMcpJson(): McpJson {
-  try {
-    if (fs.existsSync(MCP_JSON_PATH)) {
-      const raw = fs.readFileSync(MCP_JSON_PATH, 'utf-8');
-      return JSON.parse(raw);
-    }
-  } catch (err) {
-    console.error('[Connectors] Error reading .mcp.json:', err);
-  }
-  return { mcpServers: {} };
-}
+// A server name becomes an object key in the config; refuse the ones that
+// would reach Object.prototype instead of the map.
+const RESERVED_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
 
-function writeMcpJson(data: McpJson) {
-  const dir = path.dirname(MCP_JSON_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(MCP_JSON_PATH, JSON.stringify(data, null, 2), 'utf-8');
+function isValidServerName(name: unknown): name is string {
+  return (
+    typeof name === 'string' &&
+    name.trim() !== '' &&
+    name.length <= 128 &&
+    !RESERVED_NAMES.has(name) &&
+    !/[\u0000-\u001f\u007f]/.test(name)
+  );
 }
 
 interface ConnectorEntry {
@@ -54,7 +49,7 @@ interface ConnectorEntry {
  * GET /api/customize/connectors — List all MCP server configs
  */
 export async function GET() {
-  const mcpData = readMcpJson();
+  const mcpData = (await readMcpConfig()) as McpJson;
   const connectors: ConnectorEntry[] = [];
 
   // Add user-configured MCP servers
@@ -86,18 +81,11 @@ export async function POST(req: NextRequest) {
   }
 
   const { name, config } = body;
-  if (!name || typeof name !== 'string') {
+  if (!isValidServerName(name)) {
     return Response.json({ error: 'name is required' }, { status: 400 });
   }
   if (!config) {
     return Response.json({ error: 'config is required' }, { status: 400 });
-  }
-
-  const mcpData = readMcpJson();
-  if (!mcpData.mcpServers) mcpData.mcpServers = {};
-
-  if (mcpData.mcpServers[name]) {
-    return Response.json({ error: 'Connector already exists' }, { status: 409 });
   }
 
   const serverConfig: McpServerConfig = {
@@ -109,8 +97,24 @@ export async function POST(req: NextRequest) {
     ...(config.env && { env: config.env }),
   };
 
-  mcpData.mcpServers[name] = serverConfig;
-  writeMcpJson(mcpData);
+  let added: boolean | undefined;
+  try {
+    added = await updateMcpConfig((mcpData) => {
+      if (!mcpData.mcpServers) mcpData.mcpServers = {};
+      if (Object.hasOwn(mcpData.mcpServers, name)) return SKIP_WRITE;
+      mcpData.mcpServers[name] = { ...serverConfig };
+      return true;
+    });
+  } catch (err) {
+    if (err instanceof McpConfigCorruptError) {
+      return Response.json({ error: err.message }, { status: 409 });
+    }
+    console.error('[Connectors] Error writing MCP config:', err);
+    return Response.json({ error: 'Failed to save connector' }, { status: 500 });
+  }
+  if (!added) {
+    return Response.json({ error: 'Connector already exists' }, { status: 409 });
+  }
 
   return Response.json({
     connector: {

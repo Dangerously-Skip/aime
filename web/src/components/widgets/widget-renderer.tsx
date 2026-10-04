@@ -212,7 +212,6 @@ export function WidgetRenderer({ node, onAction }: WidgetRendererProps) {
 
     case "image":
       // Coercer guarantees a data: URL, so there is no network request here.
-      // eslint-disable-next-line @next/next/no-img-element -- data: URL only, never remote; next/image would add nothing here
       return <img src={node.src} alt={node.alt ?? ""} className="max-h-48 w-auto rounded-md" />;
 
     case "actionButton": {

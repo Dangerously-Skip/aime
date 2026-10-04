@@ -119,8 +119,8 @@ describe('widgetToGoal', () => {
     expect(widgetToGoal(widget())).toMatchObject({ capability: 'chat', tier: 'cheap' });
   });
 
-  it('needs no approval — generation is read-only', () => {
-    expect(widgetToGoal(widget()).approvalPolicy).toBe('never');
+  it('is unattended, so consequential actions are refused', () => {
+    expect(widgetToGoal(widget()).approvalPolicy).toBe('consequential');
   });
 
   it('has no schedule when refresh is manual', () => {

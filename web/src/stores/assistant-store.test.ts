@@ -164,3 +164,23 @@ describe('migrateCronJobs', () => {
     expect(store().orders).toHaveLength(1);
   });
 });
+
+describe('schedules are validated at save', () => {
+  it('an unreadable schedule is saved PAUSED with the reason, not active-and-dead', () => {
+    // The agent may hand over anything; it has already told the user it saved
+    // the order, so dropping it would be a silent loss of a different kind.
+    const id = store().addOrder({ ...orderInput, trigger: { type: 'interval', expression: 'soon' } });
+    expect(store().getOrder(id)!.status).toBe('paused');
+    const error = store().activity.find((a) => a.type === 'order-error' && a.orderId === id);
+    expect(error?.label).toMatch(/schedule not valid/);
+  });
+
+  it('spellings the tickers now read are saved active', () => {
+    for (const expression of ['90 minutes', '1.5h']) {
+      const id = store().addOrder({ ...orderInput, trigger: { type: 'interval', expression } });
+      expect(store().getOrder(id)!.status).toBe('active');
+    }
+    const cron = store().addOrder({ ...orderInput, trigger: { type: 'cron', expression: '0 9 * * MON-FRI' } });
+    expect(store().getOrder(cron)!.status).toBe('active');
+  });
+});

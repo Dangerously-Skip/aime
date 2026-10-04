@@ -37,7 +37,6 @@ function fingerprint(material: string): string {
   return h.toString(16).padStart(8, '0');
 }
 
-import { DATA_DIR_NAME } from '@/config/branding';
 
 /**
  * Durable state for a long-running goal run.

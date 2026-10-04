@@ -1,7 +1,8 @@
 'use client';
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { storageKey } from '@/config/branding';
 import {
   DEFAULT_WORKSPACE_LAYOUT,
   type PanelSlot,
@@ -40,6 +41,24 @@ export type CodeWorkspaceStore = CodeWorkspaceState & CodeWorkspaceActions;
 
 function ensure(state: CodeWorkspaceState, ws: string): WorkspaceLayout {
   return state.byWorkspace[ws] ?? DEFAULT_WORKSPACE_LAYOUT;
+}
+
+/** Persisted under the product prefix; it was `quarry:code-workspace`. */
+export const CODE_WORKSPACE_KEY = storageKey('code-workspace');
+const LEGACY_CODE_WORKSPACE_KEY = 'quarry:code-workspace';
+
+/**
+ * Read the pre-rename key when the new one is absent, so an upgrade keeps the
+ * user's layouts; every write goes to the new key.
+ */
+export function withLegacyKey(storage: Storage): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
+  return {
+    getItem: (key) =>
+      storage.getItem(key) ??
+      (key === CODE_WORKSPACE_KEY ? storage.getItem(LEGACY_CODE_WORKSPACE_KEY) : null),
+    setItem: (key, value) => storage.setItem(key, value),
+    removeItem: (key) => storage.removeItem(key),
+  };
 }
 
 export const useCodeWorkspaceStore = create<CodeWorkspaceStore>()(
@@ -188,7 +207,8 @@ export const useCodeWorkspaceStore = create<CodeWorkspaceStore>()(
         }),
     }),
     {
-      name: 'quarry:code-workspace',
+      name: CODE_WORKSPACE_KEY,
+      storage: createJSONStorage(() => withLegacyKey(localStorage)),
       // v4: chat tab now uses the `chat-tab` tabComponent (hideClose);
       //     wipe stored layouts so new chat panels regenerate with it.
       version: 4,
