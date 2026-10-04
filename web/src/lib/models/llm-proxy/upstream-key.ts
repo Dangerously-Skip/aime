@@ -1,4 +1,4 @@
-import { internalToken } from '@/lib/auth/internal-credential';
+import { internalToken, proxyToken } from '@/lib/auth/internal-credential';
 
 /**
  * The provider key to forward upstream: `x-api-key` and nothing else.
@@ -14,9 +14,11 @@ import { internalToken } from '@/lib/auth/internal-credential';
 export function upstreamKey(
   req: Request,
   internal: string | null = internalToken(),
+  scoped: string | null = proxyToken(),
 ): string | undefined {
   const xkey = req.headers.get('x-api-key')?.trim();
   if (!xkey) return undefined;
   if (internal && xkey === internal) return undefined;
+  if (scoped && xkey === scoped) return undefined;
   return xkey;
 }

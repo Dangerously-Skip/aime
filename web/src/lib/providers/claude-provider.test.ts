@@ -184,12 +184,23 @@ describe('option assembly', () => {
 
   it('never hands the local API token to the subprocess the agent runs Bash in', async () => {
     vi.stubEnv('AIME_API_TOKEN', 'local-api-token-0123456789abcdef');
-    for (const params of [{}, { apiKey: 'sk-ant-x' }]) {
+    for (const params of [
+      {},
+      { apiKey: 'sk-ant-x' },
+      // Our own llm-proxy is the case that needs SOME local credential — and
+      // gets the proxy-scoped one, which opens /api/llm-proxy/* and nothing else.
+      { baseUrl: 'http://127.0.0.1:3100/api/llm-proxy/openrouter/x' },
+    ]) {
       const { options } = await captureOptions(new ClaudeProvider(), params);
       const env = options.env as Record<string, string>;
       expect(env.AIME_API_TOKEN).toBeUndefined();
       expect(JSON.stringify(env)).not.toContain('local-api-token-0123456789abcdef');
     }
+    const { options } = await captureOptions(new ClaudeProvider(), {
+      baseUrl: 'http://127.0.0.1:3100/api/llm-proxy/openrouter/x',
+    });
+    const { proxyToken } = await import('@/lib/auth/internal-credential');
+    expect((options.env as Record<string, string>).ANTHROPIC_AUTH_TOKEN).toBe(proxyToken());
   });
 
   it('maps think levels to SDK thinking config', async () => {

@@ -102,6 +102,19 @@ describe('the proxy actually refuses unauthenticated API requests', () => {
     });
   });
 
+  it('the proxy-scoped token reaches the LLM proxy through the REAL proxy, and nothing else', async () => {
+    const { deriveProxyToken } = await import('./local-token');
+    const scoped = await deriveProxyToken(TOKEN);
+    await withEnv(TOKEN, async () => {
+      const ok = await proxy(req('/api/llm-proxy/openrouter/x', { authorization: `Bearer ${scoped}` }));
+      expect(ok.status).toBe(200);
+      for (const route of ['/api/subagent', '/api/health', '/api/identity/user-md']) {
+        const res = await proxy(req(route, { authorization: `Bearer ${scoped}` }));
+        expect(res.status, `${route} accepted the proxy-scoped token`).toBe(401);
+      }
+    });
+  });
+
   it('refuses everything when the server has no token', async () => {
     await withEnv(undefined, async () => {
       const res = await proxy(req('/api/health', { cookie: `${SESSION_COOKIE}=${TOKEN}` }));

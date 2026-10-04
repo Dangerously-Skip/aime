@@ -2483,8 +2483,9 @@ export class ClaudeProvider extends BaseProvider {
     // agent's Bash inherits this environment: with it, a turn (or a prompt
     // injection steering one) could call /api/subagent with `attended: true`
     // and start a run the user never clicked. Nothing in the subprocess needs
-    // it — the one legitimate use, our own llm-proxy, is handed it explicitly
-    // below as ANTHROPIC_AUTH_TOKEN, scoped to that base URL.
+    // it. Our own llm-proxy gets a DIFFERENT, derived token below
+    // (ANTHROPIC_AUTH_TOKEN via internalAuthEnv) that the gate accepts on
+    // /api/llm-proxy/* only — see lib/auth/local-token `deriveProxyToken`.
     const { CLAUDECODE: _cc, AIME_API_TOKEN: _apiToken, ...safeEnv } = process.env;
     queryOptions.env = {
       ...safeEnv,
@@ -2538,8 +2539,8 @@ export class ClaudeProvider extends BaseProvider {
         ...(queryOptions.env as Record<string, string> || {}),
         ANTHROPIC_BASE_URL: baseUrl,
         /*
-         * If that base URL is our own llm-proxy, the subprocess must present the
-         * local API credential too — we cannot add a header to a client we do
+         * If that base URL is our own llm-proxy, the subprocess must present a
+         * local credential too — the proxy-SCOPED one, never the API token — we cannot add a header to a client we do
          * not construct, so it goes in as ANTHROPIC_AUTH_TOKEN, which the SDK
          * sends as `Authorization: Bearer`. Harmless to override: the proxy
          * authenticates upstream with the provider key it already holds.

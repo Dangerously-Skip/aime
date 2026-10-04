@@ -18,6 +18,11 @@ describe('upstreamKey', () => {
     expect(upstreamKey(req({ 'x-api-key': LOCAL }), LOCAL)).toBeUndefined();
   });
 
+  it('refuses the proxy-scoped token as x-api-key too — it must never leave the machine', () => {
+    const SCOPED = 'scoped-proxy-token-0123456789abcdef';
+    expect(upstreamKey(req({ 'x-api-key': SCOPED }), LOCAL, SCOPED)).toBeUndefined();
+  });
+
   it('treats a blank x-api-key as absent', () => {
     expect(upstreamKey(req({ 'x-api-key': '  ' }), LOCAL)).toBeUndefined();
   });

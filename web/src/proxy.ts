@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { configuredToken, decide, sessionCookie, TOKEN_PARAM } from '@/lib/auth/local-token';
+import { configuredToken, decide, deriveProxyToken, sessionCookie, TOKEN_PARAM } from '@/lib/auth/local-token';
 
 /**
  * Authenticates the local API.
@@ -23,8 +23,9 @@ import { configuredToken, decide, sessionCookie, TOKEN_PARAM } from '@/lib/auth/
  * from the URL so it does not sit in `window.location`, get copied out of the
  * address bar, or ride along in a `Referer`.
  */
-export function proxy(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const token = configuredToken(process.env as Record<string, string | undefined>);
+  const proxyToken = token ? await deriveProxyToken(token) : null;
   const { pathname, searchParams } = req.nextUrl;
   const isApi = pathname.startsWith('/api/');
 
@@ -38,6 +39,7 @@ export function proxy(req: NextRequest) {
       tokenParam: searchParams.get(TOKEN_PARAM),
     },
     token,
+    proxyToken,
   );
 
   if (verdict.ok && verdict.setCookie) {

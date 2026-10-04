@@ -159,6 +159,16 @@ packaged, by `dev-with-port.js` in development, never written to disk. The
 window receives it once as `?t=` on the initial load; the proxy exchanges it for
 an HttpOnly cookie and redirects to strip it from the URL.
 
+**Our own inference clients get a narrower token.** BYOK traffic goes out
+through `/api/llm-proxy/*`, and the Agent SDK subprocess can only be handed a
+credential through its environment — which the agent's own Bash can read. So it
+never gets `AIME_API_TOKEN`: it gets `HMAC-SHA256(AIME_API_TOKEN,
+"aime:llm-proxy:v1")` (`deriveProxyToken` / `proxyToken`), which `decide()`
+accepts as a Bearer on `/api/llm-proxy/*` only — not as the cookie, not for
+`?t=`, not on any other route. A leaked copy buys model calls through the user's
+provider, which the agent holding it could already make; not subagents,
+identity files or connector config.
+
 **No token configured means everything is refused (503), not allowed.** A dev
 bypass here is the shape of the four security toggles that shipped doing
 nothing, except it is the one that would survive into a build on a shared

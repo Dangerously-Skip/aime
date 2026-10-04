@@ -66,6 +66,46 @@ export function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/**
+ * THE PROXY CREDENTIAL — a narrower token for one route.
+ *
+ * Our own inference clients reach `/api/llm-proxy/*` (lib/auth/internal-
+ * credential), and the Agent SDK subprocess can only be given a credential
+ * through its environment — which the agent's Bash inherits. Handing it the
+ * full API token meant any turn, or a prompt injection steering one, could
+ * read it and call every route: start a subagent claiming it was attended,
+ * write identity files, change connectors.
+ *
+ * So the subprocess gets this instead: HMAC-SHA256 of a fixed scope, keyed by
+ * the API token. Derived, not minted, so the proxy can check it with no shared
+ * state (it runs apart from the route handlers), and one-way, so it does not
+ * reveal the token it came from. `decide()` accepts it ONLY as a Bearer on
+ * LLM_PROXY_PREFIX — never as the cookie, never for `?t=`. What a leaked copy
+ * buys is model calls through the user's provider, which the agent holding it
+ * could already make.
+ */
+export const PROXY_TOKEN_SCOPE = 'aime:llm-proxy:v1';
+export const LLM_PROXY_PREFIX = '/api/llm-proxy/';
+
+const proxyTokenCache = new Map<string, Promise<string>>();
+
+/** The proxy-scoped token for an API token (Web Crypto: proxy-safe). */
+export function deriveProxyToken(token: string): Promise<string> {
+  let derived = proxyTokenCache.get(token);
+  if (!derived) {
+    derived = (async () => {
+      const enc = new TextEncoder();
+      const key = await crypto.subtle.importKey('raw', enc.encode(token), { name: 'HMAC', hash: 'SHA-256' }, false, [
+        'sign',
+      ]);
+      const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(PROXY_TOKEN_SCOPE)));
+      return Array.from(mac, (b) => b.toString(16).padStart(2, '0')).join('');
+    })();
+    proxyTokenCache.set(token, derived);
+  }
+  return derived;
+}
+
 /** The configured token, or null when the server was started without one. */
 export function configuredToken(env: Record<string, string | undefined>): string | null {
   const t = env.AIME_API_TOKEN;
@@ -123,9 +163,14 @@ export function readCookie(header: string | null, name: string): string | null {
  *   2. foreign origin       -> 403, before any credential is even considered
  *   3. valid `?t=`          -> mint the session
  *   4. cookie or bearer     -> allow
- *   5. otherwise            -> 401
+ *   5. proxy-scoped bearer  -> allow, on LLM_PROXY_PREFIX only
+ *   6. otherwise            -> 401
  */
-export function decide(facts: RequestFacts, token: string | null): AuthDecision {
+export function decide(
+  facts: RequestFacts,
+  token: string | null,
+  proxyToken: string | null = null,
+): AuthDecision {
   if (!token) {
     return {
       ok: false,
@@ -151,6 +196,17 @@ export function decide(facts: RequestFacts, token: string | null): AuthDecision 
     ? facts.authorization.slice('Bearer '.length)
     : null;
   if (bearer && constantTimeEqual(bearer, token)) return { ok: true, setCookie: false };
+
+  // `pathname` is the parsed URL's, so dot segments (`..`, `%2e%2e`) are
+  // already resolved — `/api/llm-proxy/../subagent` arrives as `/api/subagent`.
+  if (
+    bearer &&
+    proxyToken &&
+    facts.pathname.startsWith(LLM_PROXY_PREFIX) &&
+    constantTimeEqual(bearer, proxyToken)
+  ) {
+    return { ok: true, setCookie: false };
+  }
 
   return { ok: false, status: 401, reason: 'Missing or invalid local API credential.' };
 }
